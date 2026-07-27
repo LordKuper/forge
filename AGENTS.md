@@ -53,6 +53,7 @@ These rules apply to every repository change.
 - The PR body MUST state the goal, changes, verification, new version, compatibility impact, release notes, and related issues.
 - Require all CI checks and a completed automatic Codex review. Human approval is required only when branch protection explicitly requires it.
 - The Codex review gate passes when Codex reacts with 👍 without opening threads, or every thread it opened is resolved.
+- Run at most three automatic Codex review iterations per PR, including the initial review.
 - Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
 - Resolve every blocking human review comment before merge.
 - A maintainer may document an exception in the PR, but security, review, and release requirements have no exceptions.
