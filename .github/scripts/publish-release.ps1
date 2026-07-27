@@ -125,7 +125,11 @@ if (-not $commitMatch.Success) {
 }
 
 $isBreaking = $commitMatch.Groups["breaking"].Success
-if ($isBreaking -and $commitBody -notmatch "(?m)^BREAKING CHANGE: \S.*$") {
+$hasBreakingFooter = $commitBody -match "(?m)^BREAKING CHANGE: \S.*$"
+if ($hasBreakingFooter -and -not $isBreaking) {
+    throw "A BREAKING CHANGE footer requires ! in the commit subject."
+}
+if ($isBreaking -and -not $hasBreakingFooter) {
     throw "A breaking release commit requires a BREAKING CHANGE footer."
 }
 

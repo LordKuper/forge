@@ -183,6 +183,17 @@ try {
         Assert-Throws { Invoke-Validation $repository "feat: add behavior" -BaseSha $base } "requires a MINOR bump"
     }
 
+    Test-Case "breaking footer without marker" {
+        $repository = New-TestRepository
+        Set-Release $repository "1.2.3"
+        $base = Save-Commit $repository "chore: establish version"
+        Set-Release $repository "1.3.0"
+        Save-Commit $repository "feat: replace behavior" | Out-Null
+        Assert-Throws {
+            Invoke-Validation $repository "feat: replace behavior" "BREAKING CHANGE: behavior changed." $base
+        } "requires !"
+    }
+
     foreach ($kind in @("annotated", "lightweight")) {
         Test-Case "$kind existing tag" {
             $repository = New-TestRepository
