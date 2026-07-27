@@ -206,6 +206,42 @@
       }
     },
     {
+      "name": "suggested action accepts refresh then read for a read action",
+      "schema": "suggested-action",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "inspect_blocker",
+        "rank": 1,
+        "rationale_key": "next.inspect",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.blocked"],
+        "safety_class": "read",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "InspectSprint", "arguments": {}, "idempotency_key": "99999999-9999-4999-8999-999999999999"},
+        "expected_state_version": 3,
+        "stale_behavior": "refresh_then_read"
+      }
+    },
+    {
+      "name": "suggested action rejects refresh then read for a mutation",
+      "schema": "suggested-action",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "resume_sprint",
+        "rank": 1,
+        "rationale_key": "next.resume",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.ready"],
+        "safety_class": "confirm_mutation",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "ResumeSprint", "arguments": {}, "idempotency_key": "99999999-9999-4999-8999-999999999998"},
+        "expected_state_version": 3,
+        "stale_behavior": "refresh_then_read"
+      }
+    },
+    {
       "name": "project status resolves the suggested action reference",
       "schema": "project-status-snapshot",
       "valid": true,
@@ -291,6 +327,19 @@
         "fallback": "en",
         "catalog_version": "1.0.0",
         "capabilities": ["unknown"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a non-BCP-47 culture",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "!!",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
         "messages": {}
       }
     }

@@ -16,6 +16,13 @@
     "target": {"type": "object", "required": ["kind", "id"], "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}, "additionalProperties": false},
     "command": {"type": "object", "required": ["name", "arguments", "idempotency_key"], "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}, "idempotency_key": {"type": "string", "format": "uuid"}}, "additionalProperties": false},
     "expected_state_version": {"type": "integer", "minimum": 0},
-    "stale_behavior": {"const": "reject_without_side_effect"}
-  }
+    "stale_behavior": {"enum": ["reject_without_side_effect", "refresh_then_read"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"safety_class": {"const": "read"}}, "required": ["safety_class"]},
+      "then": {"properties": {"stale_behavior": {"const": "refresh_then_read"}}},
+      "else": {"properties": {"stale_behavior": {"const": "reject_without_side_effect"}}}
+    }
+  ]
 }

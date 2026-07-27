@@ -7,7 +7,7 @@
   "required": ["schema_version", "culture", "fallback", "catalog_version", "capabilities", "messages"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
-    "culture": {"type": "string", "minLength": 2},
+    "culture": {"type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$"},
     "fallback": {"const": "en"},
     "catalog_version": {"type": "string", "pattern": "^1\\.[0-9]+\\.[0-9]+$"},
     "capabilities": {
