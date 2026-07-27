@@ -10,6 +10,44 @@ if ($version -notmatch $semVerPattern) {
     throw "VERSION must contain a stable SemVer value."
 }
 
+$changelogPath = "CHANGELOG.md"
+if (-not (Test-Path -LiteralPath $changelogPath -PathType Leaf)) {
+    throw "CHANGELOG.md is required."
+}
+
+$changelogLines = @(Get-Content -LiteralPath $changelogPath)
+$releaseHeading = "## v$version"
+$releaseStart = [array]::IndexOf($changelogLines, $releaseHeading)
+if ($releaseStart -lt 0) {
+    throw "CHANGELOG.md must contain the exact heading '$releaseHeading'."
+}
+
+$releaseEnd = $changelogLines.Count
+for ($index = $releaseStart + 1; $index -lt $changelogLines.Count; $index++) {
+    if ($changelogLines[$index] -match "^## ") {
+        $releaseEnd = $index
+        break
+    }
+}
+
+if ($releaseEnd -le $releaseStart + 1) {
+    throw "$releaseHeading must not be empty."
+}
+
+$releaseNotes = ($changelogLines[($releaseStart + 1)..($releaseEnd - 1)] -join "`n").Trim()
+$categoryPattern = "(?m)^### (Added|Changed|Deprecated|Removed|Fixed|Security)$"
+if ($releaseNotes -notmatch $categoryPattern -or $releaseNotes -notmatch "(?m)^- .+") {
+    throw "$releaseHeading must contain categorized user-facing changes."
+}
+
+$baseSha = $env:RELEASE_BASE_SHA
+if (-not [string]::IsNullOrWhiteSpace($baseSha)) {
+    $changedFiles = @(& git diff --name-only "$baseSha...HEAD" -- $changelogPath)
+    if ($LASTEXITCODE -ne 0 -or $changedFiles -notcontains $changelogPath) {
+        throw "Every feature branch must update CHANGELOG.md."
+    }
+}
+
 $subject = $env:RELEASE_COMMIT_SUBJECT
 if ([string]::IsNullOrWhiteSpace($subject)) {
     $subject = (& git log -1 --format=%s).Trim()
@@ -83,7 +121,7 @@ if ($releaseExists) {
     --repo $env:GITHUB_REPOSITORY `
     --verify-tag `
     --title "Forge $tag" `
-    --generate-notes
+    --notes $releaseNotes
 if ($LASTEXITCODE -ne 0) {
     throw "Cannot publish release $tag."
 }

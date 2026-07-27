@@ -24,6 +24,13 @@ These rules apply to every repository change.
 - The source version, artifact versions, annotated tag, and GitHub Release version MUST match. Never reuse a released version.
 - Never commit secrets, personal data, local IDE state, or generated files that are not release inputs.
 
+## Changelog
+
+- Keep `CHANGELOG.md` at the repository root, in English, with releases ordered newest first.
+- Every feature branch MUST update it before merge. Add user-facing changes under the exact heading `## v<MAJOR>.<MINOR>.<PATCH>` matching `VERSION`.
+- Group entries under `Added`, `Changed`, `Deprecated`, `Removed`, `Fixed`, or `Security`; describe user impact rather than implementation details.
+- The release workflow MUST use that version section, up to the next `##` heading, as the GitHub Release description.
+
 ## Quality
 
 - Add automated tests for new behavior and a regression test for every fix.
@@ -52,6 +59,6 @@ These rules apply to every repository change.
 - The squash commit MUST follow Conventional Commits and summarize the complete behavior change, material decisions, compatibility impact, and related issues.
 - A protected workflow MUST validate the release before merge and publish it automatically from the resulting push to `main`. Manual publication is allowed only to retry a failed workflow.
 - Create an annotated `v<MAJOR>.<MINOR>.<PATCH>` tag on the squash commit. Match the Release title and artifact versions to it.
-- Release notes MUST cover user impact, fixes, breaking changes, upgrade steps, and known limitations. Publish checksums for binary artifacts.
+- Publish checksums for binary artifacts.
 - A failed publication leaves the release incomplete; do not announce the change as released until publication succeeds.
 - Delete the feature branch after a successful merge and release (if not deleted automatically).
