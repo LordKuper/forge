@@ -29,7 +29,7 @@ jobs:
         run: ./.github/scripts/publish-release.ps1 -ValidateOnly
 
   release:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Publish release
     permissions:
       contents: write

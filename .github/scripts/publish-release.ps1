@@ -9,6 +9,7 @@ $semVerPattern = "^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$"
 if ($version -notmatch $semVerPattern) {
     throw "VERSION must contain a stable SemVer value."
 }
+$currentVersion = [version]$version
 
 $changelogPath = "CHANGELOG.md"
 if (-not (Test-Path -LiteralPath $changelogPath -PathType Leaf)) {
@@ -46,6 +47,20 @@ if (-not [string]::IsNullOrWhiteSpace($baseSha)) {
     if ($LASTEXITCODE -ne 0 -or $changedFiles -notcontains $changelogPath) {
         throw "Every feature branch must update CHANGELOG.md."
     }
+
+    $baseVersionPath = @(& git ls-tree --name-only $baseSha -- "VERSION")
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot inspect VERSION in the base commit."
+    }
+    if ($baseVersionPath -contains "VERSION") {
+        $baseVersion = (& git show "${baseSha}:VERSION").Trim()
+        if ($LASTEXITCODE -ne 0 -or $baseVersion -notmatch $semVerPattern) {
+            throw "The base commit contains an invalid VERSION."
+        }
+        if ($currentVersion -le [version]$baseVersion) {
+            throw "$version must increase the base version $baseVersion."
+        }
+    }
 }
 
 $subject = $env:RELEASE_COMMIT_SUBJECT
@@ -76,7 +91,6 @@ if ($tagExists) {
         throw "$tag already points to another commit."
     }
 } else {
-    $currentVersion = [version]$version
     $releasedVersions = @(
         & git tag --list "v*" |
             Where-Object { $_ -match "^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$" } |

@@ -8,3 +8,7 @@ User-facing Forge changes are listed by release, newest first.
 
 - Published the project development and contribution rules.
 - Added automatic release validation, version tagging, and GitHub Release publication.
+
+### Fixed
+
+- Prevented releases from reusing the `main` version or publishing from non-`main` branches.
