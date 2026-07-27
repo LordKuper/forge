@@ -9,6 +9,7 @@ runtime implementation:
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)
 - [Architecture overview](docs/architecture/overview.md)
+- [Complete original research and system design (Russian source)](ai-agentic-software-development-workflow-ru.md)
 - [Implementation plan](implementation-plan.md)
 
 Validate the Stage 0 gate with:
