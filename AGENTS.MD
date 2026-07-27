@@ -50,7 +50,7 @@ These rules apply to every repository change.
 
 - Use squash merge only, producing exactly one commit in `main`; merge commits and rebase merges are forbidden.
 - The squash commit MUST follow Conventional Commits and summarize the complete behavior change, material decisions, compatibility impact, and related issues.
-- A single protected workflow MUST merge the PR and publish the next GitHub Release. Manual merge without release is forbidden.
+- A protected workflow MUST validate the release before merge and publish it automatically from the resulting push to `main`. Manual publication is allowed only to retry a failed workflow.
 - Create an annotated `v<MAJOR>.<MINOR>.<PATCH>` tag on the squash commit. Match the Release title and artifact versions to it.
 - Release notes MUST cover user impact, fixes, breaking changes, upgrade steps, and known limitations. Publish checksums for binary artifacts.
 - A failed publication leaves the release incomplete; do not announce the change as released until publication succeeds.
