@@ -184,7 +184,7 @@ if ($tagExists) {
 
 if ($ValidateOnly) {
     Write-Host "Validated $tag and commit: $subject"
-    exit 0
+    return
 }
 
 if ([string]::IsNullOrWhiteSpace($env:GH_TOKEN) -or
