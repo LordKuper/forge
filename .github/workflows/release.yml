@@ -25,12 +25,16 @@ jobs:
         shell: pwsh
         env:
           RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          RELEASE_COMMIT_BODY: ${{ github.event.pull_request.body }}
           RELEASE_COMMIT_SUBJECT: ${{ github.event.pull_request.title }}
         run: ./.github/scripts/publish-release.ps1 -ValidateOnly
 
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Publish release
+    concurrency:
+      group: forge-release
+      cancel-in-progress: false
     permissions:
       contents: write
     runs-on: ubuntu-latest

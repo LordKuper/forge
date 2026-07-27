@@ -41,6 +41,7 @@ if ($releaseNotes -notmatch $categoryPattern -or $releaseNotes -notmatch "(?m)^-
     throw "$releaseHeading must contain categorized user-facing changes."
 }
 
+$baseVersion = $null
 $baseSha = $env:RELEASE_BASE_SHA
 if (-not [string]::IsNullOrWhiteSpace($baseSha)) {
     $changedFiles = @(& git diff --name-only "$baseSha...HEAD" -- $changelogPath)
@@ -53,13 +54,11 @@ if (-not [string]::IsNullOrWhiteSpace($baseSha)) {
         throw "Cannot inspect VERSION in the base commit."
     }
     if ($baseVersionPath -contains "VERSION") {
-        $baseVersion = (& git show "${baseSha}:VERSION").Trim()
-        if ($LASTEXITCODE -ne 0 -or $baseVersion -notmatch $semVerPattern) {
+        $baseVersionText = (& git show "${baseSha}:VERSION").Trim()
+        if ($LASTEXITCODE -ne 0 -or $baseVersionText -notmatch $semVerPattern) {
             throw "The base commit contains an invalid VERSION."
         }
-        if ($currentVersion -le [version]$baseVersion) {
-            throw "$version must increase the base version $baseVersion."
-        }
+        $baseVersion = [version]$baseVersionText
     }
 }
 
@@ -71,9 +70,40 @@ if ([string]::IsNullOrWhiteSpace($subject)) {
     }
 }
 
-$commitPattern = "^(feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?!?: .+"
-if ($subject -notmatch $commitPattern) {
+$commitBody = $env:RELEASE_COMMIT_BODY
+if ([string]::IsNullOrWhiteSpace($commitBody)) {
+    $commitBody = (& git log -1 --format=%B | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "Cannot read the current commit body."
+    }
+}
+
+$commitPattern = "^(?<type>feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?(?<breaking>!)?: .+"
+$commitMatch = [regex]::Match($subject, $commitPattern)
+if (-not $commitMatch.Success) {
     throw "The release commit does not follow Conventional Commits: $subject"
+}
+
+$isBreaking = $commitMatch.Groups["breaking"].Success
+if ($isBreaking -and $commitBody -notmatch "(?m)^BREAKING CHANGE: \S.*$") {
+    throw "A breaking release commit requires a BREAKING CHANGE footer."
+}
+
+if ($null -ne $baseVersion) {
+    if ($isBreaking) {
+        $expectedVersion = [version]::new($baseVersion.Major + 1, 0, 0)
+        $expectedBump = "MAJOR"
+    } elseif ($commitMatch.Groups["type"].Value -eq "feat") {
+        $expectedVersion = [version]::new($baseVersion.Major, $baseVersion.Minor + 1, 0)
+        $expectedBump = "MINOR"
+    } else {
+        $expectedVersion = [version]::new($baseVersion.Major, $baseVersion.Minor, $baseVersion.Build + 1)
+        $expectedBump = "PATCH"
+    }
+
+    if ($currentVersion -ne $expectedVersion) {
+        throw "$subject requires a $expectedBump bump from $baseVersion to $expectedVersion, not $version."
+    }
 }
 
 $tag = "v$version"
@@ -91,13 +121,20 @@ if ($tagExists) {
         throw "$tag already points to another commit."
     }
 } else {
-    $releasedVersions = @(
-        & git tag --list "v*" |
-            Where-Object { $_ -match "^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$" } |
-            ForEach-Object { [version]$_.Substring(1) }
-    )
-    if ($releasedVersions -and $currentVersion -le ($releasedVersions | Sort-Object -Descending)[0]) {
-        throw "$version does not increase the latest released version."
+    $latestTag = & git tag --list "v*" |
+        Where-Object { $_ -match "^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$" } |
+        Sort-Object { [version]$_.Substring(1) } -Descending |
+        Select-Object -First 1
+    if ($latestTag) {
+        $latestVersion = [version]$latestTag.Substring(1)
+        if ($currentVersion -le $latestVersion) {
+            $latestCommit = (& git rev-list -n 1 $latestTag).Trim()
+            & git merge-base --is-ancestor $head $latestCommit
+            $latestTagIsOnDescendant = $LASTEXITCODE -eq 0
+            if ($currentVersion -eq $latestVersion -or -not $latestTagIsOnDescendant) {
+                throw "$version does not increase the latest released version."
+            }
+        }
     }
 }
 
