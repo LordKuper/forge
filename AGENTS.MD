@@ -47,6 +47,8 @@ These rules apply to every repository change.
 
 - Merge into `main` only through a PR.
 - Protect `main`: forbid deletion, force pushes, direct pushes, and bypassing required checks or reviews.
+- Open PRs as ready for review. Draft status is allowed only when explicitly requested by the user or maintainer.
+- After opening a PR, verify that expected review automation started; do not report publication complete while it is absent.
 - Use a Conventional Commits PR title; it becomes the squash commit subject.
 - The PR body MUST state the goal, changes, verification, new version, compatibility impact, release notes, and related issues.
 - Require all CI checks and at least one approval from a reviewer other than the author.
