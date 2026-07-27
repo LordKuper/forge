@@ -331,6 +331,32 @@
       }
     },
     {
+      "name": "language pack accepts a normalized variant",
+      "schema": "language-pack",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "de-CH-1901",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack accepts a normalized extension",
+      "schema": "language-pack",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "en-US-u-ca-gregory",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
       "name": "language pack rejects a non-BCP-47 culture",
       "schema": "language-pack",
       "valid": false,
