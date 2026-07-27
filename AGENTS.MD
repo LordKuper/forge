@@ -51,9 +51,10 @@ These rules apply to every repository change.
 - After opening a PR, verify that expected review automation started; do not report publication complete while it is absent.
 - Use a Conventional Commits PR title; it becomes the squash commit subject.
 - The PR body MUST state the goal, changes, verification, new version, compatibility impact, release notes, and related issues.
-- Require all CI checks and at least one approval from a reviewer other than the author.
+- Require all CI checks and a completed automatic Codex review. Human approval is required only when branch protection explicitly requires it.
+- The Codex review gate passes when Codex reacts with 👍 without opening threads, or every thread it opened is resolved.
 - Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
-- Resolve every blocking comment and review thread before merge. Authors cannot approve their own PRs.
+- Resolve every blocking human review comment before merge.
 - A maintainer may document an exception in the PR, but security, review, and release requirements have no exceptions.
 
 ## Merge and Release
