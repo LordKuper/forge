@@ -18,7 +18,8 @@ and newer minor only when unknown optional fields can be ignored safely.
 
 The Stage 0 gate builds every schema with the pinned JsonSchema.Net validator,
 resolves cross-schema references, requires format validation, and evaluates every
-compatibility fixture.
+compatibility fixture. The repository `global.json` pins the .NET SDK used by the
+gate on workstations and CI.
 
 ## Diagnostics and exit codes
 

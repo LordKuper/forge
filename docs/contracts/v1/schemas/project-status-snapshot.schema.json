@@ -31,7 +31,7 @@
         "creation_sequence": {"type": "integer", "minimum": 1},
         "state": {"enum": ["draft", "ready", "running", "awaiting_human", "blocked", "failed", "ready_to_finalize", "completed", "cancelled"]},
         "workflow": {"const": "implementation-critical"},
-        "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"}
+        "base_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
       }
     }
   }

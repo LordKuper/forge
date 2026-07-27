@@ -65,8 +65,8 @@
         "summary": "Analysis completed.",
         "decisions": [],
         "artifacts": [
-          {"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "agent_facing", "language": "en"},
-          {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": null}
+          {"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "agent_facing", "language": "en", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"},
+          {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": null, "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}
         ],
         "open_risks": []
       }
@@ -83,7 +83,7 @@
         "base_sha": "0123456789abcdef0123456789abcdef01234567",
         "summary": "Analysis completed.",
         "decisions": [],
-        "artifacts": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": "en"}],
+        "artifacts": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": "en", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}],
         "open_risks": []
       }
     },
@@ -99,7 +99,39 @@
         "base_sha": "0123456789abcdef0123456789abcdef01234567",
         "summary": "Analysis completed.",
         "decisions": [],
-        "artifacts": [{"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "user_facing"}],
+        "artifacts": [{"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "user_facing", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects missing artifact provenance",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [{"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "user_facing", "language": "en"}],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects an invalid Git object ID length",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef012345678",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [],
         "open_risks": []
       }
     },
@@ -284,6 +316,27 @@
       }
     },
     {
+      "name": "project status rejects an invalid sprint Git object ID length",
+      "schema": "project-status-snapshot",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [{
+          "id": "44444444-4444-4444-8444-444444444444",
+          "creation_sequence": 1,
+          "state": "ready",
+          "workflow": "implementation-critical",
+          "base_sha": "0123456789abcdef0123456789abcdef012345678"
+        }],
+        "attention": [],
+        "suggested_actions": []
+      }
+    },
+    {
       "name": "user config accepts separate languages",
       "schema": "user-config",
       "valid": true,
@@ -363,6 +416,32 @@
       "instance": {
         "schema_version": "1.0.0",
         "culture": "!!",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a duplicate variant",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "de-1901-1901",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a duplicate extension singleton",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "en-a-foo-a-bar",
         "fallback": "en",
         "catalog_version": "1.0.0",
         "capabilities": ["ui"],
