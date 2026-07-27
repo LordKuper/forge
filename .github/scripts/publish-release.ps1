@@ -18,6 +18,25 @@ if (-not (Test-Path -LiteralPath $changelogPath -PathType Leaf)) {
 
 $changelogLines = @(Get-Content -LiteralPath $changelogPath)
 $releaseHeading = "## v$version"
+$releaseHeadingPattern = "^## v(?<version>(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*))$"
+$releaseVersions = @()
+foreach ($line in $changelogLines) {
+    if ($line -match "^## ") {
+        if ($line -notmatch $releaseHeadingPattern) {
+            throw "Every level-two changelog heading must contain a stable release version."
+        }
+        $releaseVersions += [version]$Matches["version"]
+    }
+}
+if (-not $releaseVersions -or $releaseVersions[0] -ne $currentVersion) {
+    throw "$releaseHeading must be the first release in CHANGELOG.md."
+}
+for ($index = 1; $index -lt $releaseVersions.Count; $index++) {
+    if ($releaseVersions[$index] -ge $releaseVersions[$index - 1]) {
+        throw "CHANGELOG.md releases must be ordered newest first."
+    }
+}
+
 $releaseStart = [array]::IndexOf($changelogLines, $releaseHeading)
 if ($releaseStart -lt 0) {
     throw "CHANGELOG.md must contain the exact heading '$releaseHeading'."
@@ -36,8 +55,29 @@ if ($releaseEnd -le $releaseStart + 1) {
 }
 
 $releaseNotes = ($changelogLines[($releaseStart + 1)..($releaseEnd - 1)] -join "`n").Trim()
-$categoryPattern = "(?m)^### (Added|Changed|Deprecated|Removed|Fixed|Security)$"
-if ($releaseNotes -notmatch $categoryPattern -or $releaseNotes -notmatch "(?m)^- .+") {
+$allowedCategories = @("Added", "Changed", "Deprecated", "Removed", "Fixed", "Security")
+$hasCategory = $false
+$hasEntry = $false
+$categoryHasEntry = $false
+foreach ($line in $releaseNotes -split "`n") {
+    if ($line -match "^### (.+)$") {
+        if ($hasCategory -and -not $categoryHasEntry) {
+            throw "Every changelog category must contain an entry."
+        }
+        if ($Matches[1] -notin $allowedCategories) {
+            throw "Unsupported changelog category: $($Matches[1])."
+        }
+        $hasCategory = $true
+        $categoryHasEntry = $false
+    } elseif ($line -match "^- .+") {
+        if (-not $hasCategory) {
+            throw "Every changelog entry must follow an allowed category."
+        }
+        $hasEntry = $true
+        $categoryHasEntry = $true
+    }
+}
+if (-not $hasCategory -or -not $hasEntry -or -not $categoryHasEntry) {
     throw "$releaseHeading must contain categorized user-facing changes."
 }
 

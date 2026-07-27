@@ -72,12 +72,14 @@ function Invoke-Validation(
 }
 
 function Assert-Throws([scriptblock]$Action, [string]$Pattern) {
+    $threw = $false
     try {
         & $Action
-        throw "Expected failure matching '$Pattern'."
     } catch {
+        $threw = $true
         if ($_.Exception.Message -notlike "*$Pattern*") { throw }
     }
+    if (-not $threw) { throw "Expected failure matching '$Pattern'." }
 }
 
 function Test-Case([string]$Name, [scriptblock]$Action) {
@@ -102,7 +104,26 @@ try {
         Set-Content "$repository/VERSION" "0.1.0"
         Set-Content "$repository/CHANGELOG.md" "# Changelog`n`n## v0.1.0`n`n- Missing category."
         Save-Commit $repository "feat: initialize Forge" | Out-Null
-        Assert-Throws { Invoke-Validation $repository "feat: initialize Forge" -BaseSha $base } "categorized user-facing changes"
+        Assert-Throws { Invoke-Validation $repository "feat: initialize Forge" -BaseSha $base } "allowed category"
+    }
+
+    Test-Case "unsupported changelog category" {
+        $repository = New-TestRepository
+        $base = Save-Commit $repository "chore: initialize"
+        Set-Release $repository "0.1.0"
+        Add-Content "$repository/CHANGELOG.md" "`n`n### Internal`n`n- Hidden change."
+        Save-Commit $repository "feat: initialize Forge" | Out-Null
+        Assert-Throws { Invoke-Validation $repository "feat: initialize Forge" -BaseSha $base } "Unsupported changelog category"
+    }
+
+    Test-Case "newest-first changelog" {
+        $repository = New-TestRepository
+        Set-Release $repository "0.1.0"
+        $base = Save-Commit $repository "chore: establish version"
+        Add-Content "$repository/CHANGELOG.md" "`n`n## v0.2.0`n`n### Added`n`n- Later change."
+        Set-Content "$repository/VERSION" "0.2.0"
+        Save-Commit $repository "feat: add behavior" | Out-Null
+        Assert-Throws { Invoke-Validation $repository "feat: add behavior" -BaseSha $base } "must be the first release"
     }
 
     $bumps = @(
