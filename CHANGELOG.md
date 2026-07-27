@@ -12,7 +12,7 @@ User-facing Forge changes are listed by release, newest first.
 
 ### Changed
 
-- Updated the pinned release PowerShell toolchain to 7.6.4.
+- Required PowerShell 7.6.3 or newer for release validation.
 - Required publication workflows to open ready-for-review PRs unless draft status is explicitly requested.
 
 ## v0.1.0
