@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/suggested-action.schema.json",
+  "title": "SuggestedAction v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "action_id", "rank", "rationale_key", "rationale_arguments", "preconditions", "safety_class", "target", "command", "expected_state_version", "stale_behavior"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "action_id": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+    "rank": {"type": "integer", "minimum": 1, "maximum": 5},
+    "rationale_key": {"type": "string"},
+    "rationale_arguments": {"type": "object"},
+    "preconditions": {"type": "array", "items": {"type": "string"}},
+    "safety_class": {"enum": ["read", "confirm_mutation", "human_approval"]},
+    "target": {"type": "object", "required": ["kind", "id"], "properties": {"kind": {"type": "string"}, "id": {"type": "string"}}, "additionalProperties": false},
+    "command": {"type": "object", "required": ["name", "arguments", "idempotency_key"], "properties": {"name": {"type": "string"}, "arguments": {"type": "object"}, "idempotency_key": {"type": "string", "format": "uuid"}}, "additionalProperties": false},
+    "expected_state_version": {"type": "integer", "minimum": 0},
+    "stale_behavior": {"enum": ["reject_without_side_effect", "refresh_then_read"]}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"safety_class": {"const": "read"}}, "required": ["safety_class"]},
+      "then": {"properties": {"stale_behavior": {"const": "refresh_then_read"}}},
+      "else": {"properties": {"stale_behavior": {"const": "reject_without_side_effect"}}}
+    }
+  ]
+}

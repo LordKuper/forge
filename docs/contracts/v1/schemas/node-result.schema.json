@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/node-result.schema.json",
+  "title": "Forge node result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "sprint_id", "node_id", "attempt_id", "state", "started_at", "completed_at", "input_digest", "outputs", "diagnostics"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "node_id": {"type": "string", "minLength": 1},
+    "attempt_id": {"type": "string", "format": "uuid"},
+    "state": {"enum": ["succeeded", "failed", "cancelled"]},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "input_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "outputs": {"type": "array", "items": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}},
+    "diagnostics": {"type": "array", "items": {"$ref": "#/$defs/diagnostic"}}
+  },
+  "$defs": {
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "category", "message_key", "arguments"],
+      "properties": {
+        "code": {"type": "string", "pattern": "^[a-z0-9_]+$"},
+        "category": {"type": "string"},
+        "message_key": {"type": "string"},
+        "arguments": {"type": "object"}
+      }
+    }
+  }
+}

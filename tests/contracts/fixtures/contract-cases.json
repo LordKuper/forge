@@ -1,0 +1,452 @@
+{
+  "cases": [
+    {
+      "name": "project manifest accepts the MVP workflow",
+      "schema": "project-manifest",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "workflow": "implementation-critical",
+        "artifacts": {"language": {"user_facing": "ru", "agent_facing": "en"}}
+      }
+    },
+    {
+      "name": "project manifest rejects another workflow",
+      "schema": "project-manifest",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "workflow": "fast",
+        "artifacts": {"language": {"user_facing": "en", "agent_facing": "en"}}
+      }
+    },
+    {
+      "name": "event accepts typed invariant data",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 1,
+        "occurred_at": "2026-07-27T12:00:00Z",
+        "type": "SprintChanged",
+        "aggregate": {"kind": "sprint", "id": "sprint-1", "version": 1},
+        "message_key": "sprint.changed",
+        "arguments": {"state": "ready"}
+      }
+    },
+    {
+      "name": "event rejects a negative sequence",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": -1,
+        "occurred_at": "2026-07-27T12:00:00Z",
+        "type": "SprintChanged",
+        "aggregate": {"kind": "sprint", "id": "sprint-1", "version": 1},
+        "message_key": "sprint.changed",
+        "arguments": {}
+      }
+    },
+    {
+      "name": "handoff requires language for human artifacts and none for machine artifacts",
+      "schema": "handoff",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [
+          {"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "agent_facing", "language": "en", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"},
+          {"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": null, "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}
+        ],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects a language on a machine artifact",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [{"digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "media_type": "application/json", "audience": "machine", "language": "en", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects a missing human artifact language",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [{"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "user_facing", "policy_snapshot_hash": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "generator_version": "1.0.0"}],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects missing artifact provenance",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [{"digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media_type": "text/markdown", "audience": "user_facing", "language": "en"}],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "handoff rejects an invalid Git object ID length",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef012345678",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "finding accepts evidence",
+      "schema": "finding",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "finding_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "severity": "high",
+        "status": "open",
+        "message_key": "review.finding",
+        "arguments": {},
+        "evidence": ["tests failed"]
+      }
+    },
+    {
+      "name": "finding rejects missing evidence",
+      "schema": "finding",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "finding_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "severity": "high",
+        "status": "open",
+        "message_key": "review.finding",
+        "arguments": {},
+        "evidence": []
+      }
+    },
+    {
+      "name": "node result accepts a completed attempt",
+      "schema": "node-result",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "tests",
+        "attempt_id": "66666666-6666-4666-8666-666666666666",
+        "state": "succeeded",
+        "started_at": "2026-07-27T12:00:00Z",
+        "completed_at": "2026-07-27T12:01:00Z",
+        "input_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "outputs": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "name": "node result rejects a nonterminal state",
+      "schema": "node-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "tests",
+        "attempt_id": "66666666-6666-4666-8666-666666666666",
+        "state": "running",
+        "started_at": "2026-07-27T12:00:00Z",
+        "completed_at": "2026-07-27T12:01:00Z",
+        "input_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "outputs": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "name": "suggested action accepts a guarded command",
+      "schema": "suggested-action",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "resume_sprint",
+        "rank": 1,
+        "rationale_key": "next.resume",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.ready"],
+        "safety_class": "confirm_mutation",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "ResumeSprint", "arguments": {}, "idempotency_key": "77777777-7777-4777-8777-777777777777"},
+        "expected_state_version": 3,
+        "stale_behavior": "reject_without_side_effect"
+      }
+    },
+    {
+      "name": "suggested action rejects unsafe stale behavior",
+      "schema": "suggested-action",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "resume_sprint",
+        "rank": 1,
+        "rationale_key": "next.resume",
+        "rationale_arguments": {},
+        "preconditions": [],
+        "safety_class": "confirm_mutation",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "ResumeSprint", "arguments": {}, "idempotency_key": "77777777-7777-4777-8777-777777777777"},
+        "expected_state_version": 3,
+        "stale_behavior": "execute"
+      }
+    },
+    {
+      "name": "suggested action accepts refresh then read for a read action",
+      "schema": "suggested-action",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "inspect_blocker",
+        "rank": 1,
+        "rationale_key": "next.inspect",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.blocked"],
+        "safety_class": "read",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "InspectSprint", "arguments": {}, "idempotency_key": "99999999-9999-4999-8999-999999999999"},
+        "expected_state_version": 3,
+        "stale_behavior": "refresh_then_read"
+      }
+    },
+    {
+      "name": "suggested action rejects refresh then read for a mutation",
+      "schema": "suggested-action",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "action_id": "resume_sprint",
+        "rank": 1,
+        "rationale_key": "next.resume",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.ready"],
+        "safety_class": "confirm_mutation",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "ResumeSprint", "arguments": {}, "idempotency_key": "99999999-9999-4999-8999-999999999998"},
+        "expected_state_version": 3,
+        "stale_behavior": "refresh_then_read"
+      }
+    },
+    {
+      "name": "project status resolves the suggested action reference",
+      "schema": "project-status-snapshot",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [],
+        "attention": [],
+        "suggested_actions": [{
+          "schema_version": "1.0.0",
+          "action_id": "create_sprint",
+          "rank": 1,
+          "rationale_key": "next.create",
+          "rationale_arguments": {},
+          "preconditions": [],
+          "safety_class": "confirm_mutation",
+          "target": {"kind": "project", "id": "project-1"},
+          "command": {"name": "CreateSprint", "arguments": {}, "idempotency_key": "88888888-8888-4888-8888-888888888888"},
+          "expected_state_version": 3,
+          "stale_behavior": "reject_without_side_effect"
+        }]
+      }
+    },
+    {
+      "name": "project status rejects more than five suggestions",
+      "schema": "project-status-snapshot",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [],
+        "attention": [],
+        "suggested_actions": [1, 2, 3, 4, 5, 6]
+      }
+    },
+    {
+      "name": "project status rejects an invalid sprint Git object ID length",
+      "schema": "project-status-snapshot",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [{
+          "id": "44444444-4444-4444-8444-444444444444",
+          "creation_sequence": 1,
+          "state": "ready",
+          "workflow": "implementation-critical",
+          "base_sha": "0123456789abcdef0123456789abcdef012345678"
+        }],
+        "attention": [],
+        "suggested_actions": []
+      }
+    },
+    {
+      "name": "user config accepts separate languages",
+      "schema": "user-config",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "language": {"ui": "ru", "interaction": "ru", "llm": "en"},
+        "interaction": {"confirm_destructive": true}
+      }
+    },
+    {
+      "name": "user config rejects project artifact policy",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "artifacts": {"language": {"user_facing": "ru"}}
+      }
+    },
+    {
+      "name": "language pack accepts typed placeholders",
+      "schema": "language-pack",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "ru",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui", "interaction"],
+        "messages": {"sprint.count": {"template": "{count}", "placeholders": {"count": "integer"}, "plural_selectors": ["count"]}}
+      }
+    },
+    {
+      "name": "language pack rejects an unknown capability",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "ru",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["unknown"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack accepts a normalized variant",
+      "schema": "language-pack",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "de-CH-1901",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack accepts a normalized extension",
+      "schema": "language-pack",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "en-US-u-ca-gregory",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a non-BCP-47 culture",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "!!",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a duplicate variant",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "de-1901-1901",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    },
+    {
+      "name": "language pack rejects a duplicate extension singleton",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "culture": "en-a-foo-a-bar",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui"],
+        "messages": {}
+      }
+    }
+  ]
+}

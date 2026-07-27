@@ -6,15 +6,21 @@ $ErrorActionPreference = "Stop"
 
 $actual = @{
     "runner image" = $env:ImageVersion
-    "PowerShell" = $PSVersionTable.PSVersion.ToString()
     "Git" = ((& git --version) -replace "^git version ", "").Trim()
     "GitHub CLI" = ((& gh --version)[0] -replace "^gh version ([^ ]+).*$", '$1').Trim()
+    ".NET SDK" = ((& dotnet --version)).Trim()
 }
 $expected = @{
     "runner image" = "20260720.247.2"
-    "PowerShell" = "7.6.3"
     "Git" = "2.54.0"
     "GitHub CLI" = "2.96.0"
+    ".NET SDK" = "10.0.302"
+}
+$minimumPowerShellVersion = [version]"7.6.3"
+$actualPowerShellVersion = $PSVersionTable.PSVersion
+
+if ($actualPowerShellVersion -lt $minimumPowerShellVersion) {
+    throw "PowerShell must be $minimumPowerShellVersion or newer, found $actualPowerShellVersion."
 }
 
 foreach ($tool in $expected.Keys) {

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/project-status-snapshot.schema.json",
+  "title": "ProjectStatusSnapshot v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state_version", "generated_at", "project", "startup", "sprints", "attention", "suggested_actions"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "state_version": {"type": "integer", "minimum": 0},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "project": {
+      "type": "object",
+      "required": ["root", "initialized"],
+      "properties": {"root": {"type": "string"}, "initialized": {"type": "boolean"}},
+      "additionalProperties": false
+    },
+    "startup": {"enum": ["ready", "blocked", "failed"]},
+    "active_sprint_id": {"type": ["string", "null"], "format": "uuid"},
+    "sprints": {"type": "array", "items": {"$ref": "#/$defs/sprint"}},
+    "attention": {"type": "array", "items": {"type": "string", "format": "uuid"}},
+    "suggested_actions": {"type": "array", "maxItems": 5, "items": {"$ref": "suggested-action.schema.json"}}
+  },
+  "$defs": {
+    "sprint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "creation_sequence", "state", "workflow", "base_sha"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "creation_sequence": {"type": "integer", "minimum": 1},
+        "state": {"enum": ["draft", "ready", "running", "awaiting_human", "blocked", "failed", "ready_to_finalize", "completed", "cancelled"]},
+        "workflow": {"const": "implementation-critical"},
+        "base_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+      }
+    }
+  }
+}

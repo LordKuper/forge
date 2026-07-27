@@ -1,0 +1,76 @@
+{
+  "contract_version": "1.0.0",
+  "machines": {
+    "self_update": {
+      "initial": "current",
+      "stable": ["current", "rolled_back", "failed"],
+      "terminal": ["rolled_back", "failed"],
+      "transitions": {
+        "current": ["downloading"],
+        "downloading": ["verifying", "failed"],
+        "verifying": ["staging", "failed"],
+        "staging": ["activating", "failed"],
+        "activating": ["restarting", "rolled_back"],
+        "restarting": ["current", "rolled_back"],
+        "rolled_back": [],
+        "failed": []
+      }
+    },
+    "provider_toolchain": {
+      "initial": "missing",
+      "stable": ["ready", "failed"],
+      "terminal": [],
+      "transitions": {
+        "missing": ["installing", "failed"],
+        "installing": ["rechecking", "failed"],
+        "updating": ["rechecking", "failed"],
+        "rechecking": ["ready", "updating", "failed"],
+        "ready": ["updating", "rechecking"],
+        "failed": ["installing", "updating", "rechecking"]
+      }
+    },
+    "sprint": {
+      "initial": "draft",
+      "terminal": ["completed", "cancelled"],
+      "transitions": {
+        "draft": ["ready", "cancelled"],
+        "ready": ["running", "cancelled"],
+        "running": ["awaiting_human", "blocked", "failed", "ready_to_finalize", "cancelled"],
+        "awaiting_human": ["running", "blocked", "cancelled"],
+        "blocked": ["ready", "cancelled"],
+        "failed": ["ready", "cancelled"],
+        "ready_to_finalize": ["completed", "blocked"],
+        "completed": [],
+        "cancelled": []
+      }
+    },
+    "node": {
+      "initial": "pending",
+      "terminal": ["succeeded", "skipped", "cancelled"],
+      "transitions": {
+        "pending": ["ready", "skipped", "cancelled"],
+        "ready": ["running", "skipped", "cancelled"],
+        "running": ["awaiting_human", "succeeded", "failed", "cancelled"],
+        "awaiting_human": ["running", "failed", "cancelled"],
+        "succeeded": [],
+        "failed": ["ready"],
+        "skipped": [],
+        "cancelled": []
+      }
+    },
+    "attempt": {
+      "initial": "created",
+      "terminal": ["succeeded", "abandoned", "cancelled"],
+      "transitions": {
+        "created": ["preparing", "cancelled"],
+        "preparing": ["running", "failed", "cancelled"],
+        "running": ["validating", "failed", "cancelled"],
+        "validating": ["succeeded", "failed"],
+        "succeeded": [],
+        "failed": ["abandoned"],
+        "abandoned": [],
+        "cancelled": []
+      }
+    }
+  }
+}
