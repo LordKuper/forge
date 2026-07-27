@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/project-manifest.schema.json",
+  "title": "Forge project manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "workflow", "artifacts"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "project_id": {"type": "string", "format": "uuid"},
+    "workflow": {"const": "implementation-critical"},
+    "artifacts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["language"],
+      "properties": {
+        "language": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["user_facing", "agent_facing"],
+          "properties": {
+            "user_facing": {"$ref": "#/$defs/language"},
+            "agent_facing": {"$ref": "#/$defs/language"}
+          }
+        }
+      }
+    },
+    "sprints": {"type": "array", "items": {"type": "string", "format": "uuid"}, "uniqueItems": true}
+  },
+  "$defs": {
+    "language": {"type": "string", "pattern": "^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$"}
+  }
+}

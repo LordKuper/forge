@@ -1,0 +1,131 @@
+{
+  "contract_version": "1.0.0",
+  "rules": {
+    "public_requires_both_surfaces": true,
+    "presentation_business_orchestration": false,
+    "shared_permissions": true,
+    "mutations_require": ["validation", "authorization", "expected_state_version", "idempotency_key", "confirmation_when_required"]
+  },
+  "capabilities": [
+    {
+      "id": "startup.status",
+      "kind": "query",
+      "contract": "GetStartupStatus",
+      "events": ["StartupCheckChanged"],
+      "cli": "forge doctor --startup",
+      "desktop": "Startup/Refresh",
+      "permission": "read",
+      "acceptance": "startup-status-parity"
+    },
+    {
+      "id": "project.initialize",
+      "kind": "command",
+      "contract": "InitializeProject",
+      "events": ["ProjectInitialized"],
+      "cli": "forge init --project-root <absolute-path> [--yes]",
+      "desktop": "ProjectPicker/Initialize",
+      "permission": "project_write_confirm",
+      "acceptance": "project-init-parity"
+    },
+    {
+      "id": "project.status",
+      "kind": "query",
+      "contract": "GetProjectStatus",
+      "events": ["ProjectStatusChanged"],
+      "cli": "forge status [--json]",
+      "desktop": "Dashboard/Refresh",
+      "permission": "read",
+      "acceptance": "project-status-parity"
+    },
+    {
+      "id": "project.next",
+      "kind": "query",
+      "contract": "GetSuggestedActions",
+      "events": ["SuggestedActionsChanged"],
+      "cli": "forge next [--json]",
+      "desktop": "Dashboard/RecommendedActions",
+      "permission": "read",
+      "acceptance": "suggested-actions-parity"
+    },
+    {
+      "id": "sprint.manage",
+      "kind": "command",
+      "contract": "CreateRunResumeCancelRebaseSprint",
+      "events": ["SprintChanged"],
+      "cli": "forge sprint <create|run|resume|cancel|rebase>",
+      "desktop": "Sprints/Actions",
+      "permission": "workflow_mutate",
+      "acceptance": "sprint-lifecycle-parity"
+    },
+    {
+      "id": "sprint.inspect",
+      "kind": "query",
+      "contract": "InspectSprintGraph",
+      "events": ["NodeChanged", "AttemptChanged"],
+      "cli": "forge sprint <list|status|inspect>",
+      "desktop": "SprintDetails/Open",
+      "permission": "read",
+      "acceptance": "sprint-inspection-parity"
+    },
+    {
+      "id": "workflow.review",
+      "kind": "command",
+      "contract": "ResolveHumanGate",
+      "events": ["GateResolved", "FindingChanged"],
+      "cli": "forge gate <approve|reject>",
+      "desktop": "Review/ResolveGate",
+      "permission": "human_gate_confirm",
+      "acceptance": "human-gate-parity"
+    },
+    {
+      "id": "configuration.manage",
+      "kind": "command",
+      "contract": "GetSetScopedConfiguration",
+      "events": ["ConfigurationChanged"],
+      "cli": "forge config <user|project|show>",
+      "desktop": "Settings/GetSet",
+      "permission": "scope_write",
+      "acceptance": "configuration-parity"
+    },
+    {
+      "id": "project.sync_validate",
+      "kind": "command",
+      "contract": "SyncOrValidateProject",
+      "events": ["ValidationCompleted", "DriftDetected"],
+      "cli": "forge <sync|validate>",
+      "desktop": "ProjectHealth/SyncValidate",
+      "permission": "project_write_for_sync",
+      "acceptance": "sync-validation-parity"
+    },
+    {
+      "id": "provider.health",
+      "kind": "query",
+      "contract": "GetProviderHealth",
+      "events": ["ProviderToolchainChanged"],
+      "cli": "forge models",
+      "desktop": "Providers/Refresh",
+      "permission": "read",
+      "acceptance": "provider-health-parity"
+    },
+    {
+      "id": "observability.inspect",
+      "kind": "query",
+      "contract": "GetSafeEventsLogsMetrics",
+      "events": ["DiagnosticEventRecorded"],
+      "cli": "forge inspect <events|logs|metrics>",
+      "desktop": "Diagnostics/Open",
+      "permission": "read_redacted",
+      "acceptance": "observability-parity"
+    },
+    {
+      "id": "quality.evaluate",
+      "kind": "command",
+      "contract": "RunEvaluation",
+      "events": ["EvaluationCompleted"],
+      "cli": "forge eval",
+      "desktop": "Quality/RunEvaluation",
+      "permission": "execute_tools_confirm",
+      "acceptance": "evaluation-parity"
+    }
+  ]
+}

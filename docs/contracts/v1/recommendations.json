@@ -1,0 +1,102 @@
+{
+  "contract_version": "1.0.0",
+  "ranking": {
+    "attention_order": ["startup_blocked", "awaiting_human", "blocked", "failed", "ready_to_finalize", "resumable", "no_sprints", "informational"],
+    "tie_breakers": ["safety_class", "sprint_creation_sequence", "sprint_id", "action_id"],
+    "maximum_results": 5,
+    "implicit_active_sprint": "only_non_terminal"
+  },
+  "actions": [
+    {
+      "id": "recover_startup",
+      "priority": "startup_blocked",
+      "rationale_key": "next.recover_startup.rationale",
+      "preconditions": ["startup.fail_closed", "recovery.available"],
+      "safety_class": "confirm_mutation",
+      "target": "startup_check",
+      "command": "RecoverStartup",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "initialize_project",
+      "priority": "startup_blocked",
+      "rationale_key": "next.initialize_project.rationale",
+      "preconditions": ["project.root_confirmed", "project.forge_directory_absent"],
+      "safety_class": "confirm_mutation",
+      "target": "project",
+      "command": "InitializeProject",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "resolve_human_gate",
+      "priority": "awaiting_human",
+      "rationale_key": "next.resolve_human_gate.rationale",
+      "preconditions": ["sprint.awaiting_human", "gate.open"],
+      "safety_class": "human_approval",
+      "target": "gate",
+      "command": "ResolveHumanGate",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "inspect_blocker",
+      "priority": "blocked",
+      "rationale_key": "next.inspect_blocker.rationale",
+      "preconditions": ["sprint.blocked"],
+      "safety_class": "read",
+      "target": "sprint",
+      "command": "InspectSprint",
+      "stale_behavior": "refresh_then_read"
+    },
+    {
+      "id": "retry_failed_node",
+      "priority": "failed",
+      "rationale_key": "next.retry_failed_node.rationale",
+      "preconditions": ["node.failed", "retry.allowed", "clean_replay.available"],
+      "safety_class": "confirm_mutation",
+      "target": "node",
+      "command": "RetryNode",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "finalize_sprint",
+      "priority": "ready_to_finalize",
+      "rationale_key": "next.finalize_sprint.rationale",
+      "preconditions": ["sprint.ready_to_finalize", "dependencies.current", "gates.passed"],
+      "safety_class": "human_approval",
+      "target": "sprint",
+      "command": "FinalizeSprint",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "resume_sprint",
+      "priority": "resumable",
+      "rationale_key": "next.resume_sprint.rationale",
+      "preconditions": ["sprint.ready", "startup.ready"],
+      "safety_class": "confirm_mutation",
+      "target": "sprint",
+      "command": "ResumeSprint",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "create_sprint",
+      "priority": "no_sprints",
+      "rationale_key": "next.create_sprint.rationale",
+      "preconditions": ["project.ready", "project.non_terminal_sprint_count_zero"],
+      "safety_class": "confirm_mutation",
+      "target": "project",
+      "command": "CreateSprint",
+      "stale_behavior": "reject_without_side_effect"
+    },
+    {
+      "id": "select_sprint",
+      "priority": "informational",
+      "rationale_key": "next.select_sprint.rationale",
+      "preconditions": ["project.non_terminal_sprint_count_multiple", "surface.active_sprint_absent"],
+      "safety_class": "read",
+      "target": "sprint_collection",
+      "command": "SelectSprint",
+      "stale_behavior": "refresh_then_read"
+    }
+  ],
+  "dispatch_invariants": ["validate_command", "authorize", "confirm_by_safety_class", "check_expected_state_version", "enforce_idempotency"]
+}

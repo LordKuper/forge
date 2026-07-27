@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/finding.schema.json",
+  "title": "Forge finding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "finding_id", "sprint_id", "fingerprint", "severity", "status", "message_key", "arguments", "evidence"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "finding_id": {"type": "string", "format": "uuid"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "severity": {"enum": ["info", "low", "medium", "high", "critical"]},
+    "status": {"enum": ["open", "accepted", "resolved", "dismissed"]},
+    "message_key": {"type": "string", "pattern": "^[a-z0-9_.-]+$"},
+    "arguments": {"type": "object"},
+    "evidence": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "properties": {
+        "path": {"type": "string"},
+        "line": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

@@ -12,7 +12,7 @@ $actual = @{
 }
 $expected = @{
     "runner image" = "20260720.247.2"
-    "PowerShell" = "7.6.3"
+    "PowerShell" = "7.6.4"
     "Git" = "2.54.0"
     "GitHub CLI" = "2.96.0"
 }

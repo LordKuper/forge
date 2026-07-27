@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/handoff.schema.json",
+  "title": "Forge structured handoff v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "handoff_id", "sprint_id", "node_id", "base_sha", "summary", "decisions", "artifacts", "open_risks"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "handoff_id": {"type": "string", "format": "uuid"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "node_id": {"type": "string", "minLength": 1},
+    "base_sha": {"type": "string", "pattern": "^[0-9a-f]{40,64}$"},
+    "summary": {"type": "string", "minLength": 1},
+    "decisions": {"type": "array", "items": {"type": "string"}},
+    "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
+    "open_risks": {"type": "array", "items": {"type": "string"}},
+    "next_node_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["digest", "media_type", "audience"],
+      "properties": {
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "media_type": {"type": "string"},
+        "audience": {"enum": ["user_facing", "agent_facing", "machine"]},
+        "language": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

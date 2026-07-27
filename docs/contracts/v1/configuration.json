@@ -1,0 +1,32 @@
+{
+  "contract_version": "1.0.0",
+  "stores": {
+    "user": {
+      "path": "%LOCALAPPDATA%/Forge/config.json",
+      "schema": "schemas/user-config.schema.json",
+      "migration_stream": "user",
+      "atomic_write": true
+    },
+    "project": {
+      "path": "<project-root>/.forge/manifest.yaml",
+      "schema": "schemas/project-manifest.schema.json",
+      "migration_stream": "project",
+      "atomic_write": true
+    }
+  },
+  "keys": [
+    {"key":"language.ui","scope":"user","default":"en","session_override":true,"inherits":null,"sensitive":false},
+    {"key":"language.interaction","scope":"user","default":null,"session_override":true,"inherits":"language.ui","sensitive":false},
+    {"key":"language.llm","scope":"user","default":null,"session_override":true,"inherits":"language.interaction","sensitive":false},
+    {"key":"interaction.confirm_destructive","scope":"user","default":true,"session_override":false,"inherits":null,"sensitive":false},
+    {"key":"artifacts.language.user_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false},
+    {"key":"artifacts.language.agent_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false}
+  ],
+  "provenance": ["session", "user", "project", "inherited", "built_in_default"],
+  "resolution": {
+    "user": ["session", "user", "inherited", "built_in_default"],
+    "project": ["project", "built_in_default"]
+  },
+  "wrong_scope_code": "configuration_scope_violation",
+  "write_protocol": ["serialize_validated_temp", "flush_file", "atomic_replace", "flush_directory", "retain_previous"]
+}
