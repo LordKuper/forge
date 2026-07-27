@@ -9,10 +9,16 @@ Contract version `1.0.0` freezes Stage 0 boundaries.
 - `recommendations.json`: deterministic next-action definitions.
 - `configuration.json`: owner scope, defaults, provenance, and write rules.
 - `schemas/*.schema.json`: Draft 2020-12 external boundary schemas.
+- `../../../tests/contracts/fixtures/contract-cases.json`: representative valid
+  and invalid compatibility instances.
 
 Unknown properties are rejected unless a schema explicitly permits them.
 Producers write the declared major version. Consumers may accept an equal major
 and newer minor only when unknown optional fields can be ignored safely.
+
+The Stage 0 gate builds every schema with the pinned JsonSchema.Net validator,
+resolves cross-schema references, requires format validation, and evaluates every
+compatibility fixture.
 
 ## Diagnostics and exit codes
 

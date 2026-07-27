@@ -9,11 +9,14 @@ User-facing Forge changes are listed by release, newest first.
 - Defined the accepted MVP boundaries, trust model, state machines, diagnostics, localization, scoped configuration, and presentation parity contracts.
 - Added versioned JSON Schemas and machine-readable capability, recommendation, configuration, and lifecycle registries.
 - Added an automated contract gate that validates schema identity, closed state transitions, surface parity, recommendation safety, and configuration ownership.
+- Added locked Draft 2020-12 meta-schema, reference-resolution, and valid/invalid compatibility-fixture validation.
 
 ### Changed
 
 - Required PowerShell 7.6.3 or newer for release validation.
 - Required publication workflows to open ready-for-review PRs unless draft status is explicitly requested.
+- Required autonomous automatic-review cycles until every actionable finding is resolved.
+- Replaced non-English source documents with concise English architecture and implementation-plan artifacts.
 
 ## v0.1.0
 

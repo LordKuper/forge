@@ -26,8 +26,18 @@
         "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
         "media_type": {"type": "string"},
         "audience": {"enum": ["user_facing", "agent_facing", "machine"]},
-        "language": {"type": ["string", "null"]}
-      }
+        "language": {"type": ["string", "null"], "pattern": "^[a-z]{2,3}(?:-[A-Z][a-z]{3})?(?:-[A-Z]{2}|-[0-9]{3})?$"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"audience": {"enum": ["user_facing", "agent_facing"]}}, "required": ["audience"]},
+          "then": {"required": ["language"], "properties": {"language": {"type": "string"}}}
+        },
+        {
+          "if": {"properties": {"audience": {"const": "machine"}}, "required": ["audience"]},
+          "then": {"properties": {"language": {"type": "null"}}}
+        }
+      ]
     }
   }
 }

@@ -8,7 +8,8 @@ runtime implementation:
 
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)
-- [Implementation plan](forge-implementation-plan.md)
+- [Architecture overview](docs/architecture/overview.md)
+- [Implementation plan](implementation-plan.md)
 
 Validate the Stage 0 gate with:
 
