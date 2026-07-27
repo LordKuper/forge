@@ -116,6 +116,10 @@ $head = (& git rev-parse HEAD).Trim()
 $tagExists = @(& git tag --list $tag) -contains $tag
 
 if ($tagExists) {
+    $tagType = (& git cat-file -t $tag).Trim()
+    if ($LASTEXITCODE -ne 0 -or $tagType -ne "tag") {
+        throw "$tag must be an annotated tag."
+    }
     $tagCommit = (& git rev-list -n 1 $tag).Trim()
     if (($tagCommit | Out-String).Trim() -ne $head) {
         throw "$tag already points to another commit."

@@ -12,9 +12,21 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Test release publisher
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Test
+        shell: pwsh
+        run: ./.github/tests/publish-release.Tests.ps1
+
   validate:
     if: github.event_name == 'pull_request'
     name: Validate release
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
@@ -33,6 +45,7 @@ jobs:
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Publish release
+    needs: test
     permissions:
       contents: write
     runs-on: ubuntu-latest
