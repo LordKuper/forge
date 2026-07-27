@@ -12,4 +12,4 @@ User-facing Forge changes are listed by release, newest first.
 ### Fixed
 
 - Prevented releases from reusing the `main` version or publishing from non-`main` branches.
-- Enforced semantic version increments and breaking-change declarations while safely ordering concurrent releases.
+- Enforced semantic version increments and breaking-change declarations while safely publishing concurrent releases.

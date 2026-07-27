@@ -3,6 +3,7 @@ name: Release Forge
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
   workflow_dispatch:
@@ -32,9 +33,6 @@ jobs:
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     name: Publish release
-    concurrency:
-      group: forge-release
-      cancel-in-progress: false
     permissions:
       contents: write
     runs-on: ubuntu-latest
