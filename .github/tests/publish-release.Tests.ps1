@@ -71,6 +71,38 @@ function Invoke-Validation(
     }
 }
 
+function Invoke-Publication([string]$Repository, [string]$Subject) {
+    $log = Join-Path $Repository "gh-stub.log"
+    function global:gh {
+        Add-Content $env:GH_STUB_LOG ($args -join " ")
+        if ($args[0] -eq "release" -and $args[1] -eq "view") {
+            $global:LASTEXITCODE = 1
+        } else {
+            $global:LASTEXITCODE = 0
+        }
+    }
+
+    $env:GH_STUB_LOG = $log
+    $env:GH_TOKEN = "test-token"
+    $env:GITHUB_REPOSITORY = "owner/repo"
+    $env:RELEASE_BASE_SHA = ""
+    $env:RELEASE_COMMIT_BODY = "Test release."
+    $env:RELEASE_COMMIT_SUBJECT = $Subject
+    try {
+        Push-Location $Repository
+        try { & $publisher | Out-Null } finally { Pop-Location }
+    } finally {
+        Remove-Item Function:\gh -Force -ErrorAction SilentlyContinue
+        $env:GH_STUB_LOG = $null
+        $env:GH_TOKEN = $null
+        $env:GITHUB_REPOSITORY = $null
+        $env:RELEASE_BASE_SHA = $null
+        $env:RELEASE_COMMIT_BODY = $null
+        $env:RELEASE_COMMIT_SUBJECT = $null
+    }
+    $log
+}
+
 function Assert-Throws([scriptblock]$Action, [string]$Pattern) {
     $threw = $false
     try {
@@ -94,8 +126,8 @@ try {
         $repository = New-TestRepository
         $base = Save-Commit $repository "chore: initialize"
         Set-Release $repository "0.1.0"
-        Save-Commit $repository "feat: initialize Forge" | Out-Null
-        Invoke-Validation $repository "feat: initialize Forge" -BaseSha $base
+        Save-Commit $repository "feat(UI): initialize Forge" | Out-Null
+        Invoke-Validation $repository "feat(UI): initialize Forge" -BaseSha $base
     }
 
     Test-Case "malformed changelog" {
@@ -177,6 +209,24 @@ try {
         Invoke-TestGit $repository @("tag", "-a", "v1.1.0", "-m", "Forge v1.1.0") | Out-Null
         Invoke-TestGit $repository @("checkout", "--quiet", $earlier) | Out-Null
         Invoke-Validation $repository "feat!: establish API" "BREAKING CHANGE: API established."
+    }
+
+    Test-Case "publication" {
+        $repository = New-TestRepository
+        Save-Commit $repository "chore: initialize" | Out-Null
+        Set-Release $repository "0.1.0"
+        Save-Commit $repository "feat: initialize Forge" | Out-Null
+        $log = Invoke-Publication $repository "feat: initialize Forge"
+        if ((Invoke-TestGit $repository @("cat-file", "-t", "v0.1.0")) -ne "tag") {
+            throw "Publication did not create an annotated tag."
+        }
+        if ((Invoke-TestGit "$repository.git" @("cat-file", "-t", "v0.1.0")) -ne "tag") {
+            throw "Publication did not push the annotated tag."
+        }
+        $ghCalls = Get-Content $log -Raw
+        if ($ghCalls -notmatch "release create v0.1.0") {
+            throw "Publication did not create a GitHub Release. Stub calls: $ghCalls"
+        }
     }
 
     Write-Host "$passed release publisher tests passed."

@@ -118,7 +118,7 @@ if ([string]::IsNullOrWhiteSpace($commitBody)) {
     }
 }
 
-$commitPattern = "^(?<type>feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([a-z0-9._/-]+\))?(?<breaking>!)?: .+"
+$commitPattern = "^(?<type>feat|fix|docs|refactor|perf|test|build|ci|chore|revert)(\([^)]+\))?(?<breaking>!)?: .+"
 $commitMatch = [regex]::Match($subject, $commitPattern)
 if (-not $commitMatch.Success) {
     throw "The release commit does not follow Conventional Commits: $subject"
