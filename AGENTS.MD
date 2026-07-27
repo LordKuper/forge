@@ -10,7 +10,8 @@ These rules apply to every repository change.
 
 ## Branches
 
-- Develop only from the latest `main` in `feature/<slug>`, with a short English `kebab-case` slug.
+- Before creating a feature branch, fetch `origin`, ensure local `main` equals `origin/main`, and require `git status --porcelain` to be empty.
+- Create the branch from that verified `main` as `feature/<slug>`, with a short English `kebab-case` slug.
 - Direct commits and pushes to `main` are forbidden.
 - Keep one cohesive task per branch. Split unrelated work.
 - Synchronize with `main` and resolve conflicts in the feature branch before opening its PR.
