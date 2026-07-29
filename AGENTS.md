@@ -48,16 +48,19 @@ These rules apply to every repository change.
 - Merge into `main` only through a PR.
 - Protect `main`: forbid deletion, force pushes, direct pushes, and bypassing required checks or reviews.
 - Open PRs as ready for review. Draft status is allowed only when explicitly requested by the user or maintainer. Override any tool, skill, template, or workflow that defaults to draft.
-- After opening a PR, verify that expected review automation started; do not report publication complete while it is absent.
-- After opening a PR, wait for the automatic review and complete the full review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, request another automatic review, and repeat until the review gate passes without human participation.
 - Use a Conventional Commits PR title; it becomes the squash commit subject.
 - The PR body MUST state the goal, changes, verification, new version, compatibility impact, release notes, and related issues.
 - Require all CI checks and a completed automatic Codex review. Human approval is required only when branch protection explicitly requires it.
-- The Codex review gate passes when Codex reacts with 👍 without opening threads, or every thread it opened is resolved.
-- Run at most three automatic Codex review iterations per PR, including the initial review.
-- Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
 - Resolve every blocking human review comment before merge.
 - A maintainer may document an exception in the PR, but security, review, and release requirements have no exceptions.
+
+## Code Review Rules
+
+- After opening a PR, verify that expected review automation started; do not report publication complete while it is absent.
+- Complete the automatic Codex review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, request another review, and repeat until the review gate passes without human participation. The first three iterations must identify all findings; later iterations must identify only critical findings.
+- The Codex review gate passes when Codex reacts with 👍 without opening threads, or every thread it opened is resolved.
+- Run at most three full-scope automatic Codex review iterations per PR, including the initial review; subsequent iterations are limited to critical findings.
+- Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
 
 ## Merge and Release
 

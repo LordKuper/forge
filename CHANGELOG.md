@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.4.1
+
+### Changed
+
+- Added scoped Codex code-review rules, including full-scope review for the
+  first three iterations and critical findings only thereafter.
+
 ## v0.4.0
 
 ### Added
