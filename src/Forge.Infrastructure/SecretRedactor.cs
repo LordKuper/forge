@@ -142,7 +142,7 @@ public sealed partial class SecretRedactor
         };
 
     [GeneratedRegex(
-        @"(?i)\b(password|secret|token|api[_-]?key|authorization|cookie|credential|private[_ -]?key|provider[_ -]?session)\b(\s*=\s*)[^\s,;]+",
+        """(?i)\b(password|secret|token|api[_-]?key|authorization|cookie|credential|private[_ -]?key|provider[_ -]?session)\b(\s*=\s*)(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|[^\s,;]+)""",
         RegexOptions.CultureInvariant)]
     private static partial Regex SecretAssignmentPattern();
 
@@ -152,7 +152,7 @@ public sealed partial class SecretRedactor
     private static partial Regex SensitiveNamePattern();
 
     [GeneratedRegex(
-        @"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9+/=_\-.:]+",
+        @"(?i)\b(Bearer|Basic)\s+[A-Za-z0-9\-._~+/=]+",
         RegexOptions.CultureInvariant)]
     private static partial Regex AuthorizationPattern();
 

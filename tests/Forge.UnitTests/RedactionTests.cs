@@ -51,6 +51,8 @@ public sealed class RedactionTests
     [InlineData(
         "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
         "secret")]
+    [InlineData("password=\"correct horse battery staple\"", "correct horse battery staple")]
+    [InlineData("Authorization: Bearer abc~def", "abc~def")]
     [Trait("Category", "Security")]
     public void SensitiveValuesAreRedacted(string input, string secret)
     {
