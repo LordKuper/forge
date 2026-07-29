@@ -424,7 +424,7 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[1.0.0, )"
+          "Forge.Domain": "[0.3.0, )"
         }
       },
       "forge.configuration": {
@@ -440,7 +440,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )",
+          "Forge.Application": "[0.3.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },

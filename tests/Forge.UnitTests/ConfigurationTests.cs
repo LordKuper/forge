@@ -90,16 +90,24 @@ public sealed class ConfigurationTests
                     new Dictionary<string, JsonElement>
                     {
                         ["artifacts.language.user_facing"] = language,
-                    }),
+                        ["artifacts.language.agent_facing"] =
+                            JsonSerializer.SerializeToElement("en"),
+                    },
+                    Guid.Parse("7d634db2-586e-49c0-9da6-69292575be19")),
                 TestContext.Current.CancellationToken);
 
             ConfigurationDocument result =
                 await store.ReadAsync(TestContext.Current.CancellationToken);
             string manifest = Path.Combine(directory, ".forge", "manifest.yaml");
             Assert.Equal("ru", result.Values["artifacts.language.user_facing"].GetString());
-            Assert.Contains("schema_version: 1", await File.ReadAllTextAsync(
+            string yaml = await File.ReadAllTextAsync(
                 manifest,
-                TestContext.Current.CancellationToken));
+                TestContext.Current.CancellationToken);
+            Assert.Contains("schema_version: 1.0.0", yaml);
+            Assert.Contains("project_id: 7d634db2-586e-49c0-9da6-69292575be19", yaml);
+            Assert.Contains("workflow: implementation-critical", yaml);
+            Assert.Contains("artifacts:", yaml);
+            Assert.DoesNotContain("values:", yaml);
         }
         finally
         {
@@ -109,4 +117,230 @@ public sealed class ConfigurationTests
             }
         }
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UserStoreWritesCanonicalNestedJson()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store =
+                new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            await store.WriteAsync(
+                new(
+                    1,
+                    new Dictionary<string, JsonElement>
+                    {
+                        ["language.ui"] = JsonSerializer.SerializeToElement("ru"),
+                        ["interaction.confirm_destructive"] =
+                            JsonSerializer.SerializeToElement(true),
+                    }),
+                TestContext.Current.CancellationToken);
+
+            using JsonDocument json = JsonDocument.Parse(
+                await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            Assert.Equal("1.0.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal(
+                "ru",
+                json.RootElement.GetProperty("language").GetProperty("ui").GetString());
+            Assert.True(
+                json.RootElement
+                    .GetProperty("interaction")
+                    .GetProperty("confirm_destructive")
+                    .GetBoolean());
+            Assert.False(json.RootElement.TryGetProperty("values", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InvalidUserValueDoesNotReplaceValidConfiguration()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store =
+                new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            ConfigurationDocument valid = new(
+                1,
+                new Dictionary<string, JsonElement>
+                {
+                    ["language.ui"] = JsonSerializer.SerializeToElement("en"),
+                });
+            await store.WriteAsync(valid, TestContext.Current.CancellationToken);
+
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => store.WriteAsync(
+                    new(
+                        1,
+                        new Dictionary<string, JsonElement>
+                        {
+                            ["language.ui"] = JsonSerializer.SerializeToElement(42),
+                        }),
+                    TestContext.Current.CancellationToken));
+
+            ConfigurationDocument current =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("en", current.Values["language.ui"].GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task UserStoreRecoversMalformedCurrentFile()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store =
+                new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            await WriteUserLanguageAsync(store, "en");
+            await WriteUserLanguageAsync(store, "ru");
+            await File.WriteAllTextAsync(
+                path,
+                "{broken",
+                TestContext.Current.CancellationToken);
+
+            ConfigurationDocument recovered =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("en", recovered.Values["language.ui"].GetString());
+
+            ConfigurationDocument restored =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal("en", restored.Values["language.ui"].GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ProjectStoreRecoversInvalidCurrentFile()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, ".forge", "manifest.yaml");
+        try
+        {
+            YamlConfigurationStore store =
+                new(path, ConfigurationScope.Project, new ConfigurationRegistry());
+            Guid projectId = Guid.Parse("7d634db2-586e-49c0-9da6-69292575be19");
+            await WriteProjectLanguagesAsync(store, projectId, "en");
+            await WriteProjectLanguagesAsync(store, projectId, "ru");
+            await File.WriteAllTextAsync(
+                path,
+                "schema_version: invalid",
+                TestContext.Current.CancellationToken);
+
+            ConfigurationDocument recovered =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(
+                "en",
+                recovered.Values["artifacts.language.user_facing"].GetString());
+
+            ConfigurationDocument restored =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(
+                "en",
+                restored.Values["artifacts.language.user_facing"].GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InvalidProjectValueDoesNotReplaceValidConfiguration()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, ".forge", "manifest.yaml");
+        try
+        {
+            YamlConfigurationStore store =
+                new(path, ConfigurationScope.Project, new ConfigurationRegistry());
+            Guid projectId = Guid.Parse("7d634db2-586e-49c0-9da6-69292575be19");
+            await WriteProjectLanguagesAsync(store, projectId, "en");
+
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => store.WriteAsync(
+                    new(
+                        1,
+                        new Dictionary<string, JsonElement>
+                        {
+                            ["artifacts.language.user_facing"] =
+                                JsonSerializer.SerializeToElement(42),
+                            ["artifacts.language.agent_facing"] =
+                                JsonSerializer.SerializeToElement("en"),
+                        },
+                        projectId),
+                    TestContext.Current.CancellationToken));
+
+            ConfigurationDocument current =
+                await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(
+                "en",
+                current.Values["artifacts.language.user_facing"].GetString());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    private static Task WriteUserLanguageAsync(JsonConfigurationStore store, string language) =>
+        store.WriteAsync(
+            new(
+                1,
+                new Dictionary<string, JsonElement>
+                {
+                    ["language.ui"] = JsonSerializer.SerializeToElement(language),
+                }),
+            TestContext.Current.CancellationToken);
+
+    private static Task WriteProjectLanguagesAsync(
+        YamlConfigurationStore store,
+        Guid projectId,
+        string language) =>
+        store.WriteAsync(
+            new(
+                1,
+                new Dictionary<string, JsonElement>
+                {
+                    ["artifacts.language.user_facing"] =
+                        JsonSerializer.SerializeToElement(language),
+                    ["artifacts.language.agent_facing"] =
+                        JsonSerializer.SerializeToElement("en"),
+                },
+                projectId),
+            TestContext.Current.CancellationToken);
 }

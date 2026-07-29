@@ -12,23 +12,49 @@ public sealed class RedactionTests
 
         Assert.DoesNotContain("abc123", result, StringComparison.Ordinal);
         Assert.DoesNotContain("qwerty", result, StringComparison.Ordinal);
-        Assert.Equal("provider token=<redacted> api_key=<redacted>", result);
+        Assert.Equal(
+            "provider token=[REDACTED:token] api_key=[REDACTED:credential]",
+            result);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData("password", "credential")]
+    [InlineData("secret", "secret")]
+    [InlineData("token", "token")]
+    [InlineData("authorization", "authorization")]
+    [InlineData("cookie", "cookie")]
+    [InlineData("credential", "credential")]
+    [InlineData("private_key", "private_key")]
+    [InlineData("provider_session", "provider_session")]
     [Trait("Category", "Security")]
-    public void SensitiveStructuredPropertiesAreRedactedByName()
+    public void SensitiveStructuredPropertiesAreRedactedByName(string name, string kind)
     {
         Dictionary<string, object?> properties = new(StringComparer.Ordinal)
         {
             ["provider"] = "codex",
-            ["access_token"] = "abc123",
+            [name] = "abc123",
         };
 
         IReadOnlyDictionary<string, object?> result =
             SecretRedactor.RedactProperties(properties);
 
         Assert.Equal("codex", result["provider"]);
-        Assert.Equal("<redacted>", result["access_token"]);
+        Assert.Equal($"[REDACTED:{kind}]", result[name]);
+    }
+
+    [Theory]
+    [InlineData("Authorization: Bearer abcdefghijklmnop", "abcdefghijklmnop")]
+    [InlineData("value=aaaabbbb.ccccdddd.eeeeffff", "aaaabbbb.ccccdddd.eeeeffff")]
+    [InlineData("https://user:password@example.test/path", "user:password")]
+    [InlineData(
+        "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----",
+        "secret")]
+    [Trait("Category", "Security")]
+    public void SensitiveValuesAreRedacted(string input, string secret)
+    {
+        string result = SecretRedactor.Redact(input);
+
+        Assert.DoesNotContain(secret, result, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:", result, StringComparison.Ordinal);
     }
 }

@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 
 namespace Forge.Configuration;
@@ -7,12 +8,6 @@ public sealed class JsonConfigurationStore(
     ConfigurationScope scope,
     IConfigurationRegistry registry) : IConfigurationStore
 {
-    private static readonly JsonSerializerOptions SerializerOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-        WriteIndented = true,
-    };
-
     public ConfigurationScope Scope { get; } = scope;
 
     public async Task<ConfigurationDocument> ReadAsync(CancellationToken cancellationToken)
@@ -22,22 +17,24 @@ public sealed class JsonConfigurationStore(
             return ConfigurationDocument.Empty;
         }
 
-        await using FileStream stream = new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            4096,
-            FileOptions.Asynchronous);
-        ConfigurationDocument? document =
-            await JsonSerializer.DeserializeAsync<ConfigurationDocument>(
-                stream,
-                SerializerOptions,
+        try
+        {
+            return await ReadFileAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (IsRecoverable(error) && File.Exists($"{path}.previous"))
+        {
+            ConfigurationDocument recovered =
+                await ReadFileAsync($"{path}.previous", cancellationToken).ConfigureAwait(false);
+            byte[] contents = await File.ReadAllBytesAsync(
+                $"{path}.previous",
                 cancellationToken).ConfigureAwait(false);
-        ConfigurationDocument result =
-            document ?? throw new InvalidDataException("Configuration document is empty.");
-        Validate(result);
-        return result;
+            await AtomicConfigurationFile.WriteAsync(
+                path,
+                contents,
+                cancellationToken,
+                false).ConfigureAwait(false);
+            return recovered;
+        }
     }
 
     public async Task WriteAsync(
@@ -45,57 +42,45 @@ public sealed class JsonConfigurationStore(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(document);
-        Validate(document);
-
-        string fullPath = Path.GetFullPath(path);
-        string directory = Path.GetDirectoryName(fullPath) ??
-            throw new InvalidOperationException("Configuration path has no directory.");
-        Directory.CreateDirectory(directory);
-
-        string tempPath = $"{fullPath}.{Guid.NewGuid():N}.tmp";
-        string previousPath = $"{fullPath}.previous";
-        try
-        {
-            await using (FileStream stream = new(
-                tempPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4096,
-                FileOptions.Asynchronous | FileOptions.WriteThrough))
-            {
-                await JsonSerializer.SerializeAsync(
-                    stream,
-                    document,
-                    SerializerOptions,
-                    cancellationToken).ConfigureAwait(false);
-                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-                stream.Flush(true);
-            }
-
-            if (File.Exists(fullPath))
-            {
-                File.Replace(tempPath, fullPath, previousPath, true);
-            }
-            else
-            {
-                File.Move(tempPath, fullPath);
-            }
-        }
-        finally
-        {
-            if (File.Exists(tempPath))
-            {
-                File.Delete(tempPath);
-            }
-        }
+        ValidateScope(document);
+        ConfigurationSchemaCodec.UserConfiguration persisted =
+            ConfigurationSchemaCodec.ToUser(document);
+        byte[] contents = Encoding.UTF8.GetBytes(
+            JsonSerializer.Serialize(persisted, ConfigurationSchemaCodec.SerializerOptions));
+        await AtomicConfigurationFile.WriteAsync(
+            path,
+            contents,
+            cancellationToken).ConfigureAwait(false);
     }
 
-    private void Validate(ConfigurationDocument document)
+    private async Task<ConfigurationDocument> ReadFileAsync(
+        string filePath,
+        CancellationToken cancellationToken)
+    {
+        await using FileStream stream = new(
+            filePath,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.Read,
+            4096,
+            FileOptions.Asynchronous);
+        using JsonDocument document =
+            await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        ConfigurationDocument result =
+            ConfigurationSchemaCodec.FromUser(document.RootElement);
+        ValidateScope(result);
+        return result;
+    }
+
+    private void ValidateScope(ConfigurationDocument document)
     {
         foreach (string key in document.Values.Keys)
         {
             registry.RequireScope(key, Scope);
         }
     }
+
+    private static bool IsRecoverable(Exception error) =>
+        error is JsonException or InvalidDataException or ConfigurationScopeException;
 }

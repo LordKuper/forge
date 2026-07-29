@@ -18,6 +18,17 @@ User-facing Forge changes are listed by release, newest first.
 - Added CI validation for locked restore, formatting, warnings-as-errors builds,
   tests, and high/critical dependency vulnerabilities.
 
+### Fixed
+
+- Made persisted user and project configuration conform to the published v1
+  schemas, reject invalid writes, and recover validated previous revisions.
+- Made the MAUI Desktop restore graph deterministic for Windows x64 and Arm64.
+
+### Security
+
+- Expanded structured and value-based secret redaction to cover every credential
+  category required by the v1 contract.
+
 ## v0.2.1
 
 ### Added

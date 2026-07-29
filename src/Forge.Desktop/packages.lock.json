@@ -407,19 +407,19 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[1.0.0, )"
+          "Forge.Domain": "[0.3.0, )"
         }
       },
       "forge.bootstrap": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )",
-          "Forge.Configuration": "[1.0.0, )",
-          "Forge.Infrastructure": "[1.0.0, )",
-          "Forge.Localization": "[1.0.0, )",
-          "Forge.Presentation": "[1.0.0, )",
-          "Forge.Providers": "[1.0.0, )",
-          "Forge.Updater": "[1.0.0, )",
+          "Forge.Application": "[0.3.0, )",
+          "Forge.Configuration": "[0.3.0, )",
+          "Forge.Infrastructure": "[0.3.0, )",
+          "Forge.Localization": "[0.3.0, )",
+          "Forge.Presentation": "[0.3.0, )",
+          "Forge.Providers": "[0.3.0, )",
+          "Forge.Updater": "[0.3.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -436,7 +436,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )",
+          "Forge.Application": "[0.3.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -446,13 +446,13 @@
       "forge.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[1.0.0, )"
+          "Forge.Domain": "[0.3.0, )"
         }
       },
       "forge.providers": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )"
+          "Forge.Application": "[0.3.0, )"
         }
       },
       "forge.updater": {
@@ -502,6 +502,64 @@
         "requested": "[18.1.0, )",
         "resolved": "18.1.0",
         "contentHash": "5K+9KFg2TdTl7VXv88Qzi/0lqK6JFoNP3lRuImPYGRV7K/QYklDyTrj4+A+KAki1JsQi6qKY+hDyY7d6WRqjrw=="
+      }
+    },
+    "net10.0-windows10.0.19041/win-arm64": {
+      "Microsoft.Graphics.Win2D": {
+        "type": "Transitive",
+        "resolved": "1.3.2",
+        "contentHash": "xAv4+Xj8wePW1innIUSXebX6UHMGDzOxwKPwYNUNY7mBrsRL/hPFEtuPLpBSxc3iBnuaCogPDCDeN7T4b1xV0Q==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK": "1.6.241114003"
+        }
+      },
+      "Microsoft.Web.WebView2": {
+        "type": "Transitive",
+        "resolved": "1.0.3179.45",
+        "contentHash": "3pokSH5CnN0G6rGhGFo1y87inxYhNxBQ2Vdf0wlvBj99KHxQJormjDACmqRnFeUsmuNFIhWwfAL1ztq7wD5qRA=="
+      },
+      "Microsoft.WindowsAppSDK": {
+        "type": "Transitive",
+        "resolved": "1.7.250909003",
+        "contentHash": "zeVFVrkFYPkAL1cmXo62D1LVC66VqBiMx+WfZ3aDUmizNECCJewMTk0JwjlgYQcIqxqsK1SjF1CeG74TsokWpQ==",
+        "dependencies": {
+          "Microsoft.Web.WebView2": "1.0.2903.40",
+          "Microsoft.Windows.SDK.BuildTools": "10.0.22621.756"
+        }
+      },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
+      }
+    },
+    "net10.0-windows10.0.19041/win-x64": {
+      "Microsoft.Graphics.Win2D": {
+        "type": "Transitive",
+        "resolved": "1.3.2",
+        "contentHash": "xAv4+Xj8wePW1innIUSXebX6UHMGDzOxwKPwYNUNY7mBrsRL/hPFEtuPLpBSxc3iBnuaCogPDCDeN7T4b1xV0Q==",
+        "dependencies": {
+          "Microsoft.WindowsAppSDK": "1.6.241114003"
+        }
+      },
+      "Microsoft.Web.WebView2": {
+        "type": "Transitive",
+        "resolved": "1.0.3179.45",
+        "contentHash": "3pokSH5CnN0G6rGhGFo1y87inxYhNxBQ2Vdf0wlvBj99KHxQJormjDACmqRnFeUsmuNFIhWwfAL1ztq7wD5qRA=="
+      },
+      "Microsoft.WindowsAppSDK": {
+        "type": "Transitive",
+        "resolved": "1.7.250909003",
+        "contentHash": "zeVFVrkFYPkAL1cmXo62D1LVC66VqBiMx+WfZ3aDUmizNECCJewMTk0JwjlgYQcIqxqsK1SjF1CeG74TsokWpQ==",
+        "dependencies": {
+          "Microsoft.Web.WebView2": "1.0.2903.40",
+          "Microsoft.Windows.SDK.BuildTools": "10.0.22621.756"
+        }
+      },
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
       }
     }
   }

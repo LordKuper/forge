@@ -3,4 +3,12 @@
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="YamlDotNet" />
   </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\user-config.schema.json"
+      LogicalName="Forge.Configuration.Schemas.user-config.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\project-manifest.schema.json"
+      LogicalName="Forge.Configuration.Schemas.project-manifest.schema.json" />
+  </ItemGroup>
 </Project>

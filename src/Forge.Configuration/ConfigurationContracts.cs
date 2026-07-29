@@ -56,7 +56,10 @@ public interface IConfigurationStore
 
 public sealed record ConfigurationDocument(
     int SchemaVersion,
-    IReadOnlyDictionary<string, JsonElement> Values)
+    IReadOnlyDictionary<string, JsonElement> Values,
+    Guid? ProjectId = null,
+    string? Workflow = null,
+    IReadOnlyList<Guid>? Sprints = null)
 {
     public static ConfigurationDocument Empty { get; } =
         new(1, new Dictionary<string, JsonElement>(StringComparer.Ordinal));
