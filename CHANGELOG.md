@@ -2,7 +2,7 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.3.1
+## v0.4.0
 
 ### Added
 
