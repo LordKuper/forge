@@ -9,8 +9,8 @@ namespace Forge.Bootstrap;
 
 public static class ForgeHost
 {
-    public static IHostBuilder CreateBuilder(string[]? arguments = null) =>
-        Host.CreateDefaultBuilder(arguments ?? [])
+    public static IHostBuilder CreateBuilder() =>
+        Host.CreateDefaultBuilder()
             .ConfigureLogging(logging =>
             {
                 logging.ClearProviders();

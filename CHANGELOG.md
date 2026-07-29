@@ -21,8 +21,11 @@ User-facing Forge changes are listed by release, newest first.
 ### Fixed
 
 - Made persisted user and project configuration conform to the published v1
-  schemas, reject invalid writes, and recover validated previous revisions.
+  schemas, reject invalid writes, durably flush atomic replacements, and recover
+  validated previous revisions.
 - Made the MAUI Desktop restore graph deterministic for Windows x64 and Arm64.
+- Prevented Generic Host configuration from consuming Forge CLI options such as
+  `--help`, and normalized repository text files to LF across clean checkouts.
 
 ### Security
 

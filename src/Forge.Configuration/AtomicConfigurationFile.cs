@@ -40,6 +40,8 @@ internal static class AtomicConfigurationFile
             {
                 File.Move(tempPath, fullPath);
             }
+
+            DirectoryFlusher.Flush(directory);
         }
         finally
         {
