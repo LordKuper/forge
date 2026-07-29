@@ -48,7 +48,7 @@ public sealed class UpdaterTests
             releases,
             new PassingVerifier(),
             new PassingUpdateLock(),
-            new RestartTokenService(),
+            new RestartTokenService(new TestRestartTokenStore()),
             new RejectingRestartCoordinator());
 
         UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
@@ -128,7 +128,7 @@ public sealed class UpdaterTests
             releases,
             new PassingVerifier(),
             new PassingUpdateLock(),
-            new RestartTokenService(),
+            new RestartTokenService(new TestRestartTokenStore()),
             new RejectingRestartCoordinator());
 
         UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
@@ -169,7 +169,7 @@ public sealed class UpdaterTests
     [Trait("Category", "Unit")]
     public void RestartTokensAreOneUseAndPreserveLaunchContext()
     {
-        RestartTokenService tokens = new();
+        RestartTokenService tokens = new(new TestRestartTokenStore());
         UpdateRequest request = new(
             SemanticVersion.Parse("1.0.0"),
             "C:\\Forge\\forge.exe",
@@ -193,7 +193,7 @@ public sealed class UpdaterTests
     [Trait("Category", "Unit")]
     public void StartupHandshakeRejectsMissingAndReplayedToken()
     {
-        RestartTokenService tokens = new();
+        RestartTokenService tokens = new(new TestRestartTokenStore());
         StartupHandshake handshake = new(tokens);
         RestartIdentity identity = new(
             SemanticVersion.Parse("1.1.0"),
@@ -211,6 +211,29 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void StartupHandshakeUsesPersistedTokenAcrossServiceInstances()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-restart-token-{Guid.NewGuid():N}");
+        try
+        {
+            RestartIdentity identity = new(
+                SemanticVersion.Parse("1.1.0"),
+                new UpdateTarget("windows", "x64", "portable_bundle"),
+                UpdateSurface.Cli);
+            RestartTokenService issuingService = new(new FileRestartTokenStore(directory));
+            RestartContext context = issuingService.Create(CreateRequest(), identity);
+            StartupHandshake restartedProcess = new(new RestartTokenService(new FileRestartTokenStore(directory)));
+
+            Assert.Equal(UpdateDiagnosticCode.None, restartedProcess.Confirm(context.Token, identity).Code);
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RestartFailureRollsBackActivatedRelease()
     {
         TestStrategy strategy = new(true) { ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0")) };
@@ -220,7 +243,7 @@ public sealed class UpdaterTests
             new StaticReleaseClient(Release("1.1.0")),
             new PassingVerifier(),
             new PassingUpdateLock(),
-            new RestartTokenService(),
+            new RestartTokenService(new TestRestartTokenStore()),
             new FailingRestartCoordinator());
 
         UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
@@ -241,8 +264,35 @@ public sealed class UpdaterTests
             new StaticReleaseClient(Release("1.1.0")),
             new PassingVerifier(),
             new PassingUpdateLock(),
-            new RestartTokenService(),
+            new RestartTokenService(new TestRestartTokenStore()),
             new ThrowingRestartCoordinator());
+
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), cancellation.Token);
+
+        Assert.Equal(UpdateLifecycleState.RolledBack, result.State);
+        Assert.True(result.RollbackAttempted);
+        Assert.Equal(1, strategy.RollbackCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PartialActivationRollsBackWithCleanupToken()
+    {
+        TestStrategy strategy = new(true)
+        {
+            ActivateResult = ActivationResult.Failure("activation failed", new("activation", "1.0.0", "1.1.0")),
+            RequireUsableRollbackToken = true,
+        };
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [strategy],
+            new StaticReleaseClient(Release("1.1.0")),
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(new TestRestartTokenStore()),
+            new RejectingRestartCoordinator());
 
         using CancellationTokenSource cancellation = new();
         cancellation.Cancel();
@@ -274,7 +324,7 @@ public sealed class UpdaterTests
             releases,
             new PassingVerifier(),
             new FailingUpdateLock(),
-            new RestartTokenService(),
+            new RestartTokenService(new TestRestartTokenStore()),
             new RejectingRestartCoordinator());
 
         UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
@@ -361,6 +411,8 @@ public sealed class UpdaterTests
 
         public int RollbackCalls { get; private set; }
 
+        public bool RequireUsableRollbackToken { get; set; }
+
         public bool Supports(UpdateTarget target) => supports;
 
         public ValueTask<StageResult> StageAsync(VerifiedRelease release, UpdateTarget target, CancellationToken cancellationToken) =>
@@ -371,6 +423,11 @@ public sealed class UpdaterTests
 
         public ValueTask<RollbackResult> RollbackAsync(ActivationReceipt receipt, CancellationToken cancellationToken)
         {
+            if (RequireUsableRollbackToken && cancellationToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellationToken);
+            }
+
             RollbackCalls++;
             return ValueTask.FromResult(new RollbackResult(true, UpdateDiagnostic.None));
         }
@@ -415,5 +472,23 @@ public sealed class UpdaterTests
     {
         public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken) =>
             ValueTask.FromException<UpdateDiagnostic>(new OperationCanceledException());
+    }
+
+    private sealed class TestRestartTokenStore : IRestartTokenStore
+    {
+        private readonly Dictionary<string, RestartIdentity> tokens = new(StringComparer.Ordinal);
+
+        public bool TryCreate(string token, RestartIdentity identity) =>
+            tokens.TryAdd(token, identity);
+
+        public bool TryConsume(string token, RestartIdentity identity)
+        {
+            if (!tokens.TryGetValue(token, out RestartIdentity? expected) || expected != identity)
+            {
+                return false;
+            }
+
+            return tokens.Remove(token);
+        }
     }
 }

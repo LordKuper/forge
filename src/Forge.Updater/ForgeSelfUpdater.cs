@@ -76,7 +76,7 @@ public sealed class ForgeSelfUpdater(
             cancellationToken).ConfigureAwait(false);
         if (!activated.Succeeded)
         {
-            return await RollbackIfNeededAsync(strategy, activated.Receipt, activated.Diagnostic, cancellationToken).ConfigureAwait(false);
+            return await RollbackIfNeededAsync(strategy, activated.Receipt, activated.Diagnostic, CancellationToken.None).ConfigureAwait(false);
         }
 
         UpdateDiagnostic restartResult;

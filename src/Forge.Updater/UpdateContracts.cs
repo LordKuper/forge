@@ -203,6 +203,13 @@ public interface IRestartTokenService
     bool Consume(string token, RestartIdentity actualIdentity);
 }
 
+public interface IRestartTokenStore
+{
+    bool TryCreate(string token, RestartIdentity identity);
+
+    bool TryConsume(string token, RestartIdentity identity);
+}
+
 public interface IRestartCoordinator
 {
     ValueTask<UpdateDiagnostic> RestartAsync(

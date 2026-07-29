@@ -1,18 +1,18 @@
-using System.Collections.Concurrent;
 using System.Security.Cryptography;
+using System.Text.Json;
 
 namespace Forge.Updater;
 
-public sealed class RestartTokenService : IRestartTokenService
+public sealed class RestartTokenService(IRestartTokenStore store) : IRestartTokenService
 {
-    private readonly ConcurrentDictionary<string, RestartIdentity> unusedTokens = new(StringComparer.Ordinal);
+    private readonly IRestartTokenStore store = store ?? throw new ArgumentNullException(nameof(store));
 
     public RestartContext Create(UpdateRequest request, RestartIdentity expectedIdentity)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(expectedIdentity);
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        if (!unusedTokens.TryAdd(token, expectedIdentity))
+        if (!store.TryCreate(token, expectedIdentity))
         {
             throw new InvalidOperationException("Restart token collision.");
         }
@@ -24,12 +24,107 @@ public sealed class RestartTokenService : IRestartTokenService
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentNullException.ThrowIfNull(actualIdentity);
-        if (!unusedTokens.TryGetValue(token, out RestartIdentity? expectedIdentity) || expectedIdentity != actualIdentity)
+        return store.TryConsume(token, actualIdentity);
+    }
+}
+
+public sealed class FileRestartTokenStore : IRestartTokenStore
+{
+    private const string FileExtension = ".restart-token.json";
+    private readonly string directory;
+
+    public FileRestartTokenStore(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        this.directory = Path.GetFullPath(directory);
+        Directory.CreateDirectory(this.directory);
+    }
+
+    public bool TryCreate(string token, RestartIdentity identity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentNullException.ThrowIfNull(identity);
+        try
+        {
+            using FileStream stream = new(
+                GetTokenPath(token),
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None);
+            JsonSerializer.Serialize(stream, PersistedRestartIdentity.From(identity));
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+    }
+
+    public bool TryConsume(string token, RestartIdentity identity)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentNullException.ThrowIfNull(identity);
+        string tokenPath = GetTokenPath(token);
+        string claimPath = Path.Combine(directory, $".{token}.{Guid.NewGuid():N}.claim");
+        try
+        {
+            File.Move(tokenPath, claimPath);
+        }
+        catch (IOException)
         {
             return false;
         }
 
-        return unusedTokens.TryRemove(token, out _);
+        try
+        {
+            PersistedRestartIdentity? persisted = JsonSerializer.Deserialize<PersistedRestartIdentity>(File.ReadAllText(claimPath));
+            if (persisted is not null && persisted.Matches(identity))
+            {
+                File.Delete(claimPath);
+                return true;
+            }
+
+            File.Move(claimPath, tokenPath);
+            return false;
+        }
+        catch (JsonException)
+        {
+            File.Delete(claimPath);
+            return false;
+        }
+    }
+
+    private string GetTokenPath(string token)
+    {
+        if (token.Length != 64 || !token.All(Uri.IsHexDigit))
+        {
+            throw new ArgumentException("Restart token must be a 32-byte hexadecimal value.", nameof(token));
+        }
+
+        return Path.Combine(directory, $"{token}{FileExtension}");
+    }
+
+    private sealed record PersistedRestartIdentity(
+        string Version,
+        string OperatingSystem,
+        string Architecture,
+        string Packaging,
+        UpdateSurface Surface)
+    {
+        public static PersistedRestartIdentity From(RestartIdentity identity) =>
+            new(
+                identity.Version.ToString(),
+                identity.Target.OperatingSystem,
+                identity.Target.Architecture,
+                identity.Target.Packaging,
+                identity.Surface);
+
+        public bool Matches(RestartIdentity identity) =>
+            string.Equals(Version, identity.Version.ToString(), StringComparison.Ordinal) &&
+            string.Equals(OperatingSystem, identity.Target.OperatingSystem, StringComparison.Ordinal) &&
+            string.Equals(Architecture, identity.Target.Architecture, StringComparison.Ordinal) &&
+            string.Equals(Packaging, identity.Target.Packaging, StringComparison.Ordinal) &&
+            Surface == identity.Surface;
     }
 }
 
