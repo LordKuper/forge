@@ -1,6 +1,6 @@
 # Forge MVP implementation plan
 
-**Updated:** 2026-07-27
+**Updated:** 2026-07-29
 **Status:** active
 
 ## Plan rules
@@ -15,7 +15,7 @@
 
 - [x] Stage 0 — Freeze MVP contracts, threats, and boundaries.
 - [x] Stage 1 — Create the .NET solution and host skeletons.
-- [ ] Stage 2 — Implement the platform-neutral self-updater.
+- [x] Stage 2 — Implement the platform-neutral self-updater.
 - [ ] Stage 3 — Implement the Windows installer and update strategy.
 - [ ] Stage 4 — Implement startup and `.forge/` initialization.
 - [ ] Stage 5 — Implement provider toolchain management and adapters.
@@ -88,14 +88,14 @@ localization, and configuration contracts; architecture and redaction tests pass
 
 **Depends on:** Stages 0–1.
 
-- [ ] P2.1–P2.5 — Detect OS/process architecture, normalize `UpdateTarget`,
+- [x] P2.1–P2.5 — Detect OS/process architecture, normalize `UpdateTarget`,
   resolve exactly one strategy, and forbid mutation before resolution.
-- [ ] P2.6–P2.12 — Query the latest published stable GitHub release, enforce
+- [x] P2.6–P2.12 — Query the latest published stable GitHub release, enforce
   SemVer/no-downgrade, use ETags without TTL bypass, select assets, and verify
   name, size, SHA-256, and provenance.
-- [ ] P2.13–P2.18 — Implement the update lifecycle, restart token, argument/cwd
+- [x] P2.13–P2.18 — Implement the update lifecycle, restart token, argument/cwd
   preservation, startup handshake, and platform-neutral rollback orchestration.
-- [ ] P2.19–P2.24 — Cover platform detection, fake strategies, unsupported
+- [x] P2.19–P2.24 — Cover platform detection, fake strategies, unsupported
   platforms, release selection, verification failures, restart, and rollback.
 
 **Gate:** the core has no Windows dependency and cannot mutate unsupported
@@ -270,6 +270,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 0 gate | `pwsh ./tests/contracts/Stage0.Contracts.Tests.ps1` | 2026-07-27 |
 | Stage 1 solution and hosts | `Forge.slnx`, `src/`, `tests/Forge.*Tests/` | 2026-07-29 |
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` (17 tests) | 2026-07-29 |
+| Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
 
 ## Open decisions
 

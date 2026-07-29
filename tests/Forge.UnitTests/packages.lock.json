@@ -447,6 +447,9 @@
       "forge.localization": {
         "type": "Project"
       },
+      "forge.updater": {
+        "type": "Project"
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",
