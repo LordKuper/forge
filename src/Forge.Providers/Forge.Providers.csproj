@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\Forge.Application\Forge.Application.csproj" />
+  </ItemGroup>
+</Project>

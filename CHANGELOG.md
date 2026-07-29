@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.3.0
+
+### Added
+
+- Added the .NET 10 SLNX solution with layered runtime, updater, provider,
+  presentation, configuration, localization, bootstrap, CLI, and MAUI Desktop
+  projects.
+- Added a shared English/Russian localization catalog and a localized CLI status
+  command and Desktop startup page.
+- Added scoped user/project configuration registries, provenance resolution,
+  independent migrations, scope enforcement, and atomic writes with recovery.
+- Added unit, integration, acceptance, architecture, security, and installer
+  tests plus Windows x64/Arm64 publish profiles.
+- Added CI validation for locked restore, formatting, warnings-as-errors builds,
+  tests, and high/critical dependency vulnerabilities.
+
 ## v0.2.1
 
 ### Added
