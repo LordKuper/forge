@@ -26,6 +26,12 @@ public sealed class RestartTokenService(IRestartTokenStore store) : IRestartToke
         ArgumentNullException.ThrowIfNull(actualIdentity);
         return store.TryConsume(token, actualIdentity);
     }
+
+    public void Revoke(string token)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        store.Revoke(token);
+    }
 }
 
 public sealed class FileRestartTokenStore : IRestartTokenStore
@@ -37,7 +43,6 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         this.directory = Path.GetFullPath(directory);
-        Directory.CreateDirectory(this.directory);
     }
 
     public bool TryCreate(string token, RestartIdentity identity)
@@ -46,8 +51,9 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         ArgumentNullException.ThrowIfNull(identity);
         try
         {
+            Directory.CreateDirectory(directory);
             using FileStream stream = new(
-                GetTokenPath(token),
+                GetTokenPath(token)!,
                 FileMode.CreateNew,
                 FileAccess.Write,
                 FileShare.None);
@@ -64,11 +70,14 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
         ArgumentNullException.ThrowIfNull(identity);
-        string tokenPath = GetTokenPath(token);
+        if (!TryGetTokenPath(token, out string? tokenPath))
+        {
+            return false;
+        }
         string claimPath = Path.Combine(directory, $".{token}.{Guid.NewGuid():N}.claim");
         try
         {
-            File.Move(tokenPath, claimPath);
+            File.Move(tokenPath!, claimPath);
         }
         catch (IOException)
         {
@@ -84,7 +93,7 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
                 return true;
             }
 
-            File.Move(claimPath, tokenPath);
+            File.Move(claimPath, tokenPath!);
             return false;
         }
         catch (JsonException)
@@ -94,14 +103,29 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         }
     }
 
-    private string GetTokenPath(string token)
+    public void Revoke(string token)
+    {
+        if (TryGetTokenPath(token, out string? tokenPath))
+        {
+            File.Delete(tokenPath!);
+        }
+    }
+
+    private string? GetTokenPath(string token) =>
+        TryGetTokenPath(token, out string? path)
+            ? path
+            : throw new ArgumentException("Restart token must be a 32-byte hexadecimal value.", nameof(token));
+
+    private bool TryGetTokenPath(string token, out string? path)
     {
         if (token.Length != 64 || !token.All(Uri.IsHexDigit))
         {
-            throw new ArgumentException("Restart token must be a 32-byte hexadecimal value.", nameof(token));
+            path = null;
+            return false;
         }
 
-        return Path.Combine(directory, $"{token}{FileExtension}");
+        path = Path.Combine(directory, $"{token}{FileExtension}");
+        return true;
     }
 
     private sealed record PersistedRestartIdentity(

@@ -490,5 +490,7 @@ public sealed class UpdaterTests
 
             return tokens.Remove(token);
         }
+
+        public void Revoke(string token) => tokens.Remove(token);
     }
 }

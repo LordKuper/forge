@@ -76,6 +76,7 @@ public sealed class ForgeSelfUpdater(
             cancellationToken).ConfigureAwait(false);
         if (!activated.Succeeded)
         {
+            restartTokens.Revoke(restart.Token);
             return await RollbackIfNeededAsync(strategy, activated.Receipt, activated.Diagnostic, CancellationToken.None).ConfigureAwait(false);
         }
 
@@ -84,13 +85,14 @@ public sealed class ForgeSelfUpdater(
         {
             restartResult = await restartCoordinator.RestartAsync(restart, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is OperationCanceledException or InvalidOperationException)
+        catch (Exception exception) when (exception is OperationCanceledException or InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
         {
             restartResult = new(UpdateDiagnosticCode.RestartFailed, "Restart coordination did not complete.");
         }
 
         if (restartResult.Code != UpdateDiagnosticCode.None)
         {
+            restartTokens.Revoke(restart.Token);
             return await RollbackIfNeededAsync(strategy, activated.Receipt, restartResult, CancellationToken.None).ConfigureAwait(false);
         }
 

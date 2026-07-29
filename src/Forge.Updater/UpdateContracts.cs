@@ -201,6 +201,8 @@ public interface IRestartTokenService
     RestartContext Create(UpdateRequest request, RestartIdentity expectedIdentity);
 
     bool Consume(string token, RestartIdentity actualIdentity);
+
+    void Revoke(string token);
 }
 
 public interface IRestartTokenStore
@@ -208,6 +210,8 @@ public interface IRestartTokenStore
     bool TryCreate(string token, RestartIdentity identity);
 
     bool TryConsume(string token, RestartIdentity identity);
+
+    void Revoke(string token);
 }
 
 public interface IRestartCoordinator
