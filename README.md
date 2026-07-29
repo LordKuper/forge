@@ -41,3 +41,19 @@ Validate only the Stage 0 contract gate with:
 ```powershell
 pwsh ./tests/contracts/Stage0.Contracts.Tests.ps1
 ```
+
+## Windows installation
+
+The installer fetches the latest stable Forge release for the current x64 or
+Arm64 Windows architecture. It requires the GitHub CLI (`gh`) to verify release
+attestation, then installs under `%LOCALAPPDATA%\Forge` without administrator
+rights:
+
+```powershell
+pwsh ./install.ps1
+```
+
+It stages and self-tests the CLI before atomically changing `current.json`.
+Re-running the script for the same release is safe; it preserves the previous
+pointer as `current.json.previous` and adds `%LOCALAPPDATA%\Forge\bin` to the
+user PATH only once.

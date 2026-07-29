@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.5.0
+
+### Added
+
+- Added a verified per-user Windows installer for x64 and Arm64 portable
+  bundles. It verifies checksums and GitHub attestation, stages and self-tests
+  the CLI before activation, retains the previous current-version pointer, and
+  adds an idempotent `forge` command to the user PATH.
+
 ## v0.4.1
 
 ### Changed

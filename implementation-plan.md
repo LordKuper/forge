@@ -105,7 +105,7 @@ platforms; all update/restart/rollback contract tests pass.
 
 **Depends on:** Stage 2.
 
-- [ ] P3.1–P3.8 — Implement `install.ps1`, RID detection, verified download,
+- [x] P3.1–P3.8 — Implement `install.ps1`, RID detection, verified download,
   per-user version layout, host self-tests, idempotent PATH update, and rollback.
 - [ ] P3.9–P3.16 — Implement mutex/timeout, staging, helper activation, atomic
   current switch, handshake rollback, and concurrent-launch handling.
@@ -271,6 +271,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 1 solution and hosts | `Forge.slnx`, `src/`, `tests/Forge.*Tests/` | 2026-07-29 |
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` (17 tests) | 2026-07-29 |
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
+| Stage 3 installer foundation | `install.ps1`; `pwsh ./.github/scripts/test-stage1.ps1` (62 tests) | 2026-07-29 |
 
 ## Open decisions
 

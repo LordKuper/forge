@@ -5,6 +5,11 @@ using Forge.Localization;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
+if (args is ["--self-test"])
+{
+    return 0;
+}
+
 using IHost host = ForgeHost.CreateBuilder().Build();
 ILocalizationCatalog catalog = host.Services.GetRequiredService<ILocalizationCatalog>();
 RootCommand root = CliApplication.CreateRootCommand(catalog, Console.Out);

@@ -22,6 +22,20 @@ public sealed class PublishProfileTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Installer")]
+    public void InstallerRequiresVerifiedStagingAndAnAtomicCurrentPointer()
+    {
+        string installer = File.ReadAllText(Path.Combine(FindRoot(), "install.ps1"));
+
+        Assert.Contains("gh attestation verify", installer, StringComparison.Ordinal);
+        Assert.Contains("Get-FileHash", installer, StringComparison.Ordinal);
+        Assert.Contains(".staging-", installer, StringComparison.Ordinal);
+        Assert.Contains("--self-test", installer, StringComparison.Ordinal);
+        Assert.Contains("File]::Replace", installer, StringComparison.Ordinal);
+        Assert.Contains("Add-ForgePath", installer, StringComparison.Ordinal);
+    }
+
     private static string FindRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);
