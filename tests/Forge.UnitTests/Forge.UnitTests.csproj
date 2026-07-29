@@ -10,5 +10,6 @@
     <ProjectReference Include="..\..\src\Forge.Domain\Forge.Domain.csproj" />
     <ProjectReference Include="..\..\src\Forge.Localization\Forge.Localization.csproj" />
     <ProjectReference Include="..\..\src\Forge.Infrastructure\Forge.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
 </Project>

@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.3.1
+
+### Added
+
+- Added a platform-neutral self-update core that detects and normalizes update
+  targets, resolves exactly one strategy before release access, selects newer
+  stable GitHub releases with ETags, verifies release assets, and coordinates
+  staging, restart handshakes, and rollback.
+- Added updater contract, architecture, and regression coverage for unsupported
+  platforms, release selection, verification failures, restart context, and
+  rollback.
+
 ## v0.3.0
 
 ### Added

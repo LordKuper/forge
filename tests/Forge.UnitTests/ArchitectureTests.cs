@@ -34,6 +34,21 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void UpdaterCoreDoesNotReferencePlatformProjects()
+    {
+        string project = Path.Combine(
+            RepositoryRoot.Find(),
+            "src",
+            "Forge.Updater",
+            "Forge.Updater.csproj");
+
+        Assert.DoesNotContain(
+            ProjectReferences(project),
+            reference => reference.Contains("Windows", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void HostsDoNotContainHardCodedLabelText()
     {
         string root = RepositoryRoot.Find();
