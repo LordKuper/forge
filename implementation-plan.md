@@ -14,7 +14,7 @@
 ## Progress
 
 - [x] Stage 0 — Freeze MVP contracts, threats, and boundaries.
-- [ ] Stage 1 — Create the .NET solution and host skeletons.
+- [x] Stage 1 — Create the .NET solution and host skeletons.
 - [ ] Stage 2 — Implement the platform-neutral self-updater.
 - [ ] Stage 3 — Implement the Windows installer and update strategy.
 - [ ] Stage 4 — Implement startup and `.forge/` initialization.
@@ -66,19 +66,19 @@
 
 **Depends on:** Stage 0.
 
-- [ ] P1.1–P1.10 — Create `Forge.sln`, Domain, Application, Infrastructure,
+- [x] P1.1–P1.10 — Create `Forge.slnx`, Domain, Application, Infrastructure,
   Providers, platform-neutral and Windows updater projects, CLI, Bootstrap, and
   unit/integration/acceptance/installer tests.
-- [ ] P1.19–P1.20 — Create `Forge.Presentation` and the .NET MAUI Windows
+- [x] P1.19–P1.20 — Create `Forge.Presentation` and the .NET MAUI Windows
   `Forge.Desktop` host.
-- [ ] P1.11–P1.18 — Configure dependency injection, clock/files/process/network
+- [x] P1.11–P1.18 — Configure dependency injection, clock/files/process/network
   abstractions, structured redacted logging, analyzers, formatting,
   warnings-as-errors, test categories, CI, architecture tests, and CLI skeleton.
-- [ ] P1.21–P1.23 — Add Desktop startup skeleton, Windows publish targets, and
+- [x] P1.21–P1.23 — Add Desktop startup skeleton, Windows publish targets, and
   architecture rules forbidding presentation-to-infrastructure dependencies.
-- [ ] P1.24–P1.27 — Add the shared localization catalog, complete English and
+- [x] P1.24–P1.27 — Add the shared localization catalog, complete English and
   Russian resources, catalog linting, and hard-coded-string checks.
-- [ ] P1.28–P1.31 — Add scoped configuration registries, stores, migrations,
+- [x] P1.28–P1.31 — Add scoped configuration registries, stores, migrations,
   atomic writes, provenance, and anti-bypass architecture tests.
 
 **Gate:** clean restore/build/test; both hosts build and share presentation,
@@ -268,6 +268,8 @@ the signed MVP release installs globally for the Windows user.
 |---|---|---|
 | Stage 0 decisions and contracts | `docs/architecture/decisions/0001-stage-0-foundation.md`, `docs/contracts/v1/` | 2026-07-27 |
 | Stage 0 gate | `pwsh ./tests/contracts/Stage0.Contracts.Tests.ps1` | 2026-07-27 |
+| Stage 1 solution and hosts | `Forge.slnx`, `src/`, `tests/Forge.*Tests/` | 2026-07-29 |
+| Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` (17 tests) | 2026-07-29 |
 
 ## Open decisions
 

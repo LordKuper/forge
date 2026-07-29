@@ -11,6 +11,26 @@ permissions:
   contents: read
 
 jobs:
+  dotnet:
+    name: Validate .NET solution
+    runs-on: windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: global.json
+
+      - name: Install MAUI Windows workload
+        shell: pwsh
+        run: dotnet workload install maui-windows --skip-manifest-update
+
+      - name: Validate Stage 1
+        shell: pwsh
+        run: ./.github/scripts/test-stage1.ps1
+
   test:
     name: Test release publisher
     runs-on: ubuntu-24.04
@@ -33,7 +53,7 @@ jobs:
   validate:
     if: github.event_name == 'pull_request'
     name: Validate release
-    needs: test
+    needs: [dotnet, test]
     runs-on: ubuntu-24.04
     steps:
       - name: Check out repository
@@ -56,7 +76,7 @@ jobs:
   release:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: Publish release
-    needs: test
+    needs: [dotnet, test]
     permissions:
       contents: write
     runs-on: ubuntu-24.04

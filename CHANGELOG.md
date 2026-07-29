@@ -2,6 +2,38 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.3.0
+
+### Added
+
+- Added the .NET 10 SLNX solution with layered runtime, updater, provider,
+  presentation, configuration, localization, bootstrap, CLI, and MAUI Desktop
+  projects.
+- Added a shared English/Russian localization catalog and a localized CLI status
+  command and Desktop startup page.
+- Added scoped user/project configuration registries, provenance resolution,
+  independent migrations, scope enforcement, and atomic writes with recovery.
+- Added unit, integration, acceptance, architecture, security, and installer
+  tests plus Windows x64/Arm64 publish profiles.
+- Added CI validation for locked restore, formatting, warnings-as-errors builds,
+  tests, and high/critical dependency vulnerabilities.
+
+### Fixed
+
+- Made persisted user and project configuration conform to the published v1
+  schemas, reject invalid writes, durably flush atomic replacements, and recover
+  validated previous revisions.
+- Made the MAUI Desktop restore graph deterministic for Windows x64 and Arm64.
+- Prevented Generic Host configuration from consuming Forge CLI options such as
+  `--help`, and normalized repository text files to LF across clean checkouts.
+- Aligned sprint states with the v1 workflow contract and ensured cancellation
+  terminates child process trees.
+
+### Security
+
+- Expanded structured and value-based secret redaction to cover every credential
+  category required by the v1 contract, including nested payloads.
+
 ## v0.2.1
 
 ### Added

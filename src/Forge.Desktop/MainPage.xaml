@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<ContentPage
+    x:Class="Forge.Desktop.MainPage"
+    xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+    xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
+  <VerticalStackLayout Padding="32" Spacing="16">
+    <Label x:Name="TitleLabel" FontSize="32" SemanticProperties.HeadingLevel="Level1" />
+    <Label x:Name="StatusLabel" SemanticProperties.HeadingLevel="Level2" />
+  </VerticalStackLayout>
+</ContentPage>
