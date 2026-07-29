@@ -33,9 +33,17 @@ public sealed class ForgeReleaseClient(IReleaseApi api) : IForgeReleaseClient
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(currentVersion);
-        ReleaseApiResponse response = await api.GetReleasesAsync(
-            new ReleaseApiRequest(entityTag),
-            cancellationToken).ConfigureAwait(false);
+        ReleaseApiResponse response;
+        try
+        {
+            response = await api.GetReleasesAsync(
+                new ReleaseApiRequest(entityTag),
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpRequestException)
+        {
+            return new(null, new(UpdateDiagnosticCode.ReleaseUnavailable, "The release endpoint could not be reached."), false);
+        }
         IReadOnlyList<ReleaseMetadata>? releases = response.NotModified ? cachedReleases : response.Releases;
         if (releases is null)
         {

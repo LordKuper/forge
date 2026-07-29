@@ -106,6 +106,19 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ReleaseClientMapsHttpFailuresToRecoveryDiagnostics()
+    {
+        ForgeReleaseClient client = new(new ThrowingReleaseApi());
+
+        ReleaseLookupResult result = await client.GetLatestStableAsync(
+            SemanticVersion.Parse("1.0.0"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateDiagnosticCode.ReleaseUnavailable, result.Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task CurrentReleaseIsASuccessfulNoOp()
     {
         CountingReleaseClient releases = new();
@@ -217,6 +230,29 @@ public sealed class UpdaterTests
         Assert.Equal(1, strategy.RollbackCalls);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RestartExceptionRollsBackWithCleanupToken()
+    {
+        TestStrategy strategy = new(true) { ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0")) };
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [strategy],
+            new StaticReleaseClient(Release("1.1.0")),
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(),
+            new ThrowingRestartCoordinator());
+
+        using CancellationTokenSource cancellation = new();
+        cancellation.Cancel();
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), cancellation.Token);
+
+        Assert.Equal(UpdateLifecycleState.RolledBack, result.State);
+        Assert.True(result.RollbackAttempted);
+        Assert.Equal(1, strategy.RollbackCalls);
+    }
+
     [Theory]
     [InlineData("1.2.3+")]
     [InlineData("1.2.3+foo+bar")]
@@ -304,6 +340,12 @@ public sealed class UpdaterTests
         }
     }
 
+    private sealed class ThrowingReleaseApi : IReleaseApi
+    {
+        public ValueTask<ReleaseApiResponse> GetReleasesAsync(ReleaseApiRequest request, CancellationToken cancellationToken) =>
+            ValueTask.FromException<ReleaseApiResponse>(new HttpRequestException());
+    }
+
     private sealed class PassingVerifier : IReleaseVerifier
     {
         public ValueTask<VerificationResult> VerifyAsync(ReleaseMetadata release, UpdateTarget target, CancellationToken cancellationToken) =>
@@ -367,5 +409,11 @@ public sealed class UpdaterTests
     {
         public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken) =>
             ValueTask.FromResult(new UpdateDiagnostic(UpdateDiagnosticCode.RestartFailed, "restart failed"));
+    }
+
+    private sealed class ThrowingRestartCoordinator : IRestartCoordinator
+    {
+        public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken) =>
+            ValueTask.FromException<UpdateDiagnostic>(new OperationCanceledException());
     }
 }
