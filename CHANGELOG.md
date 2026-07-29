@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.2.1
+
+### Added
+
+- Restored the complete original research and target-system design document as a
+  verbatim Russian-language source artifact.
+
+### Changed
+
+- Clarified the relationship between the complete source design, the canonical
+  English architecture overview, and the implementation plan.
+
 ## v0.2.0
 
 ### Added
