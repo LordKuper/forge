@@ -2,12 +2,14 @@ namespace Forge.Domain;
 
 public enum SprintState
 {
-    Created,
+    Draft,
     Ready,
     Running,
     AwaitingHuman,
-    Completed,
+    Blocked,
     Failed,
+    ReadyToFinalize,
+    Completed,
     Cancelled,
 }
 

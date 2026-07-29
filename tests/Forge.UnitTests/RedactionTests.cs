@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Forge.Infrastructure;
 
 namespace Forge.UnitTests;
@@ -57,4 +58,30 @@ public sealed class RedactionTests
         Assert.DoesNotContain(secret, result, StringComparison.Ordinal);
         Assert.Contains("[REDACTED:", result, StringComparison.Ordinal);
     }
+
+    [Fact]
+    [Trait("Category", "Security")]
+    public void NestedStructuredValuesAreRecursivelyRedacted()
+    {
+        Dictionary<string, object?> properties = new(StringComparer.Ordinal)
+        {
+            ["payload"] = new Dictionary<string, object?>
+            {
+                ["items"] = new object?[]
+                {
+                    new ProviderPayload("codex", "abc123"),
+                },
+            },
+        };
+
+        IReadOnlyDictionary<string, object?> result =
+            SecretRedactor.RedactProperties(properties);
+        string json = JsonSerializer.Serialize(result);
+
+        Assert.DoesNotContain("abc123", json, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:token]", json, StringComparison.Ordinal);
+        Assert.Contains("codex", json, StringComparison.Ordinal);
+    }
+
+    private sealed record ProviderPayload(string Provider, string Token);
 }

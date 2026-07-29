@@ -42,9 +42,31 @@ public sealed class ProcessRunner : IProcessRunner
 
         using Process process = new() { StartInfo = startInfo };
         process.Start();
-        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> error = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        Task<string> output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
+        Task<string> error = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            try
+            {
+                if (!process.HasExited)
+                {
+                    process.Kill(true);
+                }
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the state check and termination.
+            }
+
+            await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            await Task.WhenAll(output, error).ConfigureAwait(false);
+            throw;
+        }
+
         return new ProcessResult(
             process.ExitCode,
             await output.ConfigureAwait(false),

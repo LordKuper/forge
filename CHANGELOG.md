@@ -26,11 +26,13 @@ User-facing Forge changes are listed by release, newest first.
 - Made the MAUI Desktop restore graph deterministic for Windows x64 and Arm64.
 - Prevented Generic Host configuration from consuming Forge CLI options such as
   `--help`, and normalized repository text files to LF across clean checkouts.
+- Aligned sprint states with the v1 workflow contract and ensured cancellation
+  terminates child process trees.
 
 ### Security
 
 - Expanded structured and value-based secret redaction to cover every credential
-  category required by the v1 contract.
+  category required by the v1 contract, including nested payloads.
 
 ## v0.2.1
 

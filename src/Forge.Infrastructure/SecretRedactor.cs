@@ -1,3 +1,5 @@
+using System.Collections;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Forge.Infrastructure;
@@ -29,11 +31,93 @@ public sealed partial class SecretRedactor
         ArgumentNullException.ThrowIfNull(properties);
         return properties.ToDictionary(
             item => item.Key,
-            item => TryGetKind(item.Key, out string? kind)
-                ? $"[REDACTED:{kind}]"
-                : item.Value is string value ? Redact(value) : item.Value,
+            item => RedactValue(item.Key, item.Value),
             StringComparer.Ordinal);
     }
+
+    private static object? RedactValue(string? name, object? value)
+    {
+        if (name is not null && TryGetKind(name, out string? kind))
+        {
+            return $"[REDACTED:{kind}]";
+        }
+
+        return value switch
+        {
+            null => null,
+            string text => Redact(text),
+            JsonElement element => RedactElement(element),
+            IReadOnlyDictionary<string, object?> dictionary =>
+                RedactProperties(dictionary),
+            IDictionary dictionary => RedactDictionary(dictionary),
+            IEnumerable collection => collection
+                .Cast<object?>()
+                .Select(item => RedactValue(null, item))
+                .ToArray(),
+            bool or byte or sbyte or short or ushort or int or uint or long or ulong or
+                float or double or decimal or char or Guid or DateTime or DateTimeOffset =>
+                value,
+            _ => RedactSerializable(value),
+        };
+    }
+
+    private static Dictionary<string, object?> RedactDictionary(IDictionary dictionary)
+    {
+        Dictionary<string, object?> result = new(StringComparer.Ordinal);
+        foreach (DictionaryEntry item in dictionary)
+        {
+            if (item.Key is not string key)
+            {
+                return DroppedPayload();
+            }
+
+            result[key] = RedactValue(key, item.Value);
+        }
+
+        return result;
+    }
+
+    private static object? RedactElement(JsonElement element) =>
+        element.ValueKind switch
+        {
+            JsonValueKind.Array => element
+                .EnumerateArray()
+                .Select(item => RedactValue(null, item))
+                .ToArray(),
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Number when element.TryGetInt64(out long integer) => integer,
+            JsonValueKind.Number => element.GetDouble(),
+            JsonValueKind.Object => element
+                .EnumerateObject()
+                .ToDictionary(
+                    property => property.Name,
+                    property => RedactValue(property.Name, property.Value),
+                    StringComparer.Ordinal),
+            JsonValueKind.String => Redact(element.GetString() ?? string.Empty),
+            JsonValueKind.True => true,
+            _ => DroppedPayload(),
+        };
+
+    private static object RedactSerializable(object value)
+    {
+        try
+        {
+            return RedactElement(JsonSerializer.SerializeToElement(value)) ??
+                DroppedPayload();
+        }
+        catch (Exception error) when (
+            error is JsonException or NotSupportedException or InvalidOperationException)
+        {
+            return DroppedPayload();
+        }
+    }
+
+    private static Dictionary<string, object?> DroppedPayload() =>
+        new(StringComparer.Ordinal)
+        {
+            ["event"] = "redaction_payload_dropped",
+        };
 
     [GeneratedRegex(
         @"(?i)\b(password|secret|token|api[_-]?key|authorization|cookie|credential|private[_ -]?key|provider[_ -]?session)\b(\s*=\s*)[^\s,;]+",
