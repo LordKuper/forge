@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using System.Text.Json;
 using Forge.Infrastructure;
 
@@ -81,6 +82,25 @@ public sealed class RedactionTests
         Assert.DoesNotContain("abc123", json, StringComparison.Ordinal);
         Assert.Contains("[REDACTED:token]", json, StringComparison.Ordinal);
         Assert.Contains("codex", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Security")]
+    public void GenericReadOnlyDictionariesPreserveSensitiveFieldNames()
+    {
+        IReadOnlyDictionary<string, string> payload =
+            new Dictionary<string, string>
+            {
+                ["provider"] = "codex",
+                ["token"] = "abc123",
+            }.ToFrozenDictionary(StringComparer.Ordinal);
+
+        string json = JsonSerializer.Serialize(
+            SecretRedactor.RedactProperties(
+                new Dictionary<string, object?> { ["payload"] = payload }));
+
+        Assert.DoesNotContain("abc123", json, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:token]", json, StringComparison.Ordinal);
     }
 
     private sealed record ProviderPayload(string Provider, string Token);

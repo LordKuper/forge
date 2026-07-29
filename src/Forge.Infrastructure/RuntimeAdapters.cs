@@ -25,6 +25,7 @@ public sealed class ProcessRunner : IProcessRunner
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
 
         ProcessStartInfo startInfo = new()
         {

@@ -1,4 +1,6 @@
+using System.Collections;
 using System.Text;
+using System.Text.Json;
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -13,6 +15,7 @@ public sealed class YamlConfigurationStore(
     private readonly IDeserializer deserializer = new DeserializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .Build();
+    private readonly IDeserializer rawDeserializer = new DeserializerBuilder().Build();
     private readonly ISerializer serializer = new SerializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
@@ -67,6 +70,9 @@ public sealed class YamlConfigurationStore(
         CancellationToken cancellationToken)
     {
         string yaml = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
+        object? raw = rawDeserializer.Deserialize<object>(yaml);
+        JsonElement rawElement = JsonSerializer.SerializeToElement(NormalizeYaml(raw));
+        ConfigurationSchemaCodec.ValidateProject(rawElement);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
             deserializer.Deserialize<ConfigurationSchemaCodec.ProjectConfiguration>(yaml) ??
             throw new InvalidDataException("Project configuration is empty.");
@@ -85,4 +91,26 @@ public sealed class YamlConfigurationStore(
 
     private static bool IsRecoverable(Exception error) =>
         error is YamlException or InvalidDataException or ConfigurationScopeException or FormatException;
+
+    private static object? NormalizeYaml(object? value) =>
+        value switch
+        {
+            IDictionary dictionary => NormalizeDictionary(dictionary),
+            IEnumerable collection when value is not string =>
+                collection.Cast<object?>().Select(NormalizeYaml).ToArray(),
+            _ => value,
+        };
+
+    private static Dictionary<string, object?> NormalizeDictionary(IDictionary dictionary)
+    {
+        Dictionary<string, object?> result = new(StringComparer.Ordinal);
+        foreach (DictionaryEntry entry in dictionary)
+        {
+            string key = entry.Key as string ??
+                throw new InvalidDataException("YAML configuration keys must be strings.");
+            result.Add(key, NormalizeYaml(entry.Value));
+        }
+
+        return result;
+    }
 }

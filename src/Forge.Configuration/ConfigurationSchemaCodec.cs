@@ -102,6 +102,9 @@ internal static class ConfigurationSchemaCodec
             persisted.Sprints?.Select(Guid.Parse).ToArray());
     }
 
+    public static void ValidateProject(JsonElement element) =>
+        Validate(element, ProjectSchema, "project");
+
     private static void RequireVersion(ConfigurationDocument document)
     {
         if (document.SchemaVersion != 1)

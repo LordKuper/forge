@@ -42,6 +42,14 @@ public sealed partial class SecretRedactor
             return $"[REDACTED:{kind}]";
         }
 
+        if (value is not null &&
+            TryGetGenericDictionaryKeyType(value.GetType(), out Type? keyType))
+        {
+            return keyType == typeof(string)
+                ? RedactSerializable(value)
+                : DroppedPayload();
+        }
+
         return value switch
         {
             null => null,
@@ -59,6 +67,20 @@ public sealed partial class SecretRedactor
                 value,
             _ => RedactSerializable(value),
         };
+    }
+
+    private static bool TryGetGenericDictionaryKeyType(Type type, out Type? keyType)
+    {
+        Type? dictionary = type
+            .GetInterfaces()
+            .Append(type)
+            .FirstOrDefault(
+                item =>
+                    item.IsGenericType &&
+                    (item.GetGenericTypeDefinition() == typeof(IDictionary<,>) ||
+                        item.GetGenericTypeDefinition() == typeof(IReadOnlyDictionary<,>)));
+        keyType = dictionary?.GetGenericArguments()[0];
+        return dictionary is not null;
     }
 
     private static Dictionary<string, object?> RedactDictionary(IDictionary dictionary)

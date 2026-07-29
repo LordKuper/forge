@@ -317,6 +317,41 @@ public sealed class ConfigurationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ProjectStoreRejectsMissingRequiredRawField()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, ".forge", "manifest.yaml");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(
+                path,
+                """
+                schema_version: 1.0.0
+                project_id: 7d634db2-586e-49c0-9da6-69292575be19
+                artifacts:
+                  language:
+                    user_facing: en
+                    agent_facing: en
+                """,
+                TestContext.Current.CancellationToken);
+            YamlConfigurationStore store =
+                new(path, ConfigurationScope.Project, new ConfigurationRegistry());
+
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => store.ReadAsync(TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
     private static Task WriteUserLanguageAsync(JsonConfigurationStore store, string language) =>
         store.WriteAsync(
             new(

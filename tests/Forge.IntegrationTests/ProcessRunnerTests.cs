@@ -59,4 +59,45 @@ public sealed class ProcessRunnerTests
             }
         }
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task PreCancelledRequestDoesNotStartProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        string marker = Path.Combine(
+            Path.GetTempPath(),
+            $"forge-process-marker-{Guid.NewGuid():N}");
+        try
+        {
+            ProcessRunner runner = new();
+            using CancellationTokenSource cancellation = new();
+            cancellation.Cancel();
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(
+                () => runner.RunAsync(
+                    new(
+                        "powershell.exe",
+                        [
+                            "-NoProfile",
+                            "-Command",
+                            $"[IO.File]::WriteAllText('{marker}','started')",
+                        ],
+                        Path.GetTempPath()),
+                    cancellation.Token));
+
+            Assert.False(File.Exists(marker));
+        }
+        finally
+        {
+            if (File.Exists(marker))
+            {
+                File.Delete(marker);
+            }
+        }
+    }
 }
