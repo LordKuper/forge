@@ -5,23 +5,30 @@ namespace Forge.Updater;
 
 public sealed class RestartTokenService : IRestartTokenService
 {
-    private readonly ConcurrentDictionary<string, byte> unusedTokens = new(StringComparer.Ordinal);
+    private readonly ConcurrentDictionary<string, RestartIdentity> unusedTokens = new(StringComparer.Ordinal);
 
-    public RestartContext Create(UpdateRequest request)
+    public RestartContext Create(UpdateRequest request, RestartIdentity expectedIdentity)
     {
         ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(expectedIdentity);
         string token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-        if (!unusedTokens.TryAdd(token, 0))
+        if (!unusedTokens.TryAdd(token, expectedIdentity))
         {
             throw new InvalidOperationException("Restart token collision.");
         }
 
-        return new RestartContext(token, request.ExecutablePath, request.Arguments, request.WorkingDirectory);
+        return new RestartContext(token, request.ExecutablePath, request.Arguments, request.WorkingDirectory, expectedIdentity);
     }
 
-    public bool Consume(string token)
+    public bool Consume(string token, RestartIdentity actualIdentity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);
+        ArgumentNullException.ThrowIfNull(actualIdentity);
+        if (!unusedTokens.TryGetValue(token, out RestartIdentity? expectedIdentity) || expectedIdentity != actualIdentity)
+        {
+            return false;
+        }
+
         return unusedTokens.TryRemove(token, out _);
     }
 }
@@ -30,10 +37,10 @@ public sealed class StartupHandshake(IRestartTokenService tokens)
 {
     private readonly IRestartTokenService tokens = tokens ?? throw new ArgumentNullException(nameof(tokens));
 
-    public UpdateDiagnostic Confirm(string token) =>
-        tokens.Consume(token)
+    public UpdateDiagnostic Confirm(string token, RestartIdentity actualIdentity) =>
+        tokens.Consume(token, actualIdentity)
             ? UpdateDiagnostic.None
-            : new(UpdateDiagnosticCode.HandshakeFailed, "The restart token is missing, expired, or was already consumed.");
+            : new(UpdateDiagnosticCode.HandshakeFailed, "The restart token is missing, expired, replayed, or bound to a different release identity.");
 }
 
 public sealed class RejectingRestartCoordinator : IRestartCoordinator

@@ -42,6 +42,7 @@ public enum UpdateLifecycleState
 {
     Idle,
     StrategyResolved,
+    NoUpdateAvailable,
     ReleaseVerified,
     Staged,
     Activated,
@@ -82,8 +83,27 @@ public sealed record StageResult(bool Succeeded, StagedRelease? Staged, UpdateDi
         new(false, null, new(UpdateDiagnosticCode.StagingFailed, detail));
 }
 
-public sealed record ActivationResult(bool Succeeded, ActivationReceipt? Receipt, UpdateDiagnostic Diagnostic)
+public sealed record ActivationResult
 {
+    private ActivationResult(bool succeeded, ActivationReceipt? receipt, UpdateDiagnostic diagnostic)
+    {
+        Succeeded = succeeded;
+        Receipt = receipt;
+        Diagnostic = diagnostic;
+    }
+
+    public bool Succeeded { get; }
+
+    public ActivationReceipt? Receipt { get; }
+
+    public UpdateDiagnostic Diagnostic { get; }
+
+    public static ActivationResult Success(ActivationReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        return new(true, receipt, UpdateDiagnostic.None);
+    }
+
     public static ActivationResult Failure(string detail, ActivationReceipt? receipt = null) =>
         new(false, receipt, new(UpdateDiagnosticCode.ActivationFailed, detail));
 }
@@ -94,17 +114,30 @@ public sealed record RollbackResult(bool Succeeded, UpdateDiagnostic Diagnostic)
         new(false, new(UpdateDiagnosticCode.RollbackFailed, detail));
 }
 
+public enum UpdateSurface
+{
+    Cli,
+    Desktop,
+}
+
+public sealed record RestartIdentity(
+    SemanticVersion Version,
+    UpdateTarget Target,
+    UpdateSurface Surface);
+
 public sealed record RestartContext(
     string Token,
     string ExecutablePath,
     IReadOnlyList<string> Arguments,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    RestartIdentity ExpectedIdentity);
 
 public sealed record UpdateRequest(
     SemanticVersion CurrentVersion,
     string ExecutablePath,
     IReadOnlyList<string> Arguments,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    UpdateSurface Surface);
 
 public sealed record UpdateResult(
     UpdateLifecycleState State,
@@ -151,11 +184,23 @@ public interface IReleaseVerifier
         CancellationToken cancellationToken);
 }
 
+public sealed record UpdateLockResult(IAsyncDisposable? Lease, UpdateDiagnostic Diagnostic)
+{
+    public bool IsAcquired => Lease is not null && Diagnostic.Code == UpdateDiagnosticCode.None;
+}
+
+public interface IUpdateLock
+{
+    ValueTask<UpdateLockResult> AcquireAsync(
+        UpdateTarget target,
+        CancellationToken cancellationToken);
+}
+
 public interface IRestartTokenService
 {
-    RestartContext Create(UpdateRequest request);
+    RestartContext Create(UpdateRequest request, RestartIdentity expectedIdentity);
 
-    bool Consume(string token);
+    bool Consume(string token, RestartIdentity actualIdentity);
 }
 
 public interface IRestartCoordinator

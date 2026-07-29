@@ -47,6 +47,7 @@ public sealed class UpdaterTests
             [],
             releases,
             new PassingVerifier(),
+            new PassingUpdateLock(),
             new RestartTokenService(),
             new RejectingRestartCoordinator());
 
@@ -105,6 +106,27 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task CurrentReleaseIsASuccessfulNoOp()
+    {
+        CountingReleaseClient releases = new();
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [new TestStrategy(true)],
+            releases,
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(),
+            new RejectingRestartCoordinator());
+
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateLifecycleState.NoUpdateAvailable, result.State);
+        Assert.Equal(UpdateDiagnosticCode.None, result.Diagnostic.Code);
+        Assert.Equal(1, releases.Calls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task VerifierRejectsIncorrectHashAndSize()
     {
         ReleaseAsset asset = new("forge-windows-x64-portable_bundle.zip", 4, new Uri("https://example.test/asset"));
@@ -139,14 +161,19 @@ public sealed class UpdaterTests
             SemanticVersion.Parse("1.0.0"),
             "C:\\Forge\\forge.exe",
             ["status", "--json"],
-            "C:\\work");
+            "C:\\work",
+            UpdateSurface.Cli);
 
-        RestartContext context = tokens.Create(request);
+        RestartIdentity identity = new(
+            SemanticVersion.Parse("1.1.0"),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            UpdateSurface.Cli);
+        RestartContext context = tokens.Create(request, identity);
 
         Assert.Equal(request.Arguments, context.Arguments);
         Assert.Equal(request.WorkingDirectory, context.WorkingDirectory);
-        Assert.True(tokens.Consume(context.Token));
-        Assert.False(tokens.Consume(context.Token));
+        Assert.True(tokens.Consume(context.Token, identity));
+        Assert.False(tokens.Consume(context.Token, identity));
     }
 
     [Fact]
@@ -155,23 +182,31 @@ public sealed class UpdaterTests
     {
         RestartTokenService tokens = new();
         StartupHandshake handshake = new(tokens);
-        RestartContext context = tokens.Create(CreateRequest());
+        RestartIdentity identity = new(
+            SemanticVersion.Parse("1.1.0"),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            UpdateSurface.Cli);
+        RestartContext context = tokens.Create(CreateRequest(), identity);
 
-        Assert.Equal(UpdateDiagnosticCode.None, handshake.Confirm(context.Token).Code);
-        Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, handshake.Confirm(context.Token).Code);
-        Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, handshake.Confirm("missing").Code);
+        Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, handshake.Confirm(
+            context.Token,
+            identity with { Surface = UpdateSurface.Desktop }).Code);
+        Assert.Equal(UpdateDiagnosticCode.None, handshake.Confirm(context.Token, identity).Code);
+        Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, handshake.Confirm(context.Token, identity).Code);
+        Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, handshake.Confirm("missing", identity).Code);
     }
 
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RestartFailureRollsBackActivatedRelease()
     {
-        TestStrategy strategy = new(true) { ActivateResult = new(true, new("activation", "1.0.0", "1.1.0"), UpdateDiagnostic.None) };
+        TestStrategy strategy = new(true) { ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0")) };
         ForgeSelfUpdater updater = CreateUpdater(
             new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
             [strategy],
             new StaticReleaseClient(Release("1.1.0")),
             new PassingVerifier(),
+            new PassingUpdateLock(),
             new RestartTokenService(),
             new FailingRestartCoordinator());
 
@@ -182,17 +217,48 @@ public sealed class UpdaterTests
         Assert.Equal(1, strategy.RollbackCalls);
     }
 
+    [Theory]
+    [InlineData("1.2.3+")]
+    [InlineData("1.2.3+foo+bar")]
+    [InlineData("1.2.3+build..1")]
+    [Trait("Category", "Unit")]
+    public void SemanticVersionRejectsMalformedBuildMetadata(string value)
+    {
+        Assert.False(SemanticVersion.TryParse(value, out _));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LockFailurePreventsReleaseLookup()
+    {
+        CountingReleaseClient releases = new();
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [new TestStrategy(true)],
+            releases,
+            new PassingVerifier(),
+            new FailingUpdateLock(),
+            new RestartTokenService(),
+            new RejectingRestartCoordinator());
+
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateDiagnosticCode.ActivationFailed, result.Diagnostic.Code);
+        Assert.Equal(0, releases.Calls);
+    }
+
     private static ForgeSelfUpdater CreateUpdater(
         IUpdateTargetDetector detector,
         IEnumerable<IPlatformUpdateStrategy> strategies,
         IForgeReleaseClient releases,
         IReleaseVerifier verifier,
+        IUpdateLock updateLock,
         IRestartTokenService tokens,
         IRestartCoordinator restart) =>
-        new(detector, new PlatformUpdateStrategyResolver(strategies), releases, verifier, tokens, restart);
+        new(detector, new PlatformUpdateStrategyResolver(strategies), updateLock, releases, verifier, tokens, restart);
 
     private static UpdateRequest CreateRequest() =>
-        new(SemanticVersion.Parse("1.0.0"), "C:\\Forge\\forge.exe", ["status"], "C:\\work");
+        new(SemanticVersion.Parse("1.0.0"), "C:\\Forge\\forge.exe", ["status"], "C:\\work", UpdateSurface.Cli);
 
     private static ReleaseMetadata Release(string version, bool draft = false, bool prerelease = false) =>
         new(
@@ -249,7 +315,7 @@ public sealed class UpdaterTests
 
     private sealed class TestStrategy(bool supports) : IPlatformUpdateStrategy
     {
-        public ActivationResult ActivateResult { get; set; } = new(true, null, UpdateDiagnostic.None);
+        public ActivationResult ActivateResult { get; set; } = ActivationResult.Success(new("activation", "1.0.0", "1.1.0"));
 
         public int RollbackCalls { get; private set; }
 
@@ -266,6 +332,23 @@ public sealed class UpdaterTests
             RollbackCalls++;
             return ValueTask.FromResult(new RollbackResult(true, UpdateDiagnostic.None));
         }
+    }
+
+    private sealed class PassingUpdateLock : IUpdateLock
+    {
+        public ValueTask<UpdateLockResult> AcquireAsync(UpdateTarget target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new UpdateLockResult(new EmptyLease(), UpdateDiagnostic.None));
+    }
+
+    private sealed class FailingUpdateLock : IUpdateLock
+    {
+        public ValueTask<UpdateLockResult> AcquireAsync(UpdateTarget target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new UpdateLockResult(null, new(UpdateDiagnosticCode.ActivationFailed, "lock unavailable")));
+    }
+
+    private sealed class EmptyLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class MemoryDownloader(Dictionary<string, byte[]> content) : IReleaseAssetDownloader

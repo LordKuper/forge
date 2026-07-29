@@ -3,6 +3,7 @@ namespace Forge.Updater;
 public sealed class ForgeSelfUpdater(
     IUpdateTargetDetector targetDetector,
     PlatformUpdateStrategyResolver strategyResolver,
+    IUpdateLock updateLock,
     IForgeReleaseClient releaseClient,
     IReleaseVerifier releaseVerifier,
     IRestartTokenService restartTokens,
@@ -10,6 +11,7 @@ public sealed class ForgeSelfUpdater(
 {
     private readonly IUpdateTargetDetector targetDetector = targetDetector ?? throw new ArgumentNullException(nameof(targetDetector));
     private readonly PlatformUpdateStrategyResolver strategyResolver = strategyResolver ?? throw new ArgumentNullException(nameof(strategyResolver));
+    private readonly IUpdateLock updateLock = updateLock ?? throw new ArgumentNullException(nameof(updateLock));
     private readonly IForgeReleaseClient releaseClient = releaseClient ?? throw new ArgumentNullException(nameof(releaseClient));
     private readonly IReleaseVerifier releaseVerifier = releaseVerifier ?? throw new ArgumentNullException(nameof(releaseVerifier));
     private readonly IRestartTokenService restartTokens = restartTokens ?? throw new ArgumentNullException(nameof(restartTokens));
@@ -27,11 +29,23 @@ public sealed class ForgeSelfUpdater(
             return Failed(resolution.Diagnostic);
         }
 
+        UpdateLockResult lockResult = await updateLock.AcquireAsync(target, cancellationToken).ConfigureAwait(false);
+        if (!lockResult.IsAcquired)
+        {
+            return Failed(lockResult.Diagnostic);
+        }
+
+        await using IAsyncDisposable updateLease = lockResult.Lease!;
         ReleaseLookupResult lookup = await releaseClient.GetLatestStableAsync(
             request.CurrentVersion,
             cancellationToken).ConfigureAwait(false);
         if (!lookup.IsUpdateAvailable)
         {
+            if (lookup.Diagnostic.Code == UpdateDiagnosticCode.NoUpdateAvailable)
+            {
+                return new(UpdateLifecycleState.NoUpdateAvailable, UpdateDiagnostic.None, request.CurrentVersion);
+            }
+
             return Failed(lookup.Diagnostic);
         }
 
@@ -54,7 +68,8 @@ public sealed class ForgeSelfUpdater(
             return Failed(staged.Diagnostic);
         }
 
-        RestartContext restart = restartTokens.Create(request);
+        RestartIdentity restartIdentity = new(verification.Release!.Version, target, request.Surface);
+        RestartContext restart = restartTokens.Create(request, restartIdentity);
         ActivationResult activated = await strategy.ActivateAsync(
             staged.Staged!,
             restart,

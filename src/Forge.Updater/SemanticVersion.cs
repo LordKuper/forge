@@ -4,12 +4,13 @@ namespace Forge.Updater;
 
 public sealed record SemanticVersion : IComparable<SemanticVersion>
 {
-    private SemanticVersion(int major, int minor, int patch, string? prerelease)
+    private SemanticVersion(int major, int minor, int patch, string? prerelease, string? buildMetadata)
     {
         Major = major;
         Minor = minor;
         Patch = patch;
         Prerelease = prerelease;
+        BuildMetadata = buildMetadata;
     }
 
     public int Major { get; }
@@ -19,6 +20,8 @@ public sealed record SemanticVersion : IComparable<SemanticVersion>
     public int Patch { get; }
 
     public string? Prerelease { get; }
+
+    public string? BuildMetadata { get; }
 
     public bool IsStable => Prerelease is null;
 
@@ -46,7 +49,14 @@ public sealed record SemanticVersion : IComparable<SemanticVersion>
             candidate = candidate[1..];
         }
 
-        string[] buildParts = candidate.Split('+', 2, StringSplitOptions.None);
+        string[] buildParts = candidate.Split('+', StringSplitOptions.None);
+        if (buildParts.Length > 2 ||
+            (buildParts.Length == 2 &&
+             (buildParts[1].Length == 0 || buildParts[1].Split('.').Any(part => !IsValidBuildPart(part)))))
+        {
+            return false;
+        }
+
         string[] prereleaseParts = buildParts[0].Split('-', 2, StringSplitOptions.None);
         string[] numbers = prereleaseParts[0].Split('.', StringSplitOptions.None);
         if (numbers.Length != 3 ||
@@ -64,7 +74,7 @@ public sealed record SemanticVersion : IComparable<SemanticVersion>
             return false;
         }
 
-        version = new SemanticVersion(major, minor, patch, prerelease);
+        version = new SemanticVersion(major, minor, patch, prerelease, buildParts.Length == 2 ? buildParts[1] : null);
         return true;
     }
 
@@ -116,7 +126,7 @@ public sealed record SemanticVersion : IComparable<SemanticVersion>
         left.CompareTo(right) >= 0;
 
     public override string ToString() =>
-        $"{Major}.{Minor}.{Patch}{(Prerelease is null ? string.Empty : $"-{Prerelease}")}";
+        $"{Major}.{Minor}.{Patch}{(Prerelease is null ? string.Empty : $"-{Prerelease}")}{(BuildMetadata is null ? string.Empty : $"+{BuildMetadata}")}";
 
     private static bool TryParseIdentifier(string value, out int number) =>
         int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out number) &&
@@ -126,6 +136,9 @@ public sealed record SemanticVersion : IComparable<SemanticVersion>
         value.Length > 0 &&
         value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-') &&
         !(value.Length > 1 && value[0] == '0' && value.All(char.IsAsciiDigit));
+
+    private static bool IsValidBuildPart(string value) =>
+        value.Length > 0 && value.All(character => char.IsAsciiLetterOrDigit(character) || character == '-');
 
     private static int ComparePrereleasePart(string left, string right)
     {
