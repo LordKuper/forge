@@ -8,6 +8,7 @@ public static class WindowsUpdateServices
     {
         ArgumentNullException.ThrowIfNull(services);
         services.AddSingleton<IReleaseAssetDownloader, HttpReleaseAssetDownloader>();
+        services.AddSingleton<IUpdateLock, WindowsUpdateLock>();
         services.AddSingleton<IPlatformUpdateStrategy>(provider => new WindowsUpdateStrategy(
             provider.GetRequiredService<IReleaseAssetDownloader>(),
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Forge")));

@@ -9,6 +9,25 @@ public sealed class WindowsUpdateStrategyTests
 {
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task SerializesConcurrentUpdates()
+    {
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        WindowsUpdateLock firstLock = new(TimeSpan.FromMilliseconds(100));
+        WindowsUpdateLock secondLock = new(TimeSpan.FromMilliseconds(100));
+
+        UpdateLockResult first = await firstLock.AcquireAsync(target, TestContext.Current.CancellationToken);
+        UpdateLockResult blocked = await secondLock.AcquireAsync(target, TestContext.Current.CancellationToken);
+        await first.Lease!.DisposeAsync();
+        UpdateLockResult next = await secondLock.AcquireAsync(target, TestContext.Current.CancellationToken);
+
+        Assert.True(first.IsAcquired);
+        Assert.Equal(UpdateDiagnosticCode.UpdateInProgress, blocked.Diagnostic.Code);
+        Assert.True(next.IsAcquired);
+        await next.Lease!.DisposeAsync();
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task StagesActivatesAndRollsBackVerifiedBundle()
     {
         using TemporaryDirectory temporary = new();

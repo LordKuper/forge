@@ -31,6 +31,7 @@ public enum UpdateDiagnosticCode
     ReleaseUnavailable,
     ReleaseRejected,
     VerificationFailed,
+    UpdateInProgress,
     StagingFailed,
     ActivationFailed,
     RestartFailed,
