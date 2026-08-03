@@ -9,7 +9,7 @@ Contract version `1.0.0` freezes Stage 0 boundaries.
 - `recommendations.json`: deterministic next-action definitions.
 - `configuration.json`: owner scope, defaults, provenance, and write rules.
 - `schemas/*.schema.json`: Draft 2020-12 external boundary schemas.
-- `../../../tests/contracts/fixtures/contract-cases.json`: representative valid
+- `../../../tests/Forge.Tests/Contracts/fixtures/contract-cases.json`: representative valid
   and invalid compatibility instances.
 
 Unknown properties are rejected unless a schema explicitly permits them.

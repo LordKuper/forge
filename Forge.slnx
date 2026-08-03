@@ -1,18 +1,8 @@
 <Solution>
-  <Project Path="src/Forge.Application/Forge.Application.csproj" />
-  <Project Path="src/Forge.Bootstrap/Forge.Bootstrap.csproj" />
   <Project Path="src/Forge.Cli/Forge.Cli.csproj" />
-  <Project Path="src/Forge.Configuration/Forge.Configuration.csproj" />
   <Project Path="src/Forge.Desktop/Forge.Desktop.csproj" />
-  <Project Path="src/Forge.Domain/Forge.Domain.csproj" />
-  <Project Path="src/Forge.Infrastructure/Forge.Infrastructure.csproj" />
-  <Project Path="src/Forge.Localization/Forge.Localization.csproj" />
-  <Project Path="src/Forge.Presentation/Forge.Presentation.csproj" />
-  <Project Path="src/Forge.Providers/Forge.Providers.csproj" />
+  <Project Path="src/Forge.Runtime/Forge.Runtime.csproj" />
   <Project Path="src/Forge.Updater.Windows/Forge.Updater.Windows.csproj" />
   <Project Path="src/Forge.Updater/Forge.Updater.csproj" />
-  <Project Path="tests/Forge.AcceptanceTests/Forge.AcceptanceTests.csproj" />
-  <Project Path="tests/Forge.InstallerTests/Forge.InstallerTests.csproj" />
-  <Project Path="tests/Forge.IntegrationTests/Forge.IntegrationTests.csproj" />
-  <Project Path="tests/Forge.UnitTests/Forge.UnitTests.csproj" />
+  <Project Path="tests/Forge.Tests/Forge.Tests.csproj" />
 </Solution>

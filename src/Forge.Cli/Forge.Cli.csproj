@@ -8,7 +8,7 @@
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Terminal.Gui" />
-    <ProjectReference Include="..\Forge.Bootstrap\Forge.Bootstrap.csproj" />
+    <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

@@ -4,9 +4,9 @@
 **Updated:** 2026-07-27
 
 This concise English overview is the canonical architecture summary. The
-[complete original research and target-system design](../../ai-agentic-software-development-workflow-ru.md)
-is preserved verbatim in Russian as a source artifact; the
-[implementation plan](../../implementation-plan.md) tracks delivery work.
+[research summary](ai-agentic-software-development-workflow.md) captures the
+non-normative reasoning behind it; the [implementation plan](../plans/implementation-plan.md)
+tracks delivery work.
 
 Forge is a local control plane that coordinates Claude Code CLI and Codex CLI
 through durable, isolated, policy-controlled software-delivery workflows. Models
@@ -17,7 +17,7 @@ Normative Stage 0 decisions and machine contracts live in:
 
 - [`decisions/0001-stage-0-foundation.md`](decisions/0001-stage-0-foundation.md)
 - [`../contracts/v1/`](../contracts/v1/)
-- [`../../implementation-plan.md`](../../implementation-plan.md)
+- [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
 ## MVP boundary
 
