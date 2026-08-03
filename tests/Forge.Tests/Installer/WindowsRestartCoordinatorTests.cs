@@ -3,6 +3,7 @@ using Forge.Updater.Windows;
 
 namespace Forge.InstallerTests;
 
+[Collection("External process tests")]
 public sealed class WindowsRestartCoordinatorTests
 {
     [Fact]

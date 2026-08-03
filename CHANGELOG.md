@@ -2,6 +2,12 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.6.2
+
+### Fixed
+
+- Stabilized Windows process-lifecycle tests in CI.
+
 ## v0.6.1
 
 ### Changed

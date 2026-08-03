@@ -3,6 +3,7 @@ using Forge.Infrastructure;
 
 namespace Forge.IntegrationTests;
 
+[Collection("External process tests")]
 public sealed class ProcessRunnerTests
 {
     [Fact]
