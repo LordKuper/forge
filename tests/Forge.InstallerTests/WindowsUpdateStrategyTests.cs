@@ -123,7 +123,7 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
-    public async Task RemovesShortcutWhenPathRegistrationFails()
+    public async Task RestoresShortcutWhenPathRegistrationFails()
     {
         using TemporaryDirectory temporary = new();
         byte[] archive = CreateBundle(temporary.Path);
@@ -141,7 +141,7 @@ public sealed class WindowsUpdateStrategyTests
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
-        Assert.True(shortcut.WasRemoved);
+        Assert.True(shortcut.WasRestored);
     }
 
     [Fact]
@@ -531,7 +531,9 @@ public sealed class WindowsUpdateStrategyTests
     {
         public string? ExecutablePath { get; private set; }
 
-        public bool WasRemoved { get; private set; }
+        public bool WasRestored { get; private set; }
+
+        public DesktopShortcutSnapshot Capture() => new([1]);
 
         public UpdateDiagnostic Ensure(string executablePath)
         {
@@ -539,7 +541,11 @@ public sealed class WindowsUpdateStrategyTests
             return UpdateDiagnostic.None;
         }
 
-        public void Remove() => WasRemoved = true;
+        public void Restore(DesktopShortcutSnapshot snapshot)
+        {
+            Assert.Equal([1], snapshot.Contents);
+            WasRestored = true;
+        }
     }
 
     private sealed class FailingPathRegistrar : IWindowsUserPathRegistrar
@@ -562,11 +568,13 @@ public sealed class WindowsUpdateStrategyTests
 
     private sealed class FailingShortcut : IWindowsDesktopShortcut
     {
+        public DesktopShortcutSnapshot Capture() => new(null);
+
         public UpdateDiagnostic Ensure(string executablePath) => new(
             UpdateDiagnosticCode.ActivationFailed,
             "The test shortcut creation failed.");
 
-        public void Remove()
+        public void Restore(DesktopShortcutSnapshot snapshot)
         {
         }
     }

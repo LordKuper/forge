@@ -113,6 +113,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
 
             Directory.Move(staged.Staged!.Location, destination);
+            DesktopShortcutSnapshot? shortcutSnapshot = desktopShortcut?.Capture();
             try
             {
                 WriteCurrentVersion(version);
@@ -124,7 +125,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
                 File.Delete(Path.Combine(root, "current.json"));
                 WindowsCommandShim.Remove(root);
-                desktopShortcut?.Remove();
+                if (shortcutSnapshot is not null)
+                {
+                    desktopShortcut!.Restore(shortcutSnapshot);
+                }
                 ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return installation;
             }
@@ -132,6 +136,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             {
                 File.Delete(Path.Combine(root, "current.json"));
                 WindowsCommandShim.Remove(root);
+                if (shortcutSnapshot is not null)
+                {
+                    desktopShortcut!.Restore(shortcutSnapshot);
+                }
                 ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,

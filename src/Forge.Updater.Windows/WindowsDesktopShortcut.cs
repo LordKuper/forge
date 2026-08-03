@@ -5,10 +5,14 @@ namespace Forge.Updater.Windows;
 
 public interface IWindowsDesktopShortcut
 {
+    DesktopShortcutSnapshot Capture();
+
     UpdateDiagnostic Ensure(string executablePath);
 
-    void Remove();
+    void Restore(DesktopShortcutSnapshot snapshot);
 }
+
+public sealed record DesktopShortcutSnapshot(byte[]? Contents);
 
 public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
 {
@@ -16,6 +20,9 @@ public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
         Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
         "Programs",
         "Forge Desktop.lnk");
+
+    public DesktopShortcutSnapshot Capture() =>
+        new(File.Exists(ShortcutPath) ? File.ReadAllBytes(ShortcutPath) : null);
 
     public UpdateDiagnostic Ensure(string executablePath)
     {
@@ -53,11 +60,20 @@ public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
         }
     }
 
-    public void Remove()
+    public void Restore(DesktopShortcutSnapshot snapshot)
     {
-        if (File.Exists(ShortcutPath))
+        ArgumentNullException.ThrowIfNull(snapshot);
+        if (snapshot.Contents is null)
         {
-            File.Delete(ShortcutPath);
+            if (File.Exists(ShortcutPath))
+            {
+                File.Delete(ShortcutPath);
+            }
+
+            return;
         }
+
+        Directory.CreateDirectory(Path.GetDirectoryName(ShortcutPath)!);
+        File.WriteAllBytes(ShortcutPath, snapshot.Contents);
     }
 }
