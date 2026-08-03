@@ -109,7 +109,7 @@ public sealed class ProcessRunnerTests
                 Directory.Delete(directory, true);
                 return;
             }
-            catch (IOException) when (attempt < 19)
+            catch (IOException) when (attempt < 49)
             {
                 await Task.Delay(100, TestContext.Current.CancellationToken);
             }

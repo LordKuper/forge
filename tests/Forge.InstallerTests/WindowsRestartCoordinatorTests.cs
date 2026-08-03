@@ -85,6 +85,7 @@ public sealed class WindowsRestartCoordinatorTests
             Assert.Equal(UpdateDiagnosticCode.RestartFailed, (await coordinator.RestartAsync(
                 restart,
                 TestContext.Current.CancellationToken)).Code);
+            Assert.True(File.Exists(readyPath), "The restarted host did not signal readiness.");
             await using (FileStream stream = new(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
             {
                 Assert.True(stream.CanWrite);
@@ -137,7 +138,7 @@ public sealed class WindowsRestartCoordinatorTests
 
         public bool Exists(string token)
         {
-            for (int attempt = 0; attempt < 50 && !File.Exists(readyPath); attempt++)
+            for (int attempt = 0; attempt < 500 && !File.Exists(readyPath); attempt++)
             {
                 Thread.Sleep(20);
             }
