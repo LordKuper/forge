@@ -4,9 +4,9 @@
 **Updated:** 2026-07-27
 
 This concise English overview is the canonical architecture summary. The
-[complete original research and target-system design](ai-agentic-software-development-workflow-ru.md)
-is preserved verbatim in Russian as a source artifact; the
-[implementation plan](../plans/implementation-plan.md) tracks delivery work.
+[research summary](ai-agentic-software-development-workflow.md) captures the
+non-normative reasoning behind it; the [implementation plan](../plans/implementation-plan.md)
+tracks delivery work.
 
 Forge is a local control plane that coordinates Claude Code CLI and Codex CLI
 through durable, isolated, policy-controlled software-delivery workflows. Models

@@ -10,7 +10,7 @@ provider, infrastructure, and bootstrap projects plus both hosts.
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)
 - [Architecture overview](docs/architecture/overview.md)
-- [Complete original research and system design (Russian source)](docs/architecture/ai-agentic-software-development-workflow-ru.md)
+- [AI-assisted software delivery research](docs/architecture/ai-agentic-software-development-workflow.md)
 - [Implementation plan](docs/plans/implementation-plan.md)
 
 ## Prerequisites

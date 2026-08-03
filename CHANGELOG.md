@@ -10,6 +10,8 @@ User-facing Forge changes are listed by release, newest first.
   Desktop, and platform-neutral/Windows update boundaries.
 - Replaced automatic Codex review with a dedicated independent agent review for
   every pull request.
+- Replaced the obsolete non-English architecture source with a concise English
+  research summary that links to canonical architecture and planning documents.
 
 ## v0.6.0
 
