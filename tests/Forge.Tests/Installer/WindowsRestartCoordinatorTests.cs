@@ -3,6 +3,7 @@ using Forge.Updater.Windows;
 
 namespace Forge.InstallerTests;
 
+[Collection("External process tests")]
 public sealed class WindowsRestartCoordinatorTests
 {
     [Fact]
@@ -18,14 +19,11 @@ public sealed class WindowsRestartCoordinatorTests
         string lockPath = Path.Combine(directory, "host.lock");
         string readyPath = Path.Combine(directory, "ready");
         string scriptPath = Path.Combine(directory, "host.cmd");
+        string hostScriptPath = Path.Combine(directory, "host.ps1");
         Directory.CreateDirectory(directory);
         try
         {
-            string command =
-                $"$stream=[IO.File]::Open('{lockPath}','OpenOrCreate','ReadWrite','None');" +
-                $"[IO.File]::WriteAllText('{readyPath}','ready');" +
-                "Start-Sleep -Seconds 30";
-            File.WriteAllText(scriptPath, "@echo off\r\npowershell.exe -NoProfile -Command \"" + command + "\"");
+            WriteHostScript(scriptPath, hostScriptPath, lockPath, readyPath);
             WindowsRestartCoordinator coordinator = new(new PersistentTokenStore(), TimeSpan.FromSeconds(10));
             RestartContext restart = new(
                 "token",
@@ -66,14 +64,11 @@ public sealed class WindowsRestartCoordinatorTests
         string lockPath = Path.Combine(directory, "host.lock");
         string readyPath = Path.Combine(directory, "ready");
         string scriptPath = Path.Combine(directory, "host.cmd");
+        string hostScriptPath = Path.Combine(directory, "host.ps1");
         Directory.CreateDirectory(directory);
         try
         {
-            string command =
-                $"$stream=[IO.File]::Open('{lockPath}','OpenOrCreate','ReadWrite','None');" +
-                $"[IO.File]::WriteAllText('{readyPath}','ready');" +
-                "Start-Sleep -Seconds 30";
-            File.WriteAllText(scriptPath, "@echo off\r\npowershell.exe -NoProfile -Command \"" + command + "\"");
+            WriteHostScript(scriptPath, hostScriptPath, lockPath, readyPath);
             WindowsRestartCoordinator coordinator = new(new ReadyThenThrowingTokenStore(readyPath));
             RestartContext restart = new(
                 "token",
@@ -111,6 +106,22 @@ public sealed class WindowsRestartCoordinatorTests
                 await Task.Delay(100, TestContext.Current.CancellationToken);
             }
         }
+    }
+
+    private static void WriteHostScript(
+        string commandPath,
+        string scriptPath,
+        string lockPath,
+        string readyPath)
+    {
+        File.WriteAllText(
+            scriptPath,
+            $"$stream=[IO.File]::Open('{lockPath}','OpenOrCreate','ReadWrite','None');\r\n" +
+            $"[IO.File]::WriteAllText('{readyPath}','ready');\r\n" +
+            "Start-Sleep -Seconds 30");
+        File.WriteAllText(
+            commandPath,
+            "@echo off\r\npowershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + scriptPath + "\"");
     }
 
     private static async Task<FileStream> WaitForLockReleaseAsync(string path)
