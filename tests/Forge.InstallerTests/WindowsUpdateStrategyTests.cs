@@ -168,6 +168,54 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task ActivatesTheDesktopHostForDesktopUpdates()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "versions", "1.0.0"));
+        File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+
+        StageResult staged = await strategy.StageAsync(release, target, TestContext.Current.CancellationToken);
+        ActivationResult result = await strategy.ActivateAsync(
+            staged.Staged!,
+            new RestartContext("token", "forge.exe", [], temporary.Path, new(release.Version, target, UpdateSurface.Desktop)),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(Path.Combine(temporary.Path, "versions", "1.1.0", "Forge.Desktop.exe"), result.Receipt!.ExecutablePath);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task RestoresThePreviousPointerWhenSurfaceSetupThrows()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "versions", "1.0.0"));
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "current"));
+        File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+        File.WriteAllText(Path.Combine(temporary.Path, "current", "forge.cmd"), "unrecognized");
+
+        StageResult staged = await strategy.StageAsync(release, target, TestContext.Current.CancellationToken);
+        ActivationResult result = await strategy.ActivateAsync(
+            staged.Staged!,
+            new RestartContext("token", "forge.exe", [], temporary.Path, new(release.Version, target, UpdateSurface.Cli)),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.Receipt);
+        Assert.Contains("1.0.0", File.ReadAllText(Path.Combine(temporary.Path, "current.json")), StringComparison.Ordinal);
+        Assert.True(Directory.Exists(Path.Combine(temporary.Path, "failed", $"1.1.0-{result.Receipt!.ActivationId}")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task RejectsBundleWhenHostSelfTestFails()
     {
         using TemporaryDirectory temporary = new();

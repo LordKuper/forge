@@ -199,6 +199,8 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         string version = staged.Release.Version.ToString();
         string destination = Path.Combine(VersionRoot, version);
         string activationId = Guid.NewGuid().ToString("N");
+        string previous = string.Empty;
+        ActivationReceipt? receipt = null;
         bool moved = false;
         try
         {
@@ -207,7 +209,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 return ValueTask.FromResult(ActivationResult.Failure("The staged release is not eligible for activation."));
             }
 
-            string previous = ReadCurrentVersion() ?? string.Empty;
+            previous = ReadCurrentVersion() ?? string.Empty;
             if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(VersionRoot, previous)))
             {
                 DeleteDirectory(staged.Location);
@@ -221,18 +223,19 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
             Directory.Move(staged.Location, destination);
             moved = true;
+            receipt = new(
+                activationId,
+                previous,
+                version,
+                Path.Combine(destination, restart.ExpectedIdentity.Surface == UpdateSurface.Desktop ? "Forge.Desktop.exe" : "forge.exe"));
             WriteCurrentVersion(version);
             UpdateDiagnostic installationResult = EnsureInstalledSurfaces(destination);
             if (installationResult.Code != UpdateDiagnosticCode.None)
             {
-                return ValueTask.FromResult(ActivationResult.Failure(installationResult.Detail, new(activationId, previous, version)));
+                return ValueTask.FromResult(ActivationResult.Failure(installationResult.Detail, receipt));
             }
 
-            return ValueTask.FromResult(ActivationResult.Success(new(
-                activationId,
-                previous,
-                version,
-                Path.Combine(destination, "forge.exe"))));
+            return ValueTask.FromResult(ActivationResult.Success(receipt));
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
         {
@@ -240,11 +243,12 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             {
                 try
                 {
+                    WriteCurrentVersion(previous);
                     ArchiveFailedVersion(destination, version, activationId);
                 }
                 catch (Exception recoveryException) when (recoveryException is IOException or UnauthorizedAccessException)
                 {
-                    return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete."));
+                    return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete.", receipt));
                 }
             }
             else
@@ -252,7 +256,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 DeleteDirectory(staged.Location);
             }
 
-            return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete."));
+            return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete.", receipt));
         }
     }
 

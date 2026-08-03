@@ -216,11 +216,22 @@ if ($releaseExists) {
     exit 0
 }
 
+$releaseAssets = @($env:RELEASE_ASSETS -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($env:GITHUB_ACTIONS -eq "true" -and $releaseAssets.Count -eq 0) {
+    throw "Release assets are required in GitHub Actions."
+}
+foreach ($asset in $releaseAssets) {
+    if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+        throw "Release asset is missing: $asset"
+    }
+}
+
 & gh release create $tag `
     --repo $env:GITHUB_REPOSITORY `
     --verify-tag `
     --title "Forge $tag" `
-    --notes $releaseNotes
+    --notes $releaseNotes `
+    @releaseAssets
 if ($LASTEXITCODE -ne 0) {
     throw "Cannot publish release $tag."
 }

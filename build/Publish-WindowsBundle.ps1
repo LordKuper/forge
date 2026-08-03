@@ -17,10 +17,13 @@ $bundlePath = Join-Path $OutputDirectory "forge-windows-$($RuntimeIdentifier.Sub
 
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
-    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Cli\Forge.Cli.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --output $stagingDirectory
+    dotnet restore (Join-Path $repositoryRoot 'Forge.slnx') --locked-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Desktop\Forge.Desktop.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --output $stagingDirectory
+    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Cli\Forge.Cli.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --output $stagingDirectory
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Desktop\Forge.Desktop.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --output $stagingDirectory
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
