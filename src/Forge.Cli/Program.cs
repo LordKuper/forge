@@ -33,5 +33,17 @@ if (args is ["--self-test"])
 }
 
 WindowsInstaller installer = host.Services.GetRequiredService<WindowsInstaller>();
-RootCommand root = CliApplication.CreateRootCommand(catalog, Console.Out, installer.InstallLatestAsync);
+IForgeSelfUpdater updater = host.Services.GetRequiredService<IForgeSelfUpdater>();
+RootCommand root = CliApplication.CreateRootCommand(
+    catalog,
+    Console.Out,
+    installer.InstallLatestAsync,
+    cancellationToken => updater.UpdateAsync(
+        new(
+            SemanticVersion.Parse(typeof(CliApplication).Assembly.GetName().Version!.ToString(3)),
+            Environment.ProcessPath ?? throw new InvalidOperationException("The Forge executable path is unavailable."),
+            ["status"],
+            Environment.CurrentDirectory,
+            UpdateSurface.Cli),
+        cancellationToken));
 return await root.Parse(args).InvokeAsync().ConfigureAwait(false);

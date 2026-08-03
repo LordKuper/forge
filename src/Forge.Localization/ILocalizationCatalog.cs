@@ -17,4 +17,8 @@ public static class MessageKeys
     public const string StatusReady = "StatusReady";
     public const string InstallDescription = "InstallDescription";
     public const string InstallCompleted = "InstallCompleted";
+    public const string InstallFailed = "InstallFailed";
+    public const string UpdateDescription = "UpdateDescription";
+    public const string UpdateCompleted = "UpdateCompleted";
+    public const string UpdateFailed = "UpdateFailed";
 }

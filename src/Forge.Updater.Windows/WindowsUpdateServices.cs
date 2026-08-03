@@ -21,6 +21,7 @@ public static class WindowsUpdateServices
         services.AddSingleton<IRestartTokenStore>(_ => new FileRestartTokenStore(Path.Combine(root, "restart")));
         services.AddSingleton<IRestartTokenService, RestartTokenService>();
         services.AddSingleton<IRestartCoordinator, WindowsRestartCoordinator>();
+        services.AddSingleton<IForgeSelfUpdater, ForgeSelfUpdater>();
         services.AddSingleton(provider => new WindowsUpdateStrategy(
             provider.GetRequiredService<IReleaseAssetDownloader>(),
             root,

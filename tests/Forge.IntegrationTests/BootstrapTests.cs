@@ -35,5 +35,6 @@ public sealed class BootstrapTests
 
         Assert.IsType<WindowsUpdateStrategy>(result.Strategy);
         Assert.NotNull(host.Services.GetRequiredService<WindowsInstaller>());
+        Assert.NotNull(host.Services.GetRequiredService<IForgeSelfUpdater>());
     }
 }

@@ -82,4 +82,55 @@ public sealed class CliTests
         Assert.Equal(0, exitCode);
         Assert.Equal($"{catalog.Resolve(MessageKeys.InstallCompleted)}{Environment.NewLine}", output.ToString());
     }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task UpdateCommandUsesTheSharedUpdateFlow()
+    {
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            catalog,
+            output,
+            update: _ => ValueTask.FromResult(new UpdateResult(
+                UpdateLifecycleState.RestartRequested,
+                UpdateDiagnostic.None)));
+
+        int exitCode = await root
+            .Parse(["update"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal($"{catalog.Resolve(MessageKeys.UpdateCompleted)}{Environment.NewLine}", output.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task InstallCommandLocalizesFailureOutput()
+    {
+        CultureInfo original = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru");
+            StringWriter output = new(CultureInfo.InvariantCulture);
+            ResourceLocalizationCatalog catalog = new();
+            RootCommand root = CliApplication.CreateRootCommand(
+                catalog,
+                output,
+                _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
+                    UpdateDiagnosticCode.ReleaseUnavailable,
+                    "The release endpoint could not be reached."))));
+
+            int exitCode = await root
+                .Parse(["install"])
+                .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+            Assert.Equal(1, exitCode);
+            Assert.Equal($"{catalog.Resolve(MessageKeys.InstallFailed)}{Environment.NewLine}", output.ToString());
+        }
+        finally
+        {
+            CultureInfo.CurrentUICulture = original;
+        }
+    }
 }

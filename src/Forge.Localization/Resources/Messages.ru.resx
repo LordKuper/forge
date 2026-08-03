@@ -10,4 +10,8 @@
   <data name="StatusReady" xml:space="preserve"><value>Forge готов.</value></data>
   <data name="InstallDescription" xml:space="preserve"><value>Установить последний релиз Forge для текущего пользователя.</value></data>
   <data name="InstallCompleted" xml:space="preserve"><value>Установка Forge завершена.</value></data>
+  <data name="InstallFailed" xml:space="preserve"><value>Не удалось установить Forge.</value></data>
+  <data name="UpdateDescription" xml:space="preserve"><value>Обновить Forge до последнего релиза.</value></data>
+  <data name="UpdateCompleted" xml:space="preserve"><value>Обновление Forge завершено.</value></data>
+  <data name="UpdateFailed" xml:space="preserve"><value>Не удалось обновить Forge.</value></data>
 </root>
