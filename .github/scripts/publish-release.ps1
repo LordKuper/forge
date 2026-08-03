@@ -133,6 +133,16 @@ if ($isBreaking -and -not $hasBreakingFooter) {
     throw "A breaking release commit requires a BREAKING CHANGE footer."
 }
 
+& git fetch --tags origin
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot fetch release tags."
+}
+
+if ($null -ne $baseVersion -and $currentVersion -lt $baseVersion -and
+    -not (@(& git tag --list "v$baseVersion") -contains "v$baseVersion")) {
+    $baseVersion = $null
+}
+
 if ($null -ne $baseVersion) {
     if ($isBreaking) {
         $expectedVersion = [version]::new($baseVersion.Major + 1, 0, 0)
@@ -151,11 +161,6 @@ if ($null -ne $baseVersion) {
 }
 
 $tag = "v$version"
-& git fetch --tags origin
-if ($LASTEXITCODE -ne 0) {
-    throw "Cannot fetch release tags."
-}
-
 $head = (& git rev-parse HEAD).Trim()
 $tagExists = @(& git tag --list $tag) -contains $tag
 

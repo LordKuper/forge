@@ -192,6 +192,18 @@ try {
         Assert-Throws { Invoke-Validation $repository "feat: add behavior" -BaseSha $base } "requires a MINOR bump"
     }
 
+    Test-Case "unreleased base version correction" {
+        $repository = New-TestRepository
+        Set-Release $repository "0.5.1"
+        Save-Commit $repository "fix: establish released version" | Out-Null
+        Invoke-TestGit $repository @("tag", "-a", "v0.5.1", "-m", "Forge v0.5.1") | Out-Null
+        Set-Release $repository "1.0.0"
+        $base = Save-Commit $repository "feat!: premature major version"
+        Set-Release $repository "0.6.0"
+        Save-Commit $repository "feat: restore prerelease version" | Out-Null
+        Invoke-Validation $repository "feat: restore prerelease version" -BaseSha $base
+    }
+
     Test-Case "breaking footer without marker" {
         $repository = New-TestRepository
         Set-Release $repository "1.2.3"
