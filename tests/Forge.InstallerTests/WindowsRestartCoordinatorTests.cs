@@ -42,7 +42,7 @@ public sealed class WindowsRestartCoordinatorTests
 
             Assert.True(File.Exists(readyPath), "The restarted host did not signal readiness.");
             Assert.Equal(UpdateDiagnosticCode.HandshakeFailed, (await operation).Code);
-            await using (FileStream stream = new(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            await using (FileStream stream = await WaitForLockReleaseAsync(lockPath))
             {
                 Assert.True(stream.CanWrite);
             }
@@ -86,7 +86,7 @@ public sealed class WindowsRestartCoordinatorTests
                 restart,
                 TestContext.Current.CancellationToken)).Code);
             Assert.True(File.Exists(readyPath), "The restarted host did not signal readiness.");
-            await using (FileStream stream = new(lockPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+            await using (FileStream stream = await WaitForLockReleaseAsync(lockPath))
             {
                 Assert.True(stream.CanWrite);
             }
@@ -107,6 +107,21 @@ public sealed class WindowsRestartCoordinatorTests
                 return;
             }
             catch (IOException) when (attempt < 19)
+            {
+                await Task.Delay(100, TestContext.Current.CancellationToken);
+            }
+        }
+    }
+
+    private static async Task<FileStream> WaitForLockReleaseAsync(string path)
+    {
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            }
+            catch (IOException) when (attempt < 49)
             {
                 await Task.Delay(100, TestContext.Current.CancellationToken);
             }
