@@ -116,11 +116,21 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             try
             {
                 WriteCurrentVersion(version);
-                return CompleteInstallation(destination);
+                WindowsInstallationResult installation = CompleteInstallation(destination);
+                if (installation.Succeeded)
+                {
+                    return installation;
+                }
+
+                File.Delete(Path.Combine(root, "current.json"));
+                WindowsCommandShim.Remove(root);
+                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
+                return installation;
             }
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
             {
                 File.Delete(Path.Combine(root, "current.json"));
+                WindowsCommandShim.Remove(root);
                 DeleteDirectory(destination);
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,

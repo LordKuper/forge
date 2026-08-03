@@ -76,6 +76,29 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task RollsBackWhenCleanInstallationSetupReturnsAFailure()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        WindowsUpdateStrategy strategy = new(
+            new MemoryDownloader(archive),
+            temporary.Path,
+            new PassingSelfTester(),
+            pathRegistrar: new FailingPathRegistrar());
+
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.False(File.Exists(Path.Combine(temporary.Path, "current.json")));
+        Assert.False(File.Exists(Path.Combine(temporary.Path, "current", "forge.cmd")));
+        Assert.Single(Directory.GetDirectories(Path.Combine(temporary.Path, "failed")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task SerializesConcurrentUpdates()
     {
         UpdateTarget target = new("windows", "x64", "portable_bundle");
@@ -374,6 +397,13 @@ public sealed class WindowsUpdateStrategyTests
             ExecutablePath = executablePath;
             return UpdateDiagnostic.None;
         }
+    }
+
+    private sealed class FailingPathRegistrar : IWindowsUserPathRegistrar
+    {
+        public UpdateDiagnostic Ensure(string directory) => new(
+            UpdateDiagnosticCode.ActivationFailed,
+            "The test PATH registration failed.");
     }
 
     private sealed class TemporaryDirectory : IDisposable

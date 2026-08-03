@@ -13,6 +13,13 @@ internal static class WindowsCommandShim
         WriteKnownFile(Path.Combine(current, "forge.ps1"), Script);
     }
 
+    public static void Remove(string root)
+    {
+        string current = Path.Combine(root, "current");
+        DeleteKnownFile(Path.Combine(current, "forge.cmd"), Command);
+        DeleteKnownFile(Path.Combine(current, "forge.ps1"), Script);
+    }
+
     private static void WriteKnownFile(string path, string contents)
     {
         if (File.Exists(path) && !string.Equals(File.ReadAllText(path), contents, StringComparison.Ordinal))
@@ -21,5 +28,13 @@ internal static class WindowsCommandShim
         }
 
         File.WriteAllText(path, contents);
+    }
+
+    private static void DeleteKnownFile(string path, string contents)
+    {
+        if (File.Exists(path) && string.Equals(File.ReadAllText(path), contents, StringComparison.Ordinal))
+        {
+            File.Delete(path);
+        }
     }
 }
