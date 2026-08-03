@@ -71,12 +71,17 @@ function Invoke-Validation(
     }
 }
 
-function Invoke-Publication([string]$Repository, [string]$Subject) {
+function Invoke-Publication(
+    [string]$Repository,
+    [string]$Subject,
+    [bool]$ReleaseExists = $false,
+    [string[]]$ReleaseAssets = @()
+) {
     $log = Join-Path $Repository "gh-stub.log"
     function global:gh {
         Add-Content $env:GH_STUB_LOG ($args -join " ")
         if ($args[0] -eq "release" -and $args[1] -eq "view") {
-            $global:LASTEXITCODE = 1
+            $global:LASTEXITCODE = if ($ReleaseExists) { 0 } else { 1 }
         } else {
             $global:LASTEXITCODE = 0
         }
@@ -88,6 +93,8 @@ function Invoke-Publication([string]$Repository, [string]$Subject) {
     $env:RELEASE_BASE_SHA = ""
     $env:RELEASE_COMMIT_BODY = "Test release."
     $env:RELEASE_COMMIT_SUBJECT = $Subject
+    $env:RELEASE_ASSETS = $ReleaseAssets -join ';'
+    $env:RELEASE_REQUIRE_ASSETS = if ($ReleaseAssets.Count -gt 0) { "true" } else { "false" }
     try {
         Push-Location $Repository
         try { & $publisher | Out-Null } finally { Pop-Location }
@@ -99,6 +106,8 @@ function Invoke-Publication([string]$Repository, [string]$Subject) {
         $env:RELEASE_BASE_SHA = $null
         $env:RELEASE_COMMIT_BODY = $null
         $env:RELEASE_COMMIT_SUBJECT = $null
+        $env:RELEASE_ASSETS = $null
+        $env:RELEASE_REQUIRE_ASSETS = $null
     }
     $log
 }
@@ -237,6 +246,20 @@ try {
         $ghCalls = Get-Content $log -Raw
         if ($ghCalls -notmatch "release create v0.1.0") {
             throw "Publication did not create a GitHub Release. Stub calls: $ghCalls"
+        }
+    }
+
+    Test-Case "existing release uploads replacement assets" {
+        $repository = New-TestRepository
+        Save-Commit $repository "chore: initialize" | Out-Null
+        Set-Release $repository "0.1.0"
+        Save-Commit $repository "feat: initialize Forge" | Out-Null
+        $asset = Join-Path $repository "forge-windows-x64-portable_bundle.zip"
+        Set-Content $asset "bundle"
+        $log = Invoke-Publication $repository "feat: initialize Forge" $true @($asset)
+        $ghCalls = Get-Content $log -Raw
+        if ($ghCalls -notmatch "release upload v0.1.0 .*--clobber") {
+            throw "Publication did not upload replacement release assets. Stub calls: $ghCalls"
         }
     }
 

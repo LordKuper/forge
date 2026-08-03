@@ -211,16 +211,34 @@ $ErrorActionPreference = "Continue"
 & gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
 $releaseExists = $LASTEXITCODE -eq 0
 $ErrorActionPreference = $savedErrorPreference
+$releaseAssets = @($env:RELEASE_ASSETS -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+if ($env:RELEASE_REQUIRE_ASSETS -eq "true" -and $releaseAssets.Count -eq 0) {
+    throw "Release assets are required in GitHub Actions."
+}
+foreach ($asset in $releaseAssets) {
+    if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) {
+        throw "Release asset is missing: $asset"
+    }
+}
+
 if ($releaseExists) {
+    if ($releaseAssets.Count -gt 0) {
+        & gh release upload $tag --repo $env:GITHUB_REPOSITORY --clobber @releaseAssets
+        if ($LASTEXITCODE -ne 0) {
+            throw "Cannot upload release assets for $tag."
+        }
+    }
+
     Write-Host "Release $tag already exists."
-    exit 0
+    return
 }
 
 & gh release create $tag `
     --repo $env:GITHUB_REPOSITORY `
     --verify-tag `
     --title "Forge $tag" `
-    --notes $releaseNotes
+    --notes $releaseNotes `
+    @releaseAssets
 if ($LASTEXITCODE -ne 0) {
     throw "Cannot publish release $tag."
 }

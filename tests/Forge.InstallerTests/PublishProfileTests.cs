@@ -24,6 +24,28 @@ public sealed class PublishProfileTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public void CliDeclaresBothWindowsRuntimeIdentifiers()
+    {
+        string project = File.ReadAllText(Path.Combine(FindRoot(), "src", "Forge.Cli", "Forge.Cli.csproj"));
+
+        Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public void BundlePublisherProducesTheVerifiedArchiveLayout()
+    {
+        string script = File.ReadAllText(Path.Combine(FindRoot(), "build", "Publish-WindowsBundle.ps1"));
+
+        Assert.Contains("Forge.Cli\\Forge.Cli.csproj", script, StringComparison.Ordinal);
+        Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
+        Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
+        Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
+        Assert.Contains("LastWriteTime", script, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public void WindowsUpdateStrategyIsImplementedInTheApplication()
     {
         string root = FindRoot();

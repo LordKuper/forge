@@ -144,20 +144,17 @@ public sealed class UpdaterTests
     {
         ReleaseAsset asset = new("forge-windows-x64-portable_bundle.zip", 4, new Uri("https://example.test/asset"));
         ReleaseAsset checksum = new("checksums.txt", 1, new Uri("https://example.test/checksums"));
-        ReleaseAsset provenance = new("provenance.intoto.jsonl", 1, new Uri("https://example.test/provenance"));
         Dictionary<string, byte[]> content = new(StringComparer.Ordinal)
         {
             [asset.Name] = Encoding.UTF8.GetBytes("bad"),
             [checksum.Name] = Encoding.UTF8.GetBytes($"{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("good")))}  4  {asset.Name}\n"),
-            [provenance.Name] = Encoding.UTF8.GetBytes("bundle"),
         };
         ReleaseAssetVerifier verifier = new(
-            new("github.com/LordKuper/forge", "release.yml", "forge-{0}-{1}-{2}.zip", checksum.Name, provenance.Name),
-            new MemoryDownloader(content),
-            new PassingProvenanceVerifier());
+            new("forge-{0}-{1}-{2}.zip", checksum.Name),
+            new MemoryDownloader(content));
 
         VerificationResult result = await verifier.VerifyAsync(
-            new ReleaseMetadata(SemanticVersion.Parse("1.1.0"), new Uri("https://example.test/release"), false, false, DateTimeOffset.UtcNow, [asset, checksum, provenance]),
+            new ReleaseMetadata(SemanticVersion.Parse("1.1.0"), new Uri("https://example.test/release"), false, false, DateTimeOffset.UtcNow, [asset, checksum]),
             new UpdateTarget("windows", "x64", "portable_bundle"),
             TestContext.Current.CancellationToken);
 
@@ -165,9 +162,11 @@ public sealed class UpdaterTests
         Assert.Equal(UpdateDiagnosticCode.VerificationFailed, result.Diagnostic.Code);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(UpdateSurface.Cli)]
+    [InlineData(UpdateSurface.Desktop)]
     [Trait("Category", "Unit")]
-    public void RestartTokensAreOneUseAndPreserveLaunchContext()
+    public void RestartTokensAreOneUseAndPreserveLaunchContext(UpdateSurface surface)
     {
         RestartTokenService tokens = new(new TestRestartTokenStore());
         UpdateRequest request = new(
@@ -175,12 +174,12 @@ public sealed class UpdaterTests
             "C:\\Forge\\forge.exe",
             ["status", "--json"],
             "C:\\work",
-            UpdateSurface.Cli);
+            surface);
 
         RestartIdentity identity = new(
             SemanticVersion.Parse("1.1.0"),
             new UpdateTarget("windows", "x64", "portable_bundle"),
-            UpdateSurface.Cli);
+            surface);
         RestartContext context = tokens.Create(request, identity);
 
         Assert.Equal(request.Arguments, context.Arguments);
@@ -234,6 +233,36 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void CorruptRestartTokenRemainsPendingUntilRevoked()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-restart-token-{Guid.NewGuid():N}");
+        string token = new('A', 64);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"{token}.restart-token.json"), "not json");
+            FileRestartTokenStore store = new(directory);
+            RestartIdentity identity = new(
+                SemanticVersion.Parse("1.1.0"),
+                new UpdateTarget("windows", "x64", "portable_bundle"),
+                UpdateSurface.Cli);
+
+            Assert.False(store.TryConsume(token, identity));
+            Assert.True(store.Exists(token));
+            store.Revoke(token);
+            Assert.False(store.Exists(token));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RestartFailureRollsBackActivatedRelease()
     {
         TestStrategy strategy = new(true) { ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0")) };
@@ -274,6 +303,33 @@ public sealed class UpdaterTests
         Assert.Equal(UpdateLifecycleState.RolledBack, result.State);
         Assert.True(result.RollbackAttempted);
         Assert.Equal(1, strategy.RollbackCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RestartUsesTheActivatedHost()
+    {
+        const string activatedHost = "C:\\Forge\\versions\\1.1.0\\forge.exe";
+        TestStrategy strategy = new(true)
+        {
+            ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0", activatedHost)),
+        };
+        CapturingRestartCoordinator restart = new();
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [strategy],
+            new StaticReleaseClient(Release("1.1.0")),
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(new TestRestartTokenStore()),
+            restart);
+
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateLifecycleState.RestartRequested, result.State);
+        Assert.Equal(activatedHost, restart.Context!.ExecutablePath);
+        Assert.Equal(CreateRequest().Arguments, restart.Context.Arguments);
+        Assert.Equal(CreateRequest().WorkingDirectory, restart.Context.WorkingDirectory);
     }
 
     [Fact]
@@ -401,7 +457,7 @@ public sealed class UpdaterTests
         public ValueTask<VerificationResult> VerifyAsync(ReleaseMetadata release, UpdateTarget target, CancellationToken cancellationToken) =>
             ValueTask.FromResult(new VerificationResult(
                 true,
-                new VerifiedRelease(release.Version, release.ReleaseUri, new("asset.zip", 0, new Uri("https://example.test/asset")), "00", "provenance"),
+                new VerifiedRelease(release.Version, release.ReleaseUri, new("asset.zip", 0, new Uri("https://example.test/asset")), "00"),
                 UpdateDiagnostic.None));
     }
 
@@ -456,12 +512,6 @@ public sealed class UpdaterTests
             ValueTask.FromResult<Stream>(new MemoryStream(content[asset.Name], writable: false));
     }
 
-    private sealed class PassingProvenanceVerifier : IProvenanceVerifier
-    {
-        public ValueTask<bool> VerifyAsync(Stream bundle, ReleaseTrustPolicy policy, ReleaseAsset asset, string sha256, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(true);
-    }
-
     private sealed class FailingRestartCoordinator : IRestartCoordinator
     {
         public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken) =>
@@ -472,6 +522,17 @@ public sealed class UpdaterTests
     {
         public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken) =>
             ValueTask.FromException<UpdateDiagnostic>(new OperationCanceledException());
+    }
+
+    private sealed class CapturingRestartCoordinator : IRestartCoordinator
+    {
+        public RestartContext? Context { get; private set; }
+
+        public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken)
+        {
+            Context = restart;
+            return ValueTask.FromResult(UpdateDiagnostic.None);
+        }
     }
 
     private sealed class TestRestartTokenStore : IRestartTokenStore
@@ -492,5 +553,7 @@ public sealed class UpdaterTests
         }
 
         public void Revoke(string token) => tokens.Remove(token);
+
+        public bool Exists(string token) => tokens.ContainsKey(token);
     }
 }

@@ -31,9 +31,7 @@ records the decisions and recovery guarantees behind them.
 - The official release identity is `github.com/LordKuper/forge`.
 - Only the latest published, non-draft, non-prerelease SemVer release is
   eligible. Downgrades and equal-version activation are forbidden.
-- Every asset must match the signed checksum manifest by name, size, and
-  SHA-256, and must carry a GitHub Actions/Sigstore build-provenance bundle whose
-  repository and workflow identity match the built-in trust policy.
+- Every asset must match the release checksum manifest by name, size, and SHA-256.
 - Verification, staging self-test, activation, one-use restart token, startup
   handshake, and rollback are mandatory. Any failure is fail-closed for project
   and sprint work.
@@ -78,8 +76,8 @@ invalid composition and return `internal_error`.
 ### Trust boundaries and credentials
 
 Forge trusts its shipped code and pinned policy, not project text. GitHub release
-metadata is untrusted until identity and provenance verification. Provider CLI
-output is untrusted typed input. Project files, generated artifacts, prompts,
+metadata remains untrusted; release checksums protect against accidental corruption.
+Provider CLI output is untrusted typed input. Project files, generated artifacts, prompts,
 hooks, and tool instructions are untrusted content and never become executable
 policy without validation and authorization.
 

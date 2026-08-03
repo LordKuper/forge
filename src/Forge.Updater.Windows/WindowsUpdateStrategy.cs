@@ -8,8 +8,10 @@ public interface IWindowsHostSelfTester
     ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken);
 }
 
-public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
+public sealed class WindowsHostSelfTester(TimeSpan? timeout = null) : IWindowsHostSelfTester
 {
+    private readonly TimeSpan timeout = timeout ?? TimeSpan.FromSeconds(30);
+
     public async ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
@@ -23,11 +25,15 @@ public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
         startInfo.ArgumentList.Add("--self-test");
         using Process process = new() { StartInfo = startInfo };
         process.Start();
+        using CancellationTokenSource deadline = new(this.timeout);
+        using CancellationTokenSource waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            deadline.Token);
         try
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await process.WaitForExitAsync(waitCancellation.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             if (!process.HasExited)
             {
@@ -35,7 +41,12 @@ public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
-            throw;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return false;
         }
 
         return process.ExitCode == 0;
@@ -44,19 +55,26 @@ public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
 
 public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 {
+    private static readonly string[] HostNames = ["forge.exe", "Forge.Desktop.exe"];
     private readonly IReleaseAssetDownloader downloader;
     private readonly string root;
     private readonly IWindowsHostSelfTester selfTester;
+    private readonly IWindowsUserPathRegistrar? pathRegistrar;
+    private readonly IWindowsDesktopShortcut? desktopShortcut;
 
     public WindowsUpdateStrategy(
         IReleaseAssetDownloader downloader,
         string root,
-        IWindowsHostSelfTester? selfTester = null)
+        IWindowsHostSelfTester? selfTester = null,
+        IWindowsUserPathRegistrar? pathRegistrar = null,
+        IWindowsDesktopShortcut? desktopShortcut = null)
     {
         this.downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         this.root = Path.GetFullPath(root);
         this.selfTester = selfTester ?? new WindowsHostSelfTester();
+        this.pathRegistrar = pathRegistrar;
+        this.desktopShortcut = desktopShortcut;
     }
 
     public bool Supports(UpdateTarget target)
@@ -66,6 +84,86 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             string.Equals(target.Packaging, "portable_bundle", StringComparison.Ordinal) &&
             (string.Equals(target.Architecture, "x64", StringComparison.Ordinal) ||
              string.Equals(target.Architecture, "arm64", StringComparison.Ordinal));
+    }
+
+    public async ValueTask<WindowsInstallationResult> InstallAsync(
+        VerifiedRelease release,
+        UpdateTarget target,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(release);
+        ArgumentNullException.ThrowIfNull(target);
+        if (!Supports(target))
+        {
+            return WindowsInstallationResult.Failure(new(
+                UpdateDiagnosticCode.PlatformNotSupported,
+                "The release target is not supported by the Windows installer."));
+        }
+
+        string version = release.Version.ToString();
+        string destination = Path.Combine(VersionRoot, version);
+        try
+        {
+            string? current = ReadCurrentVersion();
+            if (string.Equals(current, version, StringComparison.Ordinal) && Directory.Exists(destination))
+            {
+                return CompleteInstallation(destination);
+            }
+
+            if (current is not null || Directory.Exists(destination))
+            {
+                return WindowsInstallationResult.Failure(new(
+                    UpdateDiagnosticCode.ActivationFailed,
+                    "A different Forge installation already exists; use the updater instead."));
+            }
+
+            StageResult staged = await StageAsync(release, target, cancellationToken).ConfigureAwait(false);
+            if (!staged.Succeeded)
+            {
+                return WindowsInstallationResult.Failure(staged.Diagnostic);
+            }
+
+            Directory.Move(staged.Staged!.Location, destination);
+            DesktopShortcutSnapshot? shortcutSnapshot = null;
+            try
+            {
+                shortcutSnapshot = desktopShortcut?.Capture();
+                WriteCurrentVersion(version);
+                WindowsInstallationResult installation = CompleteInstallation(destination);
+                if (installation.Succeeded)
+                {
+                    return installation;
+                }
+
+                File.Delete(Path.Combine(root, "current.json"));
+                WindowsCommandShim.Remove(root);
+                if (shortcutSnapshot is not null)
+                {
+                    desktopShortcut!.Restore(shortcutSnapshot);
+                }
+                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
+                return installation;
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+            {
+                File.Delete(Path.Combine(root, "current.json"));
+                WindowsCommandShim.Remove(root);
+                if (shortcutSnapshot is not null)
+                {
+                    desktopShortcut!.Restore(shortcutSnapshot);
+                }
+                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
+                return WindowsInstallationResult.Failure(new(
+                    UpdateDiagnosticCode.ActivationFailed,
+                    "Windows installation activation could not complete."));
+            }
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+        {
+            return WindowsInstallationResult.Failure(new(
+                UpdateDiagnosticCode.ActivationFailed,
+                "Windows installation could not complete."));
+        }
     }
 
     public async ValueTask<StageResult> StageAsync(
@@ -83,14 +181,18 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             Directory.CreateDirectory(VersionRoot);
             await DownloadAndVerifyAsync(release, archive, cancellationToken).ConfigureAwait(false);
             ExtractArchive(archive, staging);
-            if (!File.Exists(Path.Combine(staging, "forge.exe")))
+            foreach (string hostName in HostNames)
             {
-                return StageResult.Failure("The release package has no Forge CLI host.");
-            }
+                string hostPath = Path.Combine(staging, hostName);
+                if (!File.Exists(hostPath))
+                {
+                    return StageResult.Failure($"The release package has no {hostName} host.");
+                }
 
-            if (!await selfTester.VerifyAsync(Path.Combine(staging, "forge.exe"), cancellationToken).ConfigureAwait(false))
-            {
-                return StageResult.Failure("The staged Forge CLI host self-test failed.");
+                if (!await selfTester.VerifyAsync(hostPath, cancellationToken).ConfigureAwait(false))
+                {
+                    return StageResult.Failure($"The staged Forge host self-test failed: {hostName}.");
+                }
             }
 
             staged = true;
@@ -129,6 +231,8 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         string version = staged.Release.Version.ToString();
         string destination = Path.Combine(VersionRoot, version);
         string activationId = Guid.NewGuid().ToString("N");
+        string previous = string.Empty;
+        ActivationReceipt? receipt = null;
         bool moved = false;
         try
         {
@@ -137,7 +241,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 return ValueTask.FromResult(ActivationResult.Failure("The staged release is not eligible for activation."));
             }
 
-            string previous = ReadCurrentVersion() ?? string.Empty;
+            previous = ReadCurrentVersion() ?? string.Empty;
             if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(VersionRoot, previous)))
             {
                 DeleteDirectory(staged.Location);
@@ -151,8 +255,19 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
             Directory.Move(staged.Location, destination);
             moved = true;
+            receipt = new(
+                activationId,
+                previous,
+                version,
+                Path.Combine(destination, restart.ExpectedIdentity.Surface == UpdateSurface.Desktop ? "Forge.Desktop.exe" : "forge.exe"));
             WriteCurrentVersion(version);
-            return ValueTask.FromResult(ActivationResult.Success(new(activationId, previous, version)));
+            UpdateDiagnostic installationResult = EnsureInstalledSurfaces(destination);
+            if (installationResult.Code != UpdateDiagnosticCode.None)
+            {
+                return ValueTask.FromResult(ActivationResult.Failure(installationResult.Detail, receipt));
+            }
+
+            return ValueTask.FromResult(ActivationResult.Success(receipt));
         }
         catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
         {
@@ -160,11 +275,12 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             {
                 try
                 {
+                    WriteCurrentVersion(previous);
                     ArchiveFailedVersion(destination, version, activationId);
                 }
                 catch (Exception recoveryException) when (recoveryException is IOException or UnauthorizedAccessException)
                 {
-                    return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete."));
+                    return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete.", receipt));
                 }
             }
             else
@@ -172,7 +288,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 DeleteDirectory(staged.Location);
             }
 
-            return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete."));
+            return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete.", receipt));
         }
     }
 
@@ -192,6 +308,12 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         try
         {
             WriteCurrentVersion(receipt.PreviousVersion);
+            UpdateDiagnostic installationResult = EnsureInstalledSurfaces(Path.Combine(VersionRoot, receipt.PreviousVersion));
+            if (installationResult.Code != UpdateDiagnosticCode.None)
+            {
+                return ValueTask.FromResult(RollbackResult.Failure(installationResult.Detail));
+            }
+
             string activated = Path.Combine(VersionRoot, receipt.ActivatedVersion);
             if (Directory.Exists(activated))
             {
@@ -207,6 +329,23 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
     }
 
     private string VersionRoot => Path.Combine(root, "versions");
+
+    private WindowsInstallationResult CompleteInstallation(string destination)
+    {
+        UpdateDiagnostic installationResult = EnsureInstalledSurfaces(destination);
+        return installationResult.Code == UpdateDiagnosticCode.None
+            ? new(true, destination, UpdateDiagnostic.None)
+            : WindowsInstallationResult.Failure(installationResult);
+    }
+
+    private UpdateDiagnostic EnsureInstalledSurfaces(string versionDirectory)
+    {
+        WindowsCommandShim.Ensure(root);
+        UpdateDiagnostic shortcutResult = desktopShortcut?.Ensure(Path.Combine(versionDirectory, "Forge.Desktop.exe")) ?? UpdateDiagnostic.None;
+        return shortcutResult.Code == UpdateDiagnosticCode.None
+            ? pathRegistrar?.Ensure(Path.Combine(root, "current")) ?? UpdateDiagnostic.None
+            : shortcutResult;
+    }
 
     private void ArchiveFailedVersion(string source, string version, string archiveId)
     {
