@@ -2,10 +2,12 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <AssemblyName>forge</AssemblyName>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Terminal.Gui" />
     <ProjectReference Include="..\Forge.Bootstrap\Forge.Bootstrap.csproj" />
+    <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

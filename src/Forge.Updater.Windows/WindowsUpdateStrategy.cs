@@ -138,6 +138,11 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
 
             string previous = ReadCurrentVersion() ?? string.Empty;
+            if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(VersionRoot, previous)))
+            {
+                return ValueTask.FromResult(ActivationResult.Failure("No previous verified Windows release is available for rollback."));
+            }
+
             if (Directory.Exists(destination))
             {
                 ArchiveFailedVersion(destination, version, activationId);

@@ -97,6 +97,28 @@ public sealed class WindowsUpdateStrategyTests
         Assert.False(result.Succeeded);
     }
 
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task RejectsActivationWithoutARestorableCurrentBundle()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+
+        StageResult staged = await strategy.StageAsync(
+            release,
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+        ActivationResult result = await strategy.ActivateAsync(
+            staged.Staged!,
+            new RestartContext("token", "forge.exe", [], temporary.Path, new(release.Version, new("windows", "x64", "portable_bundle"), UpdateSurface.Cli)),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+    }
+
     private static VerifiedRelease Release(byte[] archive) =>
         new(
             SemanticVersion.Parse("1.1.0"),
