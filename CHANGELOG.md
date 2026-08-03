@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.5.0
+
+### Added
+
+- Added a Windows updater foundation that re-verifies a released bundle while
+  staging it under the per-user version layout, atomically switches the current
+  version, and restores the prior version on rollback.
+
 ## v0.4.1
 
 ### Changed

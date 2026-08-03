@@ -105,7 +105,7 @@ platforms; all update/restart/rollback contract tests pass.
 
 **Depends on:** Stage 2.
 
-- [ ] P3.1–P3.8 — Implement `install.ps1`, RID detection, verified download,
+- [ ] P3.1–P3.8 — Implement in-app installation, RID detection, verified download,
   per-user version layout, host self-tests, idempotent PATH update, and rollback.
 - [ ] P3.9–P3.16 — Implement mutex/timeout, staging, helper activation, atomic
   current switch, handshake rollback, and concurrent-launch handling.

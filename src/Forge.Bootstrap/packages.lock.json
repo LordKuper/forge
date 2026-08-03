@@ -137,11 +137,6 @@
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
       },
-      "Microsoft.Extensions.DependencyInjection.Abstractions": {
-        "type": "Transitive",
-        "resolved": "10.0.10",
-        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
-      },
       "Microsoft.Extensions.Diagnostics": {
         "type": "Transitive",
         "resolved": "10.0.10",
@@ -299,7 +294,7 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.3.0, )"
+          "Forge.Domain": "[0.5.0, )"
         }
       },
       "forge.configuration": {
@@ -315,7 +310,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.3.0, )",
+          "Forge.Application": "[0.5.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -325,13 +320,13 @@
       "forge.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.3.0, )"
+          "Forge.Domain": "[0.5.0, )"
         }
       },
       "forge.providers": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.3.0, )"
+          "Forge.Application": "[0.5.0, )"
         }
       },
       "forge.updater": {
@@ -345,6 +340,12 @@
         "dependencies": {
           "JsonPointer.Net": "7.0.2"
         }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
       },
       "Microsoft.Extensions.Logging.Debug": {
         "type": "CentralTransitive",

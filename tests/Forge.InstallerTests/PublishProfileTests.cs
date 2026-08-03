@@ -22,6 +22,18 @@ public sealed class PublishProfileTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Installer")]
+    public void WindowsUpdateStrategyIsImplementedInTheApplication()
+    {
+        string root = FindRoot();
+        string strategy = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater.Windows", "WindowsUpdateStrategy.cs"));
+
+        Assert.False(File.Exists(Path.Combine(root, "install.ps1")));
+        Assert.Contains("DownloadAndVerifyAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("File.Replace", strategy, StringComparison.Ordinal);
+    }
+
     private static string FindRoot()
     {
         DirectoryInfo? directory = new(AppContext.BaseDirectory);

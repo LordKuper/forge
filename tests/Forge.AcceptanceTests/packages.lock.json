@@ -1,7 +1,7 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {
+    "net10.0-windows10.0.19041": {
       "Microsoft.NET.Test.Sdk": {
         "type": "Direct",
         "requested": "[18.8.1, )",
@@ -146,11 +146,6 @@
         "dependencies": {
           "Microsoft.Extensions.DependencyInjection.Abstractions": "10.0.10"
         }
-      },
-      "Microsoft.Extensions.DependencyInjection.Abstractions": {
-        "type": "Transitive",
-        "resolved": "10.0.10",
-        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
       },
       "Microsoft.Extensions.Diagnostics": {
         "type": "Transitive",
@@ -442,7 +437,8 @@
       "forge": {
         "type": "Project",
         "dependencies": {
-          "Forge.Bootstrap": "[0.3.0, )",
+          "Forge.Bootstrap": "[0.5.0, )",
+          "Forge.Updater.Windows": "[0.5.0, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -450,19 +446,19 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.3.0, )"
+          "Forge.Domain": "[0.5.0, )"
         }
       },
       "forge.bootstrap": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.3.0, )",
-          "Forge.Configuration": "[0.3.0, )",
-          "Forge.Infrastructure": "[0.3.0, )",
-          "Forge.Localization": "[0.3.0, )",
-          "Forge.Presentation": "[0.3.0, )",
-          "Forge.Providers": "[0.3.0, )",
-          "Forge.Updater": "[0.3.0, )",
+          "Forge.Application": "[0.5.0, )",
+          "Forge.Configuration": "[0.5.0, )",
+          "Forge.Infrastructure": "[0.5.0, )",
+          "Forge.Localization": "[0.5.0, )",
+          "Forge.Presentation": "[0.5.0, )",
+          "Forge.Providers": "[0.5.0, )",
+          "Forge.Updater": "[0.5.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -479,7 +475,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.3.0, )",
+          "Forge.Application": "[0.5.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -489,17 +485,24 @@
       "forge.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.3.0, )"
+          "Forge.Domain": "[0.5.0, )"
         }
       },
       "forge.providers": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.3.0, )"
+          "Forge.Application": "[0.5.0, )"
         }
       },
       "forge.updater": {
         "type": "Project"
+      },
+      "forge.updater.windows": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Updater": "[0.5.0, )",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
+        }
       },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
@@ -509,6 +512,12 @@
         "dependencies": {
           "JsonPointer.Net": "7.0.2"
         }
+      },
+      "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "type": "CentralTransitive",
+        "requested": "[10.0.10, )",
+        "resolved": "10.0.10",
+        "contentHash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA=="
       },
       "Microsoft.Extensions.Hosting": {
         "type": "CentralTransitive",

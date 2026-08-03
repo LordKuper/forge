@@ -1,4 +1,5 @@
 using Forge.Bootstrap;
+using Forge.Updater.Windows;
 #if DEBUG
 using Microsoft.Extensions.Logging;
 #endif
@@ -12,6 +13,7 @@ public static class MauiProgram
         MauiAppBuilder builder = MauiApp.CreateBuilder()
             .UseMauiApp<App>();
         builder.Services.AddForgeCore();
+        builder.Services.AddForgeWindowsUpdater();
 #if DEBUG
         builder.Logging.AddDebug();
 #endif
