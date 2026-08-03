@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v1.0.1
+
+### Fixed
+
+- Fixed the automated Windows release workflow so it installs the pinned .NET
+  SDK before validating the publishing toolchain.
+
 ## v1.0.0
 
 ### Added
