@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.5.1
+
+### Changed
+
+- Standardized repository text formatting, LF line endings, and pre-PR
+  validation that applies local formatting and blocks formatting changes,
+  warnings, and errors in CI.
+
 ## v0.5.0
 
 ### Added

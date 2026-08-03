@@ -6,7 +6,12 @@ $ErrorActionPreference = 'Stop'
 dotnet restore Forge.slnx --locked-mode
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-dotnet format Forge.slnx --no-restore --verify-no-changes
+$formatArguments = @('Forge.slnx', '--no-restore')
+if ($env:CI -eq 'true') {
+    $formatArguments += '--verify-no-changes'
+}
+
+dotnet format @formatArguments
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 dotnet build Forge.slnx --no-restore --configuration Release
