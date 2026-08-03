@@ -11,7 +11,7 @@ $actual = @{
     ".NET SDK" = ((& dotnet --version)).Trim()
 }
 $expected = @{
-    "runner image" = "20260720.247.2"
+    "runner image" = "20260728.188.1"
     "Git" = "2.54.0"
     "GitHub CLI" = "2.96.0"
     ".NET SDK" = "10.0.302"

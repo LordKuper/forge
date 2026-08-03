@@ -631,8 +631,8 @@
       "forge": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.6.2, )",
-          "Forge.Updater.Windows": "[0.6.2, )",
+          "Forge.Runtime": "[0.6.3, )",
+          "Forge.Updater.Windows": "[0.6.3, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -651,7 +651,7 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Updater": "[0.6.2, )",
+          "Forge.Updater": "[0.6.3, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
