@@ -83,7 +83,10 @@ public sealed class ForgeSelfUpdater(
         UpdateDiagnostic restartResult;
         try
         {
-            restartResult = await restartCoordinator.RestartAsync(restart, cancellationToken).ConfigureAwait(false);
+            RestartContext launch = activated.Receipt!.ExecutablePath is { Length: > 0 } executablePath
+                ? restart with { ExecutablePath = executablePath }
+                : restart;
+            restartResult = await restartCoordinator.RestartAsync(launch, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is OperationCanceledException or InvalidOperationException or System.ComponentModel.Win32Exception or IOException)
         {

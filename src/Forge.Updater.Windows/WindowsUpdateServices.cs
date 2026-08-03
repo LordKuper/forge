@@ -7,11 +7,20 @@ public static class WindowsUpdateServices
     public static IServiceCollection AddForgeWindowsUpdater(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        string root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Forge");
         services.AddSingleton<IReleaseAssetDownloader, HttpReleaseAssetDownloader>();
+        services.AddSingleton<IUpdateTargetDetector, RuntimeUpdateTargetDetector>();
         services.AddSingleton<IUpdateLock, WindowsUpdateLock>();
+        services.AddSingleton<IWindowsUserPathRegistrar, WindowsUserPathRegistrar>();
+        services.AddSingleton<IWindowsDesktopShortcut, WindowsDesktopShortcut>();
+        services.AddSingleton<IRestartTokenStore>(_ => new FileRestartTokenStore(Path.Combine(root, "restart")));
+        services.AddSingleton<IRestartTokenService, RestartTokenService>();
+        services.AddSingleton<IRestartCoordinator, WindowsRestartCoordinator>();
         services.AddSingleton(provider => new WindowsUpdateStrategy(
             provider.GetRequiredService<IReleaseAssetDownloader>(),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Forge")));
+            root,
+            pathRegistrar: provider.GetRequiredService<IWindowsUserPathRegistrar>(),
+            desktopShortcut: provider.GetRequiredService<IWindowsDesktopShortcut>()));
         services.AddSingleton<IPlatformUpdateStrategy>(provider => provider.GetRequiredService<WindowsUpdateStrategy>());
         services.AddSingleton<PlatformUpdateStrategyResolver>();
         return services;

@@ -294,7 +294,7 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.5.0, )"
+          "Forge.Domain": "[0.6.0, )"
         }
       },
       "forge.configuration": {
@@ -310,7 +310,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.5.0, )",
+          "Forge.Application": "[0.6.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -320,13 +320,13 @@
       "forge.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.5.0, )"
+          "Forge.Domain": "[0.6.0, )"
         }
       },
       "forge.providers": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[0.5.0, )"
+          "Forge.Application": "[0.6.0, )"
         }
       },
       "forge.updater": {

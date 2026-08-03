@@ -66,6 +66,9 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         }
     }
 
+    public bool Exists(string token) =>
+        TryGetTokenPath(token, out string? tokenPath) && File.Exists(tokenPath);
+
     public bool TryConsume(string token, RestartIdentity identity)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(token);

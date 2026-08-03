@@ -165,9 +165,11 @@ public sealed class UpdaterTests
         Assert.Equal(UpdateDiagnosticCode.VerificationFailed, result.Diagnostic.Code);
     }
 
-    [Fact]
+    [Theory]
+    [InlineData(UpdateSurface.Cli)]
+    [InlineData(UpdateSurface.Desktop)]
     [Trait("Category", "Unit")]
-    public void RestartTokensAreOneUseAndPreserveLaunchContext()
+    public void RestartTokensAreOneUseAndPreserveLaunchContext(UpdateSurface surface)
     {
         RestartTokenService tokens = new(new TestRestartTokenStore());
         UpdateRequest request = new(
@@ -175,12 +177,12 @@ public sealed class UpdaterTests
             "C:\\Forge\\forge.exe",
             ["status", "--json"],
             "C:\\work",
-            UpdateSurface.Cli);
+            surface);
 
         RestartIdentity identity = new(
             SemanticVersion.Parse("1.1.0"),
             new UpdateTarget("windows", "x64", "portable_bundle"),
-            UpdateSurface.Cli);
+            surface);
         RestartContext context = tokens.Create(request, identity);
 
         Assert.Equal(request.Arguments, context.Arguments);
@@ -274,6 +276,33 @@ public sealed class UpdaterTests
         Assert.Equal(UpdateLifecycleState.RolledBack, result.State);
         Assert.True(result.RollbackAttempted);
         Assert.Equal(1, strategy.RollbackCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RestartUsesTheActivatedHost()
+    {
+        const string activatedHost = "C:\\Forge\\versions\\1.1.0\\forge.exe";
+        TestStrategy strategy = new(true)
+        {
+            ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0", activatedHost)),
+        };
+        CapturingRestartCoordinator restart = new();
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [strategy],
+            new StaticReleaseClient(Release("1.1.0")),
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(new TestRestartTokenStore()),
+            restart);
+
+        UpdateResult result = await updater.UpdateAsync(CreateRequest(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateLifecycleState.RestartRequested, result.State);
+        Assert.Equal(activatedHost, restart.Context!.ExecutablePath);
+        Assert.Equal(CreateRequest().Arguments, restart.Context.Arguments);
+        Assert.Equal(CreateRequest().WorkingDirectory, restart.Context.WorkingDirectory);
     }
 
     [Fact]
@@ -474,6 +503,17 @@ public sealed class UpdaterTests
             ValueTask.FromException<UpdateDiagnostic>(new OperationCanceledException());
     }
 
+    private sealed class CapturingRestartCoordinator : IRestartCoordinator
+    {
+        public RestartContext? Context { get; private set; }
+
+        public ValueTask<UpdateDiagnostic> RestartAsync(RestartContext restart, CancellationToken cancellationToken)
+        {
+            Context = restart;
+            return ValueTask.FromResult(UpdateDiagnostic.None);
+        }
+    }
+
     private sealed class TestRestartTokenStore : IRestartTokenStore
     {
         private readonly Dictionary<string, RestartIdentity> tokens = new(StringComparer.Ordinal);
@@ -492,5 +532,7 @@ public sealed class UpdaterTests
         }
 
         public void Revoke(string token) => tokens.Remove(token);
+
+        public bool Exists(string token) => tokens.ContainsKey(token);
     }
 }

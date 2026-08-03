@@ -76,7 +76,11 @@ public sealed record VerifiedRelease(
 
 public sealed record StagedRelease(string Location, VerifiedRelease Release);
 
-public sealed record ActivationReceipt(string ActivationId, string PreviousVersion, string ActivatedVersion);
+public sealed record ActivationReceipt(
+    string ActivationId,
+    string PreviousVersion,
+    string ActivatedVersion,
+    string? ExecutablePath = null);
 
 public sealed record StageResult(bool Succeeded, StagedRelease? Staged, UpdateDiagnostic Diagnostic)
 {
@@ -213,6 +217,8 @@ public interface IRestartTokenStore
     bool TryConsume(string token, RestartIdentity identity);
 
     void Revoke(string token);
+
+    bool Exists(string token);
 }
 
 public interface IRestartCoordinator

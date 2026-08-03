@@ -1,0 +1,50 @@
+using System.Globalization;
+using System.Reflection;
+
+namespace Forge.Updater.Windows;
+
+public interface IWindowsDesktopShortcut
+{
+    UpdateDiagnostic Ensure(string executablePath);
+}
+
+public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
+{
+    public UpdateDiagnostic Ensure(string executablePath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+        if (!File.Exists(executablePath))
+        {
+            return new(UpdateDiagnosticCode.ActivationFailed, "The active Forge Desktop host is missing.");
+        }
+
+        try
+        {
+            string programs = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+                "Programs");
+            Directory.CreateDirectory(programs);
+            Type shellType = Type.GetTypeFromProgID("WScript.Shell") ??
+                throw new InvalidOperationException("Windows Script Host is unavailable.");
+            object shell = Activator.CreateInstance(shellType) ??
+                throw new InvalidOperationException("Windows Script Host could not be started.");
+            object shortcut = shellType.InvokeMember(
+                "CreateShortcut",
+                BindingFlags.InvokeMethod,
+                null,
+                shell,
+                [Path.Combine(programs, "Forge Desktop.lnk")],
+                CultureInfo.InvariantCulture) ?? throw new InvalidOperationException("The Forge Desktop shortcut could not be created.");
+            Type shortcutType = shortcut.GetType();
+            shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, [executablePath], CultureInfo.InvariantCulture);
+            shortcutType.InvokeMember("WorkingDirectory", BindingFlags.SetProperty, null, shortcut, [Path.GetDirectoryName(executablePath)!], CultureInfo.InvariantCulture);
+            shortcutType.InvokeMember("Description", BindingFlags.SetProperty, null, shortcut, ["Forge Desktop"], CultureInfo.InvariantCulture);
+            shortcutType.InvokeMember("Save", BindingFlags.InvokeMethod, null, shortcut, null, CultureInfo.InvariantCulture);
+            return UpdateDiagnostic.None;
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or UnauthorizedAccessException or TargetInvocationException)
+        {
+            return new(UpdateDiagnosticCode.ActivationFailed, "The Forge Desktop Start Menu shortcut could not be updated.");
+        }
+    }
+}

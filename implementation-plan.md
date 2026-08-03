@@ -16,7 +16,7 @@
 - [x] Stage 0 — Freeze MVP contracts, threats, and boundaries.
 - [x] Stage 1 — Create the .NET solution and host skeletons.
 - [x] Stage 2 — Implement the platform-neutral self-updater.
-- [ ] Stage 3 — Implement the Windows installer and update strategy.
+- [x] Stage 3 — Implement the Windows installer and update strategy.
 - [ ] Stage 4 — Implement startup and `.forge/` initialization.
 - [ ] Stage 5 — Implement provider toolchain management and adapters.
 - [ ] Stage 6 — Implement independent sprints and the durable workflow engine.
@@ -105,13 +105,13 @@ platforms; all update/restart/rollback contract tests pass.
 
 **Depends on:** Stage 2.
 
-- [ ] P3.1–P3.8 — Implement in-app installation, RID detection, verified download,
+- [x] P3.1–P3.8 — Implement in-app installation, RID detection, verified download,
   per-user version layout, host self-tests, idempotent PATH update, and rollback.
-- [ ] P3.9–P3.16 — Implement mutex/timeout, staging, helper activation, atomic
+- [x] P3.9–P3.16 — Implement mutex/timeout, staging, helper activation, atomic
   current switch, handshake rollback, and concurrent-launch handling.
-- [ ] P3.17–P3.23 — Test clean-profile installation, reinstall, N→N+1,
+- [x] P3.17–P3.23 — Test clean-profile installation, reinstall, N→N+1,
   argument/cwd preservation, corrupt assets, handshake failure, and concurrency.
-- [ ] P3.24–P3.30 — Bundle CLI/Desktop/updater, manage Start Menu shortcuts,
+- [x] P3.24–P3.30 — Bundle CLI/Desktop/updater, manage Start Menu shortcuts,
   preserve surface and language across install/update/rollback, and ship `en`/`ru`.
 
 **Gate:** clean Windows installation and verified atomic update/rollback work for
@@ -271,6 +271,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 1 solution and hosts | `Forge.slnx`, `src/`, `tests/Forge.*Tests/` | 2026-07-29 |
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` (17 tests) | 2026-07-29 |
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
+| Stage 3 Windows installer and gate | `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (78 tests); `build/Publish-WindowsBundle.ps1` for `win-x64` and `win-arm64` | 2026-08-03 |
 
 ## Open decisions
 

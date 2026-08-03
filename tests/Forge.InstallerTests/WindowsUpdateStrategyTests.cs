@@ -14,7 +14,8 @@ public sealed class WindowsUpdateStrategyTests
         using TemporaryDirectory temporary = new();
         byte[] archive = CreateBundle(temporary.Path);
         CountingDownloader downloader = new(archive);
-        WindowsUpdateStrategy strategy = new(downloader, temporary.Path, new PassingSelfTester());
+        RecordingShortcut shortcut = new();
+        WindowsUpdateStrategy strategy = new(downloader, temporary.Path, new PassingSelfTester(), desktopShortcut: shortcut);
         UpdateTarget target = new("windows", "x64", "portable_bundle");
 
         WindowsInstallationResult first = await strategy.InstallAsync(Release(archive), target, TestContext.Current.CancellationToken);
@@ -24,6 +25,9 @@ public sealed class WindowsUpdateStrategyTests
         Assert.Equal(Path.Combine(temporary.Path, "versions", "1.1.0"), first.VersionDirectory);
         Assert.True(File.Exists(Path.Combine(first.VersionDirectory!, "forge.exe")));
         Assert.Contains("1.1.0", File.ReadAllText(Path.Combine(temporary.Path, "current.json")), StringComparison.Ordinal);
+        Assert.True(File.Exists(Path.Combine(temporary.Path, "current", "forge.cmd")));
+        Assert.True(File.Exists(Path.Combine(temporary.Path, "current", "forge.ps1")));
+        Assert.Equal(Path.Combine(first.VersionDirectory!, "Forge.Desktop.exe"), shortcut.ExecutablePath);
         Assert.True(second.Succeeded);
         Assert.Equal(1, downloader.DownloadCount);
     }
@@ -70,6 +74,22 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public void AddsTheCurrentDirectoryToUserPathOnlyOnce()
+    {
+        string current = "C:\\Users\\test\\AppData\\Local\\Forge\\current";
+        string? path = "C:\\Tools";
+        WindowsUserPathRegistrar registrar = new(() => path, value => path = value);
+
+        UpdateDiagnostic first = registrar.Ensure(current);
+        UpdateDiagnostic second = registrar.Ensure(current);
+
+        Assert.Equal(UpdateDiagnosticCode.None, first.Code);
+        Assert.Equal(UpdateDiagnosticCode.None, second.Code);
+        Assert.Equal("C:\\Tools;C:\\Users\\test\\AppData\\Local\\Forge\\current", path);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task StagesActivatesAndRollsBackVerifiedBundle()
     {
         using TemporaryDirectory temporary = new();
@@ -80,6 +100,7 @@ public sealed class WindowsUpdateStrategyTests
         string previous = Path.Combine(temporary.Path, "versions", "1.0.0");
         Directory.CreateDirectory(previous);
         File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+        File.WriteAllText(Path.Combine(temporary.Path, "config.json"), "{\"language.ui\":\"ru\"}");
 
         StageResult staged = await strategy.StageAsync(release, target, TestContext.Current.CancellationToken);
         ActivationResult activated = await strategy.ActivateAsync(
@@ -99,6 +120,7 @@ public sealed class WindowsUpdateStrategyTests
         Assert.True(retryActivated.Succeeded);
         Assert.True(File.Exists(Path.Combine(temporary.Path, "failed", "1.1.0-" + activated.Receipt!.ActivationId, "forge.exe")));
         Assert.Contains("1.1.0", File.ReadAllText(Path.Combine(temporary.Path, "current.json")), StringComparison.Ordinal);
+        Assert.Equal("{\"language.ui\":\"ru\"}", File.ReadAllText(Path.Combine(temporary.Path, "config.json")));
     }
 
     [Fact]
@@ -163,6 +185,23 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task RejectsBundleWithoutDesktopHost()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path, includeDesktop: false);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+
+        StageResult result = await strategy.StageAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Empty(Directory.GetDirectories(Path.Combine(temporary.Path, "versions")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task RejectsInvalidCurrentVersionDuringActivation()
     {
         using TemporaryDirectory temporary = new();
@@ -215,12 +254,17 @@ public sealed class WindowsUpdateStrategyTests
             Convert.ToHexString(SHA256.HashData(archive)),
             "provenance.intoto.jsonl");
 
-    private static byte[] CreateBundle(string root)
+    private static byte[] CreateBundle(string root, bool includeDesktop = true)
     {
         string source = Path.Combine(root, "bundle");
         string archive = Path.Combine(root, "bundle.zip");
         Directory.CreateDirectory(source);
         File.WriteAllText(Path.Combine(source, "forge.exe"), "test host");
+        if (includeDesktop)
+        {
+            File.WriteAllText(Path.Combine(source, "Forge.Desktop.exe"), "test desktop host");
+        }
+
         ZipFile.CreateFromDirectory(source, archive);
         return File.ReadAllBytes(archive);
     }
@@ -250,6 +294,17 @@ public sealed class WindowsUpdateStrategyTests
     private sealed class FailingSelfTester : IWindowsHostSelfTester
     {
         public ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken) => ValueTask.FromResult(false);
+    }
+
+    private sealed class RecordingShortcut : IWindowsDesktopShortcut
+    {
+        public string? ExecutablePath { get; private set; }
+
+        public UpdateDiagnostic Ensure(string executablePath)
+        {
+            ExecutablePath = executablePath;
+            return UpdateDiagnostic.None;
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
