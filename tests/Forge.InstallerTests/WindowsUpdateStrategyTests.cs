@@ -60,6 +60,31 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task ArchivesDisplacedAndRolledBackBundlesSeparately()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "versions", "1.0.0"));
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "versions", "1.1.0"));
+        File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+
+        StageResult staged = await strategy.StageAsync(release, target, TestContext.Current.CancellationToken);
+        ActivationResult activated = await strategy.ActivateAsync(
+            staged.Staged!,
+            new RestartContext("token", "forge.exe", [], temporary.Path, new(release.Version, target, UpdateSurface.Cli)),
+            TestContext.Current.CancellationToken);
+        RollbackResult rollback = await strategy.RollbackAsync(activated.Receipt!, TestContext.Current.CancellationToken);
+
+        Assert.True(rollback.Succeeded);
+        Assert.True(Directory.Exists(Path.Combine(temporary.Path, "failed", $"1.1.0-{activated.Receipt!.ActivationId}-displaced")));
+        Assert.True(Directory.Exists(Path.Combine(temporary.Path, "failed", $"1.1.0-{activated.Receipt.ActivationId}")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task RejectsBundleWhenHostSelfTestFails()
     {
         using TemporaryDirectory temporary = new();
@@ -95,6 +120,7 @@ public sealed class WindowsUpdateStrategyTests
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
+        Assert.False(Directory.Exists(staged.Staged!.Location));
     }
 
     [Fact]
@@ -117,6 +143,7 @@ public sealed class WindowsUpdateStrategyTests
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
+        Assert.False(Directory.Exists(staged.Staged!.Location));
     }
 
     private static VerifiedRelease Release(byte[] archive) =>

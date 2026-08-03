@@ -140,12 +140,13 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             string previous = ReadCurrentVersion() ?? string.Empty;
             if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(VersionRoot, previous)))
             {
+                DeleteDirectory(staged.Location);
                 return ValueTask.FromResult(ActivationResult.Failure("No previous verified Windows release is available for rollback."));
             }
 
             if (Directory.Exists(destination))
             {
-                ArchiveFailedVersion(destination, version, activationId);
+                ArchiveFailedVersion(destination, version, $"{activationId}-displaced");
             }
 
             Directory.Move(staged.Location, destination);
@@ -165,6 +166,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 {
                     return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete."));
                 }
+            }
+            else
+            {
+                DeleteDirectory(staged.Location);
             }
 
             return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete."));
@@ -203,9 +208,9 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
     private string VersionRoot => Path.Combine(root, "versions");
 
-    private void ArchiveFailedVersion(string source, string version, string activationId)
+    private void ArchiveFailedVersion(string source, string version, string archiveId)
     {
-        string failed = Path.Combine(root, "failed", $"{version}-{activationId}");
+        string failed = Path.Combine(root, "failed", $"{version}-{archiveId}");
         Directory.CreateDirectory(Path.GetDirectoryName(failed)!);
         Directory.Move(source, failed);
     }
