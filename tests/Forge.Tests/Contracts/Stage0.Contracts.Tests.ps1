@@ -105,7 +105,7 @@ foreach ($key in $configuration.keys) {
 Assert-True ($configuration.wrong_scope_code -eq 'configuration_scope_violation') 'Wrong-scope diagnostics must be invariant.'
 
 $validatorProject = Join-Path $repositoryRoot 'tests/Forge.Tests/Forge.Tests.csproj'
-& dotnet restore $validatorProject --locked-mode
+& dotnet restore $validatorProject --locked-mode -p:EnableWindowsTargeting=true
 if ($LASTEXITCODE -ne 0) {
     throw 'Contract validator restore failed.'
 }
