@@ -29,8 +29,10 @@ dotnet workload install maui-windows --skip-manifest-update
 
 ## Build and test
 
-Restore uses committed NuGet lock files. The validation script formats, builds,
-tests, and checks dependencies for known vulnerabilities:
+Restore uses committed NuGet lock files. Run the validation script before
+creating a pull request; locally it applies .NET formatting, then builds,
+tests, and checks dependencies for known vulnerabilities. CI verifies that the
+formatting made no changes and blocks warnings and errors:
 
 ```powershell
 pwsh ./.github/scripts/test-stage1.ps1

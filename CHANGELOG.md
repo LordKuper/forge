@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.6.0
+
+### Added
+
+- Added a verified per-user Windows installer and update staging flow with
+  rollback protection for versioned bundles.
+
+## v0.5.1
+
+### Changed
+
+- Standardized repository text formatting, LF line endings, pre-PR validation,
+  and automatic Codex review completion rules.
+
 ## v0.5.0
 
 ### Added
