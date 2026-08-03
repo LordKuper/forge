@@ -437,8 +437,8 @@
       "forge": {
         "type": "Project",
         "dependencies": {
-          "Forge.Bootstrap": "[1.0.0, )",
-          "Forge.Updater.Windows": "[1.0.0, )",
+          "Forge.Bootstrap": "[0.6.0, )",
+          "Forge.Updater.Windows": "[0.6.0, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -446,19 +446,19 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[1.0.0, )"
+          "Forge.Domain": "[0.6.0, )"
         }
       },
       "forge.bootstrap": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )",
-          "Forge.Configuration": "[1.0.0, )",
-          "Forge.Infrastructure": "[1.0.0, )",
-          "Forge.Localization": "[1.0.0, )",
-          "Forge.Presentation": "[1.0.0, )",
-          "Forge.Providers": "[1.0.0, )",
-          "Forge.Updater": "[1.0.0, )",
+          "Forge.Application": "[0.6.0, )",
+          "Forge.Configuration": "[0.6.0, )",
+          "Forge.Infrastructure": "[0.6.0, )",
+          "Forge.Localization": "[0.6.0, )",
+          "Forge.Presentation": "[0.6.0, )",
+          "Forge.Providers": "[0.6.0, )",
+          "Forge.Updater": "[0.6.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -475,7 +475,7 @@
       "forge.infrastructure": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )",
+          "Forge.Application": "[0.6.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )"
         }
       },
@@ -485,13 +485,13 @@
       "forge.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[1.0.0, )"
+          "Forge.Domain": "[0.6.0, )"
         }
       },
       "forge.providers": {
         "type": "Project",
         "dependencies": {
-          "Forge.Application": "[1.0.0, )"
+          "Forge.Application": "[0.6.0, )"
         }
       },
       "forge.updater": {
@@ -500,7 +500,7 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Updater": "[1.0.0, )",
+          "Forge.Updater": "[0.6.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
