@@ -132,7 +132,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             {
                 File.Delete(Path.Combine(root, "current.json"));
                 WindowsCommandShim.Remove(root);
-                DeleteDirectory(destination);
+                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,
                     "Windows installation activation could not complete."));

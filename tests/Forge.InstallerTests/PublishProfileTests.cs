@@ -40,7 +40,8 @@ public sealed class PublishProfileTests
         Assert.Contains("Forge.Cli\\Forge.Cli.csproj", script, StringComparison.Ordinal);
         Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
         Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
-        Assert.Contains("Compress-Archive", script, StringComparison.Ordinal);
+        Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
+        Assert.Contains("LastWriteTime", script, StringComparison.Ordinal);
     }
 
     [Fact]

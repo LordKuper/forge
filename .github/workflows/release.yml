@@ -113,7 +113,8 @@ jobs:
             "$($hash.Hash)  $($bundle.Length)  $($bundle.Name)"
           }
           $checksums | Set-Content -LiteralPath (Join-Path $output 'checksums.txt')
-          "RELEASE_ASSETS=$($bundles.FullName + (Join-Path $output 'checksums.txt') -join ';')" >> $env:GITHUB_ENV
+          dotnet list Forge.slnx package --include-transitive --format json | Set-Content -LiteralPath (Join-Path $output 'sbom.json')
+          "RELEASE_ASSETS=$($bundles.FullName + (Join-Path $output 'checksums.txt') + (Join-Path $output 'sbom.json') -join ';')" >> $env:GITHUB_ENV
 
       - name: Validate and publish
         shell: pwsh

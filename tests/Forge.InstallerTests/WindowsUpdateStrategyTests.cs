@@ -72,6 +72,7 @@ public sealed class WindowsUpdateStrategyTests
         Assert.False(result.Succeeded);
         Assert.False(File.Exists(Path.Combine(temporary.Path, "current.json")));
         Assert.False(Directory.Exists(Path.Combine(temporary.Path, "versions", "1.1.0")));
+        Assert.Single(Directory.GetDirectories(Path.Combine(temporary.Path, "failed")));
     }
 
     [Fact]

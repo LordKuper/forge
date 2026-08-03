@@ -27,7 +27,30 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
-    Compress-Archive -Path (Join-Path $stagingDirectory '*') -DestinationPath $bundlePath -Force
+    if (Test-Path -LiteralPath $bundlePath) {
+        Remove-Item -LiteralPath $bundlePath -Force
+    }
+
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $timestamp = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)
+    $archive = [IO.Compression.ZipFile]::Open($bundlePath, [IO.Compression.ZipArchiveMode]::Create)
+    try {
+        Get-ChildItem -LiteralPath $stagingDirectory -File -Recurse |
+            Sort-Object { $_.FullName.Substring($stagingDirectory.Length).TrimStart('\', '/') } |
+            ForEach-Object {
+                $name = $_.FullName.Substring($stagingDirectory.Length).TrimStart('\', '/') -replace '\\', '/'
+                $entry = $archive.CreateEntry($name, [IO.Compression.CompressionLevel]::Optimal)
+                $entry.LastWriteTime = $timestamp
+                $input = [IO.File]::OpenRead($_.FullName)
+                try {
+                    $output = $entry.Open()
+                    try { $input.CopyTo($output) } finally { $output.Dispose() }
+                } finally { $input.Dispose() }
+            }
+    }
+    finally {
+        $archive.Dispose()
+    }
 }
 finally {
     if (Test-Path -LiteralPath $stagingDirectory) {
