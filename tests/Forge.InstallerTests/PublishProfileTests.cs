@@ -24,16 +24,14 @@ public sealed class PublishProfileTests
 
     [Fact]
     [Trait("Category", "Installer")]
-    public void InstallerRequiresVerifiedStagingAndAnAtomicCurrentPointer()
+    public void WindowsUpdateStrategyIsImplementedInTheApplication()
     {
-        string installer = File.ReadAllText(Path.Combine(FindRoot(), "install.ps1"));
+        string root = FindRoot();
+        string strategy = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater.Windows", "WindowsUpdateStrategy.cs"));
 
-        Assert.Contains("gh attestation verify", installer, StringComparison.Ordinal);
-        Assert.Contains("Get-FileHash", installer, StringComparison.Ordinal);
-        Assert.Contains(".staging-", installer, StringComparison.Ordinal);
-        Assert.Contains("--self-test", installer, StringComparison.Ordinal);
-        Assert.Contains("File]::Replace", installer, StringComparison.Ordinal);
-        Assert.Contains("Add-ForgePath", installer, StringComparison.Ordinal);
+        Assert.False(File.Exists(Path.Combine(root, "install.ps1")));
+        Assert.Contains("DownloadAndVerifyAsync", strategy, StringComparison.Ordinal);
+        Assert.Contains("File.Replace", strategy, StringComparison.Ordinal);
     }
 
     private static string FindRoot()
