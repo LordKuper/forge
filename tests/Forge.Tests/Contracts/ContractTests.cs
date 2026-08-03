@@ -1,5 +1,4 @@
 using System.Text.Json;
-using Forge.UnitTests;
 using Json.Schema;
 
 namespace Forge.Tests.Contracts;
@@ -10,7 +9,7 @@ public sealed class ContractTests
     [Trait("Category", "Contracts")]
     public void Draft202012SchemasMatchCompatibilityFixtures()
     {
-        string root = RepositoryRoot.Find();
+        string root = FindRepositoryRoot();
         string schemaRoot = Path.Combine(root, "docs", "contracts", "v1", "schemas");
         string fixturePath = Path.Combine(root, "tests", "Forge.Tests", "Contracts", "fixtures", "contract-cases.json");
         var buildOptions = new BuildOptions
@@ -60,5 +59,17 @@ public sealed class ContractTests
         }
 
         Assert.Empty(failures);
+    }
+
+    private static string FindRepositoryRoot()
+    {
+        DirectoryInfo? directory = new(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Forge.slnx")))
+        {
+            directory = directory.Parent;
+        }
+
+        return directory?.FullName ??
+            throw new DirectoryNotFoundException("Could not locate the Forge repository root.");
     }
 }

@@ -110,7 +110,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Contract validator restore failed.'
 }
 
-& dotnet test $validatorProject --no-restore --filter 'Category=Contracts'
+& dotnet test $validatorProject --no-restore --framework net10.0 --filter 'Category=Contracts'
 if ($LASTEXITCODE -ne 0) {
     throw 'Draft 2020-12 schema validation failed.'
 }
