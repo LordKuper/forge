@@ -10,8 +10,8 @@ provider, infrastructure, and bootstrap projects plus both hosts.
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)
 - [Architecture overview](docs/architecture/overview.md)
-- [Complete original research and system design (Russian source)](ai-agentic-software-development-workflow-ru.md)
-- [Implementation plan](implementation-plan.md)
+- [Complete original research and system design (Russian source)](docs/architecture/ai-agentic-software-development-workflow-ru.md)
+- [Implementation plan](docs/plans/implementation-plan.md)
 
 ## Prerequisites
 
@@ -41,5 +41,5 @@ pwsh ./.github/scripts/test-stage1.ps1
 Validate only the Stage 0 contract gate with:
 
 ```powershell
-pwsh ./tests/contracts/Stage0.Contracts.Tests.ps1
+pwsh ./tests/Forge.Tests/Contracts/Stage0.Contracts.Tests.ps1
 ```

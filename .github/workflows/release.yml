@@ -50,7 +50,7 @@ jobs:
 
       - name: Validate Stage 0 contracts
         shell: pwsh
-        run: ./tests/contracts/Stage0.Contracts.Tests.ps1
+        run: ./tests/Forge.Tests/Contracts/Stage0.Contracts.Tests.ps1
 
   validate:
     if: github.event_name == 'pull_request'

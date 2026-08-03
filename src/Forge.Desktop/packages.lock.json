@@ -399,55 +399,12 @@
         "resolved": "10.0.10",
         "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
       },
-      "forge.application": {
-        "type": "Project",
-        "dependencies": {
-          "Forge.Domain": "[0.6.0, )"
-        }
-      },
-      "forge.bootstrap": {
-        "type": "Project",
-        "dependencies": {
-          "Forge.Application": "[0.6.0, )",
-          "Forge.Configuration": "[0.6.0, )",
-          "Forge.Infrastructure": "[0.6.0, )",
-          "Forge.Localization": "[0.6.0, )",
-          "Forge.Presentation": "[0.6.0, )",
-          "Forge.Providers": "[0.6.0, )",
-          "Forge.Updater": "[0.6.0, )",
-          "Microsoft.Extensions.Hosting": "[10.0.10, )"
-        }
-      },
-      "forge.configuration": {
+      "forge.runtime": {
         "type": "Project",
         "dependencies": {
           "JsonSchema.Net": "[9.4.0, )",
+          "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
-        }
-      },
-      "forge.domain": {
-        "type": "Project"
-      },
-      "forge.infrastructure": {
-        "type": "Project",
-        "dependencies": {
-          "Forge.Application": "[0.6.0, )",
-          "Microsoft.Extensions.Hosting": "[10.0.10, )"
-        }
-      },
-      "forge.localization": {
-        "type": "Project"
-      },
-      "forge.presentation": {
-        "type": "Project",
-        "dependencies": {
-          "Forge.Domain": "[0.6.0, )"
-        }
-      },
-      "forge.providers": {
-        "type": "Project",
-        "dependencies": {
-          "Forge.Application": "[0.6.0, )"
         }
       },
       "forge.updater": {
@@ -456,7 +413,7 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Updater": "[0.6.0, )",
+          "Forge.Updater": "[0.6.1, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },

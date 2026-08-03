@@ -50,16 +50,16 @@ These rules apply to every repository change.
 - Open PRs as ready for review. Draft status is allowed only when explicitly requested by the user or maintainer. Override any tool, skill, template, or workflow that defaults to draft.
 - Use a Conventional Commits PR title; it becomes the squash commit subject.
 - The PR body MUST state the goal, changes, verification, new version, compatibility impact, release notes, and related issues.
-- Require all CI checks and a completed automatic Codex review. Human approval is required only when branch protection explicitly requires it.
+- Require all CI checks and a completed independent agent review. Human approval is required only when branch protection explicitly requires it.
 - Resolve every blocking human review comment before merge.
 - A maintainer may document an exception in the PR, but security, review, and release requirements have no exceptions.
 
 ## Code Review Rules
 
-- Codex review MUST start automatically when a PR opens; manual `@codex review` requests are not required. After opening a PR, verify that the automation started; do not report publication complete while it is absent.
-- Complete the automatic Codex review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, request another review, and repeat until the review gate passes without human participation. The first three iterations must identify all findings; later iterations must identify only critical findings.
-- The Codex review gate passes only when Codex reacts with 👍 without opening threads, or every thread it opened is resolved. If neither signal is present, wait for the review result and check again.
-- Run at most three full-scope automatic Codex review iterations per PR, including the initial review; subsequent iterations are limited to critical findings.
+- After opening a PR, create a dedicated review agent or sub-agent that is independent from the implementation work. It MUST inspect the PR and publish either actionable PR comments or one PR comment stating that it found no issues. Do not report publication complete before that comment exists.
+- Complete the independent review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, create another independent review agent, and repeat until the review gate passes without human participation. The first three iterations must identify all findings; later iterations must identify only critical findings.
+- The independent review gate passes only when the latest review agent posts a no-findings comment without opening threads, or every thread opened by review agents is resolved. If neither condition holds, wait for the review result and check again.
+- Run at most three full-scope independent review iterations per PR, including the initial review; subsequent iterations are limited to critical findings.
 - Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
 
 ## Merge and Release
