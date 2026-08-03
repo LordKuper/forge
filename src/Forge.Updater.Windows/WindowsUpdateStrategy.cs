@@ -1,17 +1,62 @@
+using System.Diagnostics;
 using System.Text.Json;
 
 namespace Forge.Updater.Windows;
+
+public interface IWindowsHostSelfTester
+{
+    ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken);
+}
+
+public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
+{
+    public async ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
+        cancellationToken.ThrowIfCancellationRequested();
+        ProcessStartInfo startInfo = new()
+        {
+            FileName = executablePath,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        startInfo.ArgumentList.Add("--self-test");
+        using Process process = new() { StartInfo = startInfo };
+        process.Start();
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+                await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
+            }
+
+            throw;
+        }
+
+        return process.ExitCode == 0;
+    }
+}
 
 public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 {
     private readonly IReleaseAssetDownloader downloader;
     private readonly string root;
+    private readonly IWindowsHostSelfTester selfTester;
 
-    public WindowsUpdateStrategy(IReleaseAssetDownloader downloader, string root)
+    public WindowsUpdateStrategy(
+        IReleaseAssetDownloader downloader,
+        string root,
+        IWindowsHostSelfTester? selfTester = null)
     {
         this.downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         this.root = Path.GetFullPath(root);
+        this.selfTester = selfTester ?? new WindowsHostSelfTester();
     }
 
     public bool Supports(UpdateTarget target)
@@ -32,6 +77,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         ArgumentNullException.ThrowIfNull(target);
         string staging = Path.Combine(VersionRoot, $".staging-{Guid.NewGuid():N}");
         string archive = Path.Combine(root, $".download-{Guid.NewGuid():N}.zip");
+        bool staged = false;
         try
         {
             Directory.CreateDirectory(VersionRoot);
@@ -42,13 +88,19 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 return StageResult.Failure("The release package has no Forge CLI host.");
             }
 
+            if (!await selfTester.VerifyAsync(Path.Combine(staging, "forge.exe"), cancellationToken).ConfigureAwait(false))
+            {
+                return StageResult.Failure("The staged Forge CLI host self-test failed.");
+            }
+
+            staged = true;
             return new(true, new(staging, release), UpdateDiagnostic.None);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
-        catch (Exception exception) when (exception is IOException or InvalidDataException or System.Security.Cryptography.CryptographicException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or System.ComponentModel.Win32Exception or System.Security.Cryptography.CryptographicException or UnauthorizedAccessException)
         {
             return StageResult.Failure("Windows release staging could not complete.");
         }
@@ -59,7 +111,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 File.Delete(archive);
             }
 
-            if (!Directory.Exists(staging) || !File.Exists(Path.Combine(staging, "forge.exe")))
+            if (!staged)
             {
                 DeleteDirectory(staging);
             }
@@ -76,20 +128,40 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         cancellationToken.ThrowIfCancellationRequested();
         string version = staged.Release.Version.ToString();
         string destination = Path.Combine(VersionRoot, version);
+        string activationId = Guid.NewGuid().ToString("N");
+        bool moved = false;
         try
         {
-            if (!IsUnder(staged.Location, VersionRoot) || !Directory.Exists(staged.Location) || Directory.Exists(destination))
+            if (!IsUnder(staged.Location, VersionRoot) || !Directory.Exists(staged.Location))
             {
                 return ValueTask.FromResult(ActivationResult.Failure("The staged release is not eligible for activation."));
             }
 
             string previous = ReadCurrentVersion() ?? string.Empty;
+            if (Directory.Exists(destination))
+            {
+                ArchiveFailedVersion(destination, version, activationId);
+            }
+
             Directory.Move(staged.Location, destination);
+            moved = true;
             WriteCurrentVersion(version);
-            return ValueTask.FromResult(ActivationResult.Success(new(Guid.NewGuid().ToString("N"), previous, version)));
+            return ValueTask.FromResult(ActivationResult.Success(new(activationId, previous, version)));
         }
-        catch (Exception exception) when (exception is IOException or JsonException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
         {
+            if (moved)
+            {
+                try
+                {
+                    ArchiveFailedVersion(destination, version, activationId);
+                }
+                catch (Exception recoveryException) when (recoveryException is IOException or UnauthorizedAccessException)
+                {
+                    return ValueTask.FromResult(ActivationResult.Failure("Windows release activation recovery could not complete."));
+                }
+            }
+
             return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete."));
         }
     }
@@ -101,6 +173,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         ArgumentNullException.ThrowIfNull(receipt);
         cancellationToken.ThrowIfCancellationRequested();
         if (!SemanticVersion.TryParse(receipt.PreviousVersion, out _) ||
+            !SemanticVersion.TryParse(receipt.ActivatedVersion, out _) ||
             !Directory.Exists(Path.Combine(VersionRoot, receipt.PreviousVersion)))
         {
             return ValueTask.FromResult(RollbackResult.Failure("No previous verified Windows release is available for rollback."));
@@ -109,6 +182,12 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         try
         {
             WriteCurrentVersion(receipt.PreviousVersion);
+            string activated = Path.Combine(VersionRoot, receipt.ActivatedVersion);
+            if (Directory.Exists(activated))
+            {
+                ArchiveFailedVersion(activated, receipt.ActivatedVersion, receipt.ActivationId);
+            }
+
             return ValueTask.FromResult(new RollbackResult(true, UpdateDiagnostic.None));
         }
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
@@ -118,6 +197,13 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
     }
 
     private string VersionRoot => Path.Combine(root, "versions");
+
+    private void ArchiveFailedVersion(string source, string version, string activationId)
+    {
+        string failed = Path.Combine(root, "failed", $"{version}-{activationId}");
+        Directory.CreateDirectory(Path.GetDirectoryName(failed)!);
+        Directory.Move(source, failed);
+    }
 
     private async Task DownloadAndVerifyAsync(
         VerifiedRelease release,
