@@ -67,7 +67,8 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
     }
 
     public bool Exists(string token) =>
-        TryGetTokenPath(token, out string? tokenPath) && File.Exists(tokenPath);
+        TryGetTokenPath(token, out string? tokenPath) &&
+        (File.Exists(tokenPath) || ClaimPaths(token).Any());
 
     public bool TryConsume(string token, RestartIdentity identity)
     {
@@ -101,7 +102,6 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         }
         catch (JsonException)
         {
-            File.Delete(claimPath);
             return false;
         }
     }
@@ -111,6 +111,10 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         if (TryGetTokenPath(token, out string? tokenPath))
         {
             File.Delete(tokenPath!);
+            foreach (string claimPath in ClaimPaths(token))
+            {
+                File.Delete(claimPath);
+            }
         }
     }
 
@@ -130,6 +134,11 @@ public sealed class FileRestartTokenStore : IRestartTokenStore
         path = Path.Combine(directory, $"{token}{FileExtension}");
         return true;
     }
+
+    private IEnumerable<string> ClaimPaths(string token) =>
+        Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory, $".{token}.*.claim")
+            : [];
 
     private sealed record PersistedRestartIdentity(
         string Version,

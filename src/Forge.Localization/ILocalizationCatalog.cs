@@ -15,4 +15,6 @@ public static class MessageKeys
     public const string AppTitle = "AppTitle";
     public const string StatusDescription = "StatusDescription";
     public const string StatusReady = "StatusReady";
+    public const string InstallDescription = "InstallDescription";
+    public const string InstallCompleted = "InstallCompleted";
 }

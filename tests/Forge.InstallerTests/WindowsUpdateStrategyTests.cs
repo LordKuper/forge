@@ -99,6 +99,56 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task DoesNotRegisterPathWhenShortcutCreationFails()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        RecordingPathRegistrar path = new();
+        WindowsUpdateStrategy strategy = new(
+            new MemoryDownloader(archive),
+            temporary.Path,
+            new PassingSelfTester(),
+            path,
+            new FailingShortcut());
+
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.False(path.WasCalled);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task InstallsTheLatestPublishedRelease()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        StaticReleaseClient releases = new(new(
+            release.Version,
+            release.ReleaseUri,
+            false,
+            false,
+            DateTimeOffset.UtcNow,
+            []));
+        WindowsInstaller installer = new(
+            new FixedTargetDetector(target),
+            releases,
+            new PassingVerifier(release),
+            new WindowsUpdateStrategy(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester()));
+
+        WindowsInstallationResult result = await installer.InstallLatestAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("0.0.0", releases.CurrentVersion!.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task SerializesConcurrentUpdates()
     {
         UpdateTarget target = new("windows", "x64", "portable_bundle");
@@ -366,6 +416,28 @@ public sealed class WindowsUpdateStrategyTests
             ValueTask.FromResult<Stream>(new MemoryStream(contents, writable: false));
     }
 
+    private sealed class FixedTargetDetector(UpdateTarget target) : IUpdateTargetDetector
+    {
+        public UpdateTarget Detect() => target;
+    }
+
+    private sealed class StaticReleaseClient(ReleaseMetadata release) : IForgeReleaseClient
+    {
+        public SemanticVersion? CurrentVersion { get; private set; }
+
+        public ValueTask<ReleaseLookupResult> GetLatestStableAsync(SemanticVersion currentVersion, CancellationToken cancellationToken)
+        {
+            CurrentVersion = currentVersion;
+            return ValueTask.FromResult(new ReleaseLookupResult(release, UpdateDiagnostic.None, false));
+        }
+    }
+
+    private sealed class PassingVerifier(VerifiedRelease release) : IReleaseVerifier
+    {
+        public ValueTask<VerificationResult> VerifyAsync(ReleaseMetadata metadata, UpdateTarget target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new VerificationResult(true, release, UpdateDiagnostic.None));
+    }
+
     private sealed class CountingDownloader(byte[] contents) : IReleaseAssetDownloader
     {
         public int DownloadCount { get; private set; }
@@ -403,6 +475,24 @@ public sealed class WindowsUpdateStrategyTests
         public UpdateDiagnostic Ensure(string directory) => new(
             UpdateDiagnosticCode.ActivationFailed,
             "The test PATH registration failed.");
+    }
+
+    private sealed class RecordingPathRegistrar : IWindowsUserPathRegistrar
+    {
+        public bool WasCalled { get; private set; }
+
+        public UpdateDiagnostic Ensure(string directory)
+        {
+            WasCalled = true;
+            return UpdateDiagnostic.None;
+        }
+    }
+
+    private sealed class FailingShortcut : IWindowsDesktopShortcut
+    {
+        public UpdateDiagnostic Ensure(string executablePath) => new(
+            UpdateDiagnosticCode.ActivationFailed,
+            "The test shortcut creation failed.");
     }
 
     private sealed class TemporaryDirectory : IDisposable

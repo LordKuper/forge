@@ -34,5 +34,6 @@ public sealed class BootstrapTests
         StrategyResolution result = resolver.Resolve(new UpdateTarget("windows", "x64", "portable_bundle"));
 
         Assert.IsType<WindowsUpdateStrategy>(result.Strategy);
+        Assert.NotNull(host.Services.GetRequiredService<WindowsInstaller>());
     }
 }

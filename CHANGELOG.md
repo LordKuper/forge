@@ -4,17 +4,15 @@ User-facing Forge changes are listed by release, newest first.
 
 ## v1.0.0
 
+### Added
+
+- Added a per-user Windows installer and update staging flow with rollback
+  protection for versioned bundles.
+
 ### Removed
 
 - Removed release provenance and publisher-identity verification; release assets
   are now checked only for name, size, and SHA-256 consistency.
-
-## v0.6.0
-
-### Added
-
-- Added a verified per-user Windows installer and update staging flow with
-  rollback protection for versioned bundles.
 
 ## v0.5.1
 

@@ -233,6 +233,36 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void CorruptRestartTokenRemainsPendingUntilRevoked()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-restart-token-{Guid.NewGuid():N}");
+        string token = new('A', 64);
+        try
+        {
+            Directory.CreateDirectory(directory);
+            File.WriteAllText(Path.Combine(directory, $"{token}.restart-token.json"), "not json");
+            FileRestartTokenStore store = new(directory);
+            RestartIdentity identity = new(
+                SemanticVersion.Parse("1.1.0"),
+                new UpdateTarget("windows", "x64", "portable_bundle"),
+                UpdateSurface.Cli);
+
+            Assert.False(store.TryConsume(token, identity));
+            Assert.True(store.Exists(token));
+            store.Revoke(token);
+            Assert.False(store.Exists(token));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RestartFailureRollsBackActivatedRelease()
     {
         TestStrategy strategy = new(true) { ActivateResult = ActivationResult.Success(new("activation", "1.0.0", "1.1.0")) };

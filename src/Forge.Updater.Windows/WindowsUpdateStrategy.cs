@@ -320,10 +320,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
     private UpdateDiagnostic EnsureInstalledSurfaces(string versionDirectory)
     {
         WindowsCommandShim.Ensure(root);
-        UpdateDiagnostic pathResult = pathRegistrar?.Ensure(Path.Combine(root, "current")) ?? UpdateDiagnostic.None;
-        return pathResult.Code == UpdateDiagnosticCode.None
-            ? desktopShortcut?.Ensure(Path.Combine(versionDirectory, "Forge.Desktop.exe")) ?? UpdateDiagnostic.None
-            : pathResult;
+        UpdateDiagnostic shortcutResult = desktopShortcut?.Ensure(Path.Combine(versionDirectory, "Forge.Desktop.exe")) ?? UpdateDiagnostic.None;
+        return shortcutResult.Code == UpdateDiagnosticCode.None
+            ? pathRegistrar?.Ensure(Path.Combine(root, "current")) ?? UpdateDiagnostic.None
+            : shortcutResult;
     }
 
     private void ArchiveFailedVersion(string source, string version, string archiveId)

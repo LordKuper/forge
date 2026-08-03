@@ -32,5 +32,6 @@ if (args is ["--self-test"])
     return 0;
 }
 
-RootCommand root = CliApplication.CreateRootCommand(catalog, Console.Out);
+WindowsInstaller installer = host.Services.GetRequiredService<WindowsInstaller>();
+RootCommand root = CliApplication.CreateRootCommand(catalog, Console.Out, installer.InstallLatestAsync);
 return await root.Parse(args).InvokeAsync().ConfigureAwait(false);

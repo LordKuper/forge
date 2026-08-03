@@ -8,4 +8,6 @@
   <data name="AppTitle" xml:space="preserve"><value>Forge</value></data>
   <data name="StatusDescription" xml:space="preserve"><value>Показать состояние Forge.</value></data>
   <data name="StatusReady" xml:space="preserve"><value>Forge готов.</value></data>
+  <data name="InstallDescription" xml:space="preserve"><value>Установить последний релиз Forge для текущего пользователя.</value></data>
+  <data name="InstallCompleted" xml:space="preserve"><value>Установка Forge завершена.</value></data>
 </root>
