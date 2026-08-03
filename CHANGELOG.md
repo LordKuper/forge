@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.5.1
+
+### Changed
+
+- Standardized repository text formatting, LF line endings, pre-PR validation,
+  and automatic Codex review completion rules.
+
 ## v0.5.0
 
 ### Added

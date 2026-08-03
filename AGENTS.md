@@ -56,9 +56,9 @@ These rules apply to every repository change.
 
 ## Code Review Rules
 
-- After opening a PR, verify that expected review automation started; do not report publication complete while it is absent.
+- Codex review MUST start automatically when a PR opens; manual `@codex review` requests are not required. After opening a PR, verify that the automation started; do not report publication complete while it is absent.
 - Complete the automatic Codex review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, request another review, and repeat until the review gate passes without human participation. The first three iterations must identify all findings; later iterations must identify only critical findings.
-- The Codex review gate passes when Codex reacts with 👍 without opening threads, or every thread it opened is resolved.
+- The Codex review gate passes only when Codex reacts with 👍 without opening threads, or every thread it opened is resolved. If neither signal is present, wait for the review result and check again.
 - Run at most three full-scope automatic Codex review iterations per PR, including the initial review; subsequent iterations are limited to critical findings.
 - Review MUST verify these rules, versioning, tests, security, compatibility, documentation, and release readiness.
 
