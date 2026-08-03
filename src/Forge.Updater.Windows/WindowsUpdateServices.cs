@@ -35,11 +35,13 @@ public static class WindowsUpdateServices
 
 public sealed class WindowsInstaller(
     IUpdateTargetDetector targetDetector,
+    IUpdateLock updateLock,
     IForgeReleaseClient releaseClient,
     IReleaseVerifier releaseVerifier,
     WindowsUpdateStrategy strategy)
 {
     private readonly IUpdateTargetDetector targetDetector = targetDetector ?? throw new ArgumentNullException(nameof(targetDetector));
+    private readonly IUpdateLock updateLock = updateLock ?? throw new ArgumentNullException(nameof(updateLock));
     private readonly IForgeReleaseClient releaseClient = releaseClient ?? throw new ArgumentNullException(nameof(releaseClient));
     private readonly IReleaseVerifier releaseVerifier = releaseVerifier ?? throw new ArgumentNullException(nameof(releaseVerifier));
     private readonly WindowsUpdateStrategy strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
@@ -53,6 +55,14 @@ public sealed class WindowsInstaller(
                 UpdateDiagnosticCode.PlatformNotSupported,
                 "The release target is not supported by the Windows installer."));
         }
+
+        UpdateLockResult lockResult = await updateLock.AcquireAsync(target, cancellationToken).ConfigureAwait(false);
+        if (!lockResult.IsAcquired)
+        {
+            return WindowsInstallationResult.Failure(lockResult.Diagnostic);
+        }
+
+        await using IAsyncDisposable updateLease = lockResult.Lease!;
 
         ReleaseLookupResult lookup = await releaseClient.GetLatestStableAsync(
             SemanticVersion.Parse("0.0.0"),

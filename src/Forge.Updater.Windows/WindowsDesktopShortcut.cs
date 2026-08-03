@@ -6,10 +6,17 @@ namespace Forge.Updater.Windows;
 public interface IWindowsDesktopShortcut
 {
     UpdateDiagnostic Ensure(string executablePath);
+
+    void Remove();
 }
 
 public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
 {
+    private static string ShortcutPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
+        "Programs",
+        "Forge Desktop.lnk");
+
     public UpdateDiagnostic Ensure(string executablePath)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
@@ -20,9 +27,7 @@ public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
 
         try
         {
-            string programs = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.StartMenu),
-                "Programs");
+            string programs = Path.GetDirectoryName(ShortcutPath)!;
             Directory.CreateDirectory(programs);
             Type shellType = Type.GetTypeFromProgID("WScript.Shell") ??
                 throw new InvalidOperationException("Windows Script Host is unavailable.");
@@ -33,7 +38,7 @@ public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
                 BindingFlags.InvokeMethod,
                 null,
                 shell,
-                [Path.Combine(programs, "Forge Desktop.lnk")],
+                [ShortcutPath],
                 CultureInfo.InvariantCulture) ?? throw new InvalidOperationException("The Forge Desktop shortcut could not be created.");
             Type shortcutType = shortcut.GetType();
             shortcutType.InvokeMember("TargetPath", BindingFlags.SetProperty, null, shortcut, [executablePath], CultureInfo.InvariantCulture);
@@ -45,6 +50,14 @@ public sealed class WindowsDesktopShortcut : IWindowsDesktopShortcut
         catch (Exception exception) when (exception is ArgumentException or InvalidOperationException or UnauthorizedAccessException or TargetInvocationException)
         {
             return new(UpdateDiagnosticCode.ActivationFailed, "The Forge Desktop Start Menu shortcut could not be updated.");
+        }
+    }
+
+    public void Remove()
+    {
+        if (File.Exists(ShortcutPath))
+        {
+            File.Delete(ShortcutPath);
         }
     }
 }

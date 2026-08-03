@@ -124,6 +124,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
                 File.Delete(Path.Combine(root, "current.json"));
                 WindowsCommandShim.Remove(root);
+                desktopShortcut?.Remove();
                 ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return installation;
             }

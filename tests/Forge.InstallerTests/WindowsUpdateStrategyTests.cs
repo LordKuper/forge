@@ -122,6 +122,29 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task RemovesShortcutWhenPathRegistrationFails()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        RecordingShortcut shortcut = new();
+        WindowsUpdateStrategy strategy = new(
+            new MemoryDownloader(archive),
+            temporary.Path,
+            new PassingSelfTester(),
+            new FailingPathRegistrar(),
+            shortcut);
+
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.True(shortcut.WasRemoved);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task InstallsTheLatestPublishedRelease()
     {
         using TemporaryDirectory temporary = new();
@@ -137,6 +160,7 @@ public sealed class WindowsUpdateStrategyTests
             []));
         WindowsInstaller installer = new(
             new FixedTargetDetector(target),
+            new PassingUpdateLock(),
             releases,
             new PassingVerifier(release),
             new WindowsUpdateStrategy(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester()));
@@ -145,6 +169,32 @@ public sealed class WindowsUpdateStrategyTests
 
         Assert.True(result.Succeeded);
         Assert.Equal("0.0.0", releases.CurrentVersion!.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task DoesNotLookupAReleaseWhenInstallationIsLocked()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        StaticReleaseClient releases = new(new(
+            SemanticVersion.Parse("1.1.0"),
+            new Uri("https://example.test/release"),
+            false,
+            false,
+            DateTimeOffset.UtcNow,
+            []));
+        WindowsInstaller installer = new(
+            new FixedTargetDetector(new("windows", "x64", "portable_bundle")),
+            new FailingUpdateLock(),
+            releases,
+            new PassingVerifier(Release(archive)),
+            new WindowsUpdateStrategy(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester()));
+
+        WindowsInstallationResult result = await installer.InstallLatestAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Null(releases.CurrentVersion);
     }
 
     [Fact]
@@ -438,6 +488,23 @@ public sealed class WindowsUpdateStrategyTests
             ValueTask.FromResult(new VerificationResult(true, release, UpdateDiagnostic.None));
     }
 
+    private sealed class PassingUpdateLock : IUpdateLock
+    {
+        public ValueTask<UpdateLockResult> AcquireAsync(UpdateTarget target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new UpdateLockResult(new EmptyLease(), UpdateDiagnostic.None));
+    }
+
+    private sealed class FailingUpdateLock : IUpdateLock
+    {
+        public ValueTask<UpdateLockResult> AcquireAsync(UpdateTarget target, CancellationToken cancellationToken) =>
+            ValueTask.FromResult(new UpdateLockResult(null, new(UpdateDiagnosticCode.UpdateInProgress, "The test lock is held.")));
+    }
+
+    private sealed class EmptyLease : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
     private sealed class CountingDownloader(byte[] contents) : IReleaseAssetDownloader
     {
         public int DownloadCount { get; private set; }
@@ -463,11 +530,15 @@ public sealed class WindowsUpdateStrategyTests
     {
         public string? ExecutablePath { get; private set; }
 
+        public bool WasRemoved { get; private set; }
+
         public UpdateDiagnostic Ensure(string executablePath)
         {
             ExecutablePath = executablePath;
             return UpdateDiagnostic.None;
         }
+
+        public void Remove() => WasRemoved = true;
     }
 
     private sealed class FailingPathRegistrar : IWindowsUserPathRegistrar
@@ -493,6 +564,10 @@ public sealed class WindowsUpdateStrategyTests
         public UpdateDiagnostic Ensure(string executablePath) => new(
             UpdateDiagnosticCode.ActivationFailed,
             "The test shortcut creation failed.");
+
+        public void Remove()
+        {
+        }
     }
 
     private sealed class TemporaryDirectory : IDisposable
