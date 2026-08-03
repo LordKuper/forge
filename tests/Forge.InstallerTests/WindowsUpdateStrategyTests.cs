@@ -55,6 +55,27 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task RemovesThePointerWhenCleanInstallationSetupThrows()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        string current = Path.Combine(temporary.Path, "current");
+        Directory.CreateDirectory(current);
+        File.WriteAllText(Path.Combine(current, "forge.cmd"), "unrecognized");
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.False(File.Exists(Path.Combine(temporary.Path, "current.json")));
+        Assert.False(Directory.Exists(Path.Combine(temporary.Path, "versions", "1.1.0")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task SerializesConcurrentUpdates()
     {
         UpdateTarget target = new("windows", "x64", "portable_bundle");

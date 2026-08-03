@@ -44,12 +44,14 @@ public sealed class ProcessRunnerTests
             cancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
 
-            await using FileStream stream = new(
+            await using (FileStream stream = new(
                 lockPath,
                 FileMode.Open,
                 FileAccess.ReadWrite,
-                FileShare.None);
-            Assert.True(stream.CanWrite);
+                FileShare.None))
+            {
+                Assert.True(stream.CanWrite);
+            }
         }
         finally
         {

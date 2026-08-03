@@ -39,23 +39,49 @@ public sealed class WindowsRestartCoordinator(
             }
 
             using Process process = Process.Start(startInfo) ?? throw new Win32Exception("The updated Forge host could not be started.");
-            DateTimeOffset deadline = DateTimeOffset.UtcNow + handshakeTimeout;
-            while (tokenStore.Exists(restart.Token))
+            try
             {
-                TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
-                if (remaining <= TimeSpan.Zero)
+                DateTimeOffset deadline = DateTimeOffset.UtcNow + handshakeTimeout;
+                while (tokenStore.Exists(restart.Token))
                 {
-                    return new(UpdateDiagnosticCode.HandshakeFailed, "The updated Forge host did not confirm startup in time.");
+                    TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+                    if (remaining <= TimeSpan.Zero)
+                    {
+                        await TerminateAsync(process).ConfigureAwait(false);
+                        return new(UpdateDiagnosticCode.HandshakeFailed, "The updated Forge host did not confirm startup in time.");
+                    }
+
+                    await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(100, remaining.TotalMilliseconds)), cancellationToken).ConfigureAwait(false);
                 }
 
-                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(100, remaining.TotalMilliseconds)), cancellationToken).ConfigureAwait(false);
+                return UpdateDiagnostic.None;
             }
-
-            return UpdateDiagnostic.None;
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                await TerminateAsync(process).ConfigureAwait(false);
+                throw;
+            }
         }
         catch (Exception exception) when (exception is IOException or Win32Exception or UnauthorizedAccessException)
         {
             return new(UpdateDiagnosticCode.RestartFailed, "The updated Forge host could not be restarted.");
         }
+    }
+
+    private static async Task TerminateAsync(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(true);
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // The process exited between the state check and termination.
+        }
+
+        await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
     }
 }

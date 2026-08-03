@@ -120,6 +120,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
             {
+                File.Delete(Path.Combine(root, "current.json"));
                 DeleteDirectory(destination);
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,
