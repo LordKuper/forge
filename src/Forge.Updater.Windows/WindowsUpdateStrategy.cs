@@ -124,9 +124,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
 
             Directory.Move(staged.Staged!.Location, destination);
-            DesktopShortcutSnapshot? shortcutSnapshot = desktopShortcut?.Capture();
+            DesktopShortcutSnapshot? shortcutSnapshot = null;
             try
             {
+                shortcutSnapshot = desktopShortcut?.Capture();
                 WriteCurrentVersion(version);
                 WindowsInstallationResult installation = CompleteInstallation(destination);
                 if (installation.Succeeded)

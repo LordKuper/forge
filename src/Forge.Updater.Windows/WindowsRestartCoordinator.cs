@@ -61,6 +61,11 @@ public sealed class WindowsRestartCoordinator(
                 await TerminateAsync(process).ConfigureAwait(false);
                 throw;
             }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                await TerminateAsync(process).ConfigureAwait(false);
+                return new(UpdateDiagnosticCode.RestartFailed, "The updated Forge host could not be restarted.");
+            }
         }
         catch (Exception exception) when (exception is IOException or Win32Exception or UnauthorizedAccessException)
         {

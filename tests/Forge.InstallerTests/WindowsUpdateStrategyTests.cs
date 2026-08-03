@@ -167,6 +167,30 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task RecoversWhenShortcutCaptureFails()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        WindowsUpdateStrategy failing = new(
+            new MemoryDownloader(archive),
+            temporary.Path,
+            new PassingSelfTester(),
+            desktopShortcut: new ThrowingCaptureShortcut());
+
+        WindowsInstallationResult failed = await failing.InstallAsync(Release(archive), target, TestContext.Current.CancellationToken);
+        WindowsInstallationResult retried = await new WindowsUpdateStrategy(
+            new MemoryDownloader(archive),
+            temporary.Path,
+            new PassingSelfTester()).InstallAsync(Release(archive), target, TestContext.Current.CancellationToken);
+
+        Assert.False(failed.Succeeded);
+        Assert.Single(Directory.GetDirectories(Path.Combine(temporary.Path, "failed")));
+        Assert.True(retried.Succeeded);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task InstallsTheLatestPublishedRelease()
     {
         using TemporaryDirectory temporary = new();
@@ -594,6 +618,17 @@ public sealed class WindowsUpdateStrategyTests
         public UpdateDiagnostic Ensure(string executablePath) => new(
             UpdateDiagnosticCode.ActivationFailed,
             "The test shortcut creation failed.");
+
+        public void Restore(DesktopShortcutSnapshot snapshot)
+        {
+        }
+    }
+
+    private sealed class ThrowingCaptureShortcut : IWindowsDesktopShortcut
+    {
+        public DesktopShortcutSnapshot Capture() => throw new UnauthorizedAccessException();
+
+        public UpdateDiagnostic Ensure(string executablePath) => UpdateDiagnostic.None;
 
         public void Restore(DesktopShortcutSnapshot snapshot)
         {
