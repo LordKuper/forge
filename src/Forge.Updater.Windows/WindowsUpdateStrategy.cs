@@ -68,6 +68,65 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
              string.Equals(target.Architecture, "arm64", StringComparison.Ordinal));
     }
 
+    public async ValueTask<WindowsInstallationResult> InstallAsync(
+        VerifiedRelease release,
+        UpdateTarget target,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(release);
+        ArgumentNullException.ThrowIfNull(target);
+        if (!Supports(target))
+        {
+            return WindowsInstallationResult.Failure(new(
+                UpdateDiagnosticCode.PlatformNotSupported,
+                "The release target is not supported by the Windows installer."));
+        }
+
+        string version = release.Version.ToString();
+        string destination = Path.Combine(VersionRoot, version);
+        try
+        {
+            string? current = ReadCurrentVersion();
+            if (string.Equals(current, version, StringComparison.Ordinal) && Directory.Exists(destination))
+            {
+                return new(true, destination, UpdateDiagnostic.None);
+            }
+
+            if (current is not null || Directory.Exists(destination))
+            {
+                return WindowsInstallationResult.Failure(new(
+                    UpdateDiagnosticCode.ActivationFailed,
+                    "A different Forge installation already exists; use the updater instead."));
+            }
+
+            StageResult staged = await StageAsync(release, target, cancellationToken).ConfigureAwait(false);
+            if (!staged.Succeeded)
+            {
+                return WindowsInstallationResult.Failure(staged.Diagnostic);
+            }
+
+            Directory.Move(staged.Staged!.Location, destination);
+            try
+            {
+                WriteCurrentVersion(version);
+                return new(true, destination, UpdateDiagnostic.None);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+            {
+                DeleteDirectory(destination);
+                return WindowsInstallationResult.Failure(new(
+                    UpdateDiagnosticCode.ActivationFailed,
+                    "Windows installation activation could not complete."));
+            }
+        }
+        catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
+        {
+            return WindowsInstallationResult.Failure(new(
+                UpdateDiagnosticCode.ActivationFailed,
+                "Windows installation could not complete."));
+        }
+    }
+
     public async ValueTask<StageResult> StageAsync(
         VerifiedRelease release,
         UpdateTarget target,

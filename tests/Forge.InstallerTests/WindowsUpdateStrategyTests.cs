@@ -9,6 +9,48 @@ public sealed class WindowsUpdateStrategyTests
 {
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task InstallsAVerifiedBundleAndIsIdempotent()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        CountingDownloader downloader = new(archive);
+        WindowsUpdateStrategy strategy = new(downloader, temporary.Path, new PassingSelfTester());
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+
+        WindowsInstallationResult first = await strategy.InstallAsync(Release(archive), target, TestContext.Current.CancellationToken);
+        WindowsInstallationResult second = await strategy.InstallAsync(Release(archive), target, TestContext.Current.CancellationToken);
+
+        Assert.True(first.Succeeded);
+        Assert.Equal(Path.Combine(temporary.Path, "versions", "1.1.0"), first.VersionDirectory);
+        Assert.True(File.Exists(Path.Combine(first.VersionDirectory!, "forge.exe")));
+        Assert.Contains("1.1.0", File.ReadAllText(Path.Combine(temporary.Path, "current.json")), StringComparison.Ordinal);
+        Assert.True(second.Succeeded);
+        Assert.Equal(1, downloader.DownloadCount);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task DoesNotOverwriteAnUnknownVersionDirectory()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        string existing = Path.Combine(temporary.Path, "versions", "1.1.0");
+        Directory.CreateDirectory(existing);
+        File.WriteAllText(Path.Combine(existing, "keep.txt"), "keep");
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.True(File.Exists(Path.Combine(existing, "keep.txt")));
+        Assert.False(File.Exists(Path.Combine(temporary.Path, "current.json")));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task SerializesConcurrentUpdates()
     {
         UpdateTarget target = new("windows", "x64", "portable_bundle");
@@ -187,6 +229,17 @@ public sealed class WindowsUpdateStrategyTests
     {
         public ValueTask<Stream> DownloadAsync(ReleaseAsset asset, CancellationToken cancellationToken) =>
             ValueTask.FromResult<Stream>(new MemoryStream(contents, writable: false));
+    }
+
+    private sealed class CountingDownloader(byte[] contents) : IReleaseAssetDownloader
+    {
+        public int DownloadCount { get; private set; }
+
+        public ValueTask<Stream> DownloadAsync(ReleaseAsset asset, CancellationToken cancellationToken)
+        {
+            DownloadCount++;
+            return ValueTask.FromResult<Stream>(new MemoryStream(contents, writable: false));
+        }
     }
 
     private sealed class PassingSelfTester : IWindowsHostSelfTester
