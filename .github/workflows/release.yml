@@ -80,10 +80,7 @@ jobs:
     name: Publish release
     needs: [dotnet, test]
     permissions:
-      artifact-metadata: write
-      attestations: write
       contents: write
-      id-token: write
     runs-on: windows-2025
     steps:
       - name: Check out repository
@@ -117,19 +114,6 @@ jobs:
           }
           $checksums | Set-Content -LiteralPath (Join-Path $output 'checksums.txt')
           "RELEASE_ASSETS=$($bundles.FullName + (Join-Path $output 'checksums.txt') -join ';')" >> $env:GITHUB_ENV
-
-      - name: Generate signed provenance
-        id: provenance
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
-        with:
-          subject-path: artifacts/release/*.zip
-
-      - name: Attach signed provenance
-        shell: pwsh
-        run: |
-          $provenance = Join-Path $PWD 'artifacts/release/provenance.intoto.jsonl'
-          Copy-Item -LiteralPath '${{ steps.provenance.outputs.bundle-path }}' -Destination $provenance
-          "RELEASE_ASSETS=$env:RELEASE_ASSETS;$provenance" >> $env:GITHUB_ENV
 
       - name: Validate and publish
         shell: pwsh

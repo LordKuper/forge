@@ -144,20 +144,17 @@ public sealed class UpdaterTests
     {
         ReleaseAsset asset = new("forge-windows-x64-portable_bundle.zip", 4, new Uri("https://example.test/asset"));
         ReleaseAsset checksum = new("checksums.txt", 1, new Uri("https://example.test/checksums"));
-        ReleaseAsset provenance = new("provenance.intoto.jsonl", 1, new Uri("https://example.test/provenance"));
         Dictionary<string, byte[]> content = new(StringComparer.Ordinal)
         {
             [asset.Name] = Encoding.UTF8.GetBytes("bad"),
             [checksum.Name] = Encoding.UTF8.GetBytes($"{Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("good")))}  4  {asset.Name}\n"),
-            [provenance.Name] = Encoding.UTF8.GetBytes("bundle"),
         };
         ReleaseAssetVerifier verifier = new(
-            new("github.com/LordKuper/forge", "release.yml", "forge-{0}-{1}-{2}.zip", checksum.Name, provenance.Name),
-            new MemoryDownloader(content),
-            new PassingProvenanceVerifier());
+            new("forge-{0}-{1}-{2}.zip", checksum.Name),
+            new MemoryDownloader(content));
 
         VerificationResult result = await verifier.VerifyAsync(
-            new ReleaseMetadata(SemanticVersion.Parse("1.1.0"), new Uri("https://example.test/release"), false, false, DateTimeOffset.UtcNow, [asset, checksum, provenance]),
+            new ReleaseMetadata(SemanticVersion.Parse("1.1.0"), new Uri("https://example.test/release"), false, false, DateTimeOffset.UtcNow, [asset, checksum]),
             new UpdateTarget("windows", "x64", "portable_bundle"),
             TestContext.Current.CancellationToken);
 
@@ -430,7 +427,7 @@ public sealed class UpdaterTests
         public ValueTask<VerificationResult> VerifyAsync(ReleaseMetadata release, UpdateTarget target, CancellationToken cancellationToken) =>
             ValueTask.FromResult(new VerificationResult(
                 true,
-                new VerifiedRelease(release.Version, release.ReleaseUri, new("asset.zip", 0, new Uri("https://example.test/asset")), "00", "provenance"),
+                new VerifiedRelease(release.Version, release.ReleaseUri, new("asset.zip", 0, new Uri("https://example.test/asset")), "00"),
                 UpdateDiagnostic.None));
     }
 
@@ -483,12 +480,6 @@ public sealed class UpdaterTests
     {
         public ValueTask<Stream> DownloadAsync(ReleaseAsset asset, CancellationToken cancellationToken) =>
             ValueTask.FromResult<Stream>(new MemoryStream(content[asset.Name], writable: false));
-    }
-
-    private sealed class PassingProvenanceVerifier : IProvenanceVerifier
-    {
-        public ValueTask<bool> VerifyAsync(Stream bundle, ReleaseTrustPolicy policy, ReleaseAsset asset, string sha256, CancellationToken cancellationToken) =>
-            ValueTask.FromResult(true);
     }
 
     private sealed class FailingRestartCoordinator : IRestartCoordinator

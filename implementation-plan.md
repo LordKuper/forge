@@ -92,7 +92,7 @@ localization, and configuration contracts; architecture and redaction tests pass
   resolve exactly one strategy, and forbid mutation before resolution.
 - [x] P2.6–P2.12 — Query the latest published stable GitHub release, enforce
   SemVer/no-downgrade, use ETags without TTL bypass, select assets, and verify
-  name, size, SHA-256, and provenance.
+  name, size, and SHA-256.
 - [x] P2.13–P2.18 — Implement the update lifecycle, restart token, argument/cwd
   preservation, startup handshake, and platform-neutral rollback orchestration.
 - [x] P2.19–P2.24 — Cover platform detection, fake strategies, unsupported
@@ -236,7 +236,7 @@ localization, scoped configuration, and release trust all pass.
 ## Stage 12 — MVP release and acceptance
 
 - [ ] P12.1–P12.8 — Produce reproducible Windows bundles, release assets,
-  checksums, provenance, SBOM, published-asset installer tests, update/rollback
+  checksums, SBOM, published-asset installer tests, update/rollback
   tests, and operational documentation.
 - [ ] P12.9–P12.28 — Execute end-to-end installation, self-update, provider
   preflight, project init, isolated concurrent sprints, clean fallback,

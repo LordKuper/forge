@@ -163,7 +163,7 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Updater": "[0.5.0, )",
+          "Forge.Updater": "[1.0.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },

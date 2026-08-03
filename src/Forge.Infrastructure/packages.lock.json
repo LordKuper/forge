@@ -275,7 +275,7 @@
       "forge.application": {
         "type": "Project",
         "dependencies": {
-          "Forge.Domain": "[0.6.0, )"
+          "Forge.Domain": "[1.0.0, )"
         }
       },
       "forge.domain": {

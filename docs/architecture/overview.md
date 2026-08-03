@@ -84,7 +84,7 @@ registers only `WindowsUpdateStrategy`.
 
 Forge accepts only a newer published stable SemVer release from
 `github.com/LordKuper/forge`. Assets require name, size, SHA-256, and
-GitHub/Sigstore provenance verification against built-in policy. Activation uses
+checksum verification. Activation uses
 an immutable version directory, atomic current pointer, self-test, one-use
 restart token, startup handshake, and rollback.
 
@@ -226,7 +226,7 @@ The release gate requires:
 
 - reproducible `win-x64` and `win-arm64` bundles;
 - matching source, artifact, tag, and release versions;
-- checksums, provenance, and SBOM;
+- checksums and SBOM;
 - clean-profile installer and update tests;
 - CLI/TUI and Desktop capability parity;
 - English/Russian localization completeness;

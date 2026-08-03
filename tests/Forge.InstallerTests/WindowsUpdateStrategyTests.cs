@@ -343,8 +343,7 @@ public sealed class WindowsUpdateStrategyTests
             SemanticVersion.Parse("1.1.0"),
             new Uri("https://example.test/release"),
             new("forge-windows-x64-portable_bundle.zip", archive.Length, new Uri("https://example.test/asset")),
-            Convert.ToHexString(SHA256.HashData(archive)),
-            "provenance.intoto.jsonl");
+            Convert.ToHexString(SHA256.HashData(archive)));
 
     private static byte[] CreateBundle(string root, bool includeDesktop = true)
     {

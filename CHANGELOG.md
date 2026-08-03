@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v1.0.0
+
+### Removed
+
+- Removed release provenance and publisher-identity verification; release assets
+  are now checked only for name, size, and SHA-256 consistency.
+
 ## v0.6.0
 
 ### Added

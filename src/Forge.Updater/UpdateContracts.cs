@@ -71,8 +71,7 @@ public sealed record VerifiedRelease(
     SemanticVersion Version,
     Uri ReleaseUri,
     ReleaseAsset Asset,
-    string Sha256,
-    string ProvenanceBundleName);
+    string Sha256);
 
 public sealed record StagedRelease(string Location, VerifiedRelease Release);
 

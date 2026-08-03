@@ -10,35 +10,20 @@ public sealed record VerificationResult(bool Succeeded, VerifiedRelease? Release
 }
 
 public sealed record ReleaseTrustPolicy(
-    string Repository,
-    string Workflow,
     string AssetNameTemplate,
-    string ChecksumAssetName,
-    string ProvenanceAssetName);
+    string ChecksumAssetName);
 
 public interface IReleaseAssetDownloader
 {
     ValueTask<Stream> DownloadAsync(ReleaseAsset asset, CancellationToken cancellationToken);
 }
 
-public interface IProvenanceVerifier
-{
-    ValueTask<bool> VerifyAsync(
-        Stream bundle,
-        ReleaseTrustPolicy policy,
-        ReleaseAsset asset,
-        string sha256,
-        CancellationToken cancellationToken);
-}
-
 public sealed class ReleaseAssetVerifier(
     ReleaseTrustPolicy policy,
-    IReleaseAssetDownloader downloader,
-    IProvenanceVerifier provenanceVerifier) : IReleaseVerifier
+    IReleaseAssetDownloader downloader) : IReleaseVerifier
 {
     private readonly ReleaseTrustPolicy policy = policy ?? throw new ArgumentNullException(nameof(policy));
     private readonly IReleaseAssetDownloader downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
-    private readonly IProvenanceVerifier provenanceVerifier = provenanceVerifier ?? throw new ArgumentNullException(nameof(provenanceVerifier));
 
     public async ValueTask<VerificationResult> VerifyAsync(
         ReleaseMetadata release,
@@ -59,11 +44,9 @@ public sealed class ReleaseAssetVerifier(
                 string.Equals(candidate.Name, expectedName, StringComparison.Ordinal));
             ReleaseAsset? checksumAsset = release.Assets.SingleOrDefault(candidate =>
                 string.Equals(candidate.Name, policy.ChecksumAssetName, StringComparison.Ordinal));
-            ReleaseAsset? provenanceAsset = release.Assets.SingleOrDefault(candidate =>
-                string.Equals(candidate.Name, policy.ProvenanceAssetName, StringComparison.Ordinal));
-            if (asset is null || checksumAsset is null || provenanceAsset is null)
+            if (asset is null || checksumAsset is null)
             {
-                return VerificationResult.Failure("The release is missing a required asset, checksum manifest, or provenance bundle.");
+                return VerificationResult.Failure("The release is missing a required asset or checksum manifest.");
             }
 
             ChecksumEntry? expected = await FindExpectedChecksumAsync(checksumAsset, asset, cancellationToken).ConfigureAwait(false);
@@ -91,18 +74,12 @@ public sealed class ReleaseAssetVerifier(
 
             if (actualSize != expected.Size || !string.Equals(actualHash, expected.Sha256, StringComparison.OrdinalIgnoreCase))
             {
-                return VerificationResult.Failure("The downloaded asset size or SHA-256 hash does not match the signed manifest.");
-            }
-
-            await using Stream provenance = await downloader.DownloadAsync(provenanceAsset, cancellationToken).ConfigureAwait(false);
-            if (!await provenanceVerifier.VerifyAsync(provenance, policy, asset, actualHash, cancellationToken).ConfigureAwait(false))
-            {
-                return VerificationResult.Failure("The provenance bundle does not satisfy the built-in repository and workflow policy.");
+                return VerificationResult.Failure("The downloaded asset size or SHA-256 hash does not match the checksum manifest.");
             }
 
             return new(
                 true,
-                new VerifiedRelease(release.Version, release.ReleaseUri, asset, actualHash, provenanceAsset.Name),
+                new VerifiedRelease(release.Version, release.ReleaseUri, asset, actualHash),
                 UpdateDiagnostic.None);
         }
         catch (Exception exception) when (exception is IOException or HttpRequestException or InvalidDataException)
