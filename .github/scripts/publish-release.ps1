@@ -133,6 +133,26 @@ if ($isBreaking -and -not $hasBreakingFooter) {
     throw "A breaking release commit requires a BREAKING CHANGE footer."
 }
 
+& git fetch --tags origin
+if ($LASTEXITCODE -ne 0) {
+    throw "Cannot fetch release tags."
+}
+
+$latestTag = & git tag --list "v*" |
+    Where-Object { $_ -match "^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$" } |
+    Sort-Object { [version]$_.Substring(1) } -Descending |
+    Select-Object -First 1
+$latestVersion = if ($latestTag) { [version]$latestTag.Substring(1) } else { $null }
+
+if ($null -ne $baseVersion -and $currentVersion -lt $baseVersion -and
+    -not (@(& git tag --list "v$baseVersion") -contains "v$baseVersion")) {
+    if ($null -eq $latestVersion) {
+        throw "Cannot correct an unreleased VERSION without a previous release."
+    }
+
+    $baseVersion = $latestVersion
+}
+
 if ($null -ne $baseVersion) {
     if ($isBreaking) {
         $expectedVersion = [version]::new($baseVersion.Major + 1, 0, 0)
@@ -151,11 +171,6 @@ if ($null -ne $baseVersion) {
 }
 
 $tag = "v$version"
-& git fetch --tags origin
-if ($LASTEXITCODE -ne 0) {
-    throw "Cannot fetch release tags."
-}
-
 $head = (& git rev-parse HEAD).Trim()
 $tagExists = @(& git tag --list $tag) -contains $tag
 
@@ -169,12 +184,7 @@ if ($tagExists) {
         throw "$tag already points to another commit."
     }
 } else {
-    $latestTag = & git tag --list "v*" |
-        Where-Object { $_ -match "^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$" } |
-        Sort-Object { [version]$_.Substring(1) } -Descending |
-        Select-Object -First 1
     if ($latestTag) {
-        $latestVersion = [version]$latestTag.Substring(1)
         if ($currentVersion -le $latestVersion) {
             $latestCommit = (& git rev-list -n 1 $latestTag).Trim()
             & git merge-base --is-ancestor $head $latestCommit
