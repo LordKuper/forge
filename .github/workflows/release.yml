@@ -128,4 +128,5 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_REQUIRE_ASSETS: "true"
         run: ./.github/scripts/publish-release.ps1

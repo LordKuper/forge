@@ -217,7 +217,7 @@ if ($releaseExists) {
 }
 
 $releaseAssets = @($env:RELEASE_ASSETS -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-if ($env:GITHUB_ACTIONS -eq "true" -and $releaseAssets.Count -eq 0) {
+if ($env:RELEASE_REQUIRE_ASSETS -eq "true" -and $releaseAssets.Count -eq 0) {
     throw "Release assets are required in GitHub Actions."
 }
 foreach ($asset in $releaseAssets) {
