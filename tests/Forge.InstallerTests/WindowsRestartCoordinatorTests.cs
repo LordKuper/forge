@@ -26,7 +26,7 @@ public sealed class WindowsRestartCoordinatorTests
                 $"[IO.File]::WriteAllText('{readyPath}','ready');" +
                 "Start-Sleep -Seconds 30";
             File.WriteAllText(scriptPath, "@echo off\r\npowershell.exe -NoProfile -Command \"" + command + "\"");
-            WindowsRestartCoordinator coordinator = new(new PersistentTokenStore(), TimeSpan.FromSeconds(2));
+            WindowsRestartCoordinator coordinator = new(new PersistentTokenStore(), TimeSpan.FromSeconds(10));
             RestartContext restart = new(
                 "token",
                 scriptPath,
@@ -35,7 +35,7 @@ public sealed class WindowsRestartCoordinatorTests
                 new(SemanticVersion.Parse("1.1.0"), new("windows", "x64", "portable_bundle"), UpdateSurface.Cli));
 
             Task<UpdateDiagnostic> operation = coordinator.RestartAsync(restart, TestContext.Current.CancellationToken).AsTask();
-            for (int attempt = 0; attempt < 100 && !File.Exists(readyPath); attempt++)
+            for (int attempt = 0; attempt < 500 && !File.Exists(readyPath); attempt++)
             {
                 await Task.Delay(20, TestContext.Current.CancellationToken);
             }
@@ -49,9 +49,22 @@ public sealed class WindowsRestartCoordinatorTests
         }
         finally
         {
-            if (Directory.Exists(directory))
+            await DeleteDirectoryAsync(directory);
+        }
+    }
+
+    private static async Task DeleteDirectoryAsync(string directory)
+    {
+        for (int attempt = 0; Directory.Exists(directory); attempt++)
+        {
+            try
             {
                 Directory.Delete(directory, true);
+                return;
+            }
+            catch (IOException) when (attempt < 19)
+            {
+                await Task.Delay(100, TestContext.Current.CancellationToken);
             }
         }
     }

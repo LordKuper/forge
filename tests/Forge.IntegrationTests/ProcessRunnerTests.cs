@@ -55,10 +55,7 @@ public sealed class ProcessRunnerTests
         }
         finally
         {
-            if (Directory.Exists(directory))
-            {
-                Directory.Delete(directory, true);
-            }
+            await DeleteDirectoryAsync(directory);
         }
     }
 
@@ -99,6 +96,22 @@ public sealed class ProcessRunnerTests
             if (File.Exists(marker))
             {
                 File.Delete(marker);
+            }
+        }
+    }
+
+    private static async Task DeleteDirectoryAsync(string directory)
+    {
+        for (int attempt = 0; Directory.Exists(directory); attempt++)
+        {
+            try
+            {
+                Directory.Delete(directory, true);
+                return;
+            }
+            catch (IOException) when (attempt < 19)
+            {
+                await Task.Delay(100, TestContext.Current.CancellationToken);
             }
         }
     }
