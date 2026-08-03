@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using Forge.Updater;
@@ -7,6 +8,26 @@ namespace Forge.InstallerTests;
 
 public sealed class WindowsUpdateStrategyTests
 {
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task HostSelfTestStopsAfterItsDeadline()
+    {
+        using TemporaryDirectory temporary = new();
+        string host = Path.Combine(temporary.Path, "hang.cmd");
+        await File.WriteAllTextAsync(
+            host,
+            "@echo off\r\npowershell.exe -NoProfile -Command \"Start-Sleep -Seconds 10\"\r\n",
+            TestContext.Current.CancellationToken);
+        Stopwatch elapsed = Stopwatch.StartNew();
+
+        bool succeeded = await new WindowsHostSelfTester(TimeSpan.FromMilliseconds(250)).VerifyAsync(
+            host,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(succeeded);
+        Assert.True(elapsed.Elapsed < TimeSpan.FromSeconds(3));
+    }
+
     [Fact]
     [Trait("Category", "Installer")]
     public async Task InstallsAVerifiedBundleAndIsIdempotent()

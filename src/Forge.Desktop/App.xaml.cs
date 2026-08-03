@@ -6,6 +6,9 @@ namespace Forge.Desktop;
 public partial class App : Microsoft.Maui.Controls.Application
 {
     private readonly ILocalizationCatalog catalog;
+    private readonly IRestartTokenService restartTokens;
+    private readonly IUpdateTargetDetector targetDetector;
+    private readonly string? restartToken;
 
     public App(
         ILocalizationCatalog catalog,
@@ -14,6 +17,8 @@ public partial class App : Microsoft.Maui.Controls.Application
     {
         InitializeComponent();
         this.catalog = catalog;
+        this.restartTokens = restartTokens;
+        this.targetDetector = targetDetector;
         string[] arguments = Environment.GetCommandLineArgs();
         if (arguments.Skip(1).Contains("--self-test", StringComparer.Ordinal))
         {
@@ -22,8 +27,21 @@ public partial class App : Microsoft.Maui.Controls.Application
 
         if (arguments.Length >= 3 && string.Equals(arguments[1], "--restart-token", StringComparison.Ordinal))
         {
+            restartToken = arguments[2];
+        }
+    }
+
+    protected override Window CreateWindow(IActivationState? activationState)
+    {
+        Window window = new(new MainPage(catalog))
+        {
+            Title = catalog.Resolve(MessageKeys.AppTitle),
+        };
+
+        if (restartToken is not null)
+        {
             UpdateDiagnostic handshake = new StartupHandshake(restartTokens).Confirm(
-                arguments[2],
+                restartToken,
                 new(
                     SemanticVersion.Parse(typeof(App).Assembly.GetName().Version!.ToString(3)),
                     targetDetector.Detect(),
@@ -33,11 +51,7 @@ public partial class App : Microsoft.Maui.Controls.Application
                 throw new InvalidOperationException(handshake.Detail);
             }
         }
-    }
 
-    protected override Window CreateWindow(IActivationState? activationState) =>
-        new(new MainPage(catalog))
-        {
-            Title = catalog.Resolve(MessageKeys.AppTitle),
-        };
+        return window;
+    }
 }

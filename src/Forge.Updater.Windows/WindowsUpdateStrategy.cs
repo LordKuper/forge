@@ -8,8 +8,10 @@ public interface IWindowsHostSelfTester
     ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken);
 }
 
-public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
+public sealed class WindowsHostSelfTester(TimeSpan? timeout = null) : IWindowsHostSelfTester
 {
+    private readonly TimeSpan timeout = timeout ?? TimeSpan.FromSeconds(30);
+
     public async ValueTask<bool> VerifyAsync(string executablePath, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(executablePath);
@@ -23,11 +25,15 @@ public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
         startInfo.ArgumentList.Add("--self-test");
         using Process process = new() { StartInfo = startInfo };
         process.Start();
+        using CancellationTokenSource deadline = new(this.timeout);
+        using CancellationTokenSource waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            deadline.Token);
         try
         {
-            await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
+            await process.WaitForExitAsync(waitCancellation.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException)
         {
             if (!process.HasExited)
             {
@@ -35,7 +41,12 @@ public sealed class WindowsHostSelfTester : IWindowsHostSelfTester
                 await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
             }
 
-            throw;
+            if (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+
+            return false;
         }
 
         return process.ExitCode == 0;
