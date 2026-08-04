@@ -31,6 +31,13 @@ public interface INetworkClient
     Task<Stream> GetStreamAsync(Uri uri, CancellationToken cancellationToken);
 }
 
+public interface IEnvironmentPaths
+{
+    string LocalApplicationData { get; }
+
+    string CurrentDirectory { get; }
+}
+
 public interface IRepository
 {
     Task<string> GetHeadAsync(CancellationToken cancellationToken);

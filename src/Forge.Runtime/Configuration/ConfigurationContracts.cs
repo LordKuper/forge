@@ -36,6 +36,8 @@ public sealed class ConfigurationScopeException(string key, ConfigurationScope r
     public const string DiagnosticCode = "configuration_scope_violation";
 }
 
+public sealed class ConfigurationMigrationException(string message) : InvalidOperationException(message);
+
 public interface IConfigurationRegistry
 {
     IReadOnlyCollection<ConfigurationKey> Keys { get; }

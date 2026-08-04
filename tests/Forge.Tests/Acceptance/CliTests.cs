@@ -1,12 +1,10 @@
 using System.CommandLine;
 using System.Globalization;
-using Forge.Bootstrap;
 using Forge.Cli;
 using Forge.Localization;
+using Forge.Tests.Support;
 using Forge.Updater;
 using Forge.Updater.Windows;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 
 namespace Forge.AcceptanceTests;
 
@@ -19,19 +17,27 @@ public sealed class CliTests
         CultureInfo original = CultureInfo.CurrentUICulture;
         try
         {
-            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("en");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru");
+            using TestEnvironment environment = new();
             StringWriter output = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
 
             int exitCode = await CliApplication
-                .CreateRootCommand(catalog, output)
+                .CreateRootCommand(Text(catalog), output, environment.Application)
                 .Parse(["status"])
                 .InvokeAsync(
                     new InvocationConfiguration(),
                     TestContext.Current.CancellationToken);
 
             Assert.Equal(0, exitCode);
-            Assert.Equal($"Forge is ready.{Environment.NewLine}", output.ToString());
+            Assert.Contains(
+                "Запуск заблокирован; работа со спринтами недоступна.",
+                output.ToString(),
+                StringComparison.Ordinal);
+            Assert.Contains(
+                "Проект не инициализирован.",
+                output.ToString(),
+                StringComparison.Ordinal);
         }
         finally
         {
@@ -43,13 +49,13 @@ public sealed class CliTests
     [Trait("Category", "Acceptance")]
     public async Task HelpOptionIsHandledByCliParser()
     {
-        using IHost host = ForgeHost.CreateBuilder().Build();
+        using TestEnvironment environment = new();
         StringWriter output = new(CultureInfo.InvariantCulture);
-        ILocalizationCatalog catalog =
-            host.Services.GetRequiredService<ILocalizationCatalog>();
+        ILocalizationCatalog catalog = environment.Resolve<ILocalizationCatalog>();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
-            output);
+            Text(catalog),
+            output,
+            environment.Application);
 
         int exitCode = await root
             .Parse(["--help"])
@@ -68,12 +74,15 @@ public sealed class CliTests
     [Trait("Category", "Acceptance")]
     public async Task InstallCommandUsesTheInstalledReleaseFlow()
     {
+        using TestEnvironment environment = new();
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
+            Text(catalog),
             output,
-            _ => ValueTask.FromResult(new WindowsInstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
+            environment.Application,
+            install: _ => ValueTask.FromResult(
+                new WindowsInstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
 
         int exitCode = await root
             .Parse(["install"])
@@ -87,11 +96,13 @@ public sealed class CliTests
     [Trait("Category", "Acceptance")]
     public async Task UpdateCommandUsesTheSharedUpdateFlow()
     {
+        using TestEnvironment environment = new();
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
+            Text(catalog),
             output,
+            environment.Application,
             update: _ => ValueTask.FromResult(new UpdateResult(
                 UpdateLifecycleState.RestartRequested,
                 UpdateDiagnostic.None)));
@@ -112,12 +123,14 @@ public sealed class CliTests
         try
         {
             CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru");
+            using TestEnvironment environment = new();
             StringWriter output = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
             RootCommand root = CliApplication.CreateRootCommand(
-                catalog,
+                Text(catalog),
                 output,
-                _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
+                environment.Application,
+                install: _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ReleaseUnavailable,
                     "The release endpoint could not be reached."))));
 
@@ -125,7 +138,7 @@ public sealed class CliTests
                 .Parse(["install"])
                 .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-            Assert.Equal(1, exitCode);
+            Assert.Equal(ExitCodes.Update, exitCode);
             Assert.Equal($"{catalog.Resolve(MessageKeys.InstallFailed)}{Environment.NewLine}", output.ToString());
         }
         finally
@@ -133,4 +146,7 @@ public sealed class CliTests
             CultureInfo.CurrentUICulture = original;
         }
     }
+
+    private static SurfaceText Text(ILocalizationCatalog catalog) =>
+        new(catalog, CultureInfo.CurrentUICulture);
 }

@@ -1,6 +1,6 @@
 # Forge MVP implementation plan
 
-**Updated:** 2026-07-29
+**Updated:** 2026-08-04
 **Status:** active
 
 ## Plan rules
@@ -17,7 +17,7 @@
 - [x] Stage 1 — Create the .NET solution and host skeletons.
 - [x] Stage 2 — Implement the platform-neutral self-updater.
 - [x] Stage 3 — Implement the Windows installer and update strategy.
-- [ ] Stage 4 — Implement startup and `.forge/` initialization.
+- [x] Stage 4 — Implement startup and `.forge/` initialization.
 - [ ] Stage 5 — Implement provider toolchain management and adapters.
 - [ ] Stage 6 — Implement independent sprints and the durable workflow engine.
 - [ ] Stage 7 — Implement Git isolation, safe fallback, and circuit breakers.
@@ -120,16 +120,23 @@ platforms; all update/restart/rollback contract tests pass.
 
 **Depends on:** Stages 2–3.
 
-- [ ] P4.1–P4.4 — Implement ordered startup, global commands, internal self-test
+- [x] P4.1–P4.4 — Implement ordered startup, global commands, internal self-test
   bypass, and recovery-only failure mode.
-- [ ] P4.5–P4.16 — Verify explicit roots, require confirmation, initialize through
+- [x] P4.5–P4.16 — Verify explicit roots, require confirmation, initialize through
   staging/atomic publish, create the minimal project tree, and never overwrite
   unknown configuration.
-- [ ] P4.17–P4.24 — Share bootstrap between CLI/Desktop, restore navigation,
+- [x] P4.17–P4.24 — Share bootstrap between CLI/Desktop, restore navigation,
   render project/sprint status, and expose safe recovery recommendations.
-- [ ] P4.25–P4.34 — Load/migrate language and scoped configuration, implement
+- [x] P4.25–P4.34 — Load/migrate language and scoped configuration, implement
   CLI/Desktop editors and provenance, reject cross-scope keys, and initialize
   project artifact languages independently from user language.
+
+Scope notes: sprint rendering covers the empty snapshot contract, and sprint
+records arrive with the workflow engine in Stage 6. Desktop navigation is
+restored by querying durable state on activation; persisting the selected project
+across launches needs a new user-scope key and moves with recent-project
+preferences. Replaying a completed mutation is rejected as stale until Stage 6
+adds the durable idempotency store.
 
 **Gate:** startup remains fail-closed, root confirmation is safe and idempotent,
 and both surfaces show equivalent status/configuration.
@@ -271,6 +278,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` | 2026-08-03 |
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
 | Stage 3 Windows installer and gate | `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (83 tests); `build/Publish-WindowsBundle.ps1` for `win-x64` and `win-arm64` | 2026-08-03 |
+| Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (161 tests) | 2026-08-04 |
 
 ## Open decisions
 

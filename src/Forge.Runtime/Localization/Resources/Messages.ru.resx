@@ -14,4 +14,35 @@
   <data name="UpdateDescription" xml:space="preserve"><value>Обновить Forge до последнего релиза.</value></data>
   <data name="UpdateCompleted" xml:space="preserve"><value>Обновление Forge завершено.</value></data>
   <data name="UpdateFailed" xml:space="preserve"><value>Не удалось обновить Forge.</value></data>
+  <data name="DoctorDescription" xml:space="preserve"><value>Показать упорядоченные проверки запуска.</value></data>
+  <data name="InitDescription" xml:space="preserve"><value>Инициализировать проект Forge в явно указанном каталоге.</value></data>
+  <data name="NextDescription" xml:space="preserve"><value>Показать рекомендуемые следующие действия.</value></data>
+  <data name="ConfigDescription" xml:space="preserve"><value>Показать или изменить конфигурацию нужной области.</value></data>
+  <data name="StartupChecksTitle" xml:space="preserve"><value>Проверки запуска:</value></data>
+  <data name="StartupReady" xml:space="preserve"><value>Запуск готов.</value></data>
+  <data name="StartupBlocked" xml:space="preserve"><value>Запуск заблокирован; работа со спринтами недоступна.</value></data>
+  <data name="StartupFailed" xml:space="preserve"><value>Запуск завершился ошибкой; доступно только восстановление.</value></data>
+  <data name="ProjectRootLabel" xml:space="preserve"><value>Корень проекта:</value></data>
+  <data name="ProjectInitialized" xml:space="preserve"><value>Проект инициализирован.</value></data>
+  <data name="ProjectNotInitialized" xml:space="preserve"><value>Проект не инициализирован.</value></data>
+  <data name="InitConfirmationRequired" xml:space="preserve"><value>Подтвердите инициализацию показанного каталога перед его созданием.</value></data>
+  <data name="InitCompleted" xml:space="preserve"><value>Проект Forge инициализирован.</value></data>
+  <data name="InitAlreadyInitialized" xml:space="preserve"><value>Проект Forge уже инициализирован.</value></data>
+  <data name="InitFailed" xml:space="preserve"><value>Не удалось инициализировать проект Forge.</value></data>
+  <data name="SuggestedActionsTitle" xml:space="preserve"><value>Рекомендуемые действия:</value></data>
+  <data name="NoSuggestedActions" xml:space="preserve"><value>Безопасных действий нет.</value></data>
+  <data name="ConfigurationTitle" xml:space="preserve"><value>Конфигурация:</value></data>
+  <data name="ConfigurationUpdated" xml:space="preserve"><value>Конфигурация обновлена.</value></data>
+  <data name="ConfigurationRejected" xml:space="preserve"><value>Изменение конфигурации отклонено.</value></data>
+  <data name="RefreshAction" xml:space="preserve"><value>Обновить</value></data>
+  <data name="InitializeAction" xml:space="preserve"><value>Инициализировать проект</value></data>
+  <data name="ConfigurationSetAction" xml:space="preserve"><value>Применить</value></data>
+  <data name="CancelAction" xml:space="preserve"><value>Отмена</value></data>
+  <data name="next.recover_startup.rationale" xml:space="preserve"><value>Проверка запуска завершилась ошибкой и требует восстановления до работы над проектом.</value></data>
+  <data name="next.initialize_project.rationale" xml:space="preserve"><value>В подтверждённом каталоге ещё нет проекта Forge.</value></data>
+  <data name="RecoverAction" xml:space="preserve"><value>Восстановить запуск</value></data>
+  <data name="RecoveryCompleted" xml:space="preserve"><value>Некорректный файл изолирован, запуск восстановлен.</value></data>
+  <data name="RecoveryFailed" xml:space="preserve"><value>Восстановление запуска для этой ошибки недоступно.</value></data>
+  <data name="DiagnosticsTitle" xml:space="preserve"><value>Диагностика:</value></data>
+  <data name="RecoveryNotNeeded" xml:space="preserve"><value>Нет ошибок запуска, восстановление не требуется.</value></data>
 </root>

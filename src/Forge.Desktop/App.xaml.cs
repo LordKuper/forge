@@ -1,3 +1,4 @@
+using Forge.Application;
 using Forge.Localization;
 using Forge.Updater;
 
@@ -6,17 +7,20 @@ namespace Forge.Desktop;
 public partial class App : Microsoft.Maui.Controls.Application
 {
     private readonly ILocalizationCatalog catalog;
+    private readonly ForgeApplication application;
     private readonly IRestartTokenService restartTokens;
     private readonly IUpdateTargetDetector targetDetector;
     private readonly string? restartToken;
 
     public App(
         ILocalizationCatalog catalog,
+        ForgeApplication application,
         IRestartTokenService restartTokens,
         IUpdateTargetDetector targetDetector)
     {
         InitializeComponent();
         this.catalog = catalog;
+        this.application = application;
         this.restartTokens = restartTokens;
         this.targetDetector = targetDetector;
         string[] arguments = Environment.GetCommandLineArgs();
@@ -33,9 +37,15 @@ public partial class App : Microsoft.Maui.Controls.Application
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        Window window = new(new MainPage(catalog))
+        // The startup sequence resolves the UI language before any text is rendered.
+        StartupStatus startup = application
+            .GetStartupStatusAsync(null, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        SurfaceText text = SurfaceText.For(catalog, startup.Language.Ui);
+        Window window = new(new MainPage(text, application))
         {
-            Title = catalog.Resolve(MessageKeys.AppTitle),
+            Title = text.Resolve(MessageKeys.AppTitle),
         };
 
         if (restartToken is not null)

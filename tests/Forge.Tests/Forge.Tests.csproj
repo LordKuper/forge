@@ -11,7 +11,7 @@
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-    <Compile Remove="Acceptance/**/*.cs;Installer/**/*.cs;Integration/**/*.cs;Unit/**/*.cs" />
+    <Compile Remove="Acceptance/**/*.cs;Installer/**/*.cs;Integration/**/*.cs;Support/**/*.cs;Unit/**/*.cs" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />

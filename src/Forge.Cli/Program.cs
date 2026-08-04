@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Cli;
 using Forge.Localization;
@@ -34,9 +35,15 @@ if (args is ["--self-test"])
 
 WindowsInstaller installer = host.Services.GetRequiredService<WindowsInstaller>();
 IForgeSelfUpdater updater = host.Services.GetRequiredService<IForgeSelfUpdater>();
+ForgeApplication application = host.Services.GetRequiredService<ForgeApplication>();
+// The startup sequence resolves the UI language before any text is rendered.
+StartupStatus startup = await application.GetStartupStatusAsync(null, CancellationToken.None)
+    .ConfigureAwait(false);
 RootCommand root = CliApplication.CreateRootCommand(
-    catalog,
+    SurfaceText.For(catalog, startup.Language.Ui),
     Console.Out,
+    application,
+    Console.Error,
     installer.InstallLatestAsync,
     cancellationToken => updater.UpdateAsync(
         new(

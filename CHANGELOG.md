@@ -2,6 +2,43 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.7.0
+
+### Added
+
+- Added the ordered fail-closed startup sequence shared by the CLI and Desktop
+  surfaces, reporting user configuration, language, platform, update strategy,
+  release, provider, and project checks with stable diagnostic codes. A failed
+  check refuses project mutations and leaves recovery as the only safe action.
+- Added explicit project-root verification and confirmed `.forge/`
+  initialization that stages a complete tree, publishes it atomically, stays
+  idempotent, discards staging on cancellation, and never overwrites an unknown
+  project directory.
+- Added the versioned project status snapshot with deterministic recovery and
+  initialization recommendations, stable idempotency keys, and rejection of a
+  stale expected state version without side effects.
+- Added the `forge doctor`, `forge init`, `forge status`, `forge next`, and
+  `forge config` commands with culture-invariant `--json` output, contract exit
+  codes, and diagnostics on standard error.
+- Added startup recovery that quarantines unreadable configuration, keeping every
+  unusable revision for diagnosis and falling back to the built-in defaults,
+  available as `forge doctor --recover` and from the Desktop surface. Readable
+  configuration is never moved.
+- Added the Desktop startup, project, recommendation, diagnostic, and
+  configuration views, including an explicit project root and configuration
+  scope selection, restored from durable application state.
+- Added scoped configuration reading and editing with provenance, cross-scope
+  rejection, key-typed value parsing, and project artifact languages independent
+  of the user language. `interaction.confirm_destructive` now controls whether a
+  mutation requires explicit confirmation.
+- Added application of the configured interface language to both surfaces
+  instead of the ambient operating-system culture.
+
+### Fixed
+
+- Fixed the shared host registering an empty configuration key registry, which
+  made every scoped configuration lookup fail.
+
 ## v0.6.5
 
 ### Fixed
