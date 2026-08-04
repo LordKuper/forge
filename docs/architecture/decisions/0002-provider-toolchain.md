@@ -61,9 +61,13 @@ never re-implements release verification itself:
   `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` for Codex) and runs
   `--version`, bounded by a 15-second timeout so a hung probe cannot block
   every startup pass. It never touches the network.
-- Installing a missing provider runs `powershell.exe -NoProfile
-  -NonInteractive -ExecutionPolicy Bypass -Command "<vendor install script
-  URL>"` — a fixed, Forge-controlled literal, never built from
+- Installing a missing provider runs the fully-qualified in-box Windows
+  PowerShell (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`,
+  never a bare `powershell.exe` — a bare name is resolved through
+  `CreateProcess`'s search order, which checks the calling image's own
+  directory and the current directory before `System32`) with
+  `-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "<vendor
+  install script URL>"` — a fixed, Forge-controlled literal, never built from
   variable/untrusted input. Updating an already-installed Claude Code runs
   `claude.exe update` directly (the documented lighter path); updating Codex
   reruns the same install script, which the vendor designed to be idempotent.
