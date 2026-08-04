@@ -37,9 +37,15 @@ public partial class App : Microsoft.Maui.Controls.Application
 
     protected override Window CreateWindow(IActivationState? activationState)
     {
-        Window window = new(new MainPage(catalog, application))
+        // The startup sequence resolves the UI language before any text is rendered.
+        StartupStatus startup = application
+            .GetStartupStatusAsync(null, CancellationToken.None)
+            .GetAwaiter()
+            .GetResult();
+        SurfaceText text = SurfaceText.For(catalog, startup.Language.Ui);
+        Window window = new(new MainPage(text, application))
         {
-            Title = catalog.Resolve(MessageKeys.AppTitle),
+            Title = text.Resolve(MessageKeys.AppTitle),
         };
 
         if (restartToken is not null)

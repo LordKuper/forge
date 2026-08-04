@@ -9,6 +9,33 @@ public interface ILocalizationCatalog
     IReadOnlyCollection<string> SupportedCultures { get; }
 }
 
+/// <summary>
+/// Binds the shared catalog to the language resolved during startup so surfaces never depend
+/// on the ambient operating-system culture.
+/// </summary>
+public sealed class SurfaceText(ILocalizationCatalog catalog, CultureInfo culture)
+{
+    public CultureInfo Culture { get; } = culture;
+
+    public string Resolve(string key) => catalog.Resolve(key, Culture);
+
+    public static SurfaceText For(ILocalizationCatalog catalog, string languageTag) =>
+        new(catalog, ToCulture(languageTag));
+
+    /// <summary>Unknown or malformed tags fall back to English rather than failing startup.</summary>
+    public static CultureInfo ToCulture(string languageTag)
+    {
+        try
+        {
+            return CultureInfo.GetCultureInfo(languageTag);
+        }
+        catch (CultureNotFoundException)
+        {
+            return CultureInfo.GetCultureInfo("en");
+        }
+    }
+}
+
 public static class MessageKeys
 {
     public const string AppDescription = "AppDescription";
@@ -45,6 +72,10 @@ public static class MessageKeys
     public const string InitializeAction = "InitializeAction";
     public const string ConfigurationSetAction = "ConfigurationSetAction";
     public const string CancelAction = "CancelAction";
+    public const string RecoverAction = "RecoverAction";
+    public const string RecoveryCompleted = "RecoveryCompleted";
+    public const string RecoveryFailed = "RecoveryFailed";
+    public const string DiagnosticsTitle = "DiagnosticsTitle";
     public const string RecoverStartupRationale = "next.recover_startup.rationale";
     public const string InitializeProjectRationale = "next.initialize_project.rationale";
 }

@@ -11,7 +11,7 @@ public static class DiagnosticCodes
     public const string ConfigurationInvalid = "configuration_invalid";
     public const string ConfigurationScopeViolation = "configuration_scope_violation";
     public const string ConfigurationKeyUnknown = "configuration_key_unknown";
-    public const string StartupFailed = "startup_failed";
+    public const string RecoveryUnavailable = "recovery_unavailable";
     public const string ProjectRootNotAbsolute = "project_root_not_absolute";
     public const string ProjectRootMissing = "project_root_missing";
     public const string ProjectNotInitialized = "project_not_initialized";
@@ -77,6 +77,9 @@ public sealed record StartupStatus(
 
     /// <summary>A failed check leaves recovery as the only safe action; mutations are refused.</summary>
     public bool AllowsProjectMutation => State != StartupState.Failed;
+
+    public StartupCheck? FirstFailure =>
+        Checks.FirstOrDefault(check => check.State == StartupCheckState.Failed);
 }
 
 public sealed record PlatformPreflightResult(

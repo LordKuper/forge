@@ -274,7 +274,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` | 2026-08-03 |
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
 | Stage 3 Windows installer and gate | `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (83 tests); `build/Publish-WindowsBundle.ps1` for `win-x64` and `win-arm64` | 2026-08-03 |
-| Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (125 tests) | 2026-08-04 |
+| Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (140 tests) | 2026-08-04 |
 
 ## Open decisions
 

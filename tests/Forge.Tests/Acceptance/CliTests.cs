@@ -23,7 +23,7 @@ public sealed class CliTests
             ResourceLocalizationCatalog catalog = new();
 
             int exitCode = await CliApplication
-                .CreateRootCommand(catalog, output, environment.Application)
+                .CreateRootCommand(Text(catalog), output, environment.Application)
                 .Parse(["status"])
                 .InvokeAsync(
                     new InvocationConfiguration(),
@@ -53,7 +53,7 @@ public sealed class CliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         ILocalizationCatalog catalog = environment.Resolve<ILocalizationCatalog>();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
+            Text(catalog),
             output,
             environment.Application);
 
@@ -78,10 +78,11 @@ public sealed class CliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
+            Text(catalog),
             output,
             environment.Application,
-            _ => ValueTask.FromResult(new WindowsInstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
+            install: _ => ValueTask.FromResult(
+                new WindowsInstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
 
         int exitCode = await root
             .Parse(["install"])
@@ -99,7 +100,7 @@ public sealed class CliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            catalog,
+            Text(catalog),
             output,
             environment.Application,
             update: _ => ValueTask.FromResult(new UpdateResult(
@@ -126,10 +127,10 @@ public sealed class CliTests
             StringWriter output = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
             RootCommand root = CliApplication.CreateRootCommand(
-                catalog,
+                Text(catalog),
                 output,
                 environment.Application,
-                _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
+                install: _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ReleaseUnavailable,
                     "The release endpoint could not be reached."))));
 
@@ -137,7 +138,7 @@ public sealed class CliTests
                 .Parse(["install"])
                 .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-            Assert.Equal(1, exitCode);
+            Assert.Equal(ExitCodes.Internal, exitCode);
             Assert.Equal($"{catalog.Resolve(MessageKeys.InstallFailed)}{Environment.NewLine}", output.ToString());
         }
         finally
@@ -145,4 +146,7 @@ public sealed class CliTests
             CultureInfo.CurrentUICulture = original;
         }
     }
+
+    private static SurfaceText Text(ILocalizationCatalog catalog) =>
+        new(catalog, CultureInfo.CurrentUICulture);
 }

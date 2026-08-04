@@ -8,30 +8,34 @@ User-facing Forge changes are listed by release, newest first.
 
 - Added the ordered fail-closed startup sequence shared by the CLI and Desktop
   surfaces, reporting user configuration, language, platform, update strategy,
-  release, provider, and project checks with stable diagnostic codes.
+  release, provider, and project checks with stable diagnostic codes. A failed
+  check refuses project mutations and leaves recovery as the only safe action.
 - Added explicit project-root verification and confirmed `.forge/`
   initialization that stages a complete tree, publishes it atomically, stays
-  idempotent, and never overwrites an unknown project directory.
+  idempotent, discards staging on cancellation, and never overwrites an unknown
+  project directory.
 - Added the versioned project status snapshot with deterministic recovery and
-  initialization recommendations, stable idempotency keys, and stale-state
-  rejection without side effects.
+  initialization recommendations, stable idempotency keys, and rejection of a
+  stale expected state version without side effects.
 - Added the `forge doctor`, `forge init`, `forge status`, `forge next`, and
-  `forge config` commands with culture-invariant `--json` output.
-- Added the Desktop startup, project, recommendation, and configuration views
-  that restore from durable application state.
+  `forge config` commands with culture-invariant `--json` output, contract exit
+  codes, and diagnostics on standard error.
+- Added startup recovery that quarantines unreadable configuration and restores
+  the retained previous file, available as `forge doctor --recover` and from the
+  Desktop surface.
+- Added the Desktop startup, project, recommendation, diagnostic, and
+  configuration views, including an explicit project root and configuration
+  scope selection, restored from durable application state.
 - Added scoped configuration reading and editing with provenance, cross-scope
-  rejection, and project artifact languages independent of the user language.
+  rejection, key-typed value parsing, and project artifact languages independent
+  of the user language.
+- Added application of the configured interface language to both surfaces
+  instead of the ambient operating-system culture.
 
 ### Fixed
 
 - Fixed the shared host registering an empty configuration key registry, which
   made every scoped configuration lookup fail.
-- Project mutations are refused while startup has a failed check, and only the
-  recovery action is recommended in that state.
-- Configuration values keep their JSON type, so boolean and numeric keys are
-  settable from both surfaces.
-- Corrupt configuration is reported with a diagnostic code instead of an
-  unhandled exception, and a cancelled initialization leaves no staging tree.
 
 ## v0.6.5
 

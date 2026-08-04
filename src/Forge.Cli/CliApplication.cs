@@ -12,30 +12,32 @@ namespace Forge.Cli;
 public static class CliApplication
 {
     public static RootCommand CreateRootCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
         ForgeApplication application,
+        TextWriter? error = null,
         Func<CancellationToken, ValueTask<WindowsInstallationResult>>? install = null,
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null)
     {
-        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(application);
+        TextWriter diagnostics = error ?? output;
 
-        RootCommand root = new(catalog.Resolve(MessageKeys.AppDescription));
-        root.Subcommands.Add(CreateDoctorCommand(catalog, output, application));
-        root.Subcommands.Add(CreateInitCommand(catalog, output, application));
-        root.Subcommands.Add(CreateStatusCommand(catalog, output, application));
-        root.Subcommands.Add(CreateNextCommand(catalog, output, application));
-        root.Subcommands.Add(CreateConfigCommand(catalog, output, application));
+        RootCommand root = new(text.Resolve(MessageKeys.AppDescription));
+        root.Subcommands.Add(CreateDoctorCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateNextCommand(text, output, application));
+        root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application));
         if (install is not null)
         {
-            root.Subcommands.Add(CreateInstallCommand(catalog, output, install));
+            root.Subcommands.Add(CreateInstallCommand(text, output, install));
         }
 
         if (update is not null)
         {
-            root.Subcommands.Add(CreateUpdateCommand(catalog, output, update));
+            root.Subcommands.Add(CreateUpdateCommand(text, output, update));
         }
 
         return root;
@@ -48,24 +50,41 @@ public static class CliApplication
         new("--json") { Description = "Emit the culture-invariant machine contract." };
 
     private static Command CreateDoctorCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> startup = new("--startup") { Description = "Show the startup checks." };
-        Command command = new("doctor", catalog.Resolve(MessageKeys.DoctorDescription));
+        Option<bool> recover = new("--recover") { Description = "Quarantine unreadable configuration." };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the recovery." };
+        Command command = new("doctor", text.Resolve(MessageKeys.DoctorDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(startup);
+        command.Options.Add(recover);
+        command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            string? root = parseResult.GetValue(projectRoot);
+            if (parseResult.GetValue(recover))
+            {
+                RecoverStartupResult recovered = await application
+                    .RecoverStartupAsync(root, parseResult.GetValue(confirm), cancellationToken)
+                    .ConfigureAwait(false);
+                output.WriteLine(text.Resolve(recovered.Succeeded
+                    ? MessageKeys.RecoveryCompleted
+                    : MessageKeys.RecoveryFailed));
+                return Report(diagnostics, recovered.DiagnosticCode);
+            }
+
             StartupStatus status = await application
-                .GetStartupStatusAsync(parseResult.GetValue(projectRoot), cancellationToken)
+                .GetStartupStatusAsync(root, cancellationToken)
                 .ConfigureAwait(false);
-            output.WriteLine(catalog.Resolve(StartupMessage(status.State)));
+            output.WriteLine(text.Resolve(StartupMessage(status.State)));
             if (parseResult.GetValue(startup))
             {
-                output.WriteLine(catalog.Resolve(MessageKeys.StartupChecksTitle));
+                output.WriteLine(text.Resolve(MessageKeys.StartupChecksTitle));
                 foreach (StartupCheck check in status.Checks)
                 {
                     output.WriteLine(string.Create(
@@ -74,20 +93,23 @@ public static class CliApplication
                 }
             }
 
-            WriteProject(catalog, output, status.Project);
-            return status.State == StartupState.Failed ? 1 : 0;
+            WriteProject(text, output, status.Project);
+            return status.FirstFailure is { } failure
+                ? Report(diagnostics, failure.DiagnosticCode)
+                : ExitCodes.Ok;
         });
         return command;
     }
 
     private static Command CreateInitCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> confirm = new("--yes") { Description = "Confirm the displayed directory." };
-        Command command = new("init", catalog.Resolve(MessageKeys.InitDescription));
+        Command command = new("init", text.Resolve(MessageKeys.InitDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -106,65 +128,58 @@ public static class CliApplication
                         root,
                         parseResult.GetValue(confirm),
                         snapshot.StateVersion,
-                        suggestion?.Command.IdempotencyKey),
+                        suggestion?.Command.IdempotencyKey ??
+                            ForgeApplication.InitializationKey(snapshot)),
                     cancellationToken)
                 .ConfigureAwait(false);
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {result.Root}"));
-            output.WriteLine(catalog.Resolve(InitMessage(result)));
-            if (!result.Succeeded)
-            {
-                output.WriteLine(result.DiagnosticCode);
-            }
-
-            return result.Succeeded ? 0 : 1;
+                $"{text.Resolve(MessageKeys.ProjectRootLabel)} {result.Root}"));
+            output.WriteLine(text.Resolve(InitMessage(result)));
+            return Report(diagnostics, result.DiagnosticCode);
         });
         return command;
     }
 
     private static Command CreateStatusCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> json = CreateJsonOption();
-        Command command = new("status", catalog.Resolve(MessageKeys.StatusDescription));
+        Command command = new("status", text.Resolve(MessageKeys.StatusDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(json);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            ProjectStatusSnapshot snapshot = await application
-                .GetProjectStatusAsync(parseResult.GetValue(projectRoot), cancellationToken)
+            ProjectOverview overview = await application
+                .GetOverviewAsync(parseResult.GetValue(projectRoot), cancellationToken)
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(snapshot));
-                return 0;
+                output.WriteLine(StatusJson.Serialize(overview.Status));
+                return ExitCodes.Ok;
             }
 
-            output.WriteLine(catalog.Resolve(StartupMessage(snapshot.Startup)));
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}"));
-            output.WriteLine(catalog.Resolve(snapshot.Project.Initialized
-                ? MessageKeys.ProjectInitialized
-                : MessageKeys.ProjectNotInitialized));
-            WriteActions(catalog, output, snapshot.SuggestedActions);
-            return 0;
+            output.WriteLine(text.Resolve(StartupMessage(overview.Status.Startup)));
+            WriteProject(text, output, overview.Startup.Project);
+            WriteActions(text, output, overview.Status.SuggestedActions);
+            WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
+            return ExitCodes.Ok;
         });
         return command;
     }
 
     private static Command CreateNextCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> json = CreateJsonOption();
-        Command command = new("next", catalog.Resolve(MessageKeys.NextDescription));
+        Command command = new("next", text.Resolve(MessageKeys.NextDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(json);
         command.SetAction(async (parseResult, cancellationToken) =>
@@ -175,54 +190,59 @@ public static class CliApplication
             if (parseResult.GetValue(json))
             {
                 output.WriteLine(StatusJson.Serialize(actions));
-                return 0;
+                return ExitCodes.Ok;
             }
 
-            WriteActions(catalog, output, actions);
-            return 0;
+            WriteActions(text, output, actions);
+            return ExitCodes.Ok;
         });
         return command;
     }
 
     private static Command CreateConfigCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
-        Command command = new("config", catalog.Resolve(MessageKeys.ConfigDescription));
-        Command show = new("show", catalog.Resolve(MessageKeys.ConfigurationTitle));
+        Command command = new("config", text.Resolve(MessageKeys.ConfigDescription));
+        Command show = new("show", text.Resolve(MessageKeys.ConfigurationTitle));
         show.Options.Add(projectRoot);
         show.SetAction(async (parseResult, cancellationToken) =>
         {
-            output.WriteLine(catalog.Resolve(MessageKeys.ConfigurationTitle));
-            WriteValues(
-                output,
-                await application.GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false));
-            WriteValues(
-                output,
-                await application
-                    .GetProjectConfigurationAsync(parseResult.GetValue(projectRoot), cancellationToken)
-                    .ConfigureAwait(false));
-            return 0;
+            ConfigurationView user = await application
+                .GetUserConfigurationAsync(cancellationToken)
+                .ConfigureAwait(false);
+            ConfigurationView project = await application
+                .GetProjectConfigurationAsync(parseResult.GetValue(projectRoot), cancellationToken)
+                .ConfigureAwait(false);
+            output.WriteLine(text.Resolve(MessageKeys.ConfigurationTitle));
+            WriteValues(output, user.Values);
+            WriteValues(output, project.Values);
+            WriteDiagnostic(diagnostics, project.DiagnosticCode);
+            return Report(diagnostics, user.DiagnosticCode);
         });
         command.Subcommands.Add(show);
         command.Subcommands.Add(CreateConfigSetCommand(
-            catalog,
+            text,
             output,
+            diagnostics,
             application,
             ConfigurationScope.User));
         command.Subcommands.Add(CreateConfigSetCommand(
-            catalog,
+            text,
             output,
+            diagnostics,
             application,
             ConfigurationScope.Project));
         return command;
     }
 
     private static Command CreateConfigSetCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application,
         ConfigurationScope scope)
     {
@@ -231,7 +251,7 @@ public static class CliApplication
         Argument<string> value = new("value");
         Command command = new(
             scope == ConfigurationScope.User ? "user" : "project",
-            catalog.Resolve(MessageKeys.ConfigDescription));
+            text.Resolve(MessageKeys.ConfigDescription));
         command.Arguments.Add(key);
         command.Arguments.Add(value);
         command.Options.Add(projectRoot);
@@ -242,86 +262,95 @@ public static class CliApplication
                     scope,
                     parseResult.GetValue(projectRoot),
                     parseResult.GetValue(key)!,
-                    ConfigurationValueParser.Parse(parseResult.GetValue(value)),
+                    parseResult.GetValue(value),
                     cancellationToken)
                 .ConfigureAwait(false);
-            output.WriteLine(catalog.Resolve(result.Succeeded
+            output.WriteLine(text.Resolve(result.Succeeded
                 ? MessageKeys.ConfigurationUpdated
                 : MessageKeys.ConfigurationRejected));
-            if (!result.Succeeded)
-            {
-                output.WriteLine(result.DiagnosticCode);
-            }
-
-            return result.Succeeded ? 0 : 1;
+            return Report(diagnostics, result.DiagnosticCode);
         });
         return command;
     }
 
     private static Command CreateInstallCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
         Func<CancellationToken, ValueTask<WindowsInstallationResult>> install)
     {
-        Command command = new("install", catalog.Resolve(MessageKeys.InstallDescription));
+        Command command = new("install", text.Resolve(MessageKeys.InstallDescription));
         command.SetAction(async (_, cancellationToken) =>
         {
             WindowsInstallationResult result = await install(cancellationToken).ConfigureAwait(false);
             output.WriteLine(result.Succeeded
-                ? catalog.Resolve(MessageKeys.InstallCompleted)
-                : catalog.Resolve(MessageKeys.InstallFailed));
-            return result.Succeeded ? 0 : 1;
+                ? text.Resolve(MessageKeys.InstallCompleted)
+                : text.Resolve(MessageKeys.InstallFailed));
+            return result.Succeeded ? ExitCodes.Ok : ExitCodes.Internal;
         });
         return command;
     }
 
     private static Command CreateUpdateCommand(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
         Func<CancellationToken, ValueTask<UpdateResult>> update)
     {
-        Command command = new("update", catalog.Resolve(MessageKeys.UpdateDescription));
+        Command command = new("update", text.Resolve(MessageKeys.UpdateDescription));
         command.SetAction(async (_, cancellationToken) =>
         {
             UpdateResult result = await update(cancellationToken).ConfigureAwait(false);
             output.WriteLine(result.Diagnostic.Code == UpdateDiagnosticCode.None
-                ? catalog.Resolve(MessageKeys.UpdateCompleted)
-                : catalog.Resolve(MessageKeys.UpdateFailed));
-            return result.Diagnostic.Code == UpdateDiagnosticCode.None ? 0 : 1;
+                ? text.Resolve(MessageKeys.UpdateCompleted)
+                : text.Resolve(MessageKeys.UpdateFailed));
+            return result.Diagnostic.Code == UpdateDiagnosticCode.None
+                ? ExitCodes.Ok
+                : ExitCodes.Internal;
         });
         return command;
     }
 
-    private static void WriteProject(
-        ILocalizationCatalog catalog,
-        TextWriter output,
-        ProjectRootStatus project)
+    /// <summary>Diagnostics go to standard error; machine stdout carries only the contract.</summary>
+    private static int Report(TextWriter diagnostics, string diagnosticCode)
+    {
+        WriteDiagnostic(diagnostics, diagnosticCode);
+        return ExitCodes.For(diagnosticCode);
+    }
+
+    private static void WriteDiagnostic(TextWriter diagnostics, string diagnosticCode)
+    {
+        if (diagnosticCode != DiagnosticCodes.None)
+        {
+            diagnostics.WriteLine(diagnosticCode);
+        }
+    }
+
+    private static void WriteProject(SurfaceText text, TextWriter output, ProjectRootStatus project)
     {
         output.WriteLine(string.Create(
             CultureInfo.InvariantCulture,
-            $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {project.Root}"));
-        output.WriteLine(catalog.Resolve(project.Initialized
+            $"{text.Resolve(MessageKeys.ProjectRootLabel)} {project.Root}"));
+        output.WriteLine(text.Resolve(project.Initialized
             ? MessageKeys.ProjectInitialized
             : MessageKeys.ProjectNotInitialized));
     }
 
     private static void WriteActions(
-        ILocalizationCatalog catalog,
+        SurfaceText text,
         TextWriter output,
         IReadOnlyList<SuggestedAction> actions)
     {
         if (actions.Count == 0)
         {
-            output.WriteLine(catalog.Resolve(MessageKeys.NoSuggestedActions));
+            output.WriteLine(text.Resolve(MessageKeys.NoSuggestedActions));
             return;
         }
 
-        output.WriteLine(catalog.Resolve(MessageKeys.SuggestedActionsTitle));
+        output.WriteLine(text.Resolve(MessageKeys.SuggestedActionsTitle));
         foreach (SuggestedAction action in actions)
         {
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"  {action.Rank}. {action.ActionId} - {catalog.Resolve(action.RationaleKey)}"));
+                $"  {action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"));
         }
     }
 

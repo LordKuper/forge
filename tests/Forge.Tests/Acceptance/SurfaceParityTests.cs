@@ -28,7 +28,7 @@ public sealed class SurfaceParityTests
     {
         using TestEnvironment environment = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            new ResourceLocalizationCatalog(),
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
             new StringWriter(CultureInfo.InvariantCulture),
             environment.Application);
 

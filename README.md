@@ -20,15 +20,17 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 
 | Command | Purpose |
 |---|---|
-| `forge doctor [--startup]` | Show the startup summary, and the ordered checks with `--startup`. |
+| `forge doctor [--startup] [--recover --yes]` | Show the startup summary, the ordered checks with `--startup`, or quarantine unreadable configuration with `--recover`. |
 | `forge init --project-root <absolute-path> [--yes]` | Display the absolute root and initialize `.forge/` after confirmation. |
 | `forge status [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
 | `forge next [--json]` | Show the deterministic recommended actions. |
 | `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
 
 `--project-root` accepts only an absolute directory and is never resolved
-upward. Values passed to `forge config` are read as JSON literals when possible,
-so `true` and `42` keep their type.
+upward. Values passed to `forge config` follow the declared type of the key, so
+boolean and numeric keys keep their type and string keys keep the raw text.
+Machine output goes to standard output, diagnostics go to standard error, and
+exit codes follow [the contract table](docs/contracts/v1/README.md).
 
 ## Prerequisites
 

@@ -11,8 +11,8 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
-        InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new("relative/path", true),
+        InitializeProjectResult result = await environment.InitializeAsync(
+            "relative/path", true,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -25,8 +25,8 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
-        InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new(Path.Combine(environment.Root, "absent"), true),
+        InitializeProjectResult result = await environment.InitializeAsync(
+            Path.Combine(environment.Root, "absent"), true,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -39,8 +39,8 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
-        InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, false),
+        InitializeProjectResult result = await environment.InitializeAsync(
+            environment.ProjectRoot, false,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -55,8 +55,8 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
-        InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        InitializeProjectResult result = await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
@@ -74,15 +74,15 @@ public sealed class ProjectInitializationTests
     public async Task RepeatedInitializationIsIdempotent()
     {
         using TestEnvironment environment = new();
-        await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
         string manifest = await File.ReadAllTextAsync(
             ProjectRootResolver.ManifestPath(environment.ProjectRoot),
             TestContext.Current.CancellationToken);
 
-        InitializeProjectResult repeated = await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        InitializeProjectResult repeated = await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
 
         Assert.True(repeated.Succeeded);
@@ -104,8 +104,8 @@ public sealed class ProjectInitializationTests
         string foreign = Path.Combine(forge, "foreign.txt");
         await File.WriteAllTextAsync(foreign, "keep", TestContext.Current.CancellationToken);
 
-        InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        InitializeProjectResult result = await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -121,8 +121,8 @@ public sealed class ProjectInitializationTests
     public async Task ResolutionNeverSearchesUpward()
     {
         using TestEnvironment environment = new();
-        await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
         string child = Path.Combine(environment.ProjectRoot, "src");
         Directory.CreateDirectory(child);
@@ -141,8 +141,15 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
+        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+            environment.ProjectRoot,
+            TestContext.Current.CancellationToken);
         InitializeProjectResult result = await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true, 7),
+            new(
+                environment.ProjectRoot,
+                true,
+                snapshot.StateVersion + 1,
+                ForgeApplication.InitializationKey(snapshot)),
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);

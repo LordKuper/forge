@@ -15,7 +15,9 @@
         <Entry x:Name="ProjectRootEntry" WidthRequest="360" />
         <Button x:Name="RefreshButton" Clicked="OnRefreshClicked" />
         <Button x:Name="InitializeButton" Clicked="OnInitializeClicked" />
+        <Button x:Name="RecoverButton" Clicked="OnRecoverClicked" />
       </HorizontalStackLayout>
+      <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />
       <HorizontalStackLayout Spacing="8">

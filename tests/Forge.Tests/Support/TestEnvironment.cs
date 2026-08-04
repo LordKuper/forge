@@ -36,6 +36,26 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         where T : notnull =>
         provider.GetRequiredService<T>();
 
+    /// <summary>Dispatches initialization exactly like a surface: snapshot first, then command.</summary>
+    public async Task<InitializeProjectResult> InitializeAsync(
+        string? root,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ProjectStatusSnapshot snapshot = await Application
+            .GetProjectStatusAsync(root, cancellationToken)
+            .ConfigureAwait(false);
+        return await Application
+            .InitializeProjectAsync(
+                new(
+                    root,
+                    confirmed,
+                    snapshot.StateVersion,
+                    ForgeApplication.InitializationKey(snapshot)),
+                cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public void Dispose()
     {
         provider.Dispose();

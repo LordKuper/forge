@@ -3,24 +3,29 @@ using Forge.Configuration;
 
 namespace Forge.Application;
 
-/// <summary>Parses surface input into a configuration value without guessing a type.</summary>
+/// <summary>Converts surface input using the declared type of the configuration key.</summary>
 public static class ConfigurationValueParser
 {
-    /// <summary>Accepts JSON literals such as <c>true</c> or <c>42</c>; anything else is a string.</summary>
-    public static JsonElement Parse(string? raw)
+    /// <summary>
+    /// String-typed keys keep the raw text, so a value such as <c>true</c> stays a string.
+    /// Other keys are read as JSON literals.
+    /// </summary>
+    public static JsonElement Parse(string? raw, ConfigurationKey descriptor)
     {
-        if (string.IsNullOrWhiteSpace(raw))
+        ArgumentNullException.ThrowIfNull(descriptor);
+        string text = raw ?? string.Empty;
+        if (descriptor.DefaultValue?.ValueKind == JsonValueKind.String)
         {
-            return JsonSerializer.SerializeToElement(string.Empty);
+            return JsonSerializer.SerializeToElement(text);
         }
 
         try
         {
-            return JsonSerializer.Deserialize<JsonElement>(raw).Clone();
+            return JsonSerializer.Deserialize<JsonElement>(text).Clone();
         }
         catch (JsonException)
         {
-            return JsonSerializer.SerializeToElement(raw);
+            return JsonSerializer.SerializeToElement(text);
         }
     }
 }

@@ -55,7 +55,7 @@ public sealed class StartupCliTests
             output,
             ["init", "--project-root", environment.ProjectRoot]);
 
-        Assert.Equal(1, exitCode);
+        Assert.Equal(ExitCodes.Confirmation, exitCode);
         Assert.Contains(environment.ProjectRoot, output.ToString(), StringComparison.Ordinal);
         Assert.Contains(
             catalog.Resolve(MessageKeys.InitConfirmationRequired),
@@ -116,17 +116,27 @@ public sealed class StartupCliTests
     {
         using TestEnvironment environment = new();
         StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter error = new(CultureInfo.InvariantCulture);
 
-        Assert.Equal(0, await InvokeAsync(environment, output, ["config", "user", "language.ui", "ru"]));
         Assert.Equal(
-            1,
+            ExitCodes.Ok,
+            await InvokeAsync(environment, output, ["config", "user", "language.ui", "ru"], error));
+        Assert.Equal(
+            ExitCodes.Configuration,
             await InvokeAsync(
                 environment,
                 output,
-                ["config", "user", "artifacts.language.user_facing", "ru"]));
-        Assert.Equal(0, await InvokeAsync(environment, output, ["config", "show"]));
+                ["config", "user", "artifacts.language.user_facing", "ru"],
+                error));
+        Assert.Equal(
+            ExitCodes.Ok,
+            await InvokeAsync(environment, output, ["config", "show"], error));
 
-        Assert.Contains(DiagnosticCodes.ConfigurationScopeViolation, output.ToString(), StringComparison.Ordinal);
+        Assert.Contains(DiagnosticCodes.ConfigurationScopeViolation, error.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            DiagnosticCodes.ConfigurationScopeViolation,
+            output.ToString(),
+            StringComparison.Ordinal);
         Assert.Contains("language.ui = \"ru\" (user)", output.ToString(), StringComparison.Ordinal);
         Assert.Contains("language.llm = \"ru\" (inherited)", output.ToString(), StringComparison.Ordinal);
     }
@@ -134,9 +144,14 @@ public sealed class StartupCliTests
     private static Task<int> InvokeAsync(
         TestEnvironment environment,
         TextWriter output,
-        string[] arguments) =>
+        string[] arguments,
+        TextWriter? error = null) =>
         CliApplication
-            .CreateRootCommand(new ResourceLocalizationCatalog(), output, environment.Application)
+            .CreateRootCommand(
+                new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture),
+                output,
+                environment.Application,
+                error)
             .Parse(arguments)
             .InvokeAsync(new InvocationConfiguration { Output = output }, TestContext.Current.CancellationToken);
 

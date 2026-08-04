@@ -14,8 +14,8 @@ public sealed class ScopedConfigurationTests
         using TestEnvironment environment = new();
 
         IReadOnlyList<EffectiveConfigurationValue> defaults =
-            await environment.Application.GetUserConfigurationAsync(
-                TestContext.Current.CancellationToken);
+            (await environment.Application.GetUserConfigurationAsync(
+                TestContext.Current.CancellationToken)).Values;
         await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User,
             null,
@@ -23,8 +23,8 @@ public sealed class ScopedConfigurationTests
             JsonSerializer.SerializeToElement("ru"),
             TestContext.Current.CancellationToken);
         IReadOnlyList<EffectiveConfigurationValue> updated =
-            await environment.Application.GetUserConfigurationAsync(
-                TestContext.Current.CancellationToken);
+            (await environment.Application.GetUserConfigurationAsync(
+                TestContext.Current.CancellationToken)).Values;
 
         Assert.Equal(
             ConfigurationProvenance.BuiltInDefault,
@@ -57,8 +57,8 @@ public sealed class ScopedConfigurationTests
     public async Task UserKeyInProjectScopeIsRejected()
     {
         using TestEnvironment environment = new();
-        await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
 
         ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
@@ -77,8 +77,8 @@ public sealed class ScopedConfigurationTests
     public async Task ArtifactLanguagesAreIndependentFromTheUserLanguage()
     {
         using TestEnvironment environment = new();
-        await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true),
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
             TestContext.Current.CancellationToken);
         await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User,
@@ -94,9 +94,9 @@ public sealed class ScopedConfigurationTests
             JsonSerializer.SerializeToElement("ru"),
             TestContext.Current.CancellationToken);
         IReadOnlyList<EffectiveConfigurationValue> project =
-            await environment.Application.GetProjectConfigurationAsync(
+            (await environment.Application.GetProjectConfigurationAsync(
                 environment.ProjectRoot,
-                TestContext.Current.CancellationToken);
+                TestContext.Current.CancellationToken)).Values;
 
         Assert.True(write.Succeeded);
         Assert.Equal("en", Value(project, "artifacts.language.user_facing").Value.GetString());
@@ -118,9 +118,9 @@ public sealed class ScopedConfigurationTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.ProjectNotInitialized, result.DiagnosticCode);
-        Assert.Empty(await environment.Application.GetProjectConfigurationAsync(
+        Assert.Empty((await environment.Application.GetProjectConfigurationAsync(
             environment.ProjectRoot,
-            TestContext.Current.CancellationToken));
+            TestContext.Current.CancellationToken)).Values);
     }
 
     private static EffectiveConfigurationValue Value(

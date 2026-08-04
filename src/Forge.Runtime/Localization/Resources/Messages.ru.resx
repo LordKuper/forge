@@ -40,4 +40,8 @@
   <data name="CancelAction" xml:space="preserve"><value>Отмена</value></data>
   <data name="next.recover_startup.rationale" xml:space="preserve"><value>Проверка запуска завершилась ошибкой и требует восстановления до работы над проектом.</value></data>
   <data name="next.initialize_project.rationale" xml:space="preserve"><value>В подтверждённом каталоге ещё нет проекта Forge.</value></data>
+  <data name="RecoverAction" xml:space="preserve"><value>Восстановить запуск</value></data>
+  <data name="RecoveryCompleted" xml:space="preserve"><value>Некорректный файл изолирован, запуск восстановлен.</value></data>
+  <data name="RecoveryFailed" xml:space="preserve"><value>Восстановление запуска для этой ошибки недоступно.</value></data>
+  <data name="DiagnosticsTitle" xml:space="preserve"><value>Диагностика:</value></data>
 </root>

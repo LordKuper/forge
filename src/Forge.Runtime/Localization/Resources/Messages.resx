@@ -40,4 +40,8 @@
   <data name="CancelAction" xml:space="preserve"><value>Cancel</value></data>
   <data name="next.recover_startup.rationale" xml:space="preserve"><value>A startup check failed and must be recovered before project work.</value></data>
   <data name="next.initialize_project.rationale" xml:space="preserve"><value>The confirmed directory has no Forge project yet.</value></data>
+  <data name="RecoverAction" xml:space="preserve"><value>Recover startup</value></data>
+  <data name="RecoveryCompleted" xml:space="preserve"><value>The invalid file was quarantined and startup was recovered.</value></data>
+  <data name="RecoveryFailed" xml:space="preserve"><value>Startup recovery is unavailable for this failure.</value></data>
+  <data name="DiagnosticsTitle" xml:space="preserve"><value>Diagnostics:</value></data>
 </root>

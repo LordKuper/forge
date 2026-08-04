@@ -9,21 +9,26 @@ namespace Forge.Desktop;
 
 public partial class MainPage : ContentPage
 {
-    private readonly ILocalizationCatalog catalog;
+    private readonly SurfaceText text;
     private readonly ForgeApplication application;
+    private bool busy;
 
-    public MainPage(ILocalizationCatalog catalog, ForgeApplication application)
+    public MainPage(SurfaceText text, ForgeApplication application)
     {
-        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
         InitializeComponent();
-        this.catalog = catalog;
+        this.text = text;
         this.application = application;
-        TitleLabel.Text = catalog.Resolve(MessageKeys.AppTitle);
-        RefreshButton.Text = catalog.Resolve(MessageKeys.RefreshAction);
-        InitializeButton.Text = catalog.Resolve(MessageKeys.InitializeAction);
-        ConfigurationTitleLabel.Text = catalog.Resolve(MessageKeys.ConfigurationTitle);
-        ConfigurationSetButton.Text = catalog.Resolve(MessageKeys.ConfigurationSetAction);
+        TitleLabel.Text = text.Resolve(MessageKeys.AppTitle);
+        RefreshButton.Text = text.Resolve(MessageKeys.RefreshAction);
+        InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);
+        RecoverButton.Text = text.Resolve(MessageKeys.RecoverAction);
+        ConfigurationTitleLabel.Text = text.Resolve(MessageKeys.ConfigurationTitle);
+        ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
+        // Actions stay disabled until the first refresh reports the durable state.
+        InitializeButton.IsEnabled = false;
+        RecoverButton.IsEnabled = false;
         // Scope names are machine identifiers and stay culture invariant.
         ConfigurationScopePicker.ItemsSource = new List<string> { "user", "project" };
         ConfigurationScopePicker.SelectedIndex = 0;
@@ -40,62 +45,103 @@ public partial class MainPage : ContentPage
             .ConfigureAwait(true);
         StartupStatus startup = overview.Startup;
         ProjectStatusSnapshot snapshot = overview.Status;
-        StatusLabel.Text = catalog.Resolve(StartupMessage(snapshot.Startup));
+        StatusLabel.Text = text.Resolve(StartupMessage(snapshot.Startup));
         ProjectRootLabel.Text = string.Create(
             CultureInfo.InvariantCulture,
-            $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}");
-        ProjectStateLabel.Text = catalog.Resolve(snapshot.Project.Initialized
+            $"{text.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}");
+        ProjectStateLabel.Text = text.Resolve(snapshot.Project.Initialized
             ? MessageKeys.ProjectInitialized
             : MessageKeys.ProjectNotInitialized);
         StartupChecksLabel.Text = Render(
-            catalog.Resolve(MessageKeys.StartupChecksTitle),
+            text.Resolve(MessageKeys.StartupChecksTitle),
             startup.Checks.Select(check => string.Create(
                 CultureInfo.InvariantCulture,
                 $"{Machine(check.Id)} {Machine(check.State)} {check.DiagnosticCode}")));
         SuggestedActionsLabel.Text = snapshot.SuggestedActions.Count == 0
-            ? catalog.Resolve(MessageKeys.NoSuggestedActions)
+            ? text.Resolve(MessageKeys.NoSuggestedActions)
             : Render(
-                catalog.Resolve(MessageKeys.SuggestedActionsTitle),
+                text.Resolve(MessageKeys.SuggestedActionsTitle),
                 snapshot.SuggestedActions.Select(action => string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{action.Rank}. {action.ActionId} - {catalog.Resolve(action.RationaleKey)}")));
+                    $"{action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}")));
         InitializeButton.IsEnabled = !snapshot.Project.Initialized && startup.AllowsProjectMutation;
+        RecoverButton.IsEnabled = startup.FirstFailure is not null;
+        ConfigurationView user = await application
+            .GetUserConfigurationAsync(CancellationToken.None)
+            .ConfigureAwait(true);
+        ConfigurationView project = await application
+            .GetProjectConfigurationAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
         ConfigurationLabel.Text = Render(
             null,
-            (await application.GetUserConfigurationAsync(CancellationToken.None).ConfigureAwait(true))
-                .Concat(await application
-                    .GetProjectConfigurationAsync(ProjectRoot, CancellationToken.None)
-                    .ConfigureAwait(true))
+            user.Values
+                .Concat(project.Values)
                 .Select(value => string.Create(
                     CultureInfo.InvariantCulture,
                     $"{value.Key} = {value.Value.GetRawText()} ({Machine(value.Provenance)})")));
+        DiagnosticsLabel.Text = Render(
+            text.Resolve(MessageKeys.DiagnosticsTitle),
+            new[]
+            {
+                startup.Project.DiagnosticCode,
+                user.DiagnosticCode,
+                project.DiagnosticCode,
+            }.Where(code => code != DiagnosticCodes.None).Distinct(StringComparer.Ordinal));
     }
 
     protected override async void OnAppearing()
     {
         base.OnAppearing();
-        await RefreshAsync().ConfigureAwait(true);
+        await RunAsync(RefreshAsync).ConfigureAwait(true);
     }
 
     private async void OnRefreshClicked(object? sender, EventArgs e) =>
-        await RefreshAsync().ConfigureAwait(true);
+        await RunAsync(RefreshAsync).ConfigureAwait(true);
 
-    private async void OnInitializeClicked(object? sender, EventArgs e)
+    private async void OnInitializeClicked(object? sender, EventArgs e) =>
+        await RunAsync(InitializeAsync).ConfigureAwait(true);
+
+    private async void OnRecoverClicked(object? sender, EventArgs e) =>
+        await RunAsync(RecoverAsync).ConfigureAwait(true);
+
+    private async void OnConfigurationSetClicked(object? sender, EventArgs e) =>
+        await RunAsync(SetConfigurationAsync).ConfigureAwait(true);
+
+    /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
+    private async Task RunAsync(Func<Task> action)
+    {
+        if (busy)
+        {
+            return;
+        }
+
+        busy = true;
+        try
+        {
+            await action().ConfigureAwait(true);
+        }
+        finally
+        {
+            busy = false;
+        }
+    }
+
+    private async Task InitializeAsync()
     {
         ProjectStatusSnapshot snapshot = await application
             .GetProjectStatusAsync(ProjectRoot, CancellationToken.None)
             .ConfigureAwait(true);
         bool confirmed = await DisplayAlertAsync(
-                catalog.Resolve(MessageKeys.InitializeAction),
+                text.Resolve(MessageKeys.InitializeAction),
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}"),
-                catalog.Resolve(MessageKeys.InitializeAction),
-                catalog.Resolve(MessageKeys.CancelAction))
+                    $"{text.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}"),
+                text.Resolve(MessageKeys.InitializeAction),
+                text.Resolve(MessageKeys.CancelAction))
             .ConfigureAwait(true);
         if (!confirmed)
         {
-            ConfigurationResultLabel.Text = catalog.Resolve(MessageKeys.InitConfirmationRequired);
+            ConfigurationResultLabel.Text = text.Resolve(MessageKeys.InitConfirmationRequired);
             return;
         }
 
@@ -107,19 +153,41 @@ public partial class MainPage : ContentPage
                     snapshot.Project.Root,
                     true,
                     snapshot.StateVersion,
-                    suggestion?.Command.IdempotencyKey),
+                    suggestion?.Command.IdempotencyKey ??
+                        ForgeApplication.InitializationKey(snapshot)),
                 CancellationToken.None)
             .ConfigureAwait(true);
-        ConfigurationResultLabel.Text = catalog.Resolve(result.DiagnosticCode switch
-        {
-            DiagnosticCodes.ProjectAlreadyInitialized => MessageKeys.InitAlreadyInitialized,
-            DiagnosticCodes.None => MessageKeys.InitCompleted,
-            _ => MessageKeys.InitFailed,
-        });
+        ConfigurationResultLabel.Text = Message(
+            text.Resolve(result.DiagnosticCode switch
+            {
+                DiagnosticCodes.ProjectAlreadyInitialized => MessageKeys.InitAlreadyInitialized,
+                DiagnosticCodes.None => MessageKeys.InitCompleted,
+                _ => MessageKeys.InitFailed,
+            }),
+            result.DiagnosticCode);
         await RefreshAsync().ConfigureAwait(true);
     }
 
-    private async void OnConfigurationSetClicked(object? sender, EventArgs e)
+    private async Task RecoverAsync()
+    {
+        bool confirmed = await DisplayAlertAsync(
+                text.Resolve(MessageKeys.RecoverAction),
+                text.Resolve(MessageKeys.RecoverAction),
+                text.Resolve(MessageKeys.RecoverAction),
+                text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        RecoverStartupResult result = await application
+            .RecoverStartupAsync(ProjectRoot, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        ConfigurationResultLabel.Text = Message(
+            text.Resolve(result.Succeeded
+                ? MessageKeys.RecoveryCompleted
+                : MessageKeys.RecoveryFailed),
+            result.DiagnosticCode);
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    private async Task SetConfigurationAsync()
     {
         ConfigurationScope scope = ConfigurationScopePicker.SelectedIndex == 1
             ? ConfigurationScope.Project
@@ -129,14 +197,21 @@ public partial class MainPage : ContentPage
                 scope,
                 ProjectRoot,
                 ConfigurationKeyEntry.Text ?? string.Empty,
-                ConfigurationValueParser.Parse(ConfigurationValueEntry.Text),
+                ConfigurationValueEntry.Text,
                 CancellationToken.None)
             .ConfigureAwait(true);
-        ConfigurationResultLabel.Text = catalog.Resolve(result.Succeeded
-            ? MessageKeys.ConfigurationUpdated
-            : MessageKeys.ConfigurationRejected);
+        ConfigurationResultLabel.Text = Message(
+            text.Resolve(result.Succeeded
+                ? MessageKeys.ConfigurationUpdated
+                : MessageKeys.ConfigurationRejected),
+            result.DiagnosticCode);
         await RefreshAsync().ConfigureAwait(true);
     }
+
+    private static string Message(string message, string diagnosticCode) =>
+        diagnosticCode == DiagnosticCodes.None
+            ? message
+            : string.Create(CultureInfo.InvariantCulture, $"{message} ({diagnosticCode})");
 
     private static string Render(string? title, IEnumerable<string> lines)
     {

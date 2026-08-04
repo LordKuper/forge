@@ -7,14 +7,21 @@ namespace Forge.Application;
 public sealed record InitializeProjectCommand(
     string? Root,
     bool Confirmed,
-    long? ExpectedStateVersion = null,
-    Guid? IdempotencyKey = null,
+    long ExpectedStateVersion,
+    Guid IdempotencyKey,
     string UserFacingLanguage = "en",
     string AgentFacingLanguage = "en");
 
 public sealed record ConfigurationWriteResult(bool Succeeded, string DiagnosticCode)
 {
     public static ConfigurationWriteResult Success { get; } = new(true, DiagnosticCodes.None);
+}
+
+public sealed record ConfigurationView(
+    IReadOnlyList<EffectiveConfigurationValue> Values,
+    string DiagnosticCode)
+{
+    public static ConfigurationView Empty { get; } = new([], DiagnosticCodes.None);
 }
 
 public sealed record ProjectOverview(StartupStatus Startup, ProjectStatusSnapshot Status);
@@ -27,10 +34,22 @@ public sealed class ForgeApplication(
     StartupPipeline pipeline,
     ProjectRootResolver rootResolver,
     ProjectInitializer initializer,
+    StartupRecovery recovery,
     StatusAdvisor advisor,
+    IConfigurationRegistry registry,
     ScopedConfigurationService configuration)
 {
     public const string InitializeProjectAction = "initialize_project";
+
+    /// <summary>The key any surface must present to initialize the observed project state.</summary>
+    public static Guid InitializationKey(ProjectStatusSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        return StatusAdvisor.IdempotencyKey(
+            InitializeProjectAction,
+            new("project", snapshot.Project.Root),
+            snapshot.StateVersion);
+    }
 
     public Task<StartupStatus> GetStartupStatusAsync(
         string? projectRoot,
@@ -58,6 +77,24 @@ public sealed class ForgeApplication(
         (await GetProjectStatusAsync(projectRoot, cancellationToken).ConfigureAwait(false))
             .SuggestedActions;
 
+    /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
+    public async Task<RecoverStartupResult> RecoverStartupAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        StartupStatus startup =
+            await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (startup.FirstFailure is null)
+        {
+            return new(true, null, DiagnosticCodes.None);
+        }
+
+        return confirmed
+            ? recovery.Recover(startup)
+            : new(false, startup.FirstFailure.Id, DiagnosticCodes.ConfirmationRequired);
+    }
+
     public async Task<InitializeProjectResult> InitializeProjectAsync(
         InitializeProjectCommand command,
         CancellationToken cancellationToken)
@@ -66,19 +103,14 @@ public sealed class ForgeApplication(
         StartupStatus startup =
             await pipeline.RunAsync(command.Root, cancellationToken).ConfigureAwait(false);
         ProjectRootStatus status = startup.Project;
-        if (!startup.AllowsProjectMutation)
+        if (startup.FirstFailure is { } failure)
         {
-            return new(false, status.Root, null, DiagnosticCodes.StartupFailed);
+            return new(false, status.Root, null, failure.DiagnosticCode);
         }
 
         long stateVersion = StatusAdvisor.StateVersion(status);
-        if (command.ExpectedStateVersion is { } expected && expected != stateVersion)
-        {
-            return new(false, status.Root, null, DiagnosticCodes.SuggestionStale);
-        }
-
-        if (command.IdempotencyKey is { } key &&
-            key != StatusAdvisor.IdempotencyKey(
+        if (command.ExpectedStateVersion != stateVersion ||
+            command.IdempotencyKey != StatusAdvisor.IdempotencyKey(
                 InitializeProjectAction,
                 new("project", status.Root),
                 stateVersion))
@@ -97,20 +129,22 @@ public sealed class ForgeApplication(
             .ConfigureAwait(false);
     }
 
-    public async Task<IReadOnlyList<EffectiveConfigurationValue>> GetUserConfigurationAsync(
+    public async Task<ConfigurationView> GetUserConfigurationAsync(
         CancellationToken cancellationToken)
     {
         try
         {
-            return await configuration.GetUserAsync(null, cancellationToken).ConfigureAwait(false);
+            return new(
+                await configuration.GetUserAsync(null, cancellationToken).ConfigureAwait(false),
+                DiagnosticCodes.None);
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            return [];
+            return new([], DiagnosticCodes.ConfigurationInvalid);
         }
     }
 
-    public async Task<IReadOnlyList<EffectiveConfigurationValue>> GetProjectConfigurationAsync(
+    public async Task<ConfigurationView> GetProjectConfigurationAsync(
         string? projectRoot,
         CancellationToken cancellationToken)
     {
@@ -118,19 +152,48 @@ public sealed class ForgeApplication(
             await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
         if (!status.Initialized)
         {
-            return [];
+            return new([], status.DiagnosticCode);
         }
 
         try
         {
-            return await configuration
-                .GetProjectAsync(status.Root, cancellationToken)
-                .ConfigureAwait(false);
+            return new(
+                await configuration
+                    .GetProjectAsync(status.Root, cancellationToken)
+                    .ConfigureAwait(false),
+                DiagnosticCodes.None);
         }
         catch (Exception error) when (IsRecoverable(error))
         {
-            return [];
+            return new([], DiagnosticCodes.ConfigurationInvalid);
         }
+    }
+
+    /// <summary>Converts the raw surface input using the declared type of the key.</summary>
+    public async Task<ConfigurationWriteResult> SetConfigurationAsync(
+        ConfigurationScope scope,
+        string? projectRoot,
+        string key,
+        string? rawValue,
+        CancellationToken cancellationToken)
+    {
+        ConfigurationKey descriptor;
+        try
+        {
+            descriptor = registry.FindRequired(key);
+        }
+        catch (KeyNotFoundException)
+        {
+            return new(false, DiagnosticCodes.ConfigurationKeyUnknown);
+        }
+
+        return await SetConfigurationAsync(
+                scope,
+                projectRoot,
+                key,
+                ConfigurationValueParser.Parse(rawValue, descriptor),
+                cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public async Task<ConfigurationWriteResult> SetConfigurationAsync(

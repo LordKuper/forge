@@ -3,6 +3,7 @@ using Forge.Configuration;
 using Forge.Infrastructure;
 using Forge.Localization;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -35,9 +36,11 @@ public static class ForgeHost
         services.AddSingleton<ConfigurationMigrator>();
         services.AddSingleton<ScopedConfigurationStores>();
         services.AddSingleton<ScopedConfigurationService>();
-        services.AddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
+        // A platform composition may register before or after the core defaults.
+        services.TryAddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();
+        services.AddSingleton<StartupRecovery>();
         services.AddSingleton<StartupPipeline>();
         services.AddSingleton<StatusAdvisor>();
         services.AddSingleton<ForgeApplication>();

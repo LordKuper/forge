@@ -61,8 +61,9 @@ public sealed class StatusAdvisorTests
         ProjectStatusSnapshot before = await environment.Application.GetProjectStatusAsync(
             null,
             TestContext.Current.CancellationToken);
-        await environment.Application.InitializeProjectAsync(
-            new(environment.ProjectRoot, true, before.StateVersion),
+        await environment.InitializeAsync(
+            environment.ProjectRoot,
+            true,
             TestContext.Current.CancellationToken);
 
         ProjectStatusSnapshot after = await environment.Application.GetProjectStatusAsync(
