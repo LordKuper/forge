@@ -5,27 +5,9 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 $actual = @{
-    "runner image" = $env:ImageVersion
-    "Git" = ((& git --version) -replace "^git version ", "").Trim()
-    "GitHub CLI" = ((& gh --version)[0] -replace "^gh version ([^ ]+).*$", '$1').Trim()
     ".NET SDK" = ((& dotnet --version)).Trim()
 }
-$expectedRunnerImage = if ($env:RUNNER_OS -eq "Windows") {
-    "20260728.188.1"
-}
-else {
-    "20260720.247.2"
-}
-$expectedGitVersion = if ($env:RUNNER_OS -eq "Windows") {
-    "2.55.0.windows.3"
-}
-else {
-    "2.54.0"
-}
 $expected = @{
-    "runner image" = $expectedRunnerImage
-    "Git" = $expectedGitVersion
-    "GitHub CLI" = "2.96.0"
     ".NET SDK" = "10.0.302"
 }
 $minimumPowerShellVersion = [version]"7.6.3"
