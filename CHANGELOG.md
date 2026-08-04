@@ -20,9 +20,10 @@ User-facing Forge changes are listed by release, newest first.
 - Added the `forge doctor`, `forge init`, `forge status`, `forge next`, and
   `forge config` commands with culture-invariant `--json` output, contract exit
   codes, and diagnostics on standard error.
-- Added startup recovery that quarantines unreadable configuration and restores
-  the retained previous file, available as `forge doctor --recover` and from the
-  Desktop surface.
+- Added startup recovery that quarantines unreadable configuration, keeping every
+  unusable revision for diagnosis and falling back to the built-in defaults,
+  available as `forge doctor --recover` and from the Desktop surface. Readable
+  configuration is never moved.
 - Added the Desktop startup, project, recommendation, diagnostic, and
   configuration views, including an explicit project root and configuration
   scope selection, restored from durable application state.
