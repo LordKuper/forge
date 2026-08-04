@@ -174,10 +174,12 @@ public sealed class CodexProviderAdapter(CodexProviderStrategy strategy, IProces
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(prompt);
+        // `--` marks the end of options so a prompt starting with `-` (or `--`) can never be
+        // parsed as a flag by the vendor CLI.
         return ProviderExecution.RunAsync(
             strategy,
             processRunner,
-            ["exec", "--json", prompt],
+            ["exec", "--json", "--", prompt],
             workingDirectory,
             Classify,
             _ => null,
@@ -204,9 +206,11 @@ public sealed class CodexProviderAdapter(CodexProviderStrategy strategy, IProces
 }
 
 /// <summary>
-/// Event shape per Claude Code's `--output-format stream-json`: each line has a `type` of
-/// `assistant`, `tool_use`, or `result`. `assistant` events wrap an Anthropic Messages API
-/// object, so text is read from `message.content[].text`.
+/// Event shape per Claude Code's `--output-format stream-json` (`claude -p ... --verbose`):
+/// top-level `type` is `system`, `assistant`, `user`, or `result` — there is no top-level
+/// `tool_use` type. `assistant` events wrap an Anthropic Messages API message object, whose
+/// `content` array can mix text blocks with `tool_use` content blocks; text is read from the
+/// `text`-typed blocks in `message.content[]`.
 /// </summary>
 public sealed class ClaudeCodeProviderAdapter(ClaudeCodeProviderStrategy strategy, IProcessRunner processRunner)
     : IProviderAdapter
@@ -219,10 +223,13 @@ public sealed class ClaudeCodeProviderAdapter(ClaudeCodeProviderStrategy strateg
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrEmpty(prompt);
+        // `--verbose` is required by `claude -p` whenever `--output-format stream-json` is used.
+        // `--` marks the end of options so a prompt starting with `-` can never be parsed as a
+        // flag (for example a prompt beginning with `--dangerously-skip-permissions`).
         return ProviderExecution.RunAsync(
             strategy,
             processRunner,
-            ["-p", prompt, "--output-format", "stream-json"],
+            ["-p", "--output-format", "stream-json", "--verbose", "--", prompt],
             workingDirectory,
             Classify,
             ExtractText,
@@ -232,7 +239,6 @@ public sealed class ClaudeCodeProviderAdapter(ClaudeCodeProviderStrategy strateg
     private static ProviderEventKind Classify(JsonElement root) => TypeOf(root) switch
     {
         "assistant" => ProviderEventKind.Message,
-        "tool_use" => ProviderEventKind.ToolUse,
         "result" => ProviderEventKind.Result,
         _ => ProviderEventKind.Unknown,
     };

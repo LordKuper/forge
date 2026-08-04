@@ -9,7 +9,7 @@ public sealed class ProviderToolchainTests
 {
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task DiscoverReportsMissingWithoutAnyCurrentPointer()
+    public async Task DiscoverReportsMissingWithoutTheVendorExecutable()
     {
         using TestEnvironment environment = new();
         CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(0, "0.146.0", string.Empty));
@@ -25,8 +25,13 @@ public sealed class ProviderToolchainTests
     public async Task DiscoverReportsReadyWhenThePinnedExecutableRunsSuccessfully()
     {
         using TestEnvironment environment = new();
-        WriteCurrentPointer(environment, "codex", "0.146.0", "codex.exe");
-        CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(0, "0.146.0", string.Empty));
+        string executable = WriteCodexExecutable(environment);
+        CodexProviderStrategy strategy = CreateCodexStrategy(environment, request =>
+        {
+            Assert.Equal(executable, request.FileName);
+            Assert.Equal(["--version"], request.Arguments);
+            return new(0, "codex-cli 0.146.0", string.Empty);
+        });
 
         ProviderStatus status = await strategy.DiscoverAsync(TestContext.Current.CancellationToken);
 
@@ -39,7 +44,7 @@ public sealed class ProviderToolchainTests
     public async Task DiscoverReportsFailedWhenThePinnedExecutableExitsNonZero()
     {
         using TestEnvironment environment = new();
-        WriteCurrentPointer(environment, "codex", "0.146.0", "codex.exe");
+        WriteCodexExecutable(environment);
         CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(1, string.Empty, "boom"));
 
         ProviderStatus status = await strategy.DiscoverAsync(TestContext.Current.CancellationToken);
@@ -50,17 +55,120 @@ public sealed class ProviderToolchainTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task DiscoverReportsFailedWhenTheCurrentPointerHasNoExecutable()
+    public async Task DiscoverReportsFailedWhenTheVersionOutputHasNoParsableVersion()
     {
         using TestEnvironment environment = new();
-        string root = Path.Combine(environment.LocalApplicationData, "Forge", "providers", "codex");
-        Directory.CreateDirectory(root);
-        File.WriteAllText(Path.Combine(root, "current.json"), """{"Version":"0.146.0"}""");
-        CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(0, string.Empty, string.Empty));
+        WriteCodexExecutable(environment);
+        CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(0, "not a version", string.Empty));
 
         ProviderStatus status = await strategy.DiscoverAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DiscoverRejectsAClaudeInstallBelowTheDocumentedMinimumVersion()
+    {
+        using TestEnvironment environment = new();
+        string executable = Path.Combine(environment.UserProfile, ".local", "bin", "claude.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "stub");
+        ClaudeCodeProviderStrategy strategy = new(
+            environment,
+            new StubProcessRunner(_ => new(0, "1.9.0 (Claude Code)", string.Empty)));
+
+        ProviderStatus status = await strategy.DiscoverAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Failed, status.State);
+        Assert.Equal(ProviderDiagnosticCodes.VersionUnsupported, status.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateRunsTheNativeInstallerWhenMissing()
+    {
+        using TestEnvironment environment = new();
+        bool ranInstaller = false;
+        CodexProviderStrategy strategy = CreateCodexStrategy(environment, request =>
+        {
+            if (!ranInstaller)
+            {
+                Assert.Equal("powershell.exe", request.FileName);
+                Assert.Contains("chatgpt.com/codex/install.ps1", request.Arguments[^1], StringComparison.Ordinal);
+                Assert.Contains("CODEX_NON_INTERACTIVE", request.Arguments[^1], StringComparison.Ordinal);
+                ranInstaller = true;
+                // The real installer would have created the executable; the stub does the same.
+                WriteCodexExecutable(environment);
+                return new(0, string.Empty, string.Empty);
+            }
+
+            return new(0, "0.146.0", string.Empty);
+        });
+
+        ProviderStatus status = await strategy.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(ranInstaller);
+        Assert.Equal(ProviderState.Ready, status.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateRunsClaudeUpdateDirectlyWhenAlreadyInstalled()
+    {
+        using TestEnvironment environment = new();
+        string executable = Path.Combine(environment.UserProfile, ".local", "bin", "claude.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "stub");
+        bool ranUpdate = false;
+        ClaudeCodeProviderStrategy strategy = new(
+            environment,
+            new StubProcessRunner(request =>
+            {
+                Assert.Equal(executable, request.FileName);
+                if (!ranUpdate)
+                {
+                    Assert.Equal(["update"], request.Arguments);
+                    ranUpdate = true;
+                    return new(0, string.Empty, string.Empty);
+                }
+
+                Assert.Equal(["--version"], request.Arguments);
+                return new(0, "2.1.221 (Claude Code)", string.Empty);
+            }));
+
+        ProviderStatus status = await strategy.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(ranUpdate);
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Equal("2.1.221", status.Version);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateFailsWhenTheInstallerExitsNonZero()
+    {
+        using TestEnvironment environment = new();
+        CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(1, string.Empty, "install failed"));
+
+        ProviderStatus status = await strategy.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Failed, status.State);
+        Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DiscoverPropagatesAnAlreadyCancelledTokenRatherThanReportingFailed()
+    {
+        using TestEnvironment environment = new();
+        WriteCodexExecutable(environment);
+        CodexProviderStrategy strategy = CreateCodexStrategy(environment, _ => new(0, "0.146.0", string.Empty));
+        using CancellationTokenSource cancelled = new();
+        await cancelled.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => strategy.DiscoverAsync(cancelled.Token));
     }
 
     [Fact]
@@ -138,36 +246,29 @@ public sealed class ProviderToolchainTests
     private static CodexProviderStrategy CreateCodexStrategy(
         TestEnvironment environment,
         Func<ProcessRequest, ProcessResult> respond) =>
-        new(
-            new GitHubProviderInstaller(new StubReleaseClient(null), new HttpClient(), environment),
-            new StubProcessRunner(respond));
+        new(environment, new StubProcessRunner(respond));
 
-    private static void WriteCurrentPointer(
-        TestEnvironment environment,
-        string directoryName,
-        string version,
-        string executableName)
+    private static string WriteCodexExecutable(TestEnvironment environment)
     {
-        string root = Path.Combine(environment.LocalApplicationData, "Forge", "providers", directoryName);
-        string versionDirectory = Path.Combine(root, "versions", version);
-        Directory.CreateDirectory(versionDirectory);
-        File.WriteAllText(Path.Combine(versionDirectory, executableName), "stub");
-        File.WriteAllText(Path.Combine(root, "current.json"), $$"""{"Version":"{{version}}"}""");
-    }
-
-    private sealed class StubReleaseClient(ProviderRelease? release) : IProviderReleaseClient
-    {
-        public Task<ProviderRelease?> GetLatestAsync(
-            string owner,
-            string repo,
-            CancellationToken cancellationToken) =>
-            Task.FromResult(release);
+        string executable = Path.Combine(
+            environment.LocalApplicationData,
+            "Programs",
+            "OpenAI",
+            "Codex",
+            "bin",
+            "codex.exe");
+        Directory.CreateDirectory(Path.GetDirectoryName(executable)!);
+        File.WriteAllText(executable, "stub");
+        return executable;
     }
 
     private sealed class StubProcessRunner(Func<ProcessRequest, ProcessResult> respond) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
-            Task.FromResult(respond(request));
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(respond(request));
+        }
     }
 
     private sealed class FakeStrategy(ProviderKind kind, ProviderState state, string? version) : IProviderStrategy

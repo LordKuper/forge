@@ -116,18 +116,9 @@ public sealed class StartupPipeline(
     private async Task<StartupCheck> CheckProvidersAsync(CancellationToken cancellationToken)
     {
         ProviderToolchainStatus status = await providers.CheckAsync(cancellationToken).ConfigureAwait(false);
-        if (status.Ready)
-        {
-            return StartupCheck.Passed(StartupCheckId.Providers);
-        }
-
-        bool needsRepair = status.Providers.Any(provider =>
-            provider.DiagnosticCode is ProviderDiagnosticCodes.UpdateFailed or
-                ProviderDiagnosticCodes.VersionUnsupported);
-        return new(
-            StartupCheckId.Providers,
-            StartupCheckState.Blocked,
-            needsRepair ? DiagnosticCodes.ProviderUpdateFailed : DiagnosticCodes.ProviderPreflightPending);
+        return status.Ready
+            ? StartupCheck.Passed(StartupCheckId.Providers)
+            : new(StartupCheckId.Providers, StartupCheckState.Blocked, status.SharedDiagnosticCode);
     }
 
     private IEnumerable<StartupCheck> CheckPlatform()

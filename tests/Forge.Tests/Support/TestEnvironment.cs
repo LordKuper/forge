@@ -31,6 +31,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
 
     public string LocalApplicationData => Path.Combine(Root, "local");
 
+    public string UserProfile => Path.Combine(Root, "userprofile");
+
     public string ProjectRoot => Path.Combine(Root, "project");
 
     public string CurrentDirectory => ProjectRoot;

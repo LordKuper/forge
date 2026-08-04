@@ -86,6 +86,8 @@ public sealed class SystemEnvironmentPaths : IEnvironmentPaths
     public string LocalApplicationData { get; } =
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
+    public string UserProfile { get; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
     public string CurrentDirectory => Environment.CurrentDirectory;
 }
 

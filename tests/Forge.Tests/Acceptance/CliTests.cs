@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using Forge.Cli;
 using Forge.Localization;
+using Forge.Providers;
 using Forge.Tests.Support;
 using Forge.Updater;
 using Forge.Updater.Windows;
@@ -31,7 +32,7 @@ public sealed class CliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public async Task ModelsCommandJsonReflectsAnUnreadyToolchain()
+    public async Task ModelsCommandDefaultsToReadOnlyDiscovery()
     {
         using TestEnvironment environment = new();
         StringWriter output = new(CultureInfo.InvariantCulture);
@@ -49,6 +50,32 @@ public sealed class CliTests
 
         Assert.Equal(ExitCodes.Provider, exitCode);
         Assert.Contains("\"missing\"", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal($"provider_preflight_pending{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsCommandRefreshReportsUpdateFailedWhenRepairIsNeeded()
+    {
+        ProviderToolchainStatus failed = new([
+            new(ProviderKind.Codex, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed),
+            ProviderStatus.Ready(ProviderKind.ClaudeCode, "2.1.221"),
+        ]);
+        using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(failed));
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics);
+
+        int exitCode = await root
+            .Parse(["models", "--refresh", "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Provider, exitCode);
         Assert.Equal($"provider_update_failed{Environment.NewLine}", diagnostics.ToString());
     }
 

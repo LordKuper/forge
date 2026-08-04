@@ -1,3 +1,5 @@
+using Forge.Application;
+
 namespace Forge.Providers;
 
 public enum ProviderKind
@@ -38,6 +40,23 @@ public sealed record ProviderToolchainStatus(IReadOnlyList<ProviderStatus> Provi
     public string DiagnosticCode =>
         Providers.FirstOrDefault(provider => provider.State != ProviderState.Ready)?.DiagnosticCode ??
             ProviderDiagnosticCodes.None;
+
+    /// <summary>Maps to the shared <see cref="DiagnosticCodes"/> used by startup checks and CLI reporting.</summary>
+    public string SharedDiagnosticCode
+    {
+        get
+        {
+            if (Ready)
+            {
+                return DiagnosticCodes.None;
+            }
+
+            bool needsRepair = Providers.Any(provider =>
+                provider.DiagnosticCode is ProviderDiagnosticCodes.UpdateFailed or
+                    ProviderDiagnosticCodes.VersionUnsupported);
+            return needsRepair ? DiagnosticCodes.ProviderUpdateFailed : DiagnosticCodes.ProviderPreflightPending;
+        }
+    }
 }
 
 /// <summary>
@@ -48,13 +67,13 @@ public interface IProviderStrategy
 {
     ProviderKind Kind { get; }
 
-    /// <summary>Reads the local install pointer and runs `--version`. Never touches the network.</summary>
+    /// <summary>Reads the fixed, vendor-owned install path and runs `--version`. Never touches the network.</summary>
     Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken);
 
-    /// <summary>Downloads, verifies, and activates the latest compatible release.</summary>
+    /// <summary>Runs the vendor's own native install or update mechanism, then rechecks.</summary>
     Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken);
 
-    /// <summary>The absolute path Forge verified and staged, or null when no version is ready.</summary>
+    /// <summary>The absolute path to the vendor-installed executable, or null when not installed.</summary>
     Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken);
 }
 

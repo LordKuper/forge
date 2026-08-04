@@ -73,8 +73,15 @@ public sealed class ForgeApplication(
         CancellationToken cancellationToken) =>
         (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
 
-    /// <summary>Discovers both providers and installs or updates any that are not ready.</summary>
+    /// <summary>
+    /// Read-only discovery, matching the `provider.health` capability's declared `query`/`read`
+    /// contract. Installing or updating is a separate, explicit action: <see cref="RefreshProviderHealthAsync"/>.
+    /// </summary>
     public Task<ProviderToolchainStatus> GetProviderHealthAsync(CancellationToken cancellationToken) =>
+        providerToolchain.CheckAsync(cancellationToken);
+
+    /// <summary>Installs or updates any provider that is not ready, then rechecks both.</summary>
+    public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.EnsureReadyAsync(cancellationToken);
 
     public async Task<IReadOnlyList<SuggestedAction>> GetSuggestedActionsAsync(

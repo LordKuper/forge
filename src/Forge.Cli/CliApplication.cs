@@ -208,14 +208,19 @@ public static class CliApplication
         ForgeApplication application)
     {
         Option<bool> json = CreateJsonOption();
+        Option<bool> refresh = new("--refresh")
+        {
+            Description = "Install or update any provider that is not ready.",
+        };
         Command command = new("models", text.Resolve(MessageKeys.ModelsDescription));
         command.Options.Add(json);
+        command.Options.Add(refresh);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            ProviderToolchainStatus status = await application
-                .GetProviderHealthAsync(cancellationToken)
-                .ConfigureAwait(false);
-            string diagnosticCode = status.Ready ? DiagnosticCodes.None : DiagnosticCodes.ProviderUpdateFailed;
+            ProviderToolchainStatus status = parseResult.GetValue(refresh)
+                ? await application.RefreshProviderHealthAsync(cancellationToken).ConfigureAwait(false)
+                : await application.GetProviderHealthAsync(cancellationToken).ConfigureAwait(false);
+            string diagnosticCode = status.SharedDiagnosticCode;
             if (parseResult.GetValue(json))
             {
                 output.WriteLine(StatusJson.Serialize(status));

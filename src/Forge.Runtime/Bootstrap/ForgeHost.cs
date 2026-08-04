@@ -39,8 +39,6 @@ public static class ForgeHost
         services.AddSingleton<ScopedConfigurationService>();
         // A platform composition may register before or after the core defaults.
         services.TryAddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
-        services.TryAddSingleton<IProviderReleaseClient, GitHubProviderReleaseClient>();
-        services.TryAddSingleton<GitHubProviderInstaller>();
         // Adapters need their own concrete strategy, not "any" IProviderStrategy, so each
         // strategy is resolvable both by its concrete type and through the shared collection.
         services.TryAddSingleton<CodexProviderStrategy>();
