@@ -2,6 +2,12 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.6.5
+
+### Fixed
+
+- Disabled unavailable ReadyToRun optimization during Windows bundle publishing.
+
 ## v0.6.4
 
 ### Fixed
