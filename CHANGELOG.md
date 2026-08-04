@@ -2,11 +2,12 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.6.2
+## v0.6.3
 
 ### Fixed
 
 - Stabilized Windows process-lifecycle tests in CI.
+- Refreshed the pinned Windows release-runner image.
 
 ## v0.6.1
 
