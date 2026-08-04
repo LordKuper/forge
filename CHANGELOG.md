@@ -2,6 +2,12 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.6.4
+
+### Fixed
+
+- Removed brittle exact-version checks for runner-provided tools.
+
 ## v0.6.3
 
 ### Fixed
