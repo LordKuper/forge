@@ -16,9 +16,15 @@ $expectedRunnerImage = if ($env:RUNNER_OS -eq "Windows") {
 else {
     "20260720.247.2"
 }
+$expectedGitVersion = if ($env:RUNNER_OS -eq "Windows") {
+    "2.55.0.windows.3"
+}
+else {
+    "2.54.0"
+}
 $expected = @{
     "runner image" = $expectedRunnerImage
-    "Git" = "2.55.0.windows.3"
+    "Git" = $expectedGitVersion
     "GitHub CLI" = "2.96.0"
     ".NET SDK" = "10.0.302"
 }
