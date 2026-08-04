@@ -18,7 +18,7 @@
 - [x] Stage 2 — Implement the platform-neutral self-updater.
 - [x] Stage 3 — Implement the Windows installer and update strategy.
 - [x] Stage 4 — Implement startup and `.forge/` initialization.
-- [ ] Stage 5 — Implement provider toolchain management and adapters.
+- [x] Stage 5 — Implement provider toolchain management and adapters.
 - [ ] Stage 6 — Implement independent sprints and the durable workflow engine.
 - [ ] Stage 7 — Implement Git isolation, safe fallback, and circuit breakers.
 - [ ] Stage 8 — Implement the `.forge/` source-of-truth compiler.
@@ -145,10 +145,10 @@ and both surfaces show equivalent status/configuration.
 
 **Depends on:** Stage 4.
 
-- [ ] P5.1–P5.9 — Define provider strategies; discover, version-check,
+- [x] P5.1–P5.9 — Define provider strategies; discover, version-check,
   install/update, refresh, and recheck official Codex/Claude CLIs; forbid project
   overrides; block sprint work until both are ready.
-- [ ] P5.10–P5.17 — Execute providers without shell concatenation, parse versioned
+- [x] P5.10–P5.17 — Execute providers without shell concatenation, parse versioned
   JSON/JSONL, validate constrained output, check compatibility, diagnose auth
   safely, normalize failures, and maintain provider fixtures.
 
@@ -279,9 +279,10 @@ the signed MVP release installs globally for the Windows user.
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
 | Stage 3 Windows installer and gate | `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (83 tests); `build/Publish-WindowsBundle.ps1` for `win-x64` and `win-arm64` | 2026-08-03 |
 | Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (161 tests) | 2026-08-04 |
+| Stage 5 provider toolchain and adapters, and gate | `docs/architecture/decisions/0002-provider-toolchain.md`; `src/Forge.Runtime/Providers/`; `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (189 tests); live run against `github.com/openai/codex` and `github.com/anthropics/claude-code`: `forge models --json` reaches `"ready": true` for both providers with genuine verified downloads (`codex 0.146.0`, `claude_code 2.1.221`), and `forge doctor --startup` reports `providers passed none` | 2026-08-04 |
 
 ## Open decisions
 
 | ID | Decision | Target stage | Status |
 |---|---|---:|---|
-| D-005 | Revalidate official Codex and Claude installation/update strategies on Windows immediately before implementation. | 5 | Open |
+| D-005 | Revalidate official Codex and Claude installation/update strategies on Windows immediately before implementation. | 5 | Resolved — `docs/architecture/decisions/0002-provider-toolchain.md` |

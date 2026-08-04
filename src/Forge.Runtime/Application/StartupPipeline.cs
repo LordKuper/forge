@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Configuration;
+using Forge.Providers;
 using YamlDotNet.Core;
 
 namespace Forge.Application;
@@ -13,7 +14,8 @@ public sealed class StartupPipeline(
     ConfigurationMigrator migrator,
     ScopedConfigurationStores stores,
     ProjectRootResolver rootResolver,
-    IPlatformPreflight platformPreflight)
+    IPlatformPreflight platformPreflight,
+    IProviderToolchainManager providers)
 {
     public async Task<StartupStatus> RunAsync(
         string? requestedRoot,
@@ -30,11 +32,7 @@ public sealed class StartupPipeline(
         // The release check runs on demand through the update capability; Stage 2 owns its lifecycle.
         checks.Add(new(StartupCheckId.Release, StartupCheckState.Skipped, DiagnosticCodes.UpdateCheckDeferred));
 
-        // Provider discovery arrives with the provider toolchain; until then sprint work stays blocked.
-        checks.Add(new(
-            StartupCheckId.Providers,
-            StartupCheckState.Blocked,
-            DiagnosticCodes.ProviderPreflightPending));
+        checks.Add(await CheckProvidersAsync(cancellationToken).ConfigureAwait(false));
 
         ProjectRootStatus project =
             await rootResolver.ResolveAsync(requestedRoot, cancellationToken).ConfigureAwait(false);
@@ -112,6 +110,24 @@ public sealed class StartupPipeline(
                 ? value.Value.GetString() ?? LanguageSelection.Fallback.Ui
                 : LanguageSelection.Fallback.Ui;
         }
+    }
+
+    /// <summary>Read-only discovery only; installing/updating happens through `forge models`.</summary>
+    private async Task<StartupCheck> CheckProvidersAsync(CancellationToken cancellationToken)
+    {
+        ProviderToolchainStatus status = await providers.CheckAsync(cancellationToken).ConfigureAwait(false);
+        if (status.Ready)
+        {
+            return StartupCheck.Passed(StartupCheckId.Providers);
+        }
+
+        bool needsRepair = status.Providers.Any(provider =>
+            provider.DiagnosticCode is ProviderDiagnosticCodes.UpdateFailed or
+                ProviderDiagnosticCodes.VersionUnsupported);
+        return new(
+            StartupCheckId.Providers,
+            StartupCheckState.Blocked,
+            needsRepair ? DiagnosticCodes.ProviderUpdateFailed : DiagnosticCodes.ProviderPreflightPending);
     }
 
     private IEnumerable<StartupCheck> CheckPlatform()

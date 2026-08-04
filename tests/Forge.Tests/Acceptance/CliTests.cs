@@ -12,6 +12,48 @@ public sealed class CliTests
 {
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task ModelsCommandReportsReadyProviders()
+    {
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready));
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["models"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("codex ready 0.146.0", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claude_code ready 2.1.221", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsCommandJsonReflectsAnUnreadyToolchain()
+    {
+        using TestEnvironment environment = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics);
+
+        int exitCode = await root
+            .Parse(["models", "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Provider, exitCode);
+        Assert.Contains("\"missing\"", output.ToString(), StringComparison.Ordinal);
+        Assert.Equal($"provider_update_failed{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task StatusCommandUsesSharedLocalizationCatalog()
     {
         CultureInfo original = CultureInfo.CurrentUICulture;

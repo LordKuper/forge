@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Bootstrap;
+using Forge.Providers;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Forge.Tests.Support;
@@ -9,7 +10,7 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
 {
     private readonly ServiceProvider provider;
 
-    public TestEnvironment(IPlatformPreflight? platform = null)
+    public TestEnvironment(IPlatformPreflight? platform = null, IProviderToolchainManager? providers = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -19,6 +20,10 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         services.AddForgeCore();
         services.AddSingleton<IEnvironmentPaths>(this);
         services.AddSingleton(preflight);
+        // Tests never touch the network or the real provider installation; a real toolchain
+        // manager stays offline-safe by construction (it only discovers), but callers that need
+        // a `ready` or `failed` toolchain override it explicitly.
+        services.AddSingleton(providers ?? new FakeProviderToolchainManager());
         provider = services.BuildServiceProvider();
     }
 
@@ -77,4 +82,27 @@ internal sealed class SupportedPlatformPreflight : IPlatformPreflight
 {
     public PlatformPreflightResult Check() =>
         new("windows", "x64", true, DiagnosticCodes.None);
+}
+
+/// <summary>Returns a fixed toolchain status without any network or process call.</summary>
+internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? status = null)
+    : IProviderToolchainManager
+{
+    public static ProviderToolchainStatus NotReady { get; } = new([
+        new(ProviderKind.Codex, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+        new(ProviderKind.ClaudeCode, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+    ]);
+
+    public static ProviderToolchainStatus Ready { get; } = new([
+        ProviderStatus.Ready(ProviderKind.Codex, "0.146.0"),
+        ProviderStatus.Ready(ProviderKind.ClaudeCode, "2.1.221"),
+    ]);
+
+    private readonly ProviderToolchainStatus status = status ?? NotReady;
+
+    public Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(status);
+
+    public Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(status);
 }

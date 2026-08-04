@@ -97,7 +97,10 @@ public static class InfrastructureServices
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
-        services.AddSingleton(new HttpClient());
+        // Release/provider downloads can run into the hundreds of megabytes; the default
+        // 100-second HttpClient.Timeout covers the whole request, including the body, and would
+        // abort a slow-connection download mid-stream.
+        services.AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
         services.AddSingleton<INetworkClient, NetworkClient>();
         services.AddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
         services.AddSingleton<ISafeLogger, SafeLogger>();

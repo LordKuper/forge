@@ -1,0 +1,4 @@
+{"type":"thread.started","thread_id":"thread_1"}
+{"type":"turn.started"}
+{"type":"item.command_execution","command":"echo hi"}
+{"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":4}}

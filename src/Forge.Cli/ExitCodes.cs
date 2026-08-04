@@ -29,7 +29,7 @@ public static class ExitCodes
             DiagnosticCodes.ProjectRootMissing => Project,
         DiagnosticCodes.PlatformNotSupported => Platform,
         DiagnosticCodes.UpdateCheckDeferred => Update,
-        DiagnosticCodes.ProviderPreflightPending => Provider,
+        DiagnosticCodes.ProviderPreflightPending or DiagnosticCodes.ProviderUpdateFailed => Provider,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale => Concurrency,
         _ => Internal,

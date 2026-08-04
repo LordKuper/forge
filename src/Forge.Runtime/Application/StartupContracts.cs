@@ -8,6 +8,7 @@ public static class DiagnosticCodes
     public const string PlatformNotSupported = "platform_not_supported";
     public const string UpdateCheckDeferred = "update_check_deferred";
     public const string ProviderPreflightPending = "provider_preflight_pending";
+    public const string ProviderUpdateFailed = "provider_update_failed";
     public const string ConfigurationInvalid = "configuration_invalid";
     public const string ConfigurationScopeViolation = "configuration_scope_violation";
     public const string ConfigurationKeyUnknown = "configuration_key_unknown";

@@ -4,6 +4,7 @@ using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Localization;
+using Forge.Providers;
 using Forge.Updater;
 using Forge.Updater.Windows;
 
@@ -29,6 +30,7 @@ public static class CliApplication
         root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application));
         if (install is not null)
         {
@@ -195,6 +197,40 @@ public static class CliApplication
             WriteActions(text, output, overview.Status.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    private static Command CreateModelsCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<bool> json = CreateJsonOption();
+        Command command = new("models", text.Resolve(MessageKeys.ModelsDescription));
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            ProviderToolchainStatus status = await application
+                .GetProviderHealthAsync(cancellationToken)
+                .ConfigureAwait(false);
+            string diagnosticCode = status.Ready ? DiagnosticCodes.None : DiagnosticCodes.ProviderUpdateFailed;
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(status));
+                return Report(diagnostics, diagnosticCode);
+            }
+
+            output.WriteLine(text.Resolve(MessageKeys.ProviderToolchainTitle));
+            foreach (ProviderStatus provider in status.Providers)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {Machine(provider.Kind)} {Machine(provider.State)} {provider.Version ?? "-"}"));
+            }
+
+            return Report(diagnostics, diagnosticCode);
         });
         return command;
     }

@@ -17,6 +17,8 @@
   <data name="DoctorDescription" xml:space="preserve"><value>Показать упорядоченные проверки запуска.</value></data>
   <data name="InitDescription" xml:space="preserve"><value>Инициализировать проект Forge в явно указанном каталоге.</value></data>
   <data name="NextDescription" xml:space="preserve"><value>Показать рекомендуемые следующие действия.</value></data>
+  <data name="ModelsDescription" xml:space="preserve"><value>Обнаружить, установить и обновить провайдеров Codex и Claude Code.</value></data>
+  <data name="ProviderToolchainTitle" xml:space="preserve"><value>Инструменты провайдеров:</value></data>
   <data name="ConfigDescription" xml:space="preserve"><value>Показать или изменить конфигурацию нужной области.</value></data>
   <data name="StartupChecksTitle" xml:space="preserve"><value>Проверки запуска:</value></data>
   <data name="StartupReady" xml:space="preserve"><value>Запуск готов.</value></data>

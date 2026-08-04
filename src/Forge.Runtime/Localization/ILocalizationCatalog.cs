@@ -51,6 +51,8 @@ public static class MessageKeys
     public const string DoctorDescription = "DoctorDescription";
     public const string InitDescription = "InitDescription";
     public const string NextDescription = "NextDescription";
+    public const string ModelsDescription = "ModelsDescription";
+    public const string ProviderToolchainTitle = "ProviderToolchainTitle";
     public const string ConfigDescription = "ConfigDescription";
     public const string StartupChecksTitle = "StartupChecksTitle";
     public const string StartupReady = "StartupReady";
