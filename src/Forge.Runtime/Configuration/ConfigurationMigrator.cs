@@ -16,17 +16,17 @@ public sealed class ConfigurationMigrator(IEnumerable<IConfigurationMigration> m
         {
             IConfigurationMigration migration = migrations.SingleOrDefault(
                 item => item.Scope == scope && item.FromVersion == current.SchemaVersion)
-                ?? throw new InvalidOperationException(
+                ?? throw new ConfigurationMigrationException(
                     $"Missing {scope} migration from schema {current.SchemaVersion}.");
             current = migration.Apply(current);
             if (current.SchemaVersion != migration.ToVersion)
             {
-                throw new InvalidOperationException("Migration returned an unexpected schema version.");
+                throw new ConfigurationMigrationException("Migration returned an unexpected schema version.");
             }
         }
 
         return current.SchemaVersion == targetVersion
             ? current
-            : throw new InvalidOperationException("Configuration schema is newer than supported.");
+            : throw new ConfigurationMigrationException("Configuration schema is newer than supported.");
     }
 }

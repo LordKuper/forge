@@ -131,8 +131,12 @@ platforms; all update/restart/rollback contract tests pass.
   CLI/Desktop editors and provenance, reject cross-scope keys, and initialize
   project artifact languages independently from user language.
 
-Sprint rendering covers the empty snapshot contract; sprint records arrive with
-the workflow engine in Stage 6.
+Scope notes: sprint rendering covers the empty snapshot contract, and sprint
+records arrive with the workflow engine in Stage 6. Desktop navigation is
+restored by querying durable state on activation; persisting the selected project
+across launches needs a new user-scope key and moves with recent-project
+preferences. Replaying a completed mutation is rejected as stale until Stage 6
+adds the durable idempotency store.
 
 **Gate:** startup remains fail-closed, root confirmation is safe and idempotent,
 and both surfaces show equivalent status/configuration.
@@ -274,7 +278,7 @@ the signed MVP release installs globally for the Windows user.
 | Stage 1 gate | `pwsh ./.github/scripts/test-stage1.ps1` | 2026-08-03 |
 | Stage 2 updater core and gate | `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (61 tests) | 2026-07-29 |
 | Stage 3 Windows installer and gate | `dotnet restore Forge.slnx --locked-mode`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (83 tests); `build/Publish-WindowsBundle.ps1` for `win-x64` and `win-arm64` | 2026-08-03 |
-| Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (140 tests) | 2026-08-04 |
+| Stage 4 startup and initialization gate | `dotnet restore Forge.slnx`; `dotnet format Forge.slnx --no-restore --verify-no-changes`; `dotnet build Forge.slnx --no-restore --configuration Release`; `dotnet test Forge.slnx --no-build --configuration Release` (161 tests) | 2026-08-04 |
 
 ## Open decisions
 

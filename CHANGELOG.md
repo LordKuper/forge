@@ -28,7 +28,8 @@ User-facing Forge changes are listed by release, newest first.
   scope selection, restored from durable application state.
 - Added scoped configuration reading and editing with provenance, cross-scope
   rejection, key-typed value parsing, and project artifact languages independent
-  of the user language.
+  of the user language. `interaction.confirm_destructive` now controls whether a
+  mutation requires explicit confirmation.
 - Added application of the configured interface language to both surfaces
   instead of the ambient operating-system culture.
 

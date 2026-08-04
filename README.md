@@ -3,9 +3,11 @@
 Forge is a local harness for durable, isolated AI-assisted software delivery.
 
 The MVP targets Windows and exposes equivalent CLI/TUI and .NET MAUI Desktop
-surfaces over a shared application contract. The Stage 1 skeleton contains the
-shared domain, application, presentation, localization, configuration, updater,
-provider, infrastructure, and bootstrap projects plus both hosts.
+surfaces over a shared application contract. Both hosts run the same ordered
+startup sequence and dispatch the same commands, queries, and status snapshot.
+Self-update, project initialization, scoped configuration, and deterministic
+recommendations are implemented; the provider toolchain and the durable workflow
+engine are not yet.
 
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)

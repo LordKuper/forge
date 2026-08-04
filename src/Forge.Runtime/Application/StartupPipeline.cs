@@ -71,7 +71,7 @@ public sealed class StartupPipeline(
                 StartupCheck.Passed(StartupCheckId.UserConfiguration));
         }
         catch (Exception error) when (
-            error is JsonException or InvalidDataException or InvalidOperationException or
+            error is JsonException or InvalidDataException or ConfigurationMigrationException or
                 ConfigurationScopeException or IOException or UnauthorizedAccessException)
         {
             return (
@@ -150,7 +150,7 @@ public sealed class StartupPipeline(
             return StartupCheck.Passed(StartupCheckId.ProjectConfiguration);
         }
         catch (Exception error) when (
-            error is YamlException or InvalidDataException or InvalidOperationException or
+            error is YamlException or InvalidDataException or ConfigurationMigrationException or
                 FormatException or ConfigurationScopeException or IOException or UnauthorizedAccessException)
         {
             return new(

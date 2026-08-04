@@ -13,6 +13,8 @@ public static class ExitCodes
     public const int Configuration = 3;
     public const int Project = 4;
     public const int Platform = 5;
+    public const int Update = 6;
+    public const int Provider = 7;
     public const int Confirmation = 9;
     public const int Concurrency = 10;
     public const int Internal = 13;
@@ -26,6 +28,8 @@ public static class ExitCodes
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
             DiagnosticCodes.ProjectRootMissing => Project,
         DiagnosticCodes.PlatformNotSupported => Platform,
+        DiagnosticCodes.UpdateCheckDeferred => Update,
+        DiagnosticCodes.ProviderPreflightPending => Provider,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale => Concurrency,
         _ => Internal,

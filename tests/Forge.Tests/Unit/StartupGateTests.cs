@@ -27,9 +27,10 @@ public sealed class StartupGateTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task FailedStartupOffersRecoveryOnly()
+    public async Task RecoverableFailureOffersRecoveryOnly()
     {
-        using TestEnvironment environment = new(new UnsupportedPlatformPreflight());
+        using TestEnvironment environment = new();
+        await WriteCorruptUserConfigurationAsync(environment);
 
         ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
             null,
@@ -38,6 +39,7 @@ public sealed class StartupGateTests
         SuggestedAction action = Assert.Single(snapshot.SuggestedActions);
         Assert.Equal("recover_startup", action.ActionId);
         Assert.Equal(1, action.Rank);
+        Assert.Equal("user_configuration", action.Target.Id);
     }
 
     [Fact]
@@ -248,9 +250,106 @@ public sealed class StartupGateTests
             null,
             true,
             TestContext.Current.CancellationToken);
+        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+            null,
+            TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.RecoveryUnavailable, result.DiagnosticCode);
+        Assert.Equal(DiagnosticCodes.PlatformNotSupported, result.DiagnosticCode);
+        Assert.Empty(snapshot.SuggestedActions);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecoveryReportsNothingToRepairForAHealthyStartup()
+    {
+        using TestEnvironment environment = new();
+
+        RecoverStartupResult result = await environment.Application.RecoverStartupAsync(
+            null,
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Null(result.Check);
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecoveryKeepsEveryQuarantinedRevision()
+    {
+        using TestEnvironment environment = new();
+        string path = await WriteCorruptUserConfigurationAsync(environment);
+        await environment.Application.RecoverStartupAsync(
+            null,
+            true,
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(path, "{broken again", TestContext.Current.CancellationToken);
+
+        await environment.Application.RecoverStartupAsync(
+            null,
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "{broken",
+            await File.ReadAllTextAsync(
+                $"{path}{StartupRecovery.QuarantineSuffix}",
+                TestContext.Current.CancellationToken));
+        Assert.Equal(
+            "{broken again",
+            await File.ReadAllTextAsync(
+                $"{path}{StartupRecovery.QuarantineSuffix}.1",
+                TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecoveryNeverTouchesAReadableFile()
+    {
+        using TestEnvironment environment = new();
+        await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            "language.ui",
+            "ru",
+            TestContext.Current.CancellationToken);
+        string path = ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+        string before = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+
+        RecoverStartupResult result = await environment.Application.RecoverStartupAsync(
+            null,
+            true,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Null(result.Check);
+        Assert.Equal(
+            before,
+            await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+        Assert.False(File.Exists($"{path}{StartupRecovery.QuarantineSuffix}"));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DisabledDestructiveConfirmationInitializesWithoutExplicitConfirmation()
+    {
+        using TestEnvironment environment = new();
+        await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            "interaction.confirm_destructive",
+            "false",
+            TestContext.Current.CancellationToken);
+
+        InitializeProjectResult result = await environment.InitializeAsync(
+            environment.ProjectRoot,
+            false,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.True(File.Exists(ProjectRootResolver.ManifestPath(environment.ProjectRoot)));
     }
 
     [Fact]

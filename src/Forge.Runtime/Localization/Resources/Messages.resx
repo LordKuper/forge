@@ -44,4 +44,5 @@
   <data name="RecoveryCompleted" xml:space="preserve"><value>The invalid file was quarantined and startup was recovered.</value></data>
   <data name="RecoveryFailed" xml:space="preserve"><value>Startup recovery is unavailable for this failure.</value></data>
   <data name="DiagnosticsTitle" xml:space="preserve"><value>Diagnostics:</value></data>
+  <data name="RecoveryNotNeeded" xml:space="preserve"><value>Startup has no failed check to recover.</value></data>
 </root>

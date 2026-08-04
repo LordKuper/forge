@@ -75,6 +75,7 @@ public static class MessageKeys
     public const string RecoverAction = "RecoverAction";
     public const string RecoveryCompleted = "RecoveryCompleted";
     public const string RecoveryFailed = "RecoveryFailed";
+    public const string RecoveryNotNeeded = "RecoveryNotNeeded";
     public const string DiagnosticsTitle = "DiagnosticsTitle";
     public const string RecoverStartupRationale = "next.recover_startup.rationale";
     public const string InitializeProjectRationale = "next.initialize_project.rationale";

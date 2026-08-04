@@ -85,14 +85,29 @@ public sealed class ForgeApplication(
     {
         StartupStatus startup =
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
-        if (startup.FirstFailure is null)
+        if (startup.FirstFailure is not { } failure)
         {
             return new(true, null, DiagnosticCodes.None);
         }
 
-        return confirmed
-            ? recovery.Recover(startup)
-            : new(false, startup.FirstFailure.Id, DiagnosticCodes.ConfirmationRequired);
+        if (!confirmed)
+        {
+            return new(false, failure.Id, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        RecoverStartupResult result =
+            await recovery.RecoverAsync(startup, cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            return result;
+        }
+
+        // Success means the startup sequence no longer fails, not merely that a file moved.
+        StartupStatus repaired =
+            await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        return repaired.FirstFailure is { } remaining
+            ? new(false, remaining.Id, remaining.DiagnosticCode)
+            : result;
     }
 
     public async Task<InitializeProjectResult> InitializeProjectAsync(
@@ -118,15 +133,27 @@ public sealed class ForgeApplication(
             return new(false, status.Root, null, DiagnosticCodes.SuggestionStale);
         }
 
+        bool confirmed = command.Confirmed ||
+            !await RequiresConfirmationAsync(cancellationToken).ConfigureAwait(false);
         return await initializer
             .InitializeAsync(
                 new(
                     status.Root,
-                    command.Confirmed,
+                    confirmed,
                     command.UserFacingLanguage,
                     command.AgentFacingLanguage),
                 cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Honours `interaction.confirm_destructive`; an unreadable value stays fail-closed.</summary>
+    private async Task<bool> RequiresConfirmationAsync(CancellationToken cancellationToken)
+    {
+        ConfigurationView user =
+            await GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false);
+        EffectiveConfigurationValue? value = user.Values
+            .FirstOrDefault(item => item.Key == "interaction.confirm_destructive");
+        return value?.Value.ValueKind != JsonValueKind.False;
     }
 
     public async Task<ConfigurationView> GetUserConfigurationAsync(
@@ -240,5 +267,6 @@ public sealed class ForgeApplication(
 
     private static bool IsRecoverable(Exception error) =>
         error is JsonException or YamlException or InvalidDataException or FormatException or
-            InvalidOperationException or IOException or UnauthorizedAccessException;
+            ConfigurationMigrationException or ConfigurationScopeException or IOException or
+            UnauthorizedAccessException;
 }

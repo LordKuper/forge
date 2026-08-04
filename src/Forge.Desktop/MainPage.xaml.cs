@@ -180,9 +180,12 @@ public partial class MainPage : ContentPage
             .RecoverStartupAsync(ProjectRoot, confirmed, CancellationToken.None)
             .ConfigureAwait(true);
         ConfigurationResultLabel.Text = Message(
-            text.Resolve(result.Succeeded
-                ? MessageKeys.RecoveryCompleted
-                : MessageKeys.RecoveryFailed),
+            text.Resolve(result switch
+            {
+                { Succeeded: true, Check: null } => MessageKeys.RecoveryNotNeeded,
+                { Succeeded: true } => MessageKeys.RecoveryCompleted,
+                _ => MessageKeys.RecoveryFailed,
+            }),
             result.DiagnosticCode);
         await RefreshAsync().ConfigureAwait(true);
     }

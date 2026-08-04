@@ -28,7 +28,7 @@ public static class CliApplication
         root.Subcommands.Add(CreateDoctorCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
-        root.Subcommands.Add(CreateNextCommand(text, output, application));
+        root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application));
         if (install is not null)
         {
@@ -72,9 +72,7 @@ public static class CliApplication
                 RecoverStartupResult recovered = await application
                     .RecoverStartupAsync(root, parseResult.GetValue(confirm), cancellationToken)
                     .ConfigureAwait(false);
-                output.WriteLine(text.Resolve(recovered.Succeeded
-                    ? MessageKeys.RecoveryCompleted
-                    : MessageKeys.RecoveryFailed));
+                output.WriteLine(text.Resolve(RecoveryMessage(recovered)));
                 return Report(diagnostics, recovered.DiagnosticCode);
             }
 
@@ -175,6 +173,7 @@ public static class CliApplication
     private static Command CreateNextCommand(
         SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
@@ -184,16 +183,17 @@ public static class CliApplication
         command.Options.Add(json);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            IReadOnlyList<SuggestedAction> actions = await application
-                .GetSuggestedActionsAsync(parseResult.GetValue(projectRoot), cancellationToken)
+            ProjectOverview overview = await application
+                .GetOverviewAsync(parseResult.GetValue(projectRoot), cancellationToken)
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(actions));
+                output.WriteLine(StatusJson.Serialize(overview.Status.SuggestedActions));
                 return ExitCodes.Ok;
             }
 
-            WriteActions(text, output, actions);
+            WriteActions(text, output, overview.Status.SuggestedActions);
+            WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });
         return command;
@@ -285,7 +285,7 @@ public static class CliApplication
             output.WriteLine(result.Succeeded
                 ? text.Resolve(MessageKeys.InstallCompleted)
                 : text.Resolve(MessageKeys.InstallFailed));
-            return result.Succeeded ? ExitCodes.Ok : ExitCodes.Internal;
+            return result.Succeeded ? ExitCodes.Ok : ExitCodes.Update;
         });
         return command;
     }
@@ -304,7 +304,7 @@ public static class CliApplication
                 : text.Resolve(MessageKeys.UpdateFailed));
             return result.Diagnostic.Code == UpdateDiagnosticCode.None
                 ? ExitCodes.Ok
-                : ExitCodes.Internal;
+                : ExitCodes.Update;
         });
         return command;
     }
@@ -372,6 +372,14 @@ public static class CliApplication
         StartupState.Blocked => MessageKeys.StartupBlocked,
         _ => MessageKeys.StartupFailed,
     };
+
+    private static string RecoveryMessage(RecoverStartupResult result) =>
+        result switch
+        {
+            { Succeeded: true, Check: null } => MessageKeys.RecoveryNotNeeded,
+            { Succeeded: true } => MessageKeys.RecoveryCompleted,
+            _ => MessageKeys.RecoveryFailed,
+        };
 
     private static string InitMessage(InitializeProjectResult result) =>
         result.DiagnosticCode switch

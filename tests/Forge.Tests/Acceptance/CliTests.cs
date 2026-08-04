@@ -138,7 +138,7 @@ public sealed class CliTests
                 .Parse(["install"])
                 .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-            Assert.Equal(ExitCodes.Internal, exitCode);
+            Assert.Equal(ExitCodes.Update, exitCode);
             Assert.Equal($"{catalog.Resolve(MessageKeys.InstallFailed)}{Environment.NewLine}", output.ToString());
         }
         finally

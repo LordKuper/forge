@@ -36,7 +36,10 @@ public sealed class StatusAdvisorTests
     [Trait("Category", "Unit")]
     public async Task FailedStartupRanksRecoveryWithTheFailingCheck()
     {
-        using TestEnvironment environment = new(new UnsupportedPlatformPreflight());
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 
         ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
             null,
@@ -46,7 +49,7 @@ public sealed class StatusAdvisorTests
             action => action.ActionId == "recover_startup");
         Assert.Equal(1, recovery.Rank);
         Assert.Equal("startup_check", recovery.Target.Kind);
-        Assert.Equal("platform", recovery.Target.Id);
+        Assert.Equal("user_configuration", recovery.Target.Id);
         Assert.Equal(StartupState.Failed, snapshot.Startup);
         Assert.DoesNotContain(
             snapshot.SuggestedActions,

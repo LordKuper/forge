@@ -45,7 +45,7 @@ public sealed class StatusAdvisor(IClock clock)
         List<Candidate> candidates = [];
         StartupCheck? failed = startup.Checks.FirstOrDefault(
             check => check.State == StartupCheckState.Failed);
-        if (failed is not null)
+        if (failed is not null && StartupRecovery.CanRecover(failed))
         {
             string checkId = JsonNamingPolicy.SnakeCaseLower.ConvertName(failed.Id.ToString());
             candidates.Add(new(
