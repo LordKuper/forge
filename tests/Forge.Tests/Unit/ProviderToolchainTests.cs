@@ -94,7 +94,8 @@ public sealed class ProviderToolchainTests
         {
             if (!ranInstaller)
             {
-                Assert.Equal("powershell.exe", request.FileName);
+                Assert.Equal("powershell.exe", Path.GetFileName(request.FileName));
+                Assert.True(Path.IsPathFullyQualified(request.FileName), "PowerShell must be launched by full path.");
                 Assert.Contains("chatgpt.com/codex/install.ps1", request.Arguments[^1], StringComparison.Ordinal);
                 Assert.Contains("CODEX_NON_INTERACTIVE", request.Arguments[^1], StringComparison.Ordinal);
                 ranInstaller = true;
@@ -188,6 +189,39 @@ public sealed class ProviderToolchainTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task DiscoverReportsFailedWhenTheVersionProbeExceedsItsTimeout()
+    {
+        using TestEnvironment environment = new();
+        WriteCodexExecutable(environment);
+        CodexProviderStrategy strategy = new(
+            environment,
+            new HangingProcessRunner(),
+            versionProbeTimeout: TimeSpan.FromMilliseconds(50));
+
+        ProviderStatus status = await strategy.DiscoverAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Failed, status.State);
+        Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateReportsFailedWhenTheInstallerExceedsItsTimeout()
+    {
+        using TestEnvironment environment = new();
+        CodexProviderStrategy strategy = new(
+            environment,
+            new HangingProcessRunner(),
+            installTimeout: TimeSpan.FromMilliseconds(50));
+
+        ProviderStatus status = await strategy.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Failed, status.State);
+        Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task CheckNeverInstallsOrUpdates()
     {
         FakeStrategy missing = new(ProviderKind.Codex, ProviderState.Missing, null);
@@ -268,6 +302,19 @@ public sealed class ProviderToolchainTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(respond(request));
+        }
+    }
+
+    /// <summary>
+    /// Never completes on its own, mirroring how the real <c>ProcessRunner</c> behaves against a
+    /// hung child process: it only ends when the caller's token is cancelled.
+    /// </summary>
+    private sealed class HangingProcessRunner : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+            throw new InvalidOperationException("Unreachable: Task.Delay(Infinite) only returns via cancellation.");
         }
     }
 

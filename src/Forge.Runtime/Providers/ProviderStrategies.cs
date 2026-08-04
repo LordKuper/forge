@@ -17,7 +17,11 @@ public sealed record ProviderInstallSpec(
     IReadOnlyList<string>? UpdateArguments,
     Version? MinimumVersion);
 
-public sealed class CodexProviderStrategy(IEnvironmentPaths paths, IProcessRunner processRunner) : IProviderStrategy
+public sealed class CodexProviderStrategy(
+    IEnvironmentPaths paths,
+    IProcessRunner processRunner,
+    TimeSpan? versionProbeTimeout = null,
+    TimeSpan? installTimeout = null) : IProviderStrategy
 {
     private readonly ProviderInstallSpec spec = new(
         ExecutablePath: Path.Combine(
@@ -40,17 +44,31 @@ public sealed class CodexProviderStrategy(IEnvironmentPaths paths, IProcessRunne
     public ProviderKind Kind => ProviderKind.Codex;
 
     public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken) =>
-        ProviderDiscovery.DiscoverAsync(Kind, spec, processRunner, cancellationToken);
+        ProviderDiscovery.DiscoverAsync(
+            Kind,
+            spec,
+            processRunner,
+            versionProbeTimeout ?? ProviderDiscovery.DefaultVersionProbeTimeout,
+            cancellationToken);
 
     public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken) =>
-        ProviderDiscovery.InstallOrUpdateAsync(Kind, spec, processRunner, cancellationToken);
+        ProviderDiscovery.InstallOrUpdateAsync(
+            Kind,
+            spec,
+            processRunner,
+            versionProbeTimeout ?? ProviderDiscovery.DefaultVersionProbeTimeout,
+            installTimeout ?? ProviderDiscovery.DefaultInstallTimeout,
+            cancellationToken);
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);
 }
 
-public sealed class ClaudeCodeProviderStrategy(IEnvironmentPaths paths, IProcessRunner processRunner)
-    : IProviderStrategy
+public sealed class ClaudeCodeProviderStrategy(
+    IEnvironmentPaths paths,
+    IProcessRunner processRunner,
+    TimeSpan? versionProbeTimeout = null,
+    TimeSpan? installTimeout = null) : IProviderStrategy
 {
     private readonly ProviderInstallSpec spec = new(
         ExecutablePath: Path.Combine(paths.UserProfile, ".local", "bin", "claude.exe"),
@@ -68,10 +86,21 @@ public sealed class ClaudeCodeProviderStrategy(IEnvironmentPaths paths, IProcess
     public ProviderKind Kind => ProviderKind.ClaudeCode;
 
     public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken) =>
-        ProviderDiscovery.DiscoverAsync(Kind, spec, processRunner, cancellationToken);
+        ProviderDiscovery.DiscoverAsync(
+            Kind,
+            spec,
+            processRunner,
+            versionProbeTimeout ?? ProviderDiscovery.DefaultVersionProbeTimeout,
+            cancellationToken);
 
     public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken) =>
-        ProviderDiscovery.InstallOrUpdateAsync(Kind, spec, processRunner, cancellationToken);
+        ProviderDiscovery.InstallOrUpdateAsync(
+            Kind,
+            spec,
+            processRunner,
+            versionProbeTimeout ?? ProviderDiscovery.DefaultVersionProbeTimeout,
+            installTimeout ?? ProviderDiscovery.DefaultInstallTimeout,
+            cancellationToken);
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);
@@ -80,14 +109,27 @@ public sealed class ClaudeCodeProviderStrategy(IEnvironmentPaths paths, IProcess
 /// <summary>Shared by every strategy: fixed-path discovery, version parsing, and native install/update.</summary>
 internal static partial class ProviderDiscovery
 {
-    private static readonly TimeSpan VersionProbeTimeout = TimeSpan.FromSeconds(15);
-    private static readonly TimeSpan InstallTimeout = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DefaultVersionProbeTimeout = TimeSpan.FromSeconds(15);
+    public static readonly TimeSpan DefaultInstallTimeout = TimeSpan.FromMinutes(10);
+
+    /// <summary>
+    /// The bundled Windows PowerShell, resolved by full path rather than bare name. A bare
+    /// `powershell.exe` would let `CreateProcess`'s search order (the calling image's own
+    /// directory and the current directory, both ahead of `System32`) run a planted executable
+    /// instead — the same PATH-shim risk ADR 0002 rules out for the provider CLIs themselves.
+    /// </summary>
+    private static readonly string PowerShellExecutable = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.System),
+        "WindowsPowerShell",
+        "v1.0",
+        "powershell.exe");
 
     /// <summary>Reads a fixed vendor-owned path and runs `--version`. Never touches the network.</summary>
     public static async Task<ProviderStatus> DiscoverAsync(
         ProviderKind kind,
         ProviderInstallSpec spec,
         IProcessRunner processRunner,
+        TimeSpan versionProbeTimeout,
         CancellationToken cancellationToken)
     {
         if (!File.Exists(spec.ExecutablePath))
@@ -98,7 +140,7 @@ internal static partial class ProviderDiscovery
         ProcessResult? result = await RunWithTimeoutAsync(
             processRunner,
             new(spec.ExecutablePath, ["--version"], Path.GetDirectoryName(spec.ExecutablePath)!),
-            VersionProbeTimeout,
+            versionProbeTimeout,
             cancellationToken).ConfigureAwait(false);
         if (result is not { ExitCode: 0 })
         {
@@ -119,16 +161,19 @@ internal static partial class ProviderDiscovery
         ProviderKind kind,
         ProviderInstallSpec spec,
         IProcessRunner processRunner,
+        TimeSpan versionProbeTimeout,
+        TimeSpan installTimeout,
         CancellationToken cancellationToken)
     {
         bool alreadyInstalled = File.Exists(spec.ExecutablePath);
         ProcessRequest request = alreadyInstalled && spec.UpdateArguments is { } updateArguments
             ? new(spec.ExecutablePath, updateArguments, Path.GetDirectoryName(spec.ExecutablePath)!)
-            : new("powershell.exe", spec.InstallArguments, Path.GetTempPath());
-        ProcessResult? result = await RunWithTimeoutAsync(processRunner, request, InstallTimeout, cancellationToken)
+            : new(PowerShellExecutable, spec.InstallArguments, Path.GetTempPath());
+        ProcessResult? result = await RunWithTimeoutAsync(processRunner, request, installTimeout, cancellationToken)
             .ConfigureAwait(false);
         return result is { ExitCode: 0 }
-            ? await DiscoverAsync(kind, spec, processRunner, cancellationToken).ConfigureAwait(false)
+            ? await DiscoverAsync(kind, spec, processRunner, versionProbeTimeout, cancellationToken)
+                .ConfigureAwait(false)
             : new(kind, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
     }
 

@@ -8,7 +8,13 @@ public enum ProviderKind
     ClaudeCode,
 }
 
-/// <summary>Mirrors the `provider_toolchain` state machine in `docs/contracts/v1/state-machines.json`.</summary>
+/// <summary>
+/// Declares the same states as the `provider_toolchain` state machine in
+/// `docs/contracts/v1/state-machines.json`. Install/update today is a single synchronous call
+/// with no event bus to observe mid-flight, so only <see cref="Missing"/>, <see cref="Ready"/>,
+/// and <see cref="Failed"/> are ever produced; <see cref="Installing"/>, <see cref="Updating"/>,
+/// and <see cref="Rechecking"/> are reserved for future asynchronous progress reporting.
+/// </summary>
 public enum ProviderState
 {
     Missing,
