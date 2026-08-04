@@ -1,0 +1,3 @@
+{"type":"system","subtype":"init","session_id":"s1"}
+{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{}},{"type":"text","text":"Hello"},{"type":"text","text":" world"}]}}
+{"type":"result","subtype":"success","result":"done","total_cost_usd":0.01}

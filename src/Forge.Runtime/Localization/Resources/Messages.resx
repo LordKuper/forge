@@ -17,6 +17,8 @@
   <data name="DoctorDescription" xml:space="preserve"><value>Show the ordered startup checks.</value></data>
   <data name="InitDescription" xml:space="preserve"><value>Initialize a Forge project in an explicit directory.</value></data>
   <data name="NextDescription" xml:space="preserve"><value>Show the recommended next actions.</value></data>
+  <data name="ModelsDescription" xml:space="preserve"><value>Discover, install, and update the Codex and Claude Code provider CLIs.</value></data>
+  <data name="ProviderToolchainTitle" xml:space="preserve"><value>Provider toolchain:</value></data>
   <data name="ConfigDescription" xml:space="preserve"><value>Show or change scoped configuration.</value></data>
   <data name="StartupChecksTitle" xml:space="preserve"><value>Startup checks:</value></data>
   <data name="StartupReady" xml:space="preserve"><value>Startup is ready.</value></data>

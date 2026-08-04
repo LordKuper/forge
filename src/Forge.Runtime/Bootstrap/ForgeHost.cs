@@ -2,6 +2,7 @@ using Forge.Application;
 using Forge.Configuration;
 using Forge.Infrastructure;
 using Forge.Localization;
+using Forge.Providers;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -38,6 +39,21 @@ public static class ForgeHost
         services.AddSingleton<ScopedConfigurationService>();
         // A platform composition may register before or after the core defaults.
         services.TryAddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
+        // Adapters need their own concrete strategy, not "any" IProviderStrategy, so each
+        // strategy is resolvable both by its concrete type and through the shared collection.
+        services.TryAddSingleton<CodexProviderStrategy>();
+        services.TryAddSingleton<ClaudeCodeProviderStrategy>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderStrategy, CodexProviderStrategy>(
+            sp => sp.GetRequiredService<CodexProviderStrategy>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderStrategy, ClaudeCodeProviderStrategy>(
+            sp => sp.GetRequiredService<ClaudeCodeProviderStrategy>()));
+        services.TryAddSingleton<IProviderToolchainManager, ProviderToolchainManager>();
+        services.TryAddSingleton<CodexProviderAdapter>();
+        services.TryAddSingleton<ClaudeCodeProviderAdapter>();
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderAdapter, CodexProviderAdapter>(
+            sp => sp.GetRequiredService<CodexProviderAdapter>()));
+        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderAdapter, ClaudeCodeProviderAdapter>(
+            sp => sp.GetRequiredService<ClaudeCodeProviderAdapter>()));
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();
         services.AddSingleton<StartupRecovery>();

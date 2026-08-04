@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Configuration;
+using Forge.Providers;
 using YamlDotNet.Core;
 
 namespace Forge.Application;
@@ -37,7 +38,8 @@ public sealed class ForgeApplication(
     StartupRecovery recovery,
     StatusAdvisor advisor,
     IConfigurationRegistry registry,
-    ScopedConfigurationService configuration)
+    ScopedConfigurationService configuration,
+    IProviderToolchainManager providerToolchain)
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -70,6 +72,17 @@ public sealed class ForgeApplication(
         string? projectRoot,
         CancellationToken cancellationToken) =>
         (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
+
+    /// <summary>
+    /// Read-only discovery, matching the `provider.health` capability's declared `query`/`read`
+    /// contract. Installing or updating is a separate, explicit action: <see cref="RefreshProviderHealthAsync"/>.
+    /// </summary>
+    public Task<ProviderToolchainStatus> GetProviderHealthAsync(CancellationToken cancellationToken) =>
+        providerToolchain.CheckAsync(cancellationToken);
+
+    /// <summary>Installs or updates any provider that is not ready, then rechecks both.</summary>
+    public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
+        providerToolchain.EnsureReadyAsync(cancellationToken);
 
     public async Task<IReadOnlyList<SuggestedAction>> GetSuggestedActionsAsync(
         string? projectRoot,

@@ -2,6 +2,29 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.8.0
+
+### Added
+
+- Added Forge-managed provider toolchain installation for the Codex and Claude
+  Code CLIs, using each vendor's own recommended native Windows install/update
+  mechanism at its documented fixed path, bounded by a timeout so a hung
+  installer cannot block indefinitely.
+- Added the `forge models` command (`GetProviderHealth`), which reports
+  read-only provider discovery by default, with culture-invariant `--json`
+  output; `forge models --refresh` installs or updates any provider that is
+  not ready.
+- Added the `provider_update_failed` diagnostic code for provider install,
+  update, or recheck failures, mapped to CLI exit code 7.
+- The startup `Providers` check now performs real, read-only, offline
+  discovery instead of always blocking; sprint work stays blocked until both
+  providers report `ready`.
+- Added provider execution adapters for Codex and Claude Code: prompts and
+  output never pass through a shell, JSON/JSONL output is parsed against each
+  vendor's documented event shape, and process failures normalize into a
+  stable, redacted failure category (authentication, rate-limited, quota,
+  policy, transient, malformed output, or unknown).
+
 ## v0.7.0
 
 ### Added

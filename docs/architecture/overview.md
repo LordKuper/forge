@@ -163,6 +163,10 @@ lifecycles. Deterministic gates decide pass/fail; models never self-certify test
 
 ## Provider execution and fallback
 
+Forge installs and updates Codex CLI and Claude Code CLI through each
+vendor's own recommended native Windows mechanism, at the fixed path the
+vendor documents (see
+[`decisions/0002-provider-toolchain.md`](decisions/0002-provider-toolchain.md)).
 Provider adapters execute official CLIs without shell-string concatenation,
 consume versioned JSON/JSONL, validate schema-constrained output, and normalize
 quota, rate-limit, authentication, policy, transient, and malformed-output

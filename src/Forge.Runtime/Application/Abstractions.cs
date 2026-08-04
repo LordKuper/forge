@@ -35,6 +35,8 @@ public interface IEnvironmentPaths
 {
     string LocalApplicationData { get; }
 
+    string UserProfile { get; }
+
     string CurrentDirectory { get; }
 }
 

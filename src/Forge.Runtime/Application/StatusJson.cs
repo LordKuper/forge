@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -13,6 +14,9 @@ public static class StatusJson
 
     public static string Serialize(IReadOnlyList<SuggestedAction> actions) =>
         JsonSerializer.Serialize(actions, Options);
+
+    public static string Serialize(ProviderToolchainStatus status) =>
+        JsonSerializer.Serialize(status, Options);
 
     private static JsonSerializerOptions Create()
     {
