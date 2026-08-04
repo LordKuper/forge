@@ -18,7 +18,7 @@ else {
 }
 $expected = @{
     "runner image" = $expectedRunnerImage
-    "Git" = "2.54.0"
+    "Git" = "2.55.0.windows.3"
     "GitHub CLI" = "2.96.0"
     ".NET SDK" = "10.0.302"
 }

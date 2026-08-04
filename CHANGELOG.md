@@ -2,6 +2,12 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.6.4
+
+### Fixed
+
+- Updated the pinned Git version used by release runners.
+
 ## v0.6.3
 
 ### Fixed
