@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
@@ -43,9 +44,13 @@ public sealed class StatusAdvisorTests
 
         SuggestedAction recovery = snapshot.SuggestedActions.Single(
             action => action.ActionId == "recover_startup");
+        Assert.Equal(1, recovery.Rank);
         Assert.Equal("startup_check", recovery.Target.Kind);
         Assert.Equal("platform", recovery.Target.Id);
         Assert.Equal(StartupState.Failed, snapshot.Startup);
+        Assert.DoesNotContain(
+            snapshot.SuggestedActions,
+            action => action.ActionId == "initialize_project");
     }
 
     [Fact]
@@ -74,23 +79,45 @@ public sealed class StatusAdvisorTests
     [Trait("Category", "Unit")]
     public async Task MachineSnapshotStaysCultureInvariant()
     {
-        using TestEnvironment environment = new();
-        await environment.Application.SetConfigurationAsync(
-            ConfigurationScope.User,
-            null,
-            "language.ui",
-            JsonSerializer.SerializeToElement("ru"),
-            TestContext.Current.CancellationToken);
+        CultureInfo originalCulture = CultureInfo.CurrentCulture;
+        CultureInfo originalUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("ru-RU");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru-RU");
+            using TestEnvironment environment = new();
+            await environment.Application.SetConfigurationAsync(
+                ConfigurationScope.User,
+                null,
+                "language.ui",
+                JsonSerializer.SerializeToElement("ru"),
+                TestContext.Current.CancellationToken);
 
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
-            null,
-            TestContext.Current.CancellationToken);
-        using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));
+            ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+                null,
+                TestContext.Current.CancellationToken);
+            using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));
 
-        Assert.Equal("1.0.0", json.RootElement.GetProperty("schema_version").GetString());
-        Assert.Equal("blocked", json.RootElement.GetProperty("startup").GetString());
-        Assert.Equal(
-            "initialize_project",
-            json.RootElement.GetProperty("suggested_actions")[0].GetProperty("action_id").GetString());
+            Assert.Equal("1.0.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("blocked", json.RootElement.GetProperty("startup").GetString());
+            Assert.Equal(
+                "initialize_project",
+                json.RootElement.GetProperty("suggested_actions")[0].GetProperty("action_id").GetString());
+            Assert.Equal(
+                "confirm_mutation",
+                json.RootElement.GetProperty("suggested_actions")[0].GetProperty("safety_class").GetString());
+            Assert.Equal(
+                TimeSpan.Zero,
+                DateTimeOffset
+                    .Parse(
+                        json.RootElement.GetProperty("generated_at").GetString()!,
+                        CultureInfo.InvariantCulture)
+                    .Offset);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUiCulture;
+        }
     }
 }

@@ -62,7 +62,8 @@ public sealed class StatusAdvisor(IClock clock)
                 }));
         }
 
-        if (startup.Project is { Exists: true, Initialized: false, Unknown: false })
+        // A failed startup leaves recovery as the only safe action, so no mutation is offered.
+        if (failed is null && startup.Project is { Exists: true, Initialized: false, Unknown: false })
         {
             candidates.Add(new(
                 "initialize_project",
@@ -115,8 +116,9 @@ public sealed class StatusAdvisor(IClock clock)
     }
 
     /// <summary>Derives a stable idempotency key so an unchanged snapshot repeats the same action.</summary>
-    private static Guid IdempotencyKey(string actionId, ActionTarget target, long stateVersion)
+    public static Guid IdempotencyKey(string actionId, ActionTarget target, long stateVersion)
     {
+        ArgumentNullException.ThrowIfNull(target);
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(string.Create(
             CultureInfo.InvariantCulture,
             $"{actionId}|{target.Kind}|{target.Id}|{stateVersion}")));

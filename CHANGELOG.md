@@ -26,6 +26,12 @@ User-facing Forge changes are listed by release, newest first.
 
 - Fixed the shared host registering an empty configuration key registry, which
   made every scoped configuration lookup fail.
+- Project mutations are refused while startup has a failed check, and only the
+  recovery action is recommended in that state.
+- Configuration values keep their JSON type, so boolean and numeric keys are
+  settable from both surfaces.
+- Corrupt configuration is reported with a diagnostic code instead of an
+  unhandled exception, and a cancelled initialization leaves no staging tree.
 
 ## v0.6.5
 

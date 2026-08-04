@@ -63,12 +63,15 @@ public static class CliApplication
                 .GetStartupStatusAsync(parseResult.GetValue(projectRoot), cancellationToken)
                 .ConfigureAwait(false);
             output.WriteLine(catalog.Resolve(StartupMessage(status.State)));
-            output.WriteLine(catalog.Resolve(MessageKeys.StartupChecksTitle));
-            foreach (StartupCheck check in status.Checks)
+            if (parseResult.GetValue(startup))
             {
-                output.WriteLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"  {Machine(check.Id)} {Machine(check.State)} {check.DiagnosticCode}"));
+                output.WriteLine(catalog.Resolve(MessageKeys.StartupChecksTitle));
+                foreach (StartupCheck check in status.Checks)
+                {
+                    output.WriteLine(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"  {Machine(check.Id)} {Machine(check.State)} {check.DiagnosticCode}"));
+                }
             }
 
             WriteProject(catalog, output, status.Project);
@@ -89,9 +92,21 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            string? root = parseResult.GetValue(projectRoot);
+            // The command dispatches exactly what the recommendation exposes, including its
+            // expected state version and idempotency key.
+            ProjectStatusSnapshot snapshot = await application
+                .GetProjectStatusAsync(root, cancellationToken)
+                .ConfigureAwait(false);
+            SuggestedAction? suggestion = snapshot.SuggestedActions.FirstOrDefault(
+                action => action.ActionId == ForgeApplication.InitializeProjectAction);
             InitializeProjectResult result = await application
                 .InitializeProjectAsync(
-                    new(parseResult.GetValue(projectRoot), parseResult.GetValue(confirm)),
+                    new(
+                        root,
+                        parseResult.GetValue(confirm),
+                        snapshot.StateVersion,
+                        suggestion?.Command.IdempotencyKey),
                     cancellationToken)
                 .ConfigureAwait(false);
             output.WriteLine(string.Create(
@@ -227,7 +242,7 @@ public static class CliApplication
                     scope,
                     parseResult.GetValue(projectRoot),
                     parseResult.GetValue(key)!,
-                    JsonSerializer.SerializeToElement(parseResult.GetValue(value)),
+                    ConfigurationValueParser.Parse(parseResult.GetValue(value)),
                     cancellationToken)
                 .ConfigureAwait(false);
             output.WriteLine(catalog.Resolve(result.Succeeded

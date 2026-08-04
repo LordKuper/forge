@@ -65,15 +65,16 @@ public sealed class ProjectInitializer(
             string.Create(
                 CultureInfo.InvariantCulture,
                 $"{ProjectRootResolver.ForgeDirectoryName}.staging-{Guid.NewGuid():N}"));
+        bool published = false;
         try
         {
             await StageAsync(staging, projectId, request, cancellationToken).ConfigureAwait(false);
             Directory.Move(staging, ProjectRootResolver.ForgeDirectory(root));
+            published = true;
             return new(true, root, projectId, DiagnosticCodes.None);
         }
         catch (IOException)
         {
-            Discard(staging);
             ProjectRootStatus current =
                 await rootResolver.ResolveAsync(root, cancellationToken).ConfigureAwait(false);
             return current.Initialized
@@ -82,13 +83,19 @@ public sealed class ProjectInitializer(
         }
         catch (UnauthorizedAccessException)
         {
-            Discard(staging);
             return new(false, root, null, DiagnosticCodes.InternalError);
         }
         catch (InvalidDataException)
         {
-            Discard(staging);
             return new(false, root, null, DiagnosticCodes.ConfigurationInvalid);
+        }
+        finally
+        {
+            if (!published)
+            {
+                // Cancellation and unexpected failures must never leave a staging tree behind.
+                Discard(staging);
+            }
         }
     }
 

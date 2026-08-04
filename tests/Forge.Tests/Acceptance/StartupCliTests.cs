@@ -31,6 +31,19 @@ public sealed class StartupCliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task DoctorWithoutTheStartupFlagOmitsTheCheckList()
+    {
+        using TestEnvironment environment = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(environment, output, ["doctor"]);
+
+        Assert.Equal(0, exitCode);
+        Assert.DoesNotContain("provider_preflight_pending", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task InitializationDisplaysTheRootAndRequiresConfirmation()
     {
         using TestEnvironment environment = new();

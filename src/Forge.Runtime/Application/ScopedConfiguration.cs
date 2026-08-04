@@ -3,6 +3,28 @@ using Forge.Configuration;
 
 namespace Forge.Application;
 
+/// <summary>Parses surface input into a configuration value without guessing a type.</summary>
+public static class ConfigurationValueParser
+{
+    /// <summary>Accepts JSON literals such as <c>true</c> or <c>42</c>; anything else is a string.</summary>
+    public static JsonElement Parse(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return JsonSerializer.SerializeToElement(string.Empty);
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<JsonElement>(raw).Clone();
+        }
+        catch (JsonException)
+        {
+            return JsonSerializer.SerializeToElement(raw);
+        }
+    }
+}
+
 /// <summary>Owns the location of the user and project configuration stores.</summary>
 public sealed class ScopedConfigurationStores(
     ConfigurationStoreFactory factory,

@@ -24,15 +24,22 @@ public partial class MainPage : ContentPage
         InitializeButton.Text = catalog.Resolve(MessageKeys.InitializeAction);
         ConfigurationTitleLabel.Text = catalog.Resolve(MessageKeys.ConfigurationTitle);
         ConfigurationSetButton.Text = catalog.Resolve(MessageKeys.ConfigurationSetAction);
+        // Scope names are machine identifiers and stay culture invariant.
+        ConfigurationScopePicker.ItemsSource = new List<string> { "user", "project" };
+        ConfigurationScopePicker.SelectedIndex = 0;
     }
+
+    private string? ProjectRoot =>
+        string.IsNullOrWhiteSpace(ProjectRootEntry.Text) ? null : ProjectRootEntry.Text;
 
     /// <summary>Restores the view from durable application state, never from serialized UI objects.</summary>
     public async Task RefreshAsync()
     {
-        StartupStatus startup =
-            await application.GetStartupStatusAsync(null, CancellationToken.None).ConfigureAwait(true);
-        ProjectStatusSnapshot snapshot =
-            await application.GetProjectStatusAsync(null, CancellationToken.None).ConfigureAwait(true);
+        ProjectOverview overview = await application
+            .GetOverviewAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        StartupStatus startup = overview.Startup;
+        ProjectStatusSnapshot snapshot = overview.Status;
         StatusLabel.Text = catalog.Resolve(StartupMessage(snapshot.Startup));
         ProjectRootLabel.Text = string.Create(
             CultureInfo.InvariantCulture,
@@ -52,12 +59,12 @@ public partial class MainPage : ContentPage
                 snapshot.SuggestedActions.Select(action => string.Create(
                     CultureInfo.InvariantCulture,
                     $"{action.Rank}. {action.ActionId} - {catalog.Resolve(action.RationaleKey)}")));
-        InitializeButton.IsEnabled = !snapshot.Project.Initialized;
+        InitializeButton.IsEnabled = !snapshot.Project.Initialized && startup.AllowsProjectMutation;
         ConfigurationLabel.Text = Render(
             null,
             (await application.GetUserConfigurationAsync(CancellationToken.None).ConfigureAwait(true))
                 .Concat(await application
-                    .GetProjectConfigurationAsync(null, CancellationToken.None)
+                    .GetProjectConfigurationAsync(ProjectRoot, CancellationToken.None)
                     .ConfigureAwait(true))
                 .Select(value => string.Create(
                     CultureInfo.InvariantCulture,
@@ -75,13 +82,14 @@ public partial class MainPage : ContentPage
 
     private async void OnInitializeClicked(object? sender, EventArgs e)
     {
-        StartupStatus startup =
-            await application.GetStartupStatusAsync(null, CancellationToken.None).ConfigureAwait(true);
+        ProjectStatusSnapshot snapshot = await application
+            .GetProjectStatusAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
         bool confirmed = await DisplayAlertAsync(
                 catalog.Resolve(MessageKeys.InitializeAction),
                 string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {startup.Project.Root}"),
+                    $"{catalog.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}"),
                 catalog.Resolve(MessageKeys.InitializeAction),
                 catalog.Resolve(MessageKeys.CancelAction))
             .ConfigureAwait(true);
@@ -91,9 +99,15 @@ public partial class MainPage : ContentPage
             return;
         }
 
+        SuggestedAction? suggestion = snapshot.SuggestedActions.FirstOrDefault(
+            action => action.ActionId == ForgeApplication.InitializeProjectAction);
         InitializeProjectResult result = await application
             .InitializeProjectAsync(
-                new(startup.Project.Root, true, StatusAdvisor.StateVersion(startup.Project)),
+                new(
+                    snapshot.Project.Root,
+                    true,
+                    snapshot.StateVersion,
+                    suggestion?.Command.IdempotencyKey),
                 CancellationToken.None)
             .ConfigureAwait(true);
         ConfigurationResultLabel.Text = catalog.Resolve(result.DiagnosticCode switch
@@ -107,12 +121,15 @@ public partial class MainPage : ContentPage
 
     private async void OnConfigurationSetClicked(object? sender, EventArgs e)
     {
+        ConfigurationScope scope = ConfigurationScopePicker.SelectedIndex == 1
+            ? ConfigurationScope.Project
+            : ConfigurationScope.User;
         ConfigurationWriteResult result = await application
             .SetConfigurationAsync(
-                ConfigurationScope.User,
-                null,
+                scope,
+                ProjectRoot,
                 ConfigurationKeyEntry.Text ?? string.Empty,
-                JsonSerializer.SerializeToElement(ConfigurationValueEntry.Text ?? string.Empty),
+                ConfigurationValueParser.Parse(ConfigurationValueEntry.Text),
                 CancellationToken.None)
             .ConfigureAwait(true);
         ConfigurationResultLabel.Text = catalog.Resolve(result.Succeeded

@@ -31,11 +31,11 @@ public sealed class CliTests
 
             Assert.Equal(0, exitCode);
             Assert.Contains(
-                catalog.Resolve(MessageKeys.StartupBlocked),
+                "Запуск заблокирован; работа со спринтами недоступна.",
                 output.ToString(),
                 StringComparison.Ordinal);
             Assert.Contains(
-                catalog.Resolve(MessageKeys.ProjectNotInitialized),
+                "Проект не инициализирован.",
                 output.ToString(),
                 StringComparison.Ordinal);
         }

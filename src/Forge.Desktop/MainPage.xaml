@@ -12,12 +12,14 @@
       <Label x:Name="StartupChecksLabel" />
       <Label x:Name="SuggestedActionsLabel" />
       <HorizontalStackLayout Spacing="8">
+        <Entry x:Name="ProjectRootEntry" WidthRequest="360" />
         <Button x:Name="RefreshButton" Clicked="OnRefreshClicked" />
         <Button x:Name="InitializeButton" Clicked="OnInitializeClicked" />
       </HorizontalStackLayout>
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />
       <HorizontalStackLayout Spacing="8">
+        <Picker x:Name="ConfigurationScopePicker" WidthRequest="120" />
         <Entry x:Name="ConfigurationKeyEntry" WidthRequest="240" />
         <Entry x:Name="ConfigurationValueEntry" WidthRequest="160" />
         <Button x:Name="ConfigurationSetButton" Clicked="OnConfigurationSetClicked" />

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Forge.Updater.Windows;
 
@@ -29,7 +30,8 @@ public static class WindowsUpdateServices
             desktopShortcut: provider.GetRequiredService<IWindowsDesktopShortcut>()));
         services.AddSingleton<IPlatformUpdateStrategy>(provider => provider.GetRequiredService<WindowsUpdateStrategy>());
         services.AddSingleton<PlatformUpdateStrategyResolver>();
-        services.AddSingleton<Forge.Application.IPlatformPreflight, WindowsPlatformPreflight>();
+        services.Replace(ServiceDescriptor
+            .Singleton<Forge.Application.IPlatformPreflight, WindowsPlatformPreflight>());
         services.AddSingleton<WindowsInstaller>();
         return services;
     }

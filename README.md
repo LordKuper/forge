@@ -13,6 +13,23 @@ provider, infrastructure, and bootstrap projects plus both hosts.
 - [AI-assisted software delivery research](docs/architecture/ai-agentic-software-development-workflow.md)
 - [Implementation plan](docs/plans/implementation-plan.md)
 
+## Commands
+
+Every command runs the same ordered startup sequence. Unresolved checks keep
+sprint work fail-closed; a failed check leaves recovery as the only safe action.
+
+| Command | Purpose |
+|---|---|
+| `forge doctor [--startup]` | Show the startup summary, and the ordered checks with `--startup`. |
+| `forge init --project-root <absolute-path> [--yes]` | Display the absolute root and initialize `.forge/` after confirmation. |
+| `forge status [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
+| `forge next [--json]` | Show the deterministic recommended actions. |
+| `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
+
+`--project-root` accepts only an absolute directory and is never resolved
+upward. Values passed to `forge config` are read as JSON literals when possible,
+so `true` and `42` keep their type.
+
 ## Prerequisites
 
 - .NET SDK 10.0.302, pinned by `global.json`.

@@ -10,6 +10,8 @@ public static class DiagnosticCodes
     public const string ProviderPreflightPending = "provider_preflight_pending";
     public const string ConfigurationInvalid = "configuration_invalid";
     public const string ConfigurationScopeViolation = "configuration_scope_violation";
+    public const string ConfigurationKeyUnknown = "configuration_key_unknown";
+    public const string StartupFailed = "startup_failed";
     public const string ProjectRootNotAbsolute = "project_root_not_absolute";
     public const string ProjectRootMissing = "project_root_missing";
     public const string ProjectNotInitialized = "project_not_initialized";
@@ -50,11 +52,6 @@ public sealed record StartupCheck(StartupCheckId Id, StartupCheckState State, st
 {
     public static StartupCheck Passed(StartupCheckId id) =>
         new(id, StartupCheckState.Passed, DiagnosticCodes.None);
-
-    /// <summary>A blocked check that a recovery action can clear without reinstalling Forge.</summary>
-    public bool IsRecoverable =>
-        State is StartupCheckState.Blocked or StartupCheckState.Failed &&
-        DiagnosticCode is not DiagnosticCodes.ProjectNotInitialized;
 }
 
 public sealed record LanguageSelection(string Ui, string Interaction, string Llm)
@@ -77,6 +74,9 @@ public sealed record StartupStatus(
 {
     /// <summary>Sprint work is fail-closed while any startup check is unresolved.</summary>
     public bool AllowsSprintWork => State == StartupState.Ready;
+
+    /// <summary>A failed check leaves recovery as the only safe action; mutations are refused.</summary>
+    public bool AllowsProjectMutation => State != StartupState.Failed;
 }
 
 public sealed record PlatformPreflightResult(
