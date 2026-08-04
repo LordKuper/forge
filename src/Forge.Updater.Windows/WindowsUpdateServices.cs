@@ -29,6 +29,7 @@ public static class WindowsUpdateServices
             desktopShortcut: provider.GetRequiredService<IWindowsDesktopShortcut>()));
         services.AddSingleton<IPlatformUpdateStrategy>(provider => provider.GetRequiredService<WindowsUpdateStrategy>());
         services.AddSingleton<PlatformUpdateStrategyResolver>();
+        services.AddSingleton<Forge.Application.IPlatformPreflight, WindowsPlatformPreflight>();
         services.AddSingleton<WindowsInstaller>();
         return services;
     }

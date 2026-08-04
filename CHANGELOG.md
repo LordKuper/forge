@@ -2,6 +2,31 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.7.0
+
+### Added
+
+- Added the ordered fail-closed startup sequence shared by the CLI and Desktop
+  surfaces, reporting user configuration, language, platform, update strategy,
+  release, provider, and project checks with stable diagnostic codes.
+- Added explicit project-root verification and confirmed `.forge/`
+  initialization that stages a complete tree, publishes it atomically, stays
+  idempotent, and never overwrites an unknown project directory.
+- Added the versioned project status snapshot with deterministic recovery and
+  initialization recommendations, stable idempotency keys, and stale-state
+  rejection without side effects.
+- Added the `forge doctor`, `forge init`, `forge status`, `forge next`, and
+  `forge config` commands with culture-invariant `--json` output.
+- Added the Desktop startup, project, recommendation, and configuration views
+  that restore from durable application state.
+- Added scoped configuration reading and editing with provenance, cross-scope
+  rejection, and project artifact languages independent of the user language.
+
+### Fixed
+
+- Fixed the shared host registering an empty configuration key registry, which
+  made every scoped configuration lookup fail.
+
 ## v0.6.5
 
 ### Fixed

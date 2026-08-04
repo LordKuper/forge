@@ -1,4 +1,5 @@
 using System.CommandLine;
+using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Cli;
 using Forge.Localization;
@@ -37,6 +38,7 @@ IForgeSelfUpdater updater = host.Services.GetRequiredService<IForgeSelfUpdater>(
 RootCommand root = CliApplication.CreateRootCommand(
     catalog,
     Console.Out,
+    host.Services.GetRequiredService<ForgeApplication>(),
     installer.InstallLatestAsync,
     cancellationToken => updater.UpdateAsync(
         new(

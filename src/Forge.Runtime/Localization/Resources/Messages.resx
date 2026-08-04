@@ -14,4 +14,30 @@
   <data name="UpdateDescription" xml:space="preserve"><value>Update Forge to the latest release.</value></data>
   <data name="UpdateCompleted" xml:space="preserve"><value>Forge update completed.</value></data>
   <data name="UpdateFailed" xml:space="preserve"><value>Forge update failed.</value></data>
+  <data name="DoctorDescription" xml:space="preserve"><value>Show the ordered startup checks.</value></data>
+  <data name="InitDescription" xml:space="preserve"><value>Initialize a Forge project in an explicit directory.</value></data>
+  <data name="NextDescription" xml:space="preserve"><value>Show the recommended next actions.</value></data>
+  <data name="ConfigDescription" xml:space="preserve"><value>Show or change scoped configuration.</value></data>
+  <data name="StartupChecksTitle" xml:space="preserve"><value>Startup checks:</value></data>
+  <data name="StartupReady" xml:space="preserve"><value>Startup is ready.</value></data>
+  <data name="StartupBlocked" xml:space="preserve"><value>Startup is blocked; sprint work stays unavailable.</value></data>
+  <data name="StartupFailed" xml:space="preserve"><value>Startup failed; only recovery is available.</value></data>
+  <data name="ProjectRootLabel" xml:space="preserve"><value>Project root:</value></data>
+  <data name="ProjectInitialized" xml:space="preserve"><value>The project is initialized.</value></data>
+  <data name="ProjectNotInitialized" xml:space="preserve"><value>The project is not initialized.</value></data>
+  <data name="InitConfirmationRequired" xml:space="preserve"><value>Confirm initialization of the displayed directory before it is created.</value></data>
+  <data name="InitCompleted" xml:space="preserve"><value>The Forge project was initialized.</value></data>
+  <data name="InitAlreadyInitialized" xml:space="preserve"><value>The Forge project is already initialized.</value></data>
+  <data name="InitFailed" xml:space="preserve"><value>Forge project initialization failed.</value></data>
+  <data name="SuggestedActionsTitle" xml:space="preserve"><value>Recommended actions:</value></data>
+  <data name="NoSuggestedActions" xml:space="preserve"><value>No safe action is available.</value></data>
+  <data name="ConfigurationTitle" xml:space="preserve"><value>Configuration:</value></data>
+  <data name="ConfigurationUpdated" xml:space="preserve"><value>The configuration was updated.</value></data>
+  <data name="ConfigurationRejected" xml:space="preserve"><value>The configuration change was rejected.</value></data>
+  <data name="RefreshAction" xml:space="preserve"><value>Refresh</value></data>
+  <data name="InitializeAction" xml:space="preserve"><value>Initialize project</value></data>
+  <data name="ConfigurationSetAction" xml:space="preserve"><value>Apply</value></data>
+  <data name="CancelAction" xml:space="preserve"><value>Cancel</value></data>
+  <data name="next.recover_startup.rationale" xml:space="preserve"><value>A startup check failed and must be recovered before project work.</value></data>
+  <data name="next.initialize_project.rationale" xml:space="preserve"><value>The confirmed directory has no Forge project yet.</value></data>
 </root>

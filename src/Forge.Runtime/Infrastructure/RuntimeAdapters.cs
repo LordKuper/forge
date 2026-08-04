@@ -81,6 +81,14 @@ public sealed class NetworkClient(HttpClient client) : INetworkClient
         client.GetStreamAsync(uri, cancellationToken);
 }
 
+public sealed class SystemEnvironmentPaths : IEnvironmentPaths
+{
+    public string LocalApplicationData { get; } =
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+    public string CurrentDirectory => Environment.CurrentDirectory;
+}
+
 public static class InfrastructureServices
 {
     public static IServiceCollection AddForgeInfrastructure(this IServiceCollection services)
@@ -91,6 +99,7 @@ public static class InfrastructureServices
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton(new HttpClient());
         services.AddSingleton<INetworkClient, NetworkClient>();
+        services.AddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
         services.AddSingleton<ISafeLogger, SafeLogger>();
         return services;
     }

@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
+    <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
 </Project>
