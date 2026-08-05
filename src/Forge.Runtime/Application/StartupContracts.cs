@@ -19,6 +19,9 @@ public static class DiagnosticCodes
     public const string ProjectAlreadyInitialized = "project_already_initialized";
     public const string ConfirmationRequired = "confirmation_required";
     public const string SuggestionStale = "suggestion_stale";
+    public const string SprintNotFound = "sprint_not_found";
+    public const string SprintTransitionInvalid = "sprint_transition_invalid";
+    public const string WorkflowEventConflict = "workflow_event_conflict";
 }
 
 public enum StartupState

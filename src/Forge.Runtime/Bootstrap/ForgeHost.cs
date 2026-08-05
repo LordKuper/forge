@@ -56,6 +56,8 @@ public static class ForgeHost
             sp => sp.GetRequiredService<ClaudeCodeProviderAdapter>()));
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();
+        services.AddSingleton<ISprintStore, FileSprintEventLog>();
+        services.AddSingleton<SprintOrchestrator>();
         services.AddSingleton<StartupRecovery>();
         services.AddSingleton<StartupPipeline>();
         services.AddSingleton<StatusAdvisor>();

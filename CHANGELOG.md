@@ -2,6 +2,30 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.9.0
+
+### Added
+
+- Added durable, event-sourced sprint persistence: every sprint/node/attempt
+  transition is an append-only, localization-safe event under
+  `.forge/sprints/{id}/events.jsonl`, and current state is always folded from
+  that log, so a crash can never leave state inconsistent with its own
+  history. Concurrent mutation is rejected through optimistic concurrency on
+  each aggregate's own version, and a retried command with the same
+  idempotency key is a safe no-op instead of a duplicate transition.
+- Added `SprintOrchestrator`, creating sprints and advancing them through the
+  frozen `sprint` state machine (create, run, cancel, resume) one legal
+  transition at a time. Created sprints are registered in the project
+  manifest's `sprints` list.
+- Added the `sprint_not_found`, `sprint_transition_invalid`, and
+  `workflow_event_conflict` diagnostic codes.
+- Added the `node`/`attempt` state machines and durable event contract to the
+  domain model, mirrored exactly from the frozen v1 state-machine contract.
+
+This is the persistence slice of Stage 6. `forge sprint`/Desktop sprint
+management, node/attempt DAG scheduling, retries, human gates, findings, and
+handoffs land in subsequent Stage 6 work.
+
 ## v0.8.0
 
 ### Added

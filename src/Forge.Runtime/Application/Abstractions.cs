@@ -1,3 +1,5 @@
+using Forge.Domain;
+
 namespace Forge.Application;
 
 public interface IClock
@@ -45,7 +47,41 @@ public interface IRepository
     Task<string> GetHeadAsync(CancellationToken cancellationToken);
 }
 
-public interface ISprintStore;
+public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode)
+{
+    public static AppendOutcome Conflict { get; } = new(false, null, DiagnosticCodes.WorkflowEventConflict);
+}
+
+/// <summary>
+/// Durable, event-sourced sprint/node/attempt state. Every mutation is an append-only
+/// <see cref="WorkflowEvent"/>; current state is always folded from that stream, never cached
+/// authoritatively, so a crash can never leave state inconsistent with its own history.
+/// </summary>
+public interface ISprintStore
+{
+    Task<SprintWorkflowState?> LoadAsync(string projectRoot, SprintId id, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Appends one transition if <paramref name="expectedAggregateVersion"/> still matches the
+    /// aggregate's current version (0 for an aggregate that does not exist yet) and
+    /// <paramref name="idempotencyKey"/> was not already applied. A replayed key returns the
+    /// current state without appending again; a version mismatch returns
+    /// <see cref="AppendOutcome.Conflict"/> without any side effect.
+    /// </summary>
+    Task<AppendOutcome> AppendTransitionAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AggregateKind aggregateKind,
+        string aggregateId,
+        string type,
+        string messageKey,
+        string toState,
+        long expectedAggregateVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken);
+}
 
 public interface IArtifactStore;
 
