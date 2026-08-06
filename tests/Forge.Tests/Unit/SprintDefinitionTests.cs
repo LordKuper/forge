@@ -26,6 +26,40 @@ public sealed class SprintDefinitionTests
         Assert.Equal("1.0.0", definition.WorkflowVersion);
         Assert.Equal("\"en\"", definition.ConfigurationSnapshot["artifacts.language.user_facing"]);
         Assert.Empty(definition.Dependencies);
+        Assert.Equal("en", definition.ConversationLanguage);
+        Assert.Matches("^sha256:[0-9a-f]{64}$", definition.ArtifactPolicySnapshotHash);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheArtifactPolicySnapshotHashStaysFrozenAfterALaterConfigurationChange()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        string originalHash =
+            (await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .ArtifactPolicySnapshotHash;
+
+        await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "artifacts.language.agent_facing",
+            "ru",
+            cancellationToken);
+        SprintDefinition? afterChange =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.Equal(originalHash, afterChange!.ArtifactPolicySnapshotHash);
+
+        SprintId secondSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        string secondHash =
+            (await orchestrator.GetDefinitionAsync(environment.ProjectRoot, secondSprintId, cancellationToken))!
+            .ArtifactPolicySnapshotHash;
+        Assert.NotEqual(originalHash, secondHash);
     }
 
     [Fact]

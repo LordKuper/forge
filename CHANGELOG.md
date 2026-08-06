@@ -2,6 +2,32 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.12.0
+
+### Added
+
+- A sprint now freezes its conversation language (from the user's
+  `language.llm` preference) and an artifact-policy snapshot hash
+  separately from each other and from the project's artifact-language
+  configuration, so a personal interaction language can never leak into a
+  project's shared, committed artifact language.
+
+### Security
+
+- Verified every durable sprint/node/attempt/finding/handoff record stores
+  only localization keys and structured arguments, never rendered text
+  (handoffs remain the one contractually free-text record, written for a
+  model to read rather than shown as localized UI), and that state written
+  under a non-invariant culture (Turkish, the classic dotless-`ı` case)
+  reads back identically under the invariant culture.
+
+This completes Stage 6 (durable independent sprints and the workflow
+engine): concurrent sprints stay fully isolated in the same project and
+both resume deterministically from a freshly reopened store, with no
+in-memory or transcript dependency. No real node executor exists yet
+(Stage 7 provides isolated Git worktrees for one), and there is still no
+CLI/Desktop surface for any sprint capability.
+
 ## v0.11.0
 
 ### Added

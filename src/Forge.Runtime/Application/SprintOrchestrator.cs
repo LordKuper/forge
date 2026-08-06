@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Forge.Configuration;
 using Forge.Domain;
@@ -143,14 +145,18 @@ public sealed class SprintOrchestrator(
             return new(false, null, outcome.DiagnosticCode);
         }
 
+        IReadOnlyDictionary<string, string> configurationSnapshot =
+            await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false);
         SprintDefinition definition = new(
             sprintId,
             baseCommit,
             ProjectInitializer.WorkflowName,
             ProjectInitializer.WorkflowContractVersion,
-            await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false),
+            configurationSnapshot,
             dependencies,
             graph,
+            await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
+            ArtifactPolicySnapshotHash(configurationSnapshot),
             clock.UtcNow);
         await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
         await scheduler.InitializeGraphAsync(status.Root, sprintId, graph, cancellationToken).ConfigureAwait(false);
@@ -331,6 +337,29 @@ public sealed class SprintOrchestrator(
         IReadOnlyList<EffectiveConfigurationValue> values =
             await configuration.GetProjectAsync(root, cancellationToken).ConfigureAwait(false);
         return values.ToDictionary(value => value.Key, value => value.Value.GetRawText(), StringComparer.Ordinal);
+    }
+
+    /// <summary>The language a provider is spoken to in, resolved and frozen independently of any
+    /// project artifact language.</summary>
+    private async Task<string> ConversationLanguageAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<EffectiveConfigurationValue> values =
+            await configuration.GetUserAsync(null, cancellationToken).ConfigureAwait(false);
+        return values.First(value => value.Key == "language.llm").Value.GetString() ?? "en";
+    }
+
+    /// <summary>
+    /// A stable digest over the project's frozen artifact-language policy, so a generated
+    /// artifact's metadata can name exactly which policy snapshot governed it (Stage 8+); nothing
+    /// here produces an artifact yet.
+    /// </summary>
+    private static string ArtifactPolicySnapshotHash(IReadOnlyDictionary<string, string> configurationSnapshot)
+    {
+        string userFacing = configurationSnapshot.GetValueOrDefault("artifacts.language.user_facing", "\"en\"");
+        string agentFacing = configurationSnapshot.GetValueOrDefault("artifacts.language.agent_facing", "\"en\"");
+        byte[] hash = SHA256.HashData(
+            Encoding.UTF8.GetBytes($"artifacts.language.user_facing={userFacing}|artifacts.language.agent_facing={agentFacing}"));
+        return $"sha256:{Convert.ToHexStringLower(hash)}";
     }
 
     private async Task RegisterSprintAsync(string root, SprintId sprintId, CancellationToken cancellationToken)

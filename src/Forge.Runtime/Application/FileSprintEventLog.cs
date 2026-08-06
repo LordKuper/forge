@@ -55,6 +55,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ConfigurationSnapshot = new(definition.ConfigurationSnapshot, StringComparer.Ordinal),
             Dependencies = [.. definition.Dependencies.Select(ToPersisted)],
             Graph = [.. definition.Graph.Select(ToPersisted)],
+            ConversationLanguage = definition.ConversationLanguage,
+            ArtifactPolicySnapshotHash = definition.ArtifactPolicySnapshotHash,
             FrozenAt = definition.FrozenAt,
         };
         await AtomicConfigurationFile.WriteAsync(
@@ -85,6 +87,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             persisted.ConfigurationSnapshot,
             [.. persisted.Dependencies.Select(FromPersisted)],
             [.. persisted.Graph.Select(FromPersisted)],
+            persisted.ConversationLanguage,
+            persisted.ArtifactPolicySnapshotHash,
             persisted.FrozenAt);
     }
 
@@ -538,6 +542,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<PersistedDependency> Dependencies { get; set; } = [];
 
         public List<PersistedNode> Graph { get; set; } = [];
+
+        public string ConversationLanguage { get; set; } = "en";
+
+        public string ArtifactPolicySnapshotHash { get; set; } = string.Empty;
 
         public DateTimeOffset FrozenAt { get; set; }
     }
