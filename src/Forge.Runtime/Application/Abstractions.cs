@@ -81,7 +81,8 @@ public interface ISprintStore
         string toState,
         long expectedAggregateVersion,
         Guid idempotencyKey,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? extraArguments = null);
 
     /// <summary>
     /// Persists a sprint's frozen definition once. Nothing in this store ever updates it again;
@@ -92,6 +93,29 @@ public interface ISprintStore
     Task<SprintDefinition?> LoadDefinitionAsync(
         string projectRoot,
         SprintId id,
+        CancellationToken cancellationToken);
+
+    /// <summary>Node results, findings, and handoffs are small mutable/append records, not state
+    /// machines — they need no event sourcing of their own.</summary>
+    Task SaveNodeResultAsync(string projectRoot, NodeResult result, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<NodeResult>> GetNodeResultsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    Task SaveFindingAsync(string projectRoot, Finding finding, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Finding>> GetFindingsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    Task SaveHandoffAsync(string projectRoot, Handoff handoff, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Handoff>> GetHandoffsAsync(
+        string projectRoot,
+        SprintId sprintId,
         CancellationToken cancellationToken);
 }
 

@@ -8,7 +8,8 @@ namespace Forge.Application;
 /// <summary>Serializes a <see cref="WorkflowEvent"/> to/from one line conforming to event.schema.json.</summary>
 internal static class WorkflowEventCodec
 {
-    private static readonly JsonSchema Schema = LoadSchema();
+    private static readonly JsonSchema Schema =
+        SchemaValidation.LoadEmbedded("Forge.Application.Schemas.event.schema.json");
     private static readonly JsonSerializerOptions JsonOptions = ConfigurationSchemaCodec.SerializerOptions;
     private static readonly JsonSerializerOptions CompactOptions = new() { WriteIndented = false };
 
@@ -58,25 +59,7 @@ internal static class WorkflowEventCodec
             persisted.CausationId);
     }
 
-    private static void Validate(JsonElement element)
-    {
-        EvaluationResults result = Schema.Evaluate(
-            element,
-            new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
-        if (!result.IsValid)
-        {
-            throw new InvalidDataException("The workflow event does not conform to contract v1.");
-        }
-    }
-
-    private static JsonSchema LoadSchema()
-    {
-        using Stream stream = typeof(WorkflowEventCodec).Assembly.GetManifestResourceStream(
-            "Forge.Application.Schemas.event.schema.json") ??
-            throw new InvalidOperationException("The embedded event schema is missing.");
-        using JsonDocument document = JsonDocument.Parse(stream);
-        return JsonSchema.Build(document.RootElement.Clone());
-    }
+    private static void Validate(JsonElement element) => SchemaValidation.Validate(element, Schema, "workflow event");
 
     private sealed class Persisted
     {

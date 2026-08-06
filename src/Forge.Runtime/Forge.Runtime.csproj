@@ -21,5 +21,14 @@
     <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\event.schema.json"
       LogicalName="Forge.Application.Schemas.event.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\node-result.schema.json"
+      LogicalName="Forge.Application.Schemas.node-result.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\finding.schema.json"
+      LogicalName="Forge.Application.Schemas.finding.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\handoff.schema.json"
+      LogicalName="Forge.Application.Schemas.handoff.schema.json" />
   </ItemGroup>
 </Project>

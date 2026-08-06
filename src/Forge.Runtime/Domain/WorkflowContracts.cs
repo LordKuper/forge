@@ -48,10 +48,12 @@ public enum AttemptState
     Cancelled,
 }
 
-public sealed record NodeId(Guid Value)
-{
-    public static NodeId New() => new(Guid.NewGuid());
-}
+/// <summary>
+/// A node's identity is the stable, workflow-assigned string a graph declares it with (e.g.
+/// "spec", "adr") — not a random value — so the same workflow always produces the same node
+/// identities across sprints and a node result can name it without a lookup.
+/// </summary>
+public sealed record NodeId(string Value);
 
 public sealed record AttemptId(Guid Value)
 {
@@ -62,7 +64,8 @@ public sealed record NodeSnapshot(
     NodeId Id,
     NodeState State,
     long Version,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    int AttemptCount = 0);
 
 public sealed record AttemptSnapshot(
     AttemptId Id,

@@ -8,7 +8,8 @@ public sealed record CreateSprintCommand(
     string? ProjectRoot,
     long ExpectedStateVersion,
     Guid IdempotencyKey,
-    IReadOnlyList<SprintDependency>? Dependencies = null);
+    IReadOnlyList<SprintDependency>? Dependencies = null,
+    IReadOnlyList<NodeDefinition>? Graph = null);
 
 public sealed record CreateSprintResult(bool Succeeded, SprintId? SprintId, string DiagnosticCode);
 
@@ -51,7 +52,8 @@ public sealed class SprintOrchestrator(
     IConfigurationRegistry registry,
     IRepository repository,
     ScopedConfigurationService configuration,
-    IClock clock)
+    IClock clock,
+    SprintScheduler scheduler)
 {
     public const string CreateSprintAction = "create_sprint";
     public const string RunSprintAction = "run_sprint";
@@ -108,6 +110,12 @@ public sealed class SprintOrchestrator(
             return new(false, null, dependencyDiagnostic);
         }
 
+        IReadOnlyList<NodeDefinition> graph = command.Graph ?? [];
+        if (!SprintGraphValidator.IsValid(graph))
+        {
+            return new(false, null, DiagnosticCodes.SprintGraphInvalid);
+        }
+
         string baseCommit;
         try
         {
@@ -142,8 +150,10 @@ public sealed class SprintOrchestrator(
             ProjectInitializer.WorkflowContractVersion,
             await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false),
             dependencies,
+            graph,
             clock.UtcNow);
         await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
+        await scheduler.InitializeGraphAsync(status.Root, sprintId, graph, cancellationToken).ConfigureAwait(false);
 
         await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
         await RecordCreatedSprintAsync(status.Root, command.IdempotencyKey, sprintId.Value, cancellationToken)
@@ -163,10 +173,27 @@ public sealed class SprintOrchestrator(
             : null;
     }
 
-    public Task<SprintTransitionResult> RunSprintAsync(
+    public async Task<SprintTransitionResult> RunSprintAsync(
         SprintTransitionCommand command,
-        CancellationToken cancellationToken) =>
-        TransitionAsync(command, RunSprintAction, "workflow.sprint_advanced", RunTarget, cancellationToken);
+        CancellationToken cancellationToken)
+    {
+        SprintTransitionResult result = await TransitionAsync(
+                command, RunSprintAction, "workflow.sprint_advanced", RunTarget, cancellationToken)
+            .ConfigureAwait(false);
+        if (result is { Succeeded: true, Sprint.State: SprintState.Running })
+        {
+            // A node graph may open with a human gate; entering `running` is the only moment that
+            // gate becomes eligible to auto-promote to `awaiting_human`, so the scheduler needs a
+            // chance to react right here rather than waiting for some other call to happen along.
+            ProjectRootStatus status = await rootResolver
+                .ResolveAsync(command.ProjectRoot, cancellationToken)
+                .ConfigureAwait(false);
+            await scheduler.AdvanceGraphAsync(status.Root, command.SprintId, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        return result;
+    }
 
     public Task<SprintTransitionResult> CancelSprintAsync(
         SprintTransitionCommand command,

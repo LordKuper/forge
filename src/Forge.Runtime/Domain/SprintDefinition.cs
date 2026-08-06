@@ -28,4 +28,5 @@ public sealed record SprintDefinition(
     string WorkflowVersion,
     IReadOnlyDictionary<string, string> ConfigurationSnapshot,
     IReadOnlyList<SprintDependency> Dependencies,
+    IReadOnlyList<NodeDefinition> Graph,
     DateTimeOffset FrozenAt);

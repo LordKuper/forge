@@ -24,6 +24,13 @@ public static class DiagnosticCodes
     public const string WorkflowEventConflict = "workflow_event_conflict";
     public const string RepositoryHeadUnavailable = "repository_head_unavailable";
     public const string SprintDependencyNotTerminal = "sprint_dependency_not_terminal";
+    public const string SprintGraphInvalid = "sprint_graph_invalid";
+    public const string SprintNotRunning = "sprint_not_running";
+    public const string NodeNotFound = "node_not_found";
+    public const string NodeKindMismatch = "node_kind_mismatch";
+    public const string NodeTransitionInvalid = "node_transition_invalid";
+    public const string FindingNotFound = "finding_not_found";
+    public const string WorkflowRecordInvalid = "workflow_record_invalid";
 }
 
 public enum StartupState

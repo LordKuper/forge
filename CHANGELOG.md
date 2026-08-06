@@ -2,6 +2,38 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.11.0
+
+### Added
+
+- Added the deterministic sprint node/attempt scheduler: a sprint's frozen
+  graph advances nodes to `ready` only once their declared dependencies have
+  succeeded or been skipped, work-node failures automatically retry up to a
+  bounded limit before blocking the sprint, and a sprint automatically
+  reaches `ready_to_finalize` once every node has settled successfully.
+- Added human gate nodes: as soon as one becomes eligible while its sprint is
+  running, it moves straight to awaiting a decision; approving or rejecting
+  it is durable and schema-validated like every other transition.
+- Added manual node retry (matching the existing `retry_failed_node`
+  recommendation), letting an exhausted node be re-armed after a fix.
+- Added findings (record/resolve) and structured handoffs (record/read) per
+  sprint, and node results recording each attempt's digest-based outcome,
+  all validated against their existing frozen v1 schemas.
+- Added the `sprint_graph_invalid`, `sprint_not_running`, `node_not_found`,
+  `node_kind_mismatch`, `node_transition_invalid`, `finding_not_found`, and
+  `workflow_record_invalid` diagnostic codes.
+
+### Fixed
+
+- Corrected node identity to the stable, workflow-assigned string
+  `node-result.schema.json` specifies (e.g. `"spec"`), rather than a random
+  value — the earlier persistence slice used the wrong shape before any node
+  actually existed to expose the bug.
+
+This is the scheduling slice of Stage 6. It is a deterministic engine only:
+no real node executor exists yet, and there is still no CLI/Desktop
+surface for any of it.
+
 ## v0.10.0
 
 ### Added

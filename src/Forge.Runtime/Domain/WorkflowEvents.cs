@@ -1,3 +1,5 @@
+using System.Globalization;
+
 namespace Forge.Domain;
 
 /// <summary>Matches `aggregate.kind` in docs/contracts/v1/schemas/event.schema.json.</summary>
@@ -28,6 +30,9 @@ public sealed record WorkflowEvent(
     Guid? CausationId = null)
 {
     public const string ToStateArgument = "to_state";
+
+    /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
+    public const string AttemptNumberArgument = "attempt_number";
 }
 
 public sealed record SprintWorkflowState(
@@ -90,11 +95,19 @@ public static class WorkflowFold
                         current.OccurredAt);
                     break;
                 case AggregateKind.Node:
+                    int attemptCount = current.Arguments.TryGetValue(
+                        WorkflowEvent.AttemptNumberArgument,
+                        out string? countText) && countText is not null
+                        ? int.Parse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture)
+                        : nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previous)
+                            ? previous.AttemptCount
+                            : 0;
                     nodes[current.Aggregate.Id] = new(
-                        new(Guid.Parse(current.Aggregate.Id)),
+                        new(current.Aggregate.Id),
                         WorkflowStateNames.Parse<NodeState>(toState),
                         current.Aggregate.Version,
-                        current.OccurredAt);
+                        current.OccurredAt,
+                        attemptCount);
                     break;
                 case AggregateKind.Attempt:
                     attempts[current.Aggregate.Id] = new(
