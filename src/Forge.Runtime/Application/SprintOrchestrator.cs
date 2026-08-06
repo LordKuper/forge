@@ -373,6 +373,13 @@ public sealed class SprintOrchestrator(
             .ConfigureAwait(false);
     }
 
+    // A crash between the sprint's first durable event (above) and this ledger write is a real,
+    // unclosed window: a retried CreateSprintAsync call would not find its key here yet, so it
+    // creates a *second* sprint while the first sits orphaned (never registered in the manifest,
+    // so never surfaced or otherwise reachable). No cross-file transaction spans these two writes,
+    // and closing the window that way is out of scope here — the bounded consequence (a harmless,
+    // undiscoverable orphan directory, never corrupted or duplicated *visible* state) is judged
+    // acceptable for now rather than fixed.
     private static string CreationLedgerPath(string root) =>
         Path.Combine(ProjectRootResolver.ForgeDirectory(root), "sprints", "created.json");
 

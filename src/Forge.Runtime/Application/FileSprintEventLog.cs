@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text;
 using System.Text.Json;
 using Forge.Configuration;
@@ -189,7 +190,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             NextNodeIds = handoff.NextNodeIds is null ? null : [.. handoff.NextNodeIds],
         };
         await AtomicConfigurationFile.WriteAsync(
-            Path.Combine(directory, $"{SanitizeFileName(handoff.NodeId.Value)}.json"),
+            Path.Combine(directory, $"{handoff.HandoffId:N}.json"),
             JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
             cancellationToken).ConfigureAwait(false);
     }
@@ -238,6 +239,14 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         return Task.FromResult<IReadOnlyList<SprintId>>(ids);
     }
 
+    /// <summary>
+    /// One lock per sprint directory serializes the read-check-append critical section below.
+    /// Nothing else in this store mutates a sprint concurrently, but nothing previously stopped
+    /// two in-process callers from both observing the same version and both winning the append;
+    /// different sprints still append fully in parallel (different keys, different semaphores).
+    /// </summary>
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(StringComparer.Ordinal);
+
     public async Task<AppendOutcome> AppendTransitionAsync(
         string projectRoot,
         SprintId sprintId,
@@ -256,53 +265,75 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         string eventsPath = EventsPath(directory);
         string idempotencyPath = IdempotencyPath(directory);
 
-        Dictionary<Guid, DateTimeOffset> applied =
-            await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
-        if (applied.ContainsKey(idempotencyKey))
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            SprintWorkflowState? replayed =
-                await LoadAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-            return new(true, replayed, DiagnosticCodes.None);
-        }
-
-        IReadOnlyList<WorkflowEvent> events =
-            await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
-        long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
-        if (currentVersion != expectedAggregateVersion)
-        {
-            return AppendOutcome.Conflict;
-        }
-
-        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
-        {
-            [WorkflowEvent.ToStateArgument] = toState,
-        };
-        if (extraArguments is not null)
-        {
-            foreach ((string key, string? value) in extraArguments)
+            Dictionary<Guid, DateTimeOffset> applied =
+                await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
+            if (applied.ContainsKey(idempotencyKey))
             {
-                arguments[key] = value;
+                SprintWorkflowState? replayed =
+                    await LoadAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+                return new(true, replayed, DiagnosticCodes.None, true);
             }
+
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+            long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
+            if (currentVersion != expectedAggregateVersion)
+            {
+                return AppendOutcome.Conflict;
+            }
+
+            string? currentStateText = CurrentStateText(events, aggregateKind, aggregateId);
+            if (!IsLegalTransition(aggregateKind, currentStateText, toState))
+            {
+                return new(false, null, DiagnosticCodes.WorkflowTransitionInvalid);
+            }
+
+            Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+            {
+                [WorkflowEvent.ToStateArgument] = toState,
+            };
+            if (extraArguments is not null)
+            {
+                foreach ((string key, string? value) in extraArguments)
+                {
+                    arguments[key] = value;
+                }
+            }
+
+            WorkflowEvent proposed = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                type,
+                new(aggregateKind, aggregateId, expectedAggregateVersion + 1),
+                messageKey,
+                arguments);
+
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(proposed), cancellationToken)
+                .ConfigureAwait(false);
+
+            applied[idempotencyKey] = clock.UtcNow;
+            await WriteIdempotencyAsync(idempotencyPath, applied, cancellationToken).ConfigureAwait(false);
+
+            IReadOnlyList<WorkflowEvent> persisted =
+                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+            return new(true, WorkflowFold.Apply(sprintId, persisted), DiagnosticCodes.None);
         }
-
-        WorkflowEvent proposed = new(
-            Guid.NewGuid(),
-            events.Count,
-            clock.UtcNow,
-            type,
-            new(aggregateKind, aggregateId, expectedAggregateVersion + 1),
-            messageKey,
-            arguments);
-
-        await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(proposed), cancellationToken)
-            .ConfigureAwait(false);
-
-        applied[idempotencyKey] = clock.UtcNow;
-        await WriteIdempotencyAsync(idempotencyPath, applied, cancellationToken).ConfigureAwait(false);
-
-        IReadOnlyList<WorkflowEvent> persisted =
-            await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
-        return new(true, WorkflowFold.Apply(sprintId, persisted), DiagnosticCodes.None);
+        catch (IOException)
+        {
+            // A second process (or, one day, a second machine) holding the file is the only other
+            // writer this store can ever encounter; fail with a diagnostic instead of a raw
+            // exception rather than pretend the append happened.
+            return new(false, null, DiagnosticCodes.WorkflowStoreBusy);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static string SprintsRoot(string projectRoot) =>
@@ -321,9 +352,6 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private static string HandoffsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "handoffs");
 
     private static string FindingsPath(string sprintDirectory) => Path.Combine(sprintDirectory, "findings.json");
-
-    private static string SanitizeFileName(string value) =>
-        string.Concat(value.Select(character => Path.GetInvalidFileNameChars().Contains(character) ? '_' : character));
 
     private static async Task<Dictionary<Guid, PersistedFinding>> ReadFindingsAsync(
         string projectRoot,
@@ -442,6 +470,58 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             .DefaultIfEmpty(0)
             .Max();
 
+    private static string? CurrentStateText(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
+        events
+            .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id)
+            .OrderByDescending(item => item.Aggregate.Version)
+            .FirstOrDefault()
+            ?.Arguments.GetValueOrDefault(WorkflowEvent.ToStateArgument);
+
+    /// <summary>
+    /// The single store-level guarantee that every append, from any caller, actually respects the
+    /// frozen state machine — a caller-side check (as <c>SprintOrchestrator</c> already does for
+    /// its own sprint transitions) is not enough, since nothing stopped a bug elsewhere in the
+    /// engine from appending an illegal node/attempt transition directly.
+    /// </summary>
+    private static bool IsLegalTransition(AggregateKind kind, string? fromStateText, string toStateText)
+    {
+        switch (kind)
+        {
+            case AggregateKind.Sprint:
+                {
+                    SprintState to = WorkflowStateNames.Parse<SprintState>(toStateText);
+                    return fromStateText is null
+                        ? to == WorkflowStateMachines.SprintInitial
+                        : WorkflowStateMachines.CanTransition(WorkflowStateNames.Parse<SprintState>(fromStateText), to);
+                }
+
+            case AggregateKind.Node:
+                {
+                    NodeState to = WorkflowStateNames.Parse<NodeState>(toStateText);
+                    return fromStateText is null
+                        ? to == WorkflowStateMachines.NodeInitial
+                        : WorkflowStateMachines.CanTransition(WorkflowStateNames.Parse<NodeState>(fromStateText), to);
+                }
+
+            case AggregateKind.Attempt:
+                {
+                    AttemptState to = WorkflowStateNames.Parse<AttemptState>(toStateText);
+                    return fromStateText is null
+                        ? to == WorkflowStateMachines.AttemptInitial
+                        : WorkflowStateMachines.CanTransition(WorkflowStateNames.Parse<AttemptState>(fromStateText), to);
+                }
+
+            default:
+                throw new InvalidDataException($"Unknown aggregate kind '{kind}'.");
+        }
+    }
+
+    /// <summary>
+    /// Reads events by byte offset, not by pre-split lines, because a torn trailing line must be
+    /// truncated away — not merely skipped — before the file is trusted again. Skipping it on read
+    /// but leaving the bytes in place let the next append concatenate a fresh event onto the
+    /// garbage, silently losing that event while still reporting success.
+    /// </summary>
     private static async Task<IReadOnlyList<WorkflowEvent>> ReadEventsAsync(
         string path,
         CancellationToken cancellationToken)
@@ -451,26 +531,45 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             return [];
         }
 
-        string[] lines = await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false);
-        List<WorkflowEvent> events = new(lines.Length);
-        for (int index = 0; index < lines.Length; index++)
+        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        List<WorkflowEvent> events = [];
+        int offset = 0;
+        int validLength = 0;
+        while (offset < bytes.Length)
         {
-            string line = lines[index];
-            if (line.Length == 0)
+            int newlineIndex = Array.IndexOf(bytes, (byte)'\n', offset);
+            bool isFinalChunk = newlineIndex < 0;
+            int lineEnd = isFinalChunk ? bytes.Length : newlineIndex;
+            int lineLength = lineEnd - offset;
+            if (lineLength == 0)
             {
+                if (isFinalChunk)
+                {
+                    break;
+                }
+
+                validLength = newlineIndex + 1;
+                offset = validLength;
                 continue;
             }
 
+            string line = Encoding.UTF8.GetString(bytes, offset, lineLength);
             try
             {
                 events.Add(WorkflowEventCodec.Deserialize(line));
             }
-            catch (Exception error) when (index == lines.Length - 1 && IsTornWrite(error))
+            catch (Exception error) when (isFinalChunk && IsTornWrite(error))
             {
-                // Only the last line can be a torn write left by a crash mid-append: every earlier
-                // line was already flushed to disk before its append call returned success.
-                break;
+                // Only a torn *final* line can be a crash mid-append: every earlier line was
+                // already flushed to disk before its own append call returned success. Truncate it
+                // away right now, before any caller can append past it, so the file is clean again
+                // the moment anyone reads it — not just the moment someone happens to write to it.
+                await TruncateAsync(path, validLength, cancellationToken).ConfigureAwait(false);
+                return events;
             }
+
+            validLength = isFinalChunk ? bytes.Length : newlineIndex + 1;
+            offset = validLength;
         }
 
         return events;
@@ -478,6 +577,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     private static bool IsTornWrite(Exception error) =>
         error is JsonException or InvalidDataException or FormatException;
+
+    private static async Task TruncateAsync(string path, long length, CancellationToken cancellationToken)
+    {
+        await using (FileStream stream = new(path, FileMode.Open, FileAccess.Write, FileShare.Read))
+        {
+            stream.SetLength(length);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null)
+        {
+            DirectoryFlusher.Flush(directory);
+        }
+    }
 
     private static async Task AppendLineAsync(string path, string line, CancellationToken cancellationToken)
     {
@@ -501,6 +615,13 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         DirectoryFlusher.Flush(directory);
     }
 
+    // ponytail: idempotency.json grows by one entry per append, forever, and is rewritten in full
+    // on every append (O(n) per write, not amortized). Fine at MVP sprint scale (events number in
+    // the tens to low hundreds); prune or restructure if a long-lived sprint's event count ever
+    // makes this measurable. A crash between the event append above and this write is deliberate:
+    // it leaves a retried command re-validating its expected version rather than silently
+    // replaying, since writing the key *before* the event would risk marking a never-durable
+    // transition as already applied — the current ordering is the safer of the two failure modes.
     private static async Task<Dictionary<Guid, DateTimeOffset>> ReadIdempotencyAsync(
         string path,
         CancellationToken cancellationToken)

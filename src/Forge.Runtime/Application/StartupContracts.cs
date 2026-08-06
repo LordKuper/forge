@@ -31,6 +31,8 @@ public static class DiagnosticCodes
     public const string NodeTransitionInvalid = "node_transition_invalid";
     public const string FindingNotFound = "finding_not_found";
     public const string WorkflowRecordInvalid = "workflow_record_invalid";
+    public const string WorkflowTransitionInvalid = "workflow_transition_invalid";
+    public const string WorkflowStoreBusy = "workflow_store_busy";
 }
 
 public enum StartupState

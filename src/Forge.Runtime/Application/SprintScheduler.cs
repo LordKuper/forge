@@ -205,6 +205,29 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
 
         DateTimeOffset startedAt = attempt.UpdatedAt;
+        NodeResult result = new(
+            sprintId,
+            new(nodeId),
+            attemptId,
+            succeeded ? NodeOutcome.Succeeded : NodeOutcome.Failed,
+            startedAt,
+            clock.UtcNow,
+            inputDigest,
+            outputs ?? [],
+            diagnostics ?? []);
+        // Validated *before* anything below becomes durable: a malformed result (e.g. a caller
+        // passing a garbled digest) must never leave the node succeeded/failed with no result to
+        // show for it, wedging the sprint with an unrecoverable state and a record that was never
+        // written.
+        try
+        {
+            WorkflowRecordCodec.ValidateNodeResult(result);
+        }
+        catch (InvalidDataException)
+        {
+            return new(false, node, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
         long attemptVersion = await WalkAttemptAsync(
             projectRoot, sprintId, attemptId, attempt.Version, AttemptState.Preparing, cancellationToken)
             .ConfigureAwait(false);
@@ -223,19 +246,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             projectRoot, sprintId, nodeId, succeeded ? "workflow.node_succeeded" : "workflow.node_failed",
             nodeOutcome, node.Version, cancellationToken).ConfigureAwait(false);
 
-        await store.SaveNodeResultAsync(
-            projectRoot,
-            new(
-                sprintId,
-                new(nodeId),
-                attemptId,
-                succeeded ? NodeOutcome.Succeeded : NodeOutcome.Failed,
-                startedAt,
-                clock.UtcNow,
-                inputDigest,
-                outputs ?? [],
-                diagnostics ?? []),
-            cancellationToken).ConfigureAwait(false);
+        await store.SaveNodeResultAsync(projectRoot, result, cancellationToken).ConfigureAwait(false);
 
         if (!succeeded && node.AttemptCount < MaxAutomaticRetries + 1)
         {
@@ -277,9 +288,27 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, node, DiagnosticCodes.NodeTransitionInvalid);
         }
 
-        await AppendNodeAsync(
-            projectRoot, sprintId, nodeId, "workflow.node_retried", NodeState.Ready, expectedNodeVersion,
-            cancellationToken).ConfigureAwait(false);
+        // The caller's own validated key drives this append directly (not a fresh internal GUID):
+        // a single-step verb like this one can be made genuinely idempotent for free, so a client
+        // retry after a lost response replays instead of failing the version check it would
+        // otherwise hit on the second, no-op-intended call.
+        AppendOutcome outcome = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", "workflow.node_retried",
+            WorkflowStateNames.ToSnakeCase(NodeState.Ready), expectedNodeVersion, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
+        if (!outcome.Succeeded)
+        {
+            return new(false, node, outcome.DiagnosticCode);
+        }
+
+        if (!outcome.Replayed)
+        {
+            // A human gate re-armed to `ready` must be re-promoted to `awaiting_human`; a retried
+            // work node just becomes startable again. Either way nothing else advances on its own.
+            await AdvanceGraphAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+            await EvaluateCompletionAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        }
+
         SprintWorkflowState final = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         return new(true, final.Nodes[nodeId], DiagnosticCodes.None);
@@ -314,8 +343,27 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         AttemptId attemptId = AttemptId.New();
         DateTimeOffset startedAt = clock.UtcNow;
-        long attemptVersion = await WalkAttemptAsync(
-            projectRoot, sprintId, attemptId, 0, AttemptState.Created, cancellationToken).ConfigureAwait(false);
+        // The caller's own validated key drives only this first append. A genuine replay short-
+        // circuits right here — via `Replayed` below — before any of the remaining steps run a
+        // second time; internal follow-up steps of this one logical operation keep using fresh
+        // GUIDs, since the outer check already guards against the whole sequence re-entering.
+        AppendOutcome createdOutcome = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"), "AttemptChanged",
+            "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(WorkflowStateMachines.AttemptInitial), 0,
+            idempotencyKey, cancellationToken).ConfigureAwait(false);
+        if (!createdOutcome.Succeeded)
+        {
+            return new(false, node, createdOutcome.DiagnosticCode);
+        }
+
+        if (createdOutcome.Replayed)
+        {
+            SprintWorkflowState replayedState = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            return new(true, replayedState.Nodes[nodeId], DiagnosticCodes.None);
+        }
+
+        long attemptVersion = createdOutcome.State!.Attempts[attemptId.Value.ToString("D")].Version;
         attemptVersion = await WalkAttemptAsync(
             projectRoot, sprintId, attemptId, attemptVersion, AttemptState.Preparing, cancellationToken)
             .ConfigureAwait(false);
@@ -407,9 +455,20 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return;
         }
 
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        Dictionary<string, NodeKind> kindById = definition.Graph.ToDictionary(
+            node => node.Id,
+            node => node.Kind,
+            StringComparer.Ordinal);
+
         bool allSettledGood = state.Nodes.Values.All(node => node.State is NodeState.Succeeded or NodeState.Skipped);
-        bool anyStuck = state.Nodes.Values.Any(node => node.State == NodeState.Cancelled ||
-            (node.State == NodeState.Failed && node.AttemptCount >= MaxAutomaticRetries + 1));
+        // A human gate never auto-retries (a rejection is a final human decision, not a transient
+        // failure), so any `failed` gate is stuck the moment it is rejected — it has no attempt
+        // budget to exhaust the way a work node does.
+        bool anyStuck = state.Nodes.Any(entry => entry.Value.State == NodeState.Cancelled ||
+            (entry.Value.State == NodeState.Failed &&
+                (kindById[entry.Key] == NodeKind.HumanGate || entry.Value.AttemptCount >= MaxAutomaticRetries + 1)));
         if (allSettledGood)
         {
             await store.AppendTransitionAsync(

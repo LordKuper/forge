@@ -271,6 +271,10 @@ public sealed class SprintSchedulerTests
 
         Assert.True(resolved.Succeeded);
         Assert.Equal(NodeState.Failed, resolved.Node!.State);
+        // A rejected gate never auto-retries, so it must block the sprint immediately rather than
+        // leave it stuck in `running` forever with nothing left to do and nothing moving it on.
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Blocked, sprint!.State);
     }
 
     [Fact]
@@ -320,6 +324,75 @@ public sealed class SprintSchedulerTests
             await scheduler.GetHandoffsAsync(environment.ProjectRoot, sprintId, cancellationToken));
         Assert.Equal("Did the thing.", stored.Summary);
         Assert.Equal("a", stored.NodeId.Value);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordingAFindingWithNoEvidenceIsRejectedAsAnInvalidRecord()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        // finding.schema.json requires at least one piece of evidence.
+        RecordFindingResult result = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.example",
+            new Dictionary<string, string?>(), [], null, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, result.DiagnosticCode);
+        Assert.Empty(await scheduler.GetFindingsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordingAHandoffWithAMalformedBaseShaIsRejectedAsAnInvalidRecord()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        // handoff.schema.json requires a 40- or 64-hex-character base_sha.
+        RecordHandoffResult result = await scheduler.RecordHandoffAsync(
+            environment.ProjectRoot, sprintId, "a", "not-a-commit-sha", "summary", [], [], null,
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, result.DiagnosticCode);
+        Assert.Empty(await scheduler.GetHandoffsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CompletingAnAttemptWithAMalformedDigestIsRejectedBeforeAnyDurableChange()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+
+        // node-result.schema.json requires input_digest to match ^sha256:[0-9a-f]{64}$.
+        CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, "not-a-digest", [], [],
+            cancellationToken);
+
+        Assert.False(completed.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, completed.DiagnosticCode);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["a"];
+        Assert.Equal(NodeState.Running, node.State);
+        Assert.Empty(await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
     }
 
     [Fact]

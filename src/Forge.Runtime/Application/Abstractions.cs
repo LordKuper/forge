@@ -48,7 +48,7 @@ public interface IRepository
     Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
-public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode)
+public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode, bool Replayed = false)
 {
     public static AppendOutcome Conflict { get; } = new(false, null, DiagnosticCodes.WorkflowEventConflict);
 }

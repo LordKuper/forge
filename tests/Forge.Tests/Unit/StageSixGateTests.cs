@@ -20,8 +20,8 @@ public sealed class StageSixGateTests
         SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        // Drive a realistic mix of transitions: two work nodes (one retried), a human gate
-        // (rejected then the node manually retried), a finding, and a handoff.
+        // Drive a realistic mix of transitions: two work nodes (one auto-retried after a
+        // failure), a rejected human gate, a finding, and a handoff.
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(
                 environment.ProjectRoot,
@@ -95,7 +95,8 @@ public sealed class StageSixGateTests
 
         // Handoffs are the one durable record whose prose fields are free text by contract
         // (handoff.schema.json) because they are written for a model to read, not localized UI.
-        string handoffPath = Path.Combine(sprintDirectory, "handoffs", "b.json");
+        // Handoff files are keyed by handoff id, not node id, so there is exactly one file here.
+        string handoffPath = Directory.GetFiles(Path.Combine(sprintDirectory, "handoffs"), "*.json").Single();
         using JsonDocument handoff = JsonDocument.Parse(await File.ReadAllTextAsync(handoffPath, cancellationToken));
         Assert.Equal("free text is fine here", handoff.RootElement.GetProperty("summary").GetString());
     }

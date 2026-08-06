@@ -2,6 +2,40 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.12.1
+
+### Fixed
+
+- A crash exactly mid-append to a sprint's durable event log could previously
+  leave the file with a torn trailing line; any later append onto that file
+  silently lost its own event while still reporting success, and a second
+  append could make the whole sprint permanently unreadable. Reads now
+  truncate a torn trailing line away immediately, so the file is clean again
+  the moment anyone next touches it.
+- Rejecting a human gate node left its sprint stuck in `running` forever —
+  neither blocked nor able to finish — since a rejected gate never
+  auto-retries the way a failed work node does. A rejected gate now blocks
+  its sprint immediately, matching every other unrecoverable node failure.
+- A node result with malformed data (for example a corrupt digest) could
+  previously be reported as durably succeeded with no result actually
+  recorded, wedging the sprint. Malformed results are now rejected before
+  anything becomes durable.
+- Retrying a failed node or resolving a human gate a second time with the
+  same request now genuinely replays the first outcome instead of re-running
+  the action or failing a staleness check.
+- Node and attempt transitions are now validated against their frozen state
+  machines by the durable store itself, not only by callers, closing a gap
+  where an illegal transition could otherwise have been persisted silently.
+- Two operations on the same sprint running concurrently in one process can
+  no longer both act on the same version and corrupt its history.
+- A handoff is now identified by its own id rather than by node id, so a
+  second handoff for the same node no longer silently overwrites the first.
+
+### Changed
+
+- Node identifiers in a sprint's graph are now constrained to a safe
+  lowercase alphanumeric form, since they are used to name files on disk.
+
 ## v0.12.0
 
 ### Added
@@ -11,22 +45,20 @@ User-facing Forge changes are listed by release, newest first.
   separately from each other and from the project's artifact-language
   configuration, so a personal interaction language can never leak into a
   project's shared, committed artifact language.
+- This completes Stage 6 (durable independent sprints and the workflow
+  engine): concurrent sprints in the same project now stay fully isolated
+  and both resume deterministically after a restart, with no in-memory or
+  transcript dependency. No real node executor exists yet (Stage 7 provides
+  isolated Git worktrees for one), and there is still no CLI/Desktop
+  surface for any sprint capability.
 
 ### Security
 
-- Verified every durable sprint/node/attempt/finding/handoff record stores
-  only localization keys and structured arguments, never rendered text
-  (handoffs remain the one contractually free-text record, written for a
-  model to read rather than shown as localized UI), and that state written
-  under a non-invariant culture (Turkish, the classic dotless-`ı` case)
-  reads back identically under the invariant culture.
-
-This completes Stage 6 (durable independent sprints and the workflow
-engine): concurrent sprints stay fully isolated in the same project and
-both resume deterministically from a freshly reopened store, with no
-in-memory or transcript dependency. No real node executor exists yet
-(Stage 7 provides isolated Git worktrees for one), and there is still no
-CLI/Desktop surface for any sprint capability.
+- Durable sprint/node/attempt/finding transitions store only localization
+  keys and structured arguments, never rendered text (structured handoffs
+  remain the one contractually free-text record, written for a model to
+  read rather than shown as localized UI), and stay identical regardless
+  of the host's culture setting.
 
 ## v0.11.0
 

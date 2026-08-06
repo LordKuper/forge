@@ -124,6 +124,40 @@ public sealed class SprintEventStoreTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ATornLineIsTruncatedSoTheNextAppendDoesNotConcatenateOntoItOrLoseData()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        await File.AppendAllTextAsync(eventsPath, "{\"schema_version\":\"1.0.0\",\"event_id\":\"trunc", cancellationToken);
+
+        // This append is the one that must both see the file cleaned up AND actually land — not
+        // silently report success while its event is lost, and not throw on a now-unparseable file.
+        AppendOutcome ready = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+        AppendOutcome running = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_advanced", "running", 2, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(ready.Succeeded);
+        Assert.Equal(SprintState.Ready, ready.State!.Sprint.State);
+        Assert.True(running.Succeeded);
+        Assert.Equal(SprintState.Running, running.State!.Sprint.State);
+        SprintWorkflowState? reloaded = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Running, reloaded!.Sprint.State);
+        Assert.Equal(3, reloaded.Sprint.Version);
+        string[] lines = await File.ReadAllLinesAsync(eventsPath, cancellationToken);
+        Assert.Equal(3, lines.Length);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task LoadingAnUnknownSprintReturnsNull()
     {
         using TestRoot root = new();

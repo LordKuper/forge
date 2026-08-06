@@ -1,3 +1,5 @@
+using System.Text.RegularExpressions;
+
 namespace Forge.Domain;
 
 /// <summary>
@@ -25,9 +27,19 @@ public sealed record NodeDefinition(string Id, NodeKind Kind, IReadOnlyList<stri
 /// </summary>
 public static class SprintGraphValidator
 {
+    // Node ids become filenames (results, handoffs) and event-log aggregate ids, so they are
+    // constrained to a safe, predictable alphabet rather than trusted as arbitrary strings — the
+    // schema itself only requires non-empty (node-result.schema.json: minLength 1).
+    private static readonly Regex NodeIdPattern = new("^[a-z0-9][a-z0-9_-]*$", RegexOptions.Compiled);
+
     public static bool IsValid(IReadOnlyList<NodeDefinition> graph)
     {
         ArgumentNullException.ThrowIfNull(graph);
+        if (graph.Any(node => !NodeIdPattern.IsMatch(node.Id)))
+        {
+            return false;
+        }
+
         HashSet<string> ids = new(graph.Select(node => node.Id), StringComparer.Ordinal);
         if (ids.Count != graph.Count)
         {
