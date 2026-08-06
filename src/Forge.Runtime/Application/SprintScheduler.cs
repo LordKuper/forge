@@ -343,27 +343,18 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         AttemptId attemptId = AttemptId.New();
         DateTimeOffset startedAt = clock.UtcNow;
-        // The caller's own validated key drives only this first append. A genuine replay short-
-        // circuits right here — via `Replayed` below — before any of the remaining steps run a
-        // second time; internal follow-up steps of this one logical operation keep using fresh
-        // GUIDs, since the outer check already guards against the whole sequence re-entering.
-        AppendOutcome createdOutcome = await store.AppendTransitionAsync(
-            projectRoot, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"), "AttemptChanged",
-            "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(WorkflowStateMachines.AttemptInitial), 0,
-            idempotencyKey, cancellationToken).ConfigureAwait(false);
-        if (!createdOutcome.Succeeded)
-        {
-            return new(false, node, createdOutcome.DiagnosticCode);
-        }
-
-        if (createdOutcome.Replayed)
-        {
-            SprintWorkflowState replayedState = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
-                .ConfigureAwait(false);
-            return new(true, replayedState.Nodes[nodeId], DiagnosticCodes.None);
-        }
-
-        long attemptVersion = createdOutcome.State!.Attempts[attemptId.Value.ToString("D")].Version;
+        // Deliberately NOT the caller's own idempotency key: this is a multi-step sequence (up to
+        // six appends), and forwarding the real key to only the first step was tried and reverted
+        // — it made a crash between that first append and the rest of the sequence into a
+        // permanent wedge (the ledger hit on retry returned `Succeeded=true` with the gate still
+        // stuck at `awaiting_human` forever, since nothing re-drove the remaining steps). A fresh
+        // GUID per call means a retry after a partial crash simply starts a new attempt and walks
+        // it to completion instead — the interrupted one is left behind, inert and harmless (its
+        // node was never reached), but the gate always reaches a real terminal state. True
+        // idempotent replay for a compound operation like this needs a resumable walk keyed by a
+        // deterministic attempt id, not a single boolean short-circuit; that redesign is deferred.
+        long attemptVersion = await WalkAttemptAsync(
+            projectRoot, sprintId, attemptId, 0, AttemptState.Created, cancellationToken).ConfigureAwait(false);
         attemptVersion = await WalkAttemptAsync(
             projectRoot, sprintId, attemptId, attemptVersion, AttemptState.Preparing, cancellationToken)
             .ConfigureAwait(false);

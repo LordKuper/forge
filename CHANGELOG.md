@@ -7,11 +7,14 @@ User-facing Forge changes are listed by release, newest first.
 ### Fixed
 
 - A crash exactly mid-append to a sprint's durable event log could previously
-  leave the file with a torn trailing line; any later append onto that file
-  silently lost its own event while still reporting success, and a second
-  append could make the whole sprint permanently unreadable. Reads now
-  truncate a torn trailing line away immediately, so the file is clean again
-  the moment anyone next touches it.
+  leave the file with an incomplete trailing line; any later append onto that
+  file silently lost its own event while still reporting success, and a
+  second append could make the whole sprint permanently unreadable. This
+  covered a crash that dropped part of the written JSON and, separately, one
+  that flushed a complete event but not its own line terminator. Reads now
+  discard any such incomplete trailing content immediately, so the file is
+  clean again the moment anyone next touches it; genuine corruption anywhere
+  else in the file is still reported rather than silently dropped.
 - Rejecting a human gate node left its sprint stuck in `running` forever —
   neither blocked nor able to finish — since a rejected gate never
   auto-retries the way a failed work node does. A rejected gate now blocks
@@ -20,9 +23,12 @@ User-facing Forge changes are listed by release, newest first.
   previously be reported as durably succeeded with no result actually
   recorded, wedging the sprint. Malformed results are now rejected before
   anything becomes durable.
-- Retrying a failed node or resolving a human gate a second time with the
-  same request now genuinely replays the first outcome instead of re-running
-  the action or failing a staleness check.
+- Retrying a failed node a second time with the same request now genuinely
+  replays the first outcome instead of re-running the action. Resolving a
+  human gate always reaches a real decision on retry rather than silently
+  reporting success without one, though a retry after an interrupted
+  resolution may act through a fresh internal attempt rather than resuming
+  the original one.
 - Node and attempt transitions are now validated against their frozen state
   machines by the durable store itself, not only by callers, closing a gap
   where an illegal transition could otherwise have been persisted silently.

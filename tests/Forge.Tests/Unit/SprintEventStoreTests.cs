@@ -158,6 +158,40 @@ public sealed class SprintEventStoreTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task AFinalLineMissingOnlyItsTerminatingNewlineIsDiscardedEvenThoughItParses()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        // Simulate a crash that flushed the second event's complete, valid JSON but not its own
+        // trailing '\n' — the write was never confirmed, even though the bytes happen to parse.
+        byte[] bytes = await File.ReadAllBytesAsync(eventsPath, cancellationToken);
+        await File.WriteAllBytesAsync(eventsPath, bytes[..^1], cancellationToken);
+
+        SprintWorkflowState? loaded = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        // Recovery must re-append "ready" at version 1 (the unconfirmed one was fully discarded,
+        // not kept) — appending "running" straight from "draft" would be illegal.
+        AppendOutcome readyAgain = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+
+        Assert.Equal(SprintState.Draft, loaded!.Sprint.State);
+        Assert.True(readyAgain.Succeeded);
+        Assert.Equal(SprintState.Ready, readyAgain.State!.Sprint.State);
+        string[] lines = await File.ReadAllLinesAsync(eventsPath, cancellationToken);
+        Assert.Equal(2, lines.Length);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task LoadingAnUnknownSprintReturnsNull()
     {
         using TestRoot root = new();

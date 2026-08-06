@@ -33,6 +33,7 @@ public static class DiagnosticCodes
     public const string WorkflowRecordInvalid = "workflow_record_invalid";
     public const string WorkflowTransitionInvalid = "workflow_transition_invalid";
     public const string WorkflowStoreBusy = "workflow_store_busy";
+    public const string WorkflowLogCorrupted = "workflow_log_corrupted";
 }
 
 public enum StartupState

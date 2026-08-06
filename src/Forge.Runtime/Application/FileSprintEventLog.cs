@@ -330,6 +330,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // exception rather than pretend the append happened.
             return new(false, null, DiagnosticCodes.WorkflowStoreBusy);
         }
+        catch (Exception error) when (error is JsonException or InvalidDataException or FormatException)
+        {
+            // Real corruption in an already-terminated line (never produced by this store's own
+            // write path) — a diagnostic, not a crash reaching all the way out to the caller.
+            return new(false, null, DiagnosticCodes.WorkflowLogCorrupted);
+        }
         finally
         {
             gate.Release();
@@ -522,6 +528,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// but leaving the bytes in place let the next append concatenate a fresh event onto the
     /// garbage, silently losing that event while still reporting success.
     /// </summary>
+    /// <summary>
+    /// Every append writes its whole "json + '\n'" buffer as a single contiguous write, so a
+    /// short/torn write from a mid-append crash can only ever drop a *suffix* of that buffer — it
+    /// can never produce a terminating '\n' without every byte before it in the same write having
+    /// landed too. A trailing segment with no '\n' at all is therefore always torn and always
+    /// discarded whole, whether or not it happens to parse as valid JSON: a crash can land exactly
+    /// after a complete object but before that object's own newline, and keeping it just because it
+    /// parses would keep an append its own caller never received a success result for. A
+    /// newline-terminated line that still fails to parse is real corruption, not a torn write —
+    /// this store never produces one, so that always propagates rather than being silently dropped.
+    /// </summary>
     private static async Task<IReadOnlyList<WorkflowEvent>> ReadEventsAsync(
         string path,
         CancellationToken cancellationToken)
@@ -534,49 +551,26 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         List<WorkflowEvent> events = [];
         int offset = 0;
-        int validLength = 0;
         while (offset < bytes.Length)
         {
             int newlineIndex = Array.IndexOf(bytes, (byte)'\n', offset);
-            bool isFinalChunk = newlineIndex < 0;
-            int lineEnd = isFinalChunk ? bytes.Length : newlineIndex;
-            int lineLength = lineEnd - offset;
-            if (lineLength == 0)
+            if (newlineIndex < 0)
             {
-                if (isFinalChunk)
-                {
-                    break;
-                }
-
-                validLength = newlineIndex + 1;
-                offset = validLength;
-                continue;
-            }
-
-            string line = Encoding.UTF8.GetString(bytes, offset, lineLength);
-            try
-            {
-                events.Add(WorkflowEventCodec.Deserialize(line));
-            }
-            catch (Exception error) when (isFinalChunk && IsTornWrite(error))
-            {
-                // Only a torn *final* line can be a crash mid-append: every earlier line was
-                // already flushed to disk before its own append call returned success. Truncate it
-                // away right now, before any caller can append past it, so the file is clean again
-                // the moment anyone reads it — not just the moment someone happens to write to it.
-                await TruncateAsync(path, validLength, cancellationToken).ConfigureAwait(false);
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
                 return events;
             }
 
-            validLength = isFinalChunk ? bytes.Length : newlineIndex + 1;
-            offset = validLength;
+            int lineLength = newlineIndex - offset;
+            if (lineLength > 0)
+            {
+                events.Add(WorkflowEventCodec.Deserialize(Encoding.UTF8.GetString(bytes, offset, lineLength)));
+            }
+
+            offset = newlineIndex + 1;
         }
 
         return events;
     }
-
-    private static bool IsTornWrite(Exception error) =>
-        error is JsonException or InvalidDataException or FormatException;
 
     private static async Task TruncateAsync(string path, long length, CancellationToken cancellationToken)
     {

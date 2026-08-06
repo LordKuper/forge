@@ -252,6 +252,35 @@ public sealed class SprintSchedulerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ResolvingAGateAfterAnInterruptedPriorAttemptStillReachesARealOutcome()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        // Simulate a crash right after a prior ResolveHumanGateAsync call's first append landed,
+        // before the rest of that sequence ran: an attempt exists, but the node never moved.
+        await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Attempt, AttemptId.New().Value.ToString("D"),
+            "AttemptChanged", "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+
+        NodeActionResult resolved = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+
+        // Must reach a real terminal outcome, never a false "success" that leaves the gate stuck.
+        Assert.True(resolved.Succeeded);
+        Assert.Equal(NodeState.Succeeded, resolved.Node!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RejectingAHumanGateFailsTheNodeWithoutAutomaticRetry()
     {
         using TestEnvironment environment = await InitializedAsync();
