@@ -10,7 +10,10 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
 {
     private readonly ServiceProvider provider;
 
-    public TestEnvironment(IPlatformPreflight? platform = null, IProviderToolchainManager? providers = null)
+    public TestEnvironment(
+        IPlatformPreflight? platform = null,
+        IProviderToolchainManager? providers = null,
+        IRepository? repository = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -24,6 +27,10 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         // manager stays offline-safe by construction (it only discovers), but callers that need
         // a `ready` or `failed` toolchain override it explicitly.
         services.AddSingleton(providers ?? new FakeProviderToolchainManager());
+        // Test project roots are plain temp directories, not Git repositories; a real
+        // `git rev-parse HEAD` would fail there, so sprint creation gets a fixed fake commit
+        // unless a test explicitly needs to exercise repository-unavailable behavior.
+        services.AddSingleton(repository ?? new FakeRepository());
         provider = services.BuildServiceProvider();
     }
 
@@ -84,6 +91,22 @@ internal sealed class SupportedPlatformPreflight : IPlatformPreflight
 {
     public PlatformPreflightResult Check() =>
         new("windows", "x64", true, DiagnosticCodes.None);
+}
+
+/// <summary>Returns a fixed commit without running `git`.</summary>
+internal sealed class FakeRepository(string? head = null) : IRepository
+{
+    private readonly string head = head ?? new string('a', 40);
+
+    public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(head);
+}
+
+/// <summary>Always fails, matching a project root that is not (or not yet) a Git repository.</summary>
+internal sealed class UnavailableRepository : IRepository
+{
+    public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("No repository is available in this test.");
 }
 
 /// <summary>Returns a fixed toolchain status without any network or process call.</summary>

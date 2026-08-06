@@ -44,7 +44,8 @@ public interface IEnvironmentPaths
 
 public interface IRepository
 {
-    Task<string> GetHeadAsync(CancellationToken cancellationToken);
+    /// <summary>Resolves the current commit a new sprint would freeze as its immutable base.</summary>
+    Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
 public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode)
@@ -80,6 +81,17 @@ public interface ISprintStore
         string toState,
         long expectedAggregateVersion,
         Guid idempotencyKey,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Persists a sprint's frozen definition once. Nothing in this store ever updates it again;
+    /// callers must write it exactly once, before the sprint becomes visible to other operations.
+    /// </summary>
+    Task SaveDefinitionAsync(string projectRoot, SprintDefinition definition, CancellationToken cancellationToken);
+
+    Task<SprintDefinition?> LoadDefinitionAsync(
+        string projectRoot,
+        SprintId id,
         CancellationToken cancellationToken);
 }
 

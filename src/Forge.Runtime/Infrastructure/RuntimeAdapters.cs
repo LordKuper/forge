@@ -75,6 +75,24 @@ public sealed class ProcessRunner : IProcessRunner
     }
 }
 
+/// <summary>Resolves the current commit through `git rev-parse HEAD`, never a shell string.</summary>
+public sealed class GitRepository(IProcessRunner processRunner) : IRepository
+{
+    public async Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await processRunner
+            .RunAsync(new("git", ["rev-parse", "HEAD"], projectRoot), cancellationToken)
+            .ConfigureAwait(false);
+        string head = result.StandardOutput.Trim();
+        if (result.ExitCode != 0 || head.Length == 0)
+        {
+            throw new InvalidOperationException("'git rev-parse HEAD' did not resolve a commit.");
+        }
+
+        return head;
+    }
+}
+
 public sealed class NetworkClient(HttpClient client) : INetworkClient
 {
     public Task<Stream> GetStreamAsync(Uri uri, CancellationToken cancellationToken) =>
@@ -99,6 +117,7 @@ public static class InfrastructureServices
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
+        services.AddSingleton<IRepository, GitRepository>();
         // Forge's own release bundle download can run into the hundreds of megabytes; the
         // default 100-second HttpClient.Timeout covers the whole request, including the body,
         // and would abort a slow-connection download mid-stream.

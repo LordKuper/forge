@@ -22,6 +22,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private const string SprintsDirectoryName = "sprints";
     private const string EventsFileName = "events.jsonl";
     private const string IdempotencyFileName = "idempotency.json";
+    private const string DefinitionFileName = "definition.json";
+    private static readonly JsonSerializerOptions DefinitionJsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static string SprintDirectory(string projectRoot, SprintId id) =>
         Path.Combine(SprintsRoot(projectRoot), id.Value.ToString("N"));
@@ -35,6 +37,53 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             EventsPath(SprintDirectory(projectRoot, id)),
             cancellationToken).ConfigureAwait(false);
         return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
+    }
+
+    public async Task SaveDefinitionAsync(
+        string projectRoot,
+        SprintDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(definition);
+        string directory = SprintDirectory(projectRoot, definition.Id);
+        Directory.CreateDirectory(directory);
+        PersistedDefinition persisted = new()
+        {
+            BaseCommit = definition.BaseCommit,
+            Workflow = definition.Workflow,
+            WorkflowVersion = definition.WorkflowVersion,
+            ConfigurationSnapshot = new(definition.ConfigurationSnapshot, StringComparer.Ordinal),
+            Dependencies = [.. definition.Dependencies.Select(ToPersisted)],
+            FrozenAt = definition.FrozenAt,
+        };
+        await AtomicConfigurationFile.WriteAsync(
+            DefinitionPath(directory),
+            JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<SprintDefinition?> LoadDefinitionAsync(
+        string projectRoot,
+        SprintId id,
+        CancellationToken cancellationToken)
+    {
+        string path = DefinitionPath(SprintDirectory(projectRoot, id));
+        if (!File.Exists(path))
+        {
+            return null;
+        }
+
+        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        PersistedDefinition persisted = JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
+            throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+        return new(
+            id,
+            persisted.BaseCommit,
+            persisted.Workflow,
+            persisted.WorkflowVersion,
+            persisted.ConfigurationSnapshot,
+            [.. persisted.Dependencies.Select(FromPersisted)],
+            persisted.FrozenAt);
     }
 
     public Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken)
@@ -121,6 +170,23 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     private static string IdempotencyPath(string sprintDirectory) =>
         Path.Combine(sprintDirectory, IdempotencyFileName);
+
+    private static string DefinitionPath(string sprintDirectory) =>
+        Path.Combine(sprintDirectory, DefinitionFileName);
+
+    private static PersistedDependency ToPersisted(SprintDependency dependency) =>
+        new()
+        {
+            Kind = WorkflowStateNames.ToSnakeCase(dependency.Kind),
+            Reference = dependency.Reference,
+            SourceSprintId = dependency.SourceSprintId?.Value.ToString("D"),
+        };
+
+    private static SprintDependency FromPersisted(PersistedDependency dependency) =>
+        new(
+            WorkflowStateNames.Parse<SprintDependencyKind>(dependency.Kind),
+            dependency.Reference,
+            dependency.SourceSprintId is { } sourceSprintId ? new(Guid.Parse(sourceSprintId)) : null);
 
     private static long CurrentVersion(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
@@ -215,4 +281,28 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         Dictionary<Guid, DateTimeOffset> applied,
         CancellationToken cancellationToken) =>
         AtomicConfigurationFile.WriteAsync(path, JsonSerializer.SerializeToUtf8Bytes(applied), cancellationToken);
+
+    private sealed class PersistedDefinition
+    {
+        public string BaseCommit { get; set; } = string.Empty;
+
+        public string Workflow { get; set; } = string.Empty;
+
+        public string WorkflowVersion { get; set; } = string.Empty;
+
+        public Dictionary<string, string> ConfigurationSnapshot { get; set; } = new(StringComparer.Ordinal);
+
+        public List<PersistedDependency> Dependencies { get; set; } = [];
+
+        public DateTimeOffset FrozenAt { get; set; }
+    }
+
+    private sealed class PersistedDependency
+    {
+        public string Kind { get; set; } = string.Empty;
+
+        public string Reference { get; set; } = string.Empty;
+
+        public string? SourceSprintId { get; set; }
+    }
 }

@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.10.0
+
+### Added
+
+- Sprint creation now freezes its immutable inputs once and for good: the
+  current Git commit (resolved through `git rev-parse HEAD`, never a shell
+  string), the workflow contract version, and a snapshot of the project's
+  effective configuration at that moment. Later configuration or Git changes
+  never retroactively affect an existing sprint.
+- Added sprint dependency declarations. A dependency on a raw immutable Git
+  commit is always accepted; a dependency on another sprint's artifact is
+  accepted only once that sprint has reached `completed`, rejecting mutable
+  cross-sprint input before any sprint is created.
+- Added the `repository_head_unavailable` and `sprint_dependency_not_terminal`
+  diagnostic codes.
+
 ## v0.9.0
 
 ### Added

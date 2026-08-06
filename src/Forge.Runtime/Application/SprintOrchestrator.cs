@@ -4,7 +4,11 @@ using Forge.Domain;
 
 namespace Forge.Application;
 
-public sealed record CreateSprintCommand(string? ProjectRoot, long ExpectedStateVersion, Guid IdempotencyKey);
+public sealed record CreateSprintCommand(
+    string? ProjectRoot,
+    long ExpectedStateVersion,
+    Guid IdempotencyKey,
+    IReadOnlyList<SprintDependency>? Dependencies = null);
 
 public sealed record CreateSprintResult(bool Succeeded, SprintId? SprintId, string DiagnosticCode);
 
@@ -23,11 +27,14 @@ public sealed record SprintTransitionResult(bool Succeeded, SprintSnapshot? Spri
 /// </summary>
 /// <remarks>
 /// This is the persistence slice of Stage 6 (durable sprint/node/attempt state, optimistic
-/// concurrency, idempotency, crash recovery, resume). It intentionally advances the sprint
-/// machine one legal hop per call (e.g. `draft` to `ready`, then `ready` to `running`) rather than
-/// skipping straight to `running`: the `ready` transition is where a later slice freezes the
-/// sprint's base commit, inputs, and policy, and no DAG scheduler exists yet to make a running
-/// sprint do anything. CLI/Desktop wiring lands with that scheduler.
+/// concurrency, idempotency, crash recovery, resume) plus the frozen-inputs slice (base commit,
+/// workflow/configuration policy, dependencies, cross-sprint isolation). Creation freezes the
+/// sprint's <see cref="SprintDefinition"/> once and for good: current `HEAD`, the workflow
+/// contract version, and a snapshot of the project's effective configuration, none of which are
+/// re-read afterward even if the project or Git state moves on. `run` still advances the sprint
+/// machine one legal hop per call (`draft` to `ready`, then `ready` to `running`) rather than
+/// skipping straight to `running`, since no DAG scheduler exists yet to make a running sprint do
+/// anything; CLI/Desktop wiring lands with that scheduler.
 ///
 /// Transition commands (run/cancel/resume) derive their idempotency key from the target sprint's
 /// own version, exactly like <see cref="ForgeApplication.InitializeProjectAsync"/>: there is
@@ -41,7 +48,10 @@ public sealed record SprintTransitionResult(bool Succeeded, SprintSnapshot? Spri
 public sealed class SprintOrchestrator(
     ProjectRootResolver rootResolver,
     ISprintStore store,
-    IConfigurationRegistry registry)
+    IConfigurationRegistry registry,
+    IRepository repository,
+    ScopedConfigurationService configuration,
+    IClock clock)
 {
     public const string CreateSprintAction = "create_sprint";
     public const string RunSprintAction = "run_sprint";
@@ -90,6 +100,24 @@ public sealed class SprintOrchestrator(
             return new(true, new SprintId(reused), DiagnosticCodes.None);
         }
 
+        IReadOnlyList<SprintDependency> dependencies = command.Dependencies ?? [];
+        string dependencyDiagnostic =
+            await ValidateDependenciesAsync(status.Root, dependencies, cancellationToken).ConfigureAwait(false);
+        if (dependencyDiagnostic != DiagnosticCodes.None)
+        {
+            return new(false, null, dependencyDiagnostic);
+        }
+
+        string baseCommit;
+        try
+        {
+            baseCommit = await repository.GetHeadAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException)
+        {
+            return new(false, null, DiagnosticCodes.RepositoryHeadUnavailable);
+        }
+
         SprintId sprintId = SprintId.New();
         AppendOutcome outcome = await store.AppendTransitionAsync(
             status.Root,
@@ -107,10 +135,32 @@ public sealed class SprintOrchestrator(
             return new(false, null, outcome.DiagnosticCode);
         }
 
+        SprintDefinition definition = new(
+            sprintId,
+            baseCommit,
+            ProjectInitializer.WorkflowName,
+            ProjectInitializer.WorkflowContractVersion,
+            await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false),
+            dependencies,
+            clock.UtcNow);
+        await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
+
         await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
         await RecordCreatedSprintAsync(status.Root, command.IdempotencyKey, sprintId.Value, cancellationToken)
             .ConfigureAwait(false);
         return new(true, sprintId, DiagnosticCodes.None);
+    }
+
+    public async Task<SprintDefinition?> GetDefinitionAsync(
+        string? projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        return status.Initialized
+            ? await store.LoadDefinitionAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false)
+            : null;
     }
 
     public Task<SprintTransitionResult> RunSprintAsync(
@@ -215,6 +265,45 @@ public sealed class SprintOrchestrator(
         return outcome.Succeeded
             ? new(true, outcome.State!.Sprint, DiagnosticCodes.None)
             : new(false, state.Sprint, outcome.DiagnosticCode);
+    }
+
+    /// <summary>
+    /// A raw commit dependency is immutable by construction. An artifact dependency that names its
+    /// source sprint is only "published" once that sprint reaches a terminal state; a non-terminal
+    /// source would still be mutable and is rejected before any side effect. An artifact dependency
+    /// with no source sprint is trusted as an already-published, content-addressed digest — there is
+    /// no Forge-tracked sprint to check.
+    /// </summary>
+    private async Task<string> ValidateDependenciesAsync(
+        string root,
+        IReadOnlyList<SprintDependency> dependencies,
+        CancellationToken cancellationToken)
+    {
+        foreach (SprintDependency dependency in dependencies)
+        {
+            if (dependency.Kind != SprintDependencyKind.Artifact || dependency.SourceSprintId is not { } sourceId)
+            {
+                continue;
+            }
+
+            SprintWorkflowState? source = await store.LoadAsync(root, sourceId, cancellationToken)
+                .ConfigureAwait(false);
+            if (source is null || source.Sprint.State != SprintState.Completed)
+            {
+                return DiagnosticCodes.SprintDependencyNotTerminal;
+            }
+        }
+
+        return DiagnosticCodes.None;
+    }
+
+    private async Task<IReadOnlyDictionary<string, string>> ConfigurationSnapshotAsync(
+        string root,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<EffectiveConfigurationValue> values =
+            await configuration.GetProjectAsync(root, cancellationToken).ConfigureAwait(false);
+        return values.ToDictionary(value => value.Key, value => value.Value.GetRawText(), StringComparer.Ordinal);
     }
 
     private async Task RegisterSprintAsync(string root, SprintId sprintId, CancellationToken cancellationToken)

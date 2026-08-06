@@ -22,6 +22,8 @@ public static class DiagnosticCodes
     public const string SprintNotFound = "sprint_not_found";
     public const string SprintTransitionInvalid = "sprint_transition_invalid";
     public const string WorkflowEventConflict = "workflow_event_conflict";
+    public const string RepositoryHeadUnavailable = "repository_head_unavailable";
+    public const string SprintDependencyNotTerminal = "sprint_dependency_not_terminal";
 }
 
 public enum StartupState
