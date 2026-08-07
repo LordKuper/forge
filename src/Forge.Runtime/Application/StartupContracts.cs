@@ -23,7 +23,6 @@ public static class DiagnosticCodes
     public const string SprintTransitionInvalid = "sprint_transition_invalid";
     public const string WorkflowEventConflict = "workflow_event_conflict";
     public const string RepositoryHeadUnavailable = "repository_head_unavailable";
-    public const string SprintDependencyNotTerminal = "sprint_dependency_not_terminal";
     public const string SprintDependencyInvalid = "sprint_dependency_invalid";
     public const string SprintDependencyNotPublished = "sprint_dependency_not_published";
     public const string SprintGraphInvalid = "sprint_graph_invalid";

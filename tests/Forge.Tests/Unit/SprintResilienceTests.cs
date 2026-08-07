@@ -292,9 +292,10 @@ public sealed class SprintResilienceTests
             cancellationToken)).SprintId!;
         string originalHead = repository.Head;
 
-        // Simulate a crash before the marker: the first event and (this time) the idempotency key
-        // are both durable — a retry replays through the store's own idempotency check rather than
-        // hitting the conflict path — but the definition was never saved.
+        // Simulate a crash exactly before the marker: the first event, the idempotency key, and the
+        // definition are all already durable — a retry replays the first append through the store's
+        // own idempotency check rather than hitting the conflict path, and it is precisely because
+        // `definition.json` already exists that the reuse path below gets exercised at all.
         string sprintDirectory = FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId);
         File.Delete(Path.Combine(sprintDirectory, "created.marker"));
         // HEAD moves and the retry's caller supplies a different graph — neither may retroactively

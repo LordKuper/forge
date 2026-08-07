@@ -59,6 +59,10 @@ User-facing Forge changes are listed by release, newest first.
 
 - Findings are now stored one file per finding under
   `.forge/sprints/{id}/findings/` instead of a single shared `findings.json`.
+- A sprint with a human gate awaiting a decision now halts starting new work
+  on any other node in the same sprint, even one entirely independent of
+  that gate, until every pending gate is resolved. Previously the sprint
+  stayed `running` and independent work could continue in parallel.
 
 ## v0.9.0
 

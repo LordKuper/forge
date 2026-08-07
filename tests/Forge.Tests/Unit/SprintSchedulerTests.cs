@@ -711,6 +711,43 @@ public sealed class SprintSchedulerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task SkippingAStuckNodeInABlockedSprintDoesNotBypassTheOperatorsResumeDecision()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await ExhaustRetriesAsync(scheduler, environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(
+            SprintState.Blocked,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        // A manual retry re-arms the exhausted node, but the sprint stays `blocked` — a real node
+        // failure, not a late finding, put it there, so it must not silently clear on its own.
+        NodeSnapshot failed = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["a"];
+        NodeActionResult retried = await scheduler.RetryNodeAsync(
+            environment.ProjectRoot, sprintId, "a", failed.Version, SprintScheduler.RetryNodeKey(sprintId, failed),
+            cancellationToken);
+        Assert.True(retried.Succeeded);
+
+        // Skipping the re-armed node settles every node good, exactly like the late-open-finding
+        // recovery path — but this sprint was never blocked by a finding, so skipping it must not
+        // bypass the operator's explicit resume_sprint -> run_sprint decision that a real node
+        // failure requires.
+        NodeActionResult skipped = await scheduler.SkipNodeAsync(
+            environment.ProjectRoot, sprintId, "a", retried.Node!.Version, cancellationToken);
+        Assert.True(skipped.Succeeded);
+
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Blocked, sprint!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task ConcurrentFindingWritesNeverLoseADistinctFinding()
     {
         using TestEnvironment environment = await InitializedAsync();

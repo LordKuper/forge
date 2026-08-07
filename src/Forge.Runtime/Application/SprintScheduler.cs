@@ -640,23 +640,27 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
     /// <summary>
     /// Every node in `succeeded`/`skipped` with zero open findings promotes the sprint to
-    /// `ready_to_finalize`; any node stuck at `failed` with no automatic retries left blocks it. Runs
-    /// from `running` (the normal path) and also from `blocked` (a sprint a late-arriving open
-    /// finding blocked after every node had already settled good — see `RecordFindingAsync` — must
-    /// be able to advance the moment that finding resolves, without a manual ready/running round
-    /// trip). A no-op while other nodes still have in-flight work, while any finding stays `open`, or
-    /// if the sprint is in neither state (an internal, best-effort check: a lost race just waits for
-    /// the next call that observes the settled state). The two sprint-level appends below are
-    /// deliberately not propagated further: this method returns nothing to propagate to, and a
-    /// failed append here is provably safe to ignore — it means the sprint's version already moved
-    /// (something else changed it first), so applying this stale view would itself be wrong, and
-    /// every caller of this method already re-evaluates on its own next call.
+    /// `ready_to_finalize`; any node stuck at `failed` with no automatic retries left blocks it. A
+    /// no-op while other nodes still have in-flight work, while any finding stays `open`, or if the
+    /// sprint is not currently `running` (an internal, best-effort check: a lost race just waits for
+    /// the next call that observes the settled state). Deliberately does *not* also run from
+    /// `blocked`: unlike `running`, a sprint can be `blocked` for a reason that has nothing to do
+    /// with findings (a genuinely stuck node), and this method cannot tell those apart from
+    /// `allSettledGood` alone once an operator has manually retried or skipped the stuck node —
+    /// promoting straight to `ready_to_finalize` from there would bypass the explicit
+    /// `resume_sprint`/`run_sprint` decision `blocked` exists to require. See
+    /// `TryAdvanceFindingsOnlyBlockedSprintAsync` for the one narrow, explicit path that *is* allowed
+    /// to leave `blocked` this way. The sprint-level append below is deliberately not propagated
+    /// further: this method returns nothing to propagate to, and a failed append here is provably
+    /// safe to ignore — it means the sprint's version already moved (something else changed it
+    /// first), so applying this stale view would itself be wrong, and every caller of this method
+    /// already re-evaluates on its own next call.
     /// </summary>
     public async Task EvaluateCompletionAsync(string projectRoot, SprintId sprintId, CancellationToken cancellationToken)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State is not (SprintState.Running or SprintState.Blocked) || state.Nodes.Count == 0)
+        if (state.Sprint.State != SprintState.Running || state.Nodes.Count == 0)
         {
             return;
         }
@@ -684,25 +688,62 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
             if (findings.Any(finding => finding.Status == FindingStatus.Open))
             {
-                // Not a distinct sprint state: the sprint just stays where it is until every open
+                // Not a distinct sprint state: the sprint just stays `running` until every open
                 // finding is resolved, then a later call (see ResolveFindingAsync) re-evaluates.
                 return;
             }
 
-            // Legal from both `running` (the normal path) and `blocked` (the late-finding recovery
-            // path above) — every node is already settled good and no finding is left open either way.
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_ready_to_finalize", WorkflowStateNames.ToSnakeCase(SprintState.ReadyToFinalize),
                 state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
         }
-        else if (anyStuck && state.Sprint.State == SprintState.Running)
+        else if (anyStuck)
         {
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
                 state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
         }
+    }
+
+    /// <summary>
+    /// The one narrow, explicit path that may move a `blocked` sprint straight to
+    /// `ready_to_finalize`: called only from <see cref="ResolveFindingAsync"/>, and only advances
+    /// when the sprint is blocked *for no other reason than an open finding* — every node already
+    /// settled good, and no finding left open. A sprint blocked by a genuinely stuck node is left
+    /// alone, so resolving an unrelated finding can never bypass the operator's explicit
+    /// `resume_sprint`/`run_sprint` decision that a real node failure requires.
+    /// </summary>
+    private async Task TryAdvanceFindingsOnlyBlockedSprintAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (state.Sprint.State != SprintState.Blocked || state.Nodes.Count == 0)
+        {
+            return;
+        }
+
+        bool allSettledGood = state.Nodes.Values.All(node => node.State is NodeState.Succeeded or NodeState.Skipped);
+        if (!allSettledGood)
+        {
+            return;
+        }
+
+        IReadOnlyList<Finding> findings =
+            await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        if (findings.Any(finding => finding.Status == FindingStatus.Open))
+        {
+            return;
+        }
+
+        await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_ready_to_finalize", WorkflowStateNames.ToSnakeCase(SprintState.ReadyToFinalize),
+            state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<RecordFindingResult> RecordFindingAsync(
@@ -769,8 +810,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         Finding updated = existing with { Status = status };
         await store.SaveFindingAsync(projectRoot, updated, cancellationToken).ConfigureAwait(false);
         // The completion gate re-checks findings only when it runs; resolving the last open finding
-        // must itself be the trigger that lets an otherwise-settled sprint advance.
+        // must itself be the trigger that lets an otherwise-settled sprint advance — whether the
+        // sprint is still `running` (the gate itself) or was moved to `blocked` by a finding that
+        // arrived after every node had already settled (the narrow recovery path below).
         await EvaluateCompletionAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        await TryAdvanceFindingsOnlyBlockedSprintAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
         return new(true, updated, DiagnosticCodes.None);
     }
 

@@ -173,7 +173,10 @@ public sealed class SprintOrchestrator(
         // A resumed call reuses whatever was already frozen instead of re-deriving it from this
         // retry's own inputs: HEAD may have moved, configuration may have changed, and a caller could
         // even supply a different graph — none of that may retroactively rewrite a sprint's supposedly
-        // frozen definition once its first event is durable.
+        // frozen definition once `definition.json` itself is durable (not merely once the first event
+        // is — a crash between the two still re-derives once, from this same retry's own inputs,
+        // which is harmless: nothing could have observed the not-yet-saved definition, and the graph
+        // is not initialized from it until after this whole block).
         SprintDefinition? definition =
             await store.LoadDefinitionAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
         if (definition is null)

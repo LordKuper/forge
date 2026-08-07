@@ -264,6 +264,48 @@ public sealed class SprintDefinitionTests
         Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACommitDependencyWithATrailingNewlineIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        // .NET regex `$` matches immediately before a trailing '\n', not just at the true end of the
+        // string — a canonical-looking id smuggling one in must still be rejected.
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                [new(SprintDependencyKind.Commit, new string('a', 40) + "\n")]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnArtifactDependencyWithATrailingNewlineIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64) + "\n")]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
+    }
+
     private static async Task CompleteDirectlyAsync(
         ISprintStore store,
         string root,
