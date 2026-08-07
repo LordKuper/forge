@@ -47,7 +47,7 @@ Desktop ─┘                              │
                                        └─ Interfaces
                                            ├─ Provider adapters
                                            ├─ Git/worktrees
-                                           ├─ SQLite/CAS
+                                           ├─ Event log/CAS
                                            ├─ Files/process/network
                                            └─ Platform update strategy
 ```
@@ -159,7 +159,11 @@ sprint is forbidden.
 
 The workflow engine persists transitions before side effects, uses idempotency
 keys, resumes after crashes, and distinguishes sprint, node, and attempt
-lifecycles. Deterministic gates decide pass/fail; models never self-certify tests.
+lifecycles. Deterministic gates decide pass/fail; models never self-certify
+tests. Sprint/node/attempt state is event-sourced in an append-only,
+localization-safe log under `.forge/sprints/{id}/`, folded into current state
+on every read rather than trusted from a cache (see
+[`decisions/0003-durable-sprint-persistence.md`](decisions/0003-durable-sprint-persistence.md)).
 
 ## Provider execution and fallback
 

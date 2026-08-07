@@ -1,3 +1,5 @@
+using Forge.Domain;
+
 namespace Forge.Application;
 
 public interface IClock
@@ -42,10 +44,80 @@ public interface IEnvironmentPaths
 
 public interface IRepository
 {
-    Task<string> GetHeadAsync(CancellationToken cancellationToken);
+    /// <summary>Resolves the current commit a new sprint would freeze as its immutable base.</summary>
+    Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
-public interface ISprintStore;
+public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode, bool Replayed = false)
+{
+    public static AppendOutcome Conflict { get; } = new(false, null, DiagnosticCodes.WorkflowEventConflict);
+}
+
+/// <summary>
+/// Durable, event-sourced sprint/node/attempt state. Every mutation is an append-only
+/// <see cref="WorkflowEvent"/>; current state is always folded from that stream, never cached
+/// authoritatively, so a crash can never leave state inconsistent with its own history.
+/// </summary>
+public interface ISprintStore
+{
+    Task<SprintWorkflowState?> LoadAsync(string projectRoot, SprintId id, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Appends one transition if <paramref name="expectedAggregateVersion"/> still matches the
+    /// aggregate's current version (0 for an aggregate that does not exist yet) and
+    /// <paramref name="idempotencyKey"/> was not already applied. A replayed key returns the
+    /// current state without appending again; a version mismatch returns
+    /// <see cref="AppendOutcome.Conflict"/> without any side effect.
+    /// </summary>
+    Task<AppendOutcome> AppendTransitionAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AggregateKind aggregateKind,
+        string aggregateId,
+        string type,
+        string messageKey,
+        string toState,
+        long expectedAggregateVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? extraArguments = null);
+
+    /// <summary>
+    /// Persists a sprint's frozen definition once. Nothing in this store ever updates it again;
+    /// callers must write it exactly once, before the sprint becomes visible to other operations.
+    /// </summary>
+    Task SaveDefinitionAsync(string projectRoot, SprintDefinition definition, CancellationToken cancellationToken);
+
+    Task<SprintDefinition?> LoadDefinitionAsync(
+        string projectRoot,
+        SprintId id,
+        CancellationToken cancellationToken);
+
+    /// <summary>Node results, findings, and handoffs are small mutable/append records, not state
+    /// machines — they need no event sourcing of their own.</summary>
+    Task SaveNodeResultAsync(string projectRoot, NodeResult result, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<NodeResult>> GetNodeResultsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    Task SaveFindingAsync(string projectRoot, Finding finding, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Finding>> GetFindingsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    Task SaveHandoffAsync(string projectRoot, Handoff handoff, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<Handoff>> GetHandoffsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+}
 
 public interface IArtifactStore;
 

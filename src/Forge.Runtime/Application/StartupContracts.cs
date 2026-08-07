@@ -19,6 +19,21 @@ public static class DiagnosticCodes
     public const string ProjectAlreadyInitialized = "project_already_initialized";
     public const string ConfirmationRequired = "confirmation_required";
     public const string SuggestionStale = "suggestion_stale";
+    public const string SprintNotFound = "sprint_not_found";
+    public const string SprintTransitionInvalid = "sprint_transition_invalid";
+    public const string WorkflowEventConflict = "workflow_event_conflict";
+    public const string RepositoryHeadUnavailable = "repository_head_unavailable";
+    public const string SprintDependencyNotTerminal = "sprint_dependency_not_terminal";
+    public const string SprintGraphInvalid = "sprint_graph_invalid";
+    public const string SprintNotRunning = "sprint_not_running";
+    public const string NodeNotFound = "node_not_found";
+    public const string NodeKindMismatch = "node_kind_mismatch";
+    public const string NodeTransitionInvalid = "node_transition_invalid";
+    public const string FindingNotFound = "finding_not_found";
+    public const string WorkflowRecordInvalid = "workflow_record_invalid";
+    public const string WorkflowTransitionInvalid = "workflow_transition_invalid";
+    public const string WorkflowStoreBusy = "workflow_store_busy";
+    public const string WorkflowLogCorrupted = "workflow_log_corrupted";
 }
 
 public enum StartupState

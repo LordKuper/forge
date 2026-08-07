@@ -2,6 +2,76 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.9.0
+
+### Added
+
+- Added Stage 6: durable, independent sprints and the workflow engine.
+  Every sprint/node/attempt transition is an append-only, localization-safe
+  event under `.forge/sprints/{id}/events.jsonl`; current state is always
+  folded from that log, so a crash can never leave state inconsistent with
+  its own history, and a crash exactly mid-write is discarded cleanly
+  rather than corrupting recovery. Concurrent mutation is rejected through
+  optimistic concurrency on each aggregate's own version (serialized against
+  concurrent operations on the same sprint), validated against the frozen
+  sprint/node/attempt state machines by the store itself, and a retried
+  command with the same idempotency key is a safe no-op instead of a
+  duplicate transition. Concurrent sprints in the same project stay fully
+  isolated and both resume deterministically after a restart, with no
+  in-memory or transcript dependency.
+- Added `SprintOrchestrator`, creating sprints and advancing them through the
+  frozen `sprint` state machine (create, run, cancel, resume) one legal
+  transition at a time. Created sprints are registered in the project
+  manifest's `sprints` list.
+- Sprint creation freezes its immutable inputs once and for good: the
+  current Git commit (resolved through `git rev-parse HEAD`, never a shell
+  string), the workflow contract version, a snapshot of the project's
+  effective configuration, and the user's conversation language
+  (`language.llm`) kept separate from the project's own artifact-language
+  configuration. Later configuration or Git changes never retroactively
+  affect an existing sprint.
+- Added sprint dependency declarations: a dependency on a raw immutable Git
+  commit is always accepted; a dependency on another sprint's artifact is
+  accepted only once that sprint has reached `completed`, rejecting mutable
+  cross-sprint input before any sprint is created.
+- Added the deterministic sprint node/attempt scheduler: a sprint's frozen
+  graph advances nodes to `ready` only once their declared dependencies have
+  succeeded or been skipped, work-node failures automatically retry up to a
+  bounded limit before blocking the sprint, and a sprint automatically
+  reaches `ready_to_finalize` once every node has settled successfully.
+- Added human gate nodes: as soon as one becomes eligible while its sprint is
+  running, it moves straight to awaiting a decision; approving or rejecting
+  it is durable and schema-validated like every other transition, and a
+  rejected gate blocks its sprint immediately rather than leaving it stuck
+  with nothing left to do.
+- Added manual node retry (matching the existing `retry_failed_node`
+  recommendation), letting an exhausted node be re-armed after a fix.
+- Added findings (record/resolve) and structured handoffs (record/read,
+  identified by their own id, so a second handoff for the same node no
+  longer overwrites the first) per sprint, and node results recording each
+  attempt's digest-based outcome — all validated against their frozen v1
+  schemas before anything becomes durable.
+- Added the `sprint_not_found`, `sprint_transition_invalid`,
+  `workflow_event_conflict`, `repository_head_unavailable`,
+  `sprint_dependency_not_terminal`, `sprint_graph_invalid`,
+  `sprint_not_running`, `node_not_found`, `node_kind_mismatch`,
+  `node_transition_invalid`, `finding_not_found`, `workflow_record_invalid`,
+  `workflow_transition_invalid`, `workflow_store_busy`, and
+  `workflow_log_corrupted` diagnostic codes.
+
+This is a deterministic engine only: no real node executor exists yet
+(Stage 7 provides isolated Git worktrees for one), and there is no
+CLI/Desktop surface for any sprint capability yet — both are separate,
+later work.
+
+### Security
+
+- Durable sprint/node/attempt/finding transitions store only localization
+  keys and structured arguments, never rendered text (structured handoffs
+  remain the one contractually free-text record, written for a model to
+  read rather than shown as localized UI), and stay identical regardless
+  of the host's culture setting.
+
 ## v0.8.0
 
 ### Added

@@ -25,8 +25,8 @@ public sealed class ProjectInitializer(
     IConfigurationRegistry registry,
     ProjectRootResolver rootResolver)
 {
-    private const string WorkflowName = "implementation-critical";
-    private const string ContractVersion = "1.0.0";
+    internal const string WorkflowName = "implementation-critical";
+    internal const string WorkflowContractVersion = "1.0.0";
 
     public async Task<InitializeProjectResult> InitializeAsync(
         InitializeProjectRequest request,
@@ -127,7 +127,7 @@ public sealed class ProjectInitializer(
 
         await File.WriteAllTextAsync(
                 Path.Combine(staging, "workflows", $"{WorkflowName}.yaml"),
-                $"schema_version: {ContractVersion}{Environment.NewLine}workflow: {WorkflowName}{Environment.NewLine}",
+                $"schema_version: {WorkflowContractVersion}{Environment.NewLine}workflow: {WorkflowName}{Environment.NewLine}",
                 Encoding.UTF8,
                 cancellationToken)
             .ConfigureAwait(false);
