@@ -6,6 +6,13 @@ namespace Forge.InstallerTests;
 [Collection("External process tests")]
 public sealed class WindowsRestartCoordinatorTests
 {
+    // A real `powershell.exe` process must start and write its readiness file within this budget.
+    // 10s (the original 500 * 20ms) was tight enough that CI-runner contention — more test
+    // assemblies, more parallel file I/O, antivirus scanning a freshly written script — could
+    // starve the spawned process past it even though nothing about the coordinator's own behavior
+    // changed; this only widens the window, it does not change what either test asserts.
+    private const int ReadinessPollAttempts = 1500;
+    private const int ReadinessPollDelayMilliseconds = 20;
     [Fact]
     [Trait("Category", "Installer")]
     public async Task TerminatesAnUnconfirmedHostBeforeReturning()
@@ -33,9 +40,9 @@ public sealed class WindowsRestartCoordinatorTests
                 new(SemanticVersion.Parse("1.1.0"), new("windows", "x64", "portable_bundle"), UpdateSurface.Cli));
 
             Task<UpdateDiagnostic> operation = coordinator.RestartAsync(restart, TestContext.Current.CancellationToken).AsTask();
-            for (int attempt = 0; attempt < 500 && !File.Exists(readyPath); attempt++)
+            for (int attempt = 0; attempt < ReadinessPollAttempts && !File.Exists(readyPath); attempt++)
             {
-                await Task.Delay(20, TestContext.Current.CancellationToken);
+                await Task.Delay(ReadinessPollDelayMilliseconds, TestContext.Current.CancellationToken);
             }
 
             Assert.True(File.Exists(readyPath), "The restarted host did not signal readiness.");
@@ -164,9 +171,9 @@ public sealed class WindowsRestartCoordinatorTests
 
         public bool Exists(string token)
         {
-            for (int attempt = 0; attempt < 500 && !File.Exists(readyPath); attempt++)
+            for (int attempt = 0; attempt < ReadinessPollAttempts && !File.Exists(readyPath); attempt++)
             {
-                Thread.Sleep(20);
+                Thread.Sleep(ReadinessPollDelayMilliseconds);
             }
 
             throw new IOException();
