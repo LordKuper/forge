@@ -117,7 +117,7 @@ public sealed class SprintDefinitionTests
                 environment.ProjectRoot,
                 1,
                 Guid.NewGuid(),
-                [new(SprintDependencyKind.Artifact, "sha256:abc", upstream)]),
+                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64), upstream)]),
             cancellationToken);
 
         Assert.False(result.Succeeded);
@@ -127,7 +127,7 @@ public sealed class SprintDefinitionTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AnArtifactDependencyOnACompletedSprintSucceeds()
+    public async Task AnArtifactDependencyWithASourceSprintIsRejectedEvenOnceItIsCompleted()
     {
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
@@ -137,18 +137,54 @@ public sealed class SprintDefinitionTests
             new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
         await CompleteDirectlyAsync(store, environment.ProjectRoot, upstream, cancellationToken);
 
+        // No durable artifact-publication record exists yet, so a claim that a specific source
+        // sprint published this exact digest can never be verified — it fails closed even though
+        // the well-formed digest and the terminal source sprint would otherwise look plausible.
         CreateSprintResult result = await orchestrator.CreateSprintAsync(
             new(
                 environment.ProjectRoot,
                 1,
                 Guid.NewGuid(),
-                [new(SprintDependencyKind.Artifact, "sha256:abc", upstream)]),
+                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64), upstream)]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyNotPublished, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnArtifactDependencyWithNoSourceSprintIsTrustedAsAlreadyPublished()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64))]),
             cancellationToken);
 
         Assert.True(result.Succeeded);
-        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
-            environment.ProjectRoot, result.SprintId!, cancellationToken);
-        Assert.Equal(upstream, definition!.Dependencies.Single().SourceSprintId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnArtifactDependencyWithAMalformedDigestIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), [new(SprintDependencyKind.Artifact, "sha256:abc")]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
     }
 
     [Fact]
@@ -168,6 +204,62 @@ public sealed class SprintDefinitionTests
             cancellationToken);
 
         Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACommitDependencyOnABranchNameIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), [new(SprintDependencyKind.Commit, "main")]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACommitDependencyWithAnAbbreviatedShaIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                [new(SprintDependencyKind.Commit, new string('b', 7))]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACommitDependencyWithUppercaseHexIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                [new(SprintDependencyKind.Commit, new string('B', 40))]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
     }
 
     private static async Task CompleteDirectlyAsync(

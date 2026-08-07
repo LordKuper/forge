@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Bootstrap;
+using Forge.Configuration;
 using Forge.Providers;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -49,6 +50,24 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
     public T Resolve<T>()
         where T : notnull =>
         provider.GetRequiredService<T>();
+
+    /// <summary>Builds a fresh orchestrator/scheduler pair wired to a <see cref="FlakySprintStore"/>
+    /// wrapping the real store, sharing every other real dependency from this environment's
+    /// container — for tests that simulate a crash or a conflicting append mid compound operation.</summary>
+    public (SprintOrchestrator Orchestrator, SprintScheduler Scheduler, FlakySprintStore Store) ResolveWithFlakyStore()
+    {
+        FlakySprintStore store = new(Resolve<ISprintStore>());
+        SprintScheduler scheduler = new(store, Resolve<IClock>());
+        SprintOrchestrator orchestrator = new(
+            Resolve<ProjectRootResolver>(),
+            store,
+            Resolve<IConfigurationRegistry>(),
+            Resolve<IRepository>(),
+            Resolve<ScopedConfigurationService>(),
+            Resolve<IClock>(),
+            scheduler);
+        return (orchestrator, scheduler, store);
+    }
 
     /// <summary>Dispatches initialization exactly like a surface: snapshot first, then command.</summary>
     public async Task<InitializeProjectResult> InitializeAsync(

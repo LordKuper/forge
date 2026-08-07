@@ -225,7 +225,12 @@ internal static class ConfigurationSchemaCodec
 
         public ProjectArtifacts Artifacts { get; set; } = new();
 
-        public IReadOnlyList<string>? Sprints { get; set; }
+        // A concrete array, not `IReadOnlyList<string>`: YamlDotNet's default deserializer cannot
+        // construct a value for an interface-typed property, so it silently stays null on read
+        // even though a value was serialized — losing every previously registered sprint on the
+        // next write. Every other collection persisted through this codec already uses a concrete
+        // type for exactly this reason.
+        public string[]? Sprints { get; set; }
     }
 
     internal sealed class ProjectArtifacts

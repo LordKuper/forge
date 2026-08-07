@@ -65,6 +65,14 @@ public interface ISprintStore
     Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Marks a sprint's creation as durably complete: until this is called, <see cref="ListAsync"/>
+    /// will not return the sprint, even though every other write for it may already be durable and
+    /// individually addressable by id. This lets sprint creation retry safely from a crash at any
+    /// point without ever exposing a partially built sprint through enumeration.
+    /// </summary>
+    Task MarkSprintCreatedAsync(string projectRoot, SprintId id, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Appends one transition if <paramref name="expectedAggregateVersion"/> still matches the
     /// aggregate's current version (0 for an aggregate that does not exist yet) and
     /// <paramref name="idempotencyKey"/> was not already applied. A replayed key returns the

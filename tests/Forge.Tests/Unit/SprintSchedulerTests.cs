@@ -451,6 +451,205 @@ public sealed class SprintSchedulerTests
         Assert.Equal(SprintState.ReadyToFinalize, sprint!.State);
     }
 
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(FindingSeverity.Info)]
+    [InlineData(FindingSeverity.Low)]
+    [InlineData(FindingSeverity.Medium)]
+    [InlineData(FindingSeverity.High)]
+    [InlineData(FindingSeverity.Critical)]
+    public async Task AnOpenFindingOfAnySeverityBlocksFinalizationEvenWithEveryNodeSettled(FindingSeverity severity)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, severity, "finding.example", new Dictionary<string, string?>(),
+            ["src/Foo.cs:1"], null, cancellationToken);
+
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Running, sprint!.State);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(FindingStatus.Accepted)]
+    [InlineData(FindingStatus.Resolved)]
+    [InlineData(FindingStatus.Dismissed)]
+    public async Task ANonOpenFindingDoesNotBlockFinalization(FindingStatus status)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, status, cancellationToken);
+
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.ReadyToFinalize, sprint!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolvingTheLastOpenFindingLetsAnAlreadySettledSprintAdvance()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.Critical, "finding.example",
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+        Assert.Equal(
+            SprintState.Running,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved, cancellationToken);
+
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.ReadyToFinalize, sprint!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CompletingAnAttemptForTheWrongNodeIsRejectedWithoutChangingEitherNode()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: TwoIndependentNodeGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult startedA =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "b", 2, cancellationToken);
+
+        // Node A's attempt is presented as if it belonged to node B — the durable owner recorded at
+        // attempt creation must reject the mismatch rather than let the wrong pair settle.
+        CompleteAttemptResult crossed = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "b", startedA.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+
+        Assert.False(crossed.Succeeded);
+        Assert.Equal(DiagnosticCodes.AttemptOwnershipMismatch, crossed.DiagnosticCode);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Running, state.Nodes["a"].State);
+        Assert.Equal(NodeState.Running, state.Nodes["b"].State);
+        Assert.Empty(await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+
+        // The real pairing still completes normally afterward.
+        CompleteAttemptResult real = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", startedA.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+        Assert.True(real.Succeeded);
+        Assert.Equal(NodeState.Succeeded, real.Node!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task MultipleSimultaneousGatesKeepTheSprintAwaitingHumanUntilBothResolve()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph: [new("gate1", NodeKind.HumanGate, []), new("gate2", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate1"].State);
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate2"].State);
+        Assert.Equal(SprintState.AwaitingHuman, state.Sprint.State);
+
+        NodeSnapshot gate1 = state.Nodes["gate1"];
+        await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate1", true, gate1.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate1), cancellationToken);
+
+        // One gate resolved, one still open: the sprint must stay `awaiting_human`, not resume.
+        SprintSnapshot? afterFirst = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.AwaitingHuman, afterFirst!.State);
+
+        // A store reopen mid-sequence must not change that derived state.
+        FileSprintEventLog reopened = new(new FakeClock());
+        SprintWorkflowState reopenedState =
+            (await reopened.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.AwaitingHuman, reopenedState.Sprint.State);
+
+        NodeSnapshot gate2 = reopenedState.Nodes["gate2"];
+        await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate2", true, gate2.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate2), cancellationToken);
+
+        // Both gates settled and nothing else is outstanding, so the sprint doesn't just resume
+        // `running` — it advances straight through to `ready_to_finalize` in the same call.
+        SprintSnapshot? afterBoth = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.ReadyToFinalize, afterBoth!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConcurrentFindingWritesNeverLoseADistinctFinding()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        const int count = 20;
+        await Task.WhenAll(Enumerable.Range(0, count).Select(index => scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.example",
+            new Dictionary<string, string?>(), [$"src/Foo.cs:{index}"], null, cancellationToken)));
+
+        IReadOnlyList<Finding> findings =
+            await scheduler.GetFindingsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(count, findings.Count);
+        Assert.Equal(count, findings.Select(item => item.FindingId).Distinct().Count());
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ProgressSurvivesReopeningTheStoreFromScratch()
@@ -482,6 +681,12 @@ public sealed class SprintSchedulerTests
     [
         new("a", NodeKind.Work, []),
         new("b", NodeKind.Work, ["a"]),
+    ];
+
+    private static readonly IReadOnlyList<NodeDefinition> TwoIndependentNodeGraph =
+    [
+        new("a", NodeKind.Work, []),
+        new("b", NodeKind.Work, []),
     ];
 
     private static readonly string SampleDigest = "sha256:" + new string('0', 64);

@@ -71,4 +71,6 @@ public sealed record AttemptSnapshot(
     AttemptId Id,
     AttemptState State,
     long Version,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? NodeId = null,
+    string? TargetOutcome = null);

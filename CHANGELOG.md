@@ -2,6 +2,72 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.10.0
+
+### Fixed
+
+- Sprint creation is now crash-safe and idempotent: a sprint's id is derived
+  deterministically from its project and idempotency key, the whole sprint is
+  assembled in an isolated staging location and only made visible by an
+  atomic rename, and a retried creation call repairs a missing manifest
+  registration instead of risking an orphaned or duplicated sprint.
+- Completing an attempt or resolving a human gate now resumes correctly after
+  an interrupted prior call instead of risking a stuck node or a lost result;
+  every step is idempotent, and a retried command converges on the same
+  terminal outcome instead of abandoning the interrupted attempt.
+- Starting an attempt, completing an attempt, and resolving a human gate now
+  report failure (instead of silently continuing with stale data) when a
+  durable write conflicts, so callers never see a false success.
+- A sprint can no longer reach `ready_to_finalize` while it has an open
+  finding of any severity; resolving the last open finding now lets an
+  already-settled sprint advance immediately instead of waiting for another
+  unrelated transition.
+- Sprint dependencies are now validated as canonical, immutable references: a
+  commit dependency must be a full lowercase object id (never a branch name
+  or an abbreviated sha), an artifact dependency must be a full `sha256:`
+  digest, and an artifact dependency that names its source sprint is
+  rejected until Forge can durably verify what that sprint published.
+- Concurrent finding updates in the same sprint no longer risk losing one
+  finding's update to another's racing write.
+- An attempt now records which node it belongs to; completing an attempt for
+  the wrong node is rejected instead of silently settling the wrong pair.
+- A workflow transition can no longer be redirected to an unintended state
+  through a caller-supplied extra argument.
+- A sprint now enters and leaves `awaiting_human` alongside its human gates
+  and correctly returns to `running` or moves to `blocked` once every gate
+  resolves, including after a restart mid-sequence.
+- Fixed the project manifest's registered-sprints list failing to survive a
+  fresh read, which could silently drop previously registered sprints the
+  next time the manifest was written.
+- Sprint creation no longer stages its build under an id `ListAsync` would
+  briefly surface if interrupted; a sprint is now invisible to enumeration
+  until every creation write has landed, and its identity is derived from the
+  project's own stable id rather than the project's path, so a relocated
+  project directory or differently cased Windows path still resolves to the
+  same sprint for the same idempotency key.
+- Starting an attempt, completing an attempt, and resolving a human gate no
+  longer risk a stuck node: each now resumes from exactly where an
+  interrupted prior call left off, and a retry can never silently flip an
+  already-committed outcome (success/failure, or a human gate's
+  approve/reject decision) to its opposite.
+- A node result that already exists for an attempt is now compared, not just
+  assumed identical; a genuinely different result for the same attempt is
+  rejected instead of one silently overwriting the other.
+- Findings recorded before this release (stored in a single shared
+  `findings.json`) are now migrated automatically and safely to the new
+  per-finding-file layout on first access, instead of silently disappearing.
+- An open finding recorded after a sprint already reached `ready_to_finalize`
+  now moves it back to `blocked` immediately, instead of leaving it
+  finalizable with unreviewed findings outstanding.
+- A human gate promotion interrupted between its two durable writes now
+  resumes automatically on any later graph advance instead of leaving the
+  gate stuck at `running` forever.
+
+### Changed
+
+- Findings are now stored one file per finding under
+  `.forge/sprints/{id}/findings/` instead of a single shared `findings.json`.
+
 ## v0.9.0
 
 ### Added

@@ -33,6 +33,15 @@ public sealed record WorkflowEvent(
 
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
+
+    /// <summary>Carried on an attempt's creation event so its owning node is a durable fact, not
+    /// something only the caller who happens to pair matching ids remembers.</summary>
+    public const string NodeIdArgument = "node_id";
+
+    /// <summary>Carried on the first transition an attempt makes away from `created`, so the
+    /// outcome a compound operation committed to is a durable fact a retry must honor — never
+    /// something a caller's later, possibly different argument can silently flip.</summary>
+    public const string TargetOutcomeArgument = "target_outcome";
 }
 
 public sealed record SprintWorkflowState(
@@ -110,11 +119,24 @@ public static class WorkflowFold
                         attemptCount);
                     break;
                 case AggregateKind.Attempt:
+                    attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? previousAttempt);
+                    string? nodeId = current.Arguments.TryGetValue(
+                        WorkflowEvent.NodeIdArgument,
+                        out string? nodeIdValue) && nodeIdValue is not null
+                        ? nodeIdValue
+                        : previousAttempt?.NodeId;
+                    string? targetOutcome = current.Arguments.TryGetValue(
+                        WorkflowEvent.TargetOutcomeArgument,
+                        out string? targetOutcomeValue) && targetOutcomeValue is not null
+                        ? targetOutcomeValue
+                        : previousAttempt?.TargetOutcome;
                     attempts[current.Aggregate.Id] = new(
                         new(Guid.Parse(current.Aggregate.Id)),
                         WorkflowStateNames.Parse<AttemptState>(toState),
                         current.Aggregate.Version,
-                        current.OccurredAt);
+                        current.OccurredAt,
+                        nodeId,
+                        targetOutcome);
                     break;
                 default:
                     throw new InvalidDataException(
