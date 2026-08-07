@@ -115,8 +115,7 @@ public sealed class SprintOrchestrator(
         }
 
         IReadOnlyList<SprintDependency> dependencies = command.Dependencies ?? [];
-        string dependencyDiagnostic =
-            await ValidateDependenciesAsync(status.Root, dependencies, cancellationToken).ConfigureAwait(false);
+        string dependencyDiagnostic = ValidateDependencies(dependencies);
         if (dependencyDiagnostic != DiagnosticCodes.None)
         {
             return new(false, null, dependencyDiagnostic);
@@ -140,10 +139,10 @@ public sealed class SprintOrchestrator(
 
         // Every write below targets the final, deterministic id directly — never a separate staging
         // id — and every one of them is safe to repeat: the first event replays through the store's
-        // own idempotency key, `SaveDefinitionAsync` always overwrites identically, and
-        // `InitializeGraphAsync` tolerates a node that a prior, interrupted call already created.
-        // `ListAsync` cannot observe any of this until `MarkSprintCreatedAsync` runs last, so a crash
-        // at any point before then simply leaves an invisible, safely resumable sprint behind.
+        // own idempotency key, `InitializeGraphAsync` tolerates a node that a prior, interrupted call
+        // already created, and the definition is reused rather than rebuilt if one is already durable
+        // (below). `ListAsync` cannot observe any of this until `MarkSprintCreatedAsync` runs last, so
+        // a crash at any point before then simply leaves an invisible, safely resumable sprint behind.
         AppendOutcome outcome = await store.AppendTransitionAsync(
             status.Root,
             sprintId,
@@ -157,24 +156,46 @@ public sealed class SprintOrchestrator(
             cancellationToken).ConfigureAwait(false);
         if (!outcome.Succeeded)
         {
-            return new(false, null, outcome.DiagnosticCode);
+            // `AppendTransitionAsync` durably appends the event before it records the idempotency
+            // key (see its own remarks), so a crash in that exact window leaves this sprint's first
+            // event durable at version 1 with the key unrecorded and no marker yet — a retry then
+            // computes the *same* deterministic id and hits `expectedVersion 0 != 1` here, forever,
+            // unless that conflict is verified against durable state and treated as the resumed case
+            // rather than a hard failure.
+            bool alreadyStarted = outcome.DiagnosticCode == DiagnosticCodes.WorkflowEventConflict &&
+                await store.LoadAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false) is not null;
+            if (!alreadyStarted)
+            {
+                return new(false, null, outcome.DiagnosticCode);
+            }
         }
 
-        IReadOnlyDictionary<string, string> configurationSnapshot =
-            await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false);
-        SprintDefinition definition = new(
-            sprintId,
-            baseCommit,
-            ProjectInitializer.WorkflowName,
-            ProjectInitializer.WorkflowContractVersion,
-            configurationSnapshot,
-            dependencies,
-            graph,
-            await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
-            ArtifactPolicySnapshotHash(configurationSnapshot),
-            clock.UtcNow);
-        await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
-        await scheduler.InitializeGraphAsync(status.Root, sprintId, graph, cancellationToken).ConfigureAwait(false);
+        // A resumed call reuses whatever was already frozen instead of re-deriving it from this
+        // retry's own inputs: HEAD may have moved, configuration may have changed, and a caller could
+        // even supply a different graph — none of that may retroactively rewrite a sprint's supposedly
+        // frozen definition once its first event is durable.
+        SprintDefinition? definition =
+            await store.LoadDefinitionAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
+        if (definition is null)
+        {
+            IReadOnlyDictionary<string, string> configurationSnapshot =
+                await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false);
+            definition = new(
+                sprintId,
+                baseCommit,
+                ProjectInitializer.WorkflowName,
+                ProjectInitializer.WorkflowContractVersion,
+                configurationSnapshot,
+                dependencies,
+                graph,
+                await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
+                ArtifactPolicySnapshotHash(configurationSnapshot),
+                clock.UtcNow);
+            await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
+        }
+
+        await scheduler.InitializeGraphAsync(status.Root, sprintId, definition.Graph, cancellationToken)
+            .ConfigureAwait(false);
         await store.MarkSprintCreatedAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
 
         await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
@@ -317,23 +338,22 @@ public sealed class SprintOrchestrator(
     // Node ids become event-log aggregate ids; commit/artifact references become part of a frozen,
     // cross-sprint-trusted definition, so both are constrained to a canonical, unambiguous alphabet
     // rather than trusted as arbitrary strings.
-    private static readonly Regex CommitIdPattern = new("^[0-9a-f]{40}$|^[0-9a-f]{64}$", RegexOptions.Compiled);
-    private static readonly Regex ArtifactDigestPattern = new("^sha256:[0-9a-f]{64}$", RegexOptions.Compiled);
+    // `\z` (absolute end), not `$`, which in .NET also matches immediately before a trailing '\n' —
+    // "aaa…a\n" must not validate as a canonical id.
+    private static readonly Regex CommitIdPattern = new(@"\A[0-9a-f]{40}\z|\A[0-9a-f]{64}\z", RegexOptions.Compiled);
+    private static readonly Regex ArtifactDigestPattern = new(@"\Asha256:[0-9a-f]{64}\z", RegexOptions.Compiled);
 
     /// <summary>
     /// A commit dependency must be a canonical, immutable object id — never a mutable ref such as a
     /// branch name, and never abbreviated. An artifact dependency must be a full, canonical digest.
     /// An artifact dependency that also names its source sprint claims that sprint published the
     /// exact digest; that can only be trusted once a durable, cross-sprint publication record
-    /// exists, and none does yet (Stage 6 does not produce artifacts), so it fails closed rather
-    /// than trusting an unverifiable claim — even once the source sprint has reached a terminal
-    /// state. An artifact dependency with no source sprint is trusted as an already-published,
-    /// content-addressed digest — there is no Forge-tracked sprint to check.
+    /// exists, and none does yet (Stage 6 does not produce artifacts), so it is rejected outright —
+    /// checking the source sprint's own state first would not change that outcome, only leak whether
+    /// it exists or has completed. An artifact dependency with no source sprint is trusted as an
+    /// already-published, content-addressed digest — there is no Forge-tracked sprint to check.
     /// </summary>
-    private async Task<string> ValidateDependenciesAsync(
-        string root,
-        IReadOnlyList<SprintDependency> dependencies,
-        CancellationToken cancellationToken)
+    private static string ValidateDependencies(IReadOnlyList<SprintDependency> dependencies)
     {
         foreach (SprintDependency dependency in dependencies)
         {
@@ -352,19 +372,10 @@ public sealed class SprintOrchestrator(
                 return DiagnosticCodes.SprintDependencyInvalid;
             }
 
-            if (dependency.SourceSprintId is not { } sourceId)
+            if (dependency.SourceSprintId is not null)
             {
-                continue;
+                return DiagnosticCodes.SprintDependencyNotPublished;
             }
-
-            SprintWorkflowState? source = await store.LoadAsync(root, sourceId, cancellationToken)
-                .ConfigureAwait(false);
-            if (source is null || source.Sprint.State != SprintState.Completed)
-            {
-                return DiagnosticCodes.SprintDependencyNotTerminal;
-            }
-
-            return DiagnosticCodes.SprintDependencyNotPublished;
         }
 
         return DiagnosticCodes.None;

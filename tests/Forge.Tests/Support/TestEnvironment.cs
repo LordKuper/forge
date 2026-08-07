@@ -121,6 +121,17 @@ internal sealed class FakeRepository(string? head = null) : IRepository
         Task.FromResult(head);
 }
 
+/// <summary>Like <see cref="FakeRepository"/>, but `Head` can change between calls — for tests that
+/// need to prove a *later* read is never re-consulted (e.g. a resumed sprint creation must reuse its
+/// already-frozen `baseCommit`, not re-read HEAD).</summary>
+internal sealed class MutableRepository : IRepository
+{
+    public string Head { get; set; } = new string('a', 40);
+
+    public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(Head);
+}
+
 /// <summary>Always fails, matching a project root that is not (or not yet) a Git repository.</summary>
 internal sealed class UnavailableRepository : IRepository
 {

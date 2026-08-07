@@ -25,7 +25,10 @@ public static class WorkflowStateMachines
             ],
             [SprintState.AwaitingHuman] =
                 [SprintState.Running, SprintState.Blocked, SprintState.Cancelled],
-            [SprintState.Blocked] = [SprintState.Ready, SprintState.Cancelled],
+            // `ReadyToFinalize` is reachable from `Blocked` because a sprint blocked only by a
+            // late-arriving open finding (every node already settled good) must be able to advance
+            // as soon as that finding resolves, without a manual ready/running round trip.
+            [SprintState.Blocked] = [SprintState.Ready, SprintState.ReadyToFinalize, SprintState.Cancelled],
             [SprintState.Failed] = [SprintState.Ready, SprintState.Cancelled],
             [SprintState.ReadyToFinalize] = [SprintState.Completed, SprintState.Blocked],
             [SprintState.Completed] = [],

@@ -237,6 +237,86 @@ public sealed class SprintResilienceTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task RetryingCreateSprintAfterTheIdempotencyKeyIsLostStillConverges()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        Guid idempotencyKey = Guid.NewGuid();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, idempotencyKey, Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+
+        // Simulate a crash exactly between the durable event append and the idempotency-key write
+        // (the store's own documented ordering), before creation was ever marked complete: the first
+        // event is durable, but nothing else is. With a deterministic id, a retry recomputes the
+        // *exact same* id, so — unlike the old random-id design — it must resume, not just orphan
+        // and start over.
+        string sprintDirectory = FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId);
+        File.Delete(Path.Combine(sprintDirectory, "idempotency.json"));
+        File.Delete(Path.Combine(sprintDirectory, "created.marker"));
+
+        CreateSprintResult retried = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, idempotencyKey, Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken);
+        // A second retry must converge too, not just the first.
+        CreateSprintResult retriedAgain = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, idempotencyKey, Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken);
+
+        Assert.True(retried.Succeeded);
+        Assert.Equal(sprintId, retried.SprintId);
+        Assert.True(retriedAgain.Succeeded);
+        Assert.Equal(sprintId, retriedAgain.SprintId);
+        Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RetryingCreateSprintReusesTheAlreadyFrozenDefinitionInsteadOfReFreezingIt()
+    {
+        MutableRepository repository = new();
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        Guid idempotencyKey = Guid.NewGuid();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, idempotencyKey, Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        string originalHead = repository.Head;
+
+        // Simulate a crash before the marker: the first event and (this time) the idempotency key
+        // are both durable — a retry replays through the store's own idempotency check rather than
+        // hitting the conflict path — but the definition was never saved.
+        string sprintDirectory = FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId);
+        File.Delete(Path.Combine(sprintDirectory, "created.marker"));
+        // HEAD moves and the retry's caller supplies a different graph — neither may retroactively
+        // change what this sprint already froze.
+        repository.Head = new string('b', 40);
+
+        CreateSprintResult retried = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, idempotencyKey, Graph: [new("z", NodeKind.Work, [])]),
+            cancellationToken);
+
+        Assert.True(retried.Succeeded);
+        Assert.Equal(sprintId, retried.SprintId);
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(originalHead, definition!.BaseCommit);
+        Assert.Equal("a", Assert.Single(definition.Graph).Id);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(["a"], state.Nodes.Keys);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task ListAsyncNeverObservesASprintBeforeItIsMarkedCreated()
     {
         using TestRoot root = new();

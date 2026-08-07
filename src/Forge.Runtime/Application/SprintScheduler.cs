@@ -101,10 +101,6 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             .ConfigureAwait(false);
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        Dictionary<string, NodeDefinition> byId = definition.Graph.ToDictionary(
-            node => node.Id,
-            node => node,
-            StringComparer.Ordinal);
 
         foreach (NodeDefinition node in definition.Graph)
         {
@@ -126,10 +122,20 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 cancellationToken).ConfigureAwait(false);
         }
 
+        // Brings the sprint's own state up to date with whatever just settled — e.g. a gate that was
+        // resolved by the caller just above this call — *before* deciding whether to push any newly
+        // `ready` gate onward below. Otherwise a gate that becomes `ready` only as a side effect of
+        // the promotion loop above (it depends on another gate that just resolved in this same
+        // sprint) could be promoted to `ready` while the sprint is still mid-transition back to
+        // `running`, and the loop below — gated on the sprint already being `running` — would then
+        // skip it entirely, with nothing else ever calling `AdvanceGraphAsync` again to catch it.
+        await SynchronizeSprintGateStateAsync(projectRoot, sprintId, definition, cancellationToken)
+            .ConfigureAwait(false);
+
         state = await RequireStateAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
         if (state.Sprint.State == SprintState.Running)
         {
-            foreach (NodeDefinition node in definition.Graph.Where(node => byId[node.Id].Kind == NodeKind.HumanGate))
+            foreach (NodeDefinition node in definition.Graph.Where(node => node.Kind == NodeKind.HumanGate))
             {
                 if (!state.Nodes.TryGetValue(node.Id, out NodeSnapshot? snapshot))
                 {
@@ -168,6 +174,9 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             }
         }
 
+        // Syncs again: a gate just promoted to `awaiting_human` immediately above must flip the
+        // sprint there too, in the same call — a caller must never observe `running` with a gate
+        // already `awaiting_human` even momentarily between two separate calls.
         await SynchronizeSprintGateStateAsync(projectRoot, sprintId, definition, cancellationToken)
             .ConfigureAwait(false);
         return await RequireStateAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
@@ -205,6 +214,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // conflicting append). Basing the deterministic id on the number the node already carries —
         // rather than count + 1 — keeps a retry's id stable across that transition instead of
         // shifting to a new, unrelated one every time it is recomputed.
+        // ponytail: on this resume path `expectedNodeVersion` is not re-checked against the node's
+        // current version — there is no prior version to check it against once the node has already
+        // moved. A caller with an arbitrarily stale version is handed the real, already-in-flight
+        // attempt id rather than rejected; that id is inert on its own (every later verb re-validates
+        // ownership and state independently), so this trades a slightly looser staleness guarantee
+        // on this one path for actually being resumable. Revisit if that trade stops being safe.
         bool nodeAlreadyRunning = node.State == NodeState.Running;
         int attemptNumber = nodeAlreadyRunning ? node.AttemptCount : node.AttemptCount + 1;
         AttemptId attemptId = DeterministicAttemptId(
@@ -625,9 +640,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
     /// <summary>
     /// Every node in `succeeded`/`skipped` with zero open findings promotes the sprint to
-    /// `ready_to_finalize`; any node stuck at `failed` with no automatic retries left blocks it. A
-    /// no-op while other nodes still have in-flight work, while any finding stays `open`, and if the
-    /// sprint is not currently `running` (an internal, best-effort check: a lost race just waits for
+    /// `ready_to_finalize`; any node stuck at `failed` with no automatic retries left blocks it. Runs
+    /// from `running` (the normal path) and also from `blocked` (a sprint a late-arriving open
+    /// finding blocked after every node had already settled good — see `RecordFindingAsync` — must
+    /// be able to advance the moment that finding resolves, without a manual ready/running round
+    /// trip). A no-op while other nodes still have in-flight work, while any finding stays `open`, or
+    /// if the sprint is in neither state (an internal, best-effort check: a lost race just waits for
     /// the next call that observes the settled state). The two sprint-level appends below are
     /// deliberately not propagated further: this method returns nothing to propagate to, and a
     /// failed append here is provably safe to ignore — it means the sprint's version already moved
@@ -638,7 +656,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running || state.Nodes.Count == 0)
+        if (state.Sprint.State is not (SprintState.Running or SprintState.Blocked) || state.Nodes.Count == 0)
         {
             return;
         }
@@ -653,27 +671,32 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         bool allSettledGood = state.Nodes.Values.All(node => node.State is NodeState.Succeeded or NodeState.Skipped);
         // A human gate never auto-retries (a rejection is a final human decision, not a transient
         // failure), so any `failed` gate is stuck the moment it is rejected — it has no attempt
-        // budget to exhaust the way a work node does.
+        // budget to exhaust the way a work node does. `TryGetValue`, not an indexer: a node from an
+        // earlier, differently-frozen definition could in principle be durable without a matching
+        // graph entry, and this must never throw for that.
         bool anyStuck = state.Nodes.Any(entry => entry.Value.State == NodeState.Cancelled ||
             (entry.Value.State == NodeState.Failed &&
-                (kindById[entry.Key] == NodeKind.HumanGate || entry.Value.AttemptCount >= MaxAutomaticRetries + 1)));
+                (!kindById.TryGetValue(entry.Key, out NodeKind kind) || kind == NodeKind.HumanGate ||
+                    entry.Value.AttemptCount >= MaxAutomaticRetries + 1)));
         if (allSettledGood)
         {
             IReadOnlyList<Finding> findings =
                 await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
             if (findings.Any(finding => finding.Status == FindingStatus.Open))
             {
-                // Not a distinct sprint state: the sprint just stays `running` until every open
+                // Not a distinct sprint state: the sprint just stays where it is until every open
                 // finding is resolved, then a later call (see ResolveFindingAsync) re-evaluates.
                 return;
             }
 
+            // Legal from both `running` (the normal path) and `blocked` (the late-finding recovery
+            // path above) — every node is already settled good and no finding is left open either way.
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_ready_to_finalize", WorkflowStateNames.ToSnakeCase(SprintState.ReadyToFinalize),
                 state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
         }
-        else if (anyStuck)
+        else if (anyStuck && state.Sprint.State == SprintState.Running)
         {
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",

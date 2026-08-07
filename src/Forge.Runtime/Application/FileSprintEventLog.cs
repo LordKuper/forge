@@ -319,9 +319,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     /// <summary>
     /// One lock per key serializes a critical section below: sprint directory keys guard the
-    /// event log's read-check-append sequence, and finding file path keys guard a same-id
-    /// read-then-replace. Different keys never contend (different sprints, different findings).
+    /// event log's read-check-append sequence, and finding/result/legacy-migration file path keys
+    /// guard a same-id read-then-replace. Different keys never contend (different sprints, different
+    /// findings, different results).
     /// </summary>
+    /// <remarks>
+    /// ponytail: entries are never evicted, so this grows by one `SemaphoreSlim` per distinct sprint
+    /// directory and per distinct finding/result/legacy-migration path ever touched, for the life of
+    /// the process. Fine at MVP scale (a CLI process is short-lived; a long-running host would still
+    /// need one entry per active sprint/record, not per operation). Add eviction (e.g. on sprint
+    /// completion) if a long-lived host process ever makes this measurable.
+    /// </remarks>
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(StringComparer.Ordinal);
 
     public async Task<AppendOutcome> AppendTransitionAsync(

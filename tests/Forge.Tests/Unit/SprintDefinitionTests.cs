@@ -112,6 +112,8 @@ public sealed class SprintDefinitionTests
         SprintId upstream = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
 
+        // Naming a source sprint is always rejected — fail-closed, since no publication record
+        // exists to verify against — regardless of whether that source sprint is even terminal yet.
         CreateSprintResult result = await orchestrator.CreateSprintAsync(
             new(
                 environment.ProjectRoot,
@@ -121,7 +123,7 @@ public sealed class SprintDefinitionTests
             cancellationToken);
 
         Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyNotTerminal, result.DiagnosticCode);
+        Assert.Equal(DiagnosticCodes.SprintDependencyNotPublished, result.DiagnosticCode);
         Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 
