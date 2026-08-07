@@ -71,6 +71,8 @@ public sealed class WorkflowContractTests
     [InlineData(SprintState.Ready, SprintState.Running, true)]
     [InlineData(SprintState.Running, SprintState.ReadyToFinalize, true)]
     [InlineData(SprintState.ReadyToFinalize, SprintState.Completed, true)]
+    [InlineData(SprintState.Blocked, SprintState.ReadyToFinalize, true)]
+    [InlineData(SprintState.Blocked, SprintState.Running, false)]
     [InlineData(SprintState.Completed, SprintState.Draft, false)]
     [InlineData(SprintState.Cancelled, SprintState.Ready, false)]
     public void SprintTransitionsMatchFrozenV1Contract(SprintState from, SprintState to, bool expected) =>

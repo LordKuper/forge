@@ -741,6 +741,62 @@ public sealed class SprintSchedulerTests
         NodeActionResult skipped = await scheduler.SkipNodeAsync(
             environment.ProjectRoot, sprintId, "a", retried.Node!.Version, cancellationToken);
         Assert.True(skipped.Succeeded);
+        Assert.Equal(
+            SprintState.Blocked,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        // The full exploit: with every node now settled good, recording and resolving a completely
+        // unrelated finding must not launder this node-caused block into `ready_to_finalize` either
+        // — the durable block reason is `node`, not `finding`, regardless of how settled the graph
+        // looks right now.
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.unrelated",
+            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, cancellationToken);
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved, cancellationToken);
+
+        SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Blocked, sprint!.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolvingAnUnrelatedFindingDoesNotLaunderARejectedGateToReadyToFinalize()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+
+        await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", false, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        Assert.Equal(
+            SprintState.Blocked,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        // A rejected gate can be manually re-armed and skipped exactly like a failed work node —
+        // settling the graph without ever passing through a real approval.
+        NodeSnapshot rejected = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult retried = await scheduler.RetryNodeAsync(
+            environment.ProjectRoot, sprintId, "gate", rejected.Version,
+            SprintScheduler.RetryNodeKey(sprintId, rejected), cancellationToken);
+        Assert.True(retried.Succeeded);
+        NodeActionResult skipped = await scheduler.SkipNodeAsync(
+            environment.ProjectRoot, sprintId, "gate", retried.Node!.Version, cancellationToken);
+        Assert.True(skipped.Succeeded);
+
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.unrelated",
+            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, cancellationToken);
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved, cancellationToken);
 
         SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
         Assert.Equal(SprintState.Blocked, sprint!.State);

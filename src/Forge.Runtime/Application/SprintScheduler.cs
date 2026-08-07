@@ -703,17 +703,35 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
-                state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+                state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = BlockedByNode,
+                }).ConfigureAwait(false);
         }
     }
+
+    /// <summary>A durable <see cref="WorkflowEvent.BlockedReasonArgument"/> tag for each of the
+    /// three sites that can append a sprint's `blocked` transition — a stuck/failed node
+    /// (<see cref="EvaluateCompletionAsync"/>), a late-arriving open finding
+    /// (<see cref="RecordFindingAsync"/>), and a rejected human gate
+    /// (<see cref="SynchronizeSprintGateStateAsync"/>). Only <see cref="BlockedByFinding"/> may ever
+    /// recover automatically; the other two require the operator's explicit
+    /// `resume_sprint`/`run_sprint` decision, and nothing here may blur that distinction by treating
+    /// "every node happens to be settled good right now" as proof of *why* it got that way.</summary>
+    private const string BlockedByNode = "node";
+
+    private const string BlockedByFinding = "finding";
+
+    private const string BlockedByGate = "gate";
 
     /// <summary>
     /// The one narrow, explicit path that may move a `blocked` sprint straight to
     /// `ready_to_finalize`: called only from <see cref="ResolveFindingAsync"/>, and only advances
-    /// when the sprint is blocked *for no other reason than an open finding* — every node already
-    /// settled good, and no finding left open. A sprint blocked by a genuinely stuck node is left
-    /// alone, so resolving an unrelated finding can never bypass the operator's explicit
-    /// `resume_sprint`/`run_sprint` decision that a real node failure requires.
+    /// when the sprint's durable `blocked_reason` is itself <see cref="BlockedByFinding"/> — not
+    /// merely when every node happens to be settled good, which a stuck node's manual retry-and-skip
+    /// produces identically to a genuine late-finding block, and would otherwise let resolving an
+    /// unrelated finding launder either kind of block past the operator's required decision.
     /// </summary>
     private async Task TryAdvanceFindingsOnlyBlockedSprintAsync(
         string projectRoot,
@@ -722,7 +740,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Blocked || state.Nodes.Count == 0)
+        if (state.Sprint.State != SprintState.Blocked || state.Sprint.BlockedReason != BlockedByFinding ||
+            state.Nodes.Count == 0)
         {
             return;
         }
@@ -786,7 +805,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked), state.Sprint.Version,
-                Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+                Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = BlockedByFinding,
+                }).ConfigureAwait(false);
         }
 
         return new(true, finding, DiagnosticCodes.None);
@@ -979,7 +1002,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                 "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
-                state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+                state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = BlockedByGate,
+                }).ConfigureAwait(false);
         }
         else if (state.Sprint.State == SprintState.AwaitingHuman && !anyAwaiting)
         {

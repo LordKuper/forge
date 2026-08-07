@@ -54,6 +54,24 @@ User-facing Forge changes are listed by release, newest first.
 - Findings recorded before this release (stored in a single shared
   `findings.json`) are now migrated automatically and safely to the new
   per-finding-file layout on first access, instead of silently disappearing.
+- A sprint `blocked` for any reason now requires the operator's explicit
+  `resume_sprint`/`run_sprint` decision to advance again. Resolving a
+  finding only advances a sprint whose block was actually caused by that
+  finding; it can no longer also advance one blocked by a stuck node or a
+  rejected human gate just because every node happens to look settled at
+  that moment (for example after the node was separately retried and
+  skipped).
+
+### Added
+
+- Added the `sprint_dependency_invalid`, `sprint_dependency_not_published`,
+  and `attempt_ownership_mismatch` diagnostic codes.
+
+### Removed
+
+- Removed the `sprint_dependency_not_terminal` diagnostic code: an artifact
+  dependency naming its source sprint is now always rejected regardless of
+  that sprint's state, so it is never produced.
 
 ### Changed
 

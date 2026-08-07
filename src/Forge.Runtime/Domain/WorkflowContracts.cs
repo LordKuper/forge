@@ -22,7 +22,8 @@ public sealed record SprintSnapshot(
     SprintId Id,
     SprintState State,
     long Version,
-    DateTimeOffset UpdatedAt);
+    DateTimeOffset UpdatedAt,
+    string? BlockedReason = null);
 
 public enum NodeState
 {

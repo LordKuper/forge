@@ -2,7 +2,12 @@ namespace Forge.Domain;
 
 /// <summary>
 /// Mirrors the frozen `sprint`/`node`/`attempt` machines in
-/// docs/contracts/v1/schemas/state-machines.json exactly. WorkflowContractTests enforces parity.
+/// docs/contracts/v1/state-machines.json exactly. The Stage 0 contract gate
+/// (`Stage0.Contracts.Tests.ps1`) validates that JSON file's own internal structural consistency
+/// (every referenced state defined, no dangling transitions, terminal states have no outgoing
+/// edges); `WorkflowContractTests` spot-checks representative transitions from this table against
+/// the same expectations — it does not diff this table against the JSON byte-for-byte, so keep the
+/// two in sync by hand when either changes.
 /// </summary>
 public static class WorkflowStateMachines
 {
