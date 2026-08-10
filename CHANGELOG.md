@@ -2,6 +2,86 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.9.1
+
+### Fixed
+
+- Sprint creation is now crash-safe and idempotent: a sprint's id is derived
+  deterministically from the project's own stable id (not its path, so a
+  relocated project directory or a differently cased Windows path still
+  resolves to the same sprint) and the caller's idempotency key. Every
+  creation write is safe to repeat, and a sprint stays invisible to listing
+  until a completion marker lands last, so a crash at any point never leaves
+  an orphaned or partially visible sprint. A retried creation call also
+  repairs a missing manifest registration and reuses an already-frozen
+  definition instead of re-deriving one from a possibly different retry.
+- Starting an attempt, completing an attempt, and resolving a human gate now
+  resume correctly after an interrupted prior call instead of risking a
+  stuck node or a lost result, and report failure (instead of silently
+  continuing with stale data) when a durable write conflicts. A retried
+  command converges on the same terminal outcome instead of abandoning the
+  interrupted attempt or silently flipping an already-committed
+  success/failure or approve/reject decision to its opposite.
+- A sprint can no longer reach `ready_to_finalize` while it has an open
+  finding of any severity; resolving the last open finding lets an
+  already-settled sprint advance immediately, whether it is still `running`
+  or was moved to `blocked` by a finding that arrived after every node had
+  already settled.
+- Sprint dependencies are now validated as canonical, immutable references: a
+  commit dependency must be a full lowercase object id (never a branch name,
+  an abbreviated sha, or one matched with a trailing newline), an artifact
+  dependency must be a full `sha256:` digest, and an artifact dependency
+  that names its source sprint is always rejected, since Forge cannot yet
+  durably verify what that sprint published.
+- Concurrent finding and node-result writes in the same sprint no longer
+  risk losing one update to another's racing write; a node result that
+  already exists for an attempt is compared, not assumed identical, and a
+  genuinely different result for the same attempt is rejected instead of one
+  silently overwriting the other.
+- An attempt now records which node it belongs to; completing an attempt for
+  the wrong node is rejected instead of silently settling the wrong pair.
+- A workflow transition can no longer be redirected to an unintended state
+  through a caller-supplied extra argument.
+- A sprint now enters and leaves `awaiting_human` alongside its human gates
+  and correctly returns to `running` or moves to `blocked` once every gate
+  resolves — including two or more gates that become eligible one after
+  another, and after a restart mid-sequence. A gate promotion interrupted
+  between its two durable writes now resumes automatically on any later
+  graph advance instead of leaving the gate stuck at `running` forever.
+- Fixed the project manifest's registered-sprints list failing to survive a
+  fresh read, which could silently drop previously registered sprints the
+  next time the manifest was written.
+- Findings recorded before this release (stored in a single shared
+  `findings.json`) are now migrated automatically and safely to the new
+  per-finding-file layout on first access, instead of silently disappearing.
+- A sprint `blocked` for any reason now requires the operator's explicit
+  `resume_sprint`/`run_sprint` decision to advance again. Resolving a
+  finding only advances a sprint whose block was actually caused by that
+  finding; it can no longer also advance one blocked by a stuck node or a
+  rejected human gate just because every node happens to look settled at
+  that moment (for example after the node was separately retried and
+  skipped).
+
+### Added
+
+- Added the `sprint_dependency_invalid`, `sprint_dependency_not_published`,
+  and `attempt_ownership_mismatch` diagnostic codes.
+
+### Removed
+
+- Removed the `sprint_dependency_not_terminal` diagnostic code: an artifact
+  dependency naming its source sprint is now always rejected regardless of
+  that sprint's state, so it is never produced.
+
+### Changed
+
+- Findings are now stored one file per finding under
+  `.forge/sprints/{id}/findings/` instead of a single shared `findings.json`.
+- A sprint with a human gate awaiting a decision now halts starting new work
+  on any other node in the same sprint, even one entirely independent of
+  that gate, until every pending gate is resolved. Previously the sprint
+  stayed `running` and independent work could continue in parallel.
+
 ## v0.9.0
 
 ### Added

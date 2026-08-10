@@ -1,6 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
+using System.Text.RegularExpressions;
 using Forge.Configuration;
 using Forge.Domain;
 
@@ -44,9 +44,11 @@ public sealed record SprintTransitionResult(bool Succeeded, SprintSnapshot? Spri
 /// exactly one legal next action for a given sprint version. Sprint creation cannot use that
 /// convention — the project's state version does not change when a sprint is created, so the same
 /// derived key would forever describe "create the first sprint" and could never create a second
-/// one. Callers instead supply their own opaque <see cref="CreateSprintCommand.IdempotencyKey"/>,
-/// recorded in a project-level ledger so a retried create-sprint call safely returns the sprint it
-/// already created instead of creating a duplicate.
+/// one. Callers instead supply their own opaque <see cref="CreateSprintCommand.IdempotencyKey"/>;
+/// the sprint's own id is derived deterministically from the project root and that key (see
+/// <see cref="DeriveSprintId"/>), so a retried create-sprint call always targets the exact same
+/// sprint directory instead of needing a separate lookup ledger that could itself drift out of
+/// sync with what actually landed on disk.
 /// </remarks>
 public sealed class SprintOrchestrator(
     ProjectRootResolver rootResolver,
@@ -97,16 +99,23 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.SuggestionStale);
         }
 
-        Guid? alreadyCreated = await FindCreatedSprintAsync(status.Root, command.IdempotencyKey, cancellationToken)
-            .ConfigureAwait(false);
-        if (alreadyCreated is { } reused)
+        // The manifest's own `ProjectId` — not the root path string — anchors sprint identity: a
+        // relocated project directory or a differently cased Windows path must still resolve to the
+        // exact same sprint for the same idempotency key, since both name the same project.
+        Guid projectId = await ReadProjectIdAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        SprintId sprintId = DeriveSprintId(projectId, command.IdempotencyKey);
+        IReadOnlyList<SprintId> existingSprints =
+            await store.ListAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        if (existingSprints.Contains(sprintId))
         {
-            return new(true, new SprintId(reused), DiagnosticCodes.None);
+            // Every creation write for this exact (project, idempotency key) pair already landed and
+            // was marked complete — the only possibly-missing step is manifest registration, below.
+            await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
+            return new(true, sprintId, DiagnosticCodes.None);
         }
 
         IReadOnlyList<SprintDependency> dependencies = command.Dependencies ?? [];
-        string dependencyDiagnostic =
-            await ValidateDependenciesAsync(status.Root, dependencies, cancellationToken).ConfigureAwait(false);
+        string dependencyDiagnostic = ValidateDependencies(dependencies);
         if (dependencyDiagnostic != DiagnosticCodes.None)
         {
             return new(false, null, dependencyDiagnostic);
@@ -128,7 +137,12 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.RepositoryHeadUnavailable);
         }
 
-        SprintId sprintId = SprintId.New();
+        // Every write below targets the final, deterministic id directly — never a separate staging
+        // id — and every one of them is safe to repeat: the first event replays through the store's
+        // own idempotency key, `InitializeGraphAsync` tolerates a node that a prior, interrupted call
+        // already created, and the definition is reused rather than rebuilt if one is already durable
+        // (below). `ListAsync` cannot observe any of this until `MarkSprintCreatedAsync` runs last, so
+        // a crash at any point before then simply leaves an invisible, safely resumable sprint behind.
         AppendOutcome outcome = await store.AppendTransitionAsync(
             status.Root,
             sprintId,
@@ -142,28 +156,52 @@ public sealed class SprintOrchestrator(
             cancellationToken).ConfigureAwait(false);
         if (!outcome.Succeeded)
         {
-            return new(false, null, outcome.DiagnosticCode);
+            // `AppendTransitionAsync` durably appends the event before it records the idempotency
+            // key (see its own remarks), so a crash in that exact window leaves this sprint's first
+            // event durable at version 1 with the key unrecorded and no marker yet — a retry then
+            // computes the *same* deterministic id and hits `expectedVersion 0 != 1` here, forever,
+            // unless that conflict is verified against durable state and treated as the resumed case
+            // rather than a hard failure.
+            bool alreadyStarted = outcome.DiagnosticCode == DiagnosticCodes.WorkflowEventConflict &&
+                await store.LoadAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false) is not null;
+            if (!alreadyStarted)
+            {
+                return new(false, null, outcome.DiagnosticCode);
+            }
         }
 
-        IReadOnlyDictionary<string, string> configurationSnapshot =
-            await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false);
-        SprintDefinition definition = new(
-            sprintId,
-            baseCommit,
-            ProjectInitializer.WorkflowName,
-            ProjectInitializer.WorkflowContractVersion,
-            configurationSnapshot,
-            dependencies,
-            graph,
-            await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
-            ArtifactPolicySnapshotHash(configurationSnapshot),
-            clock.UtcNow);
-        await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
-        await scheduler.InitializeGraphAsync(status.Root, sprintId, graph, cancellationToken).ConfigureAwait(false);
+        // A resumed call reuses whatever was already frozen instead of re-deriving it from this
+        // retry's own inputs: HEAD may have moved, configuration may have changed, and a caller could
+        // even supply a different graph — none of that may retroactively rewrite a sprint's supposedly
+        // frozen definition once `definition.json` itself is durable (not merely once the first event
+        // is — a crash between the two still re-derives once, from this same retry's own inputs,
+        // which is harmless: nothing could have observed the not-yet-saved definition, and the graph
+        // is not initialized from it until after this whole block).
+        SprintDefinition? definition =
+            await store.LoadDefinitionAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
+        if (definition is null)
+        {
+            IReadOnlyDictionary<string, string> configurationSnapshot =
+                await ConfigurationSnapshotAsync(status.Root, cancellationToken).ConfigureAwait(false);
+            definition = new(
+                sprintId,
+                baseCommit,
+                ProjectInitializer.WorkflowName,
+                ProjectInitializer.WorkflowContractVersion,
+                configurationSnapshot,
+                dependencies,
+                graph,
+                await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
+                ArtifactPolicySnapshotHash(configurationSnapshot),
+                clock.UtcNow);
+            await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
+        }
+
+        await scheduler.InitializeGraphAsync(status.Root, sprintId, definition.Graph, cancellationToken)
+            .ConfigureAwait(false);
+        await store.MarkSprintCreatedAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
 
         await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
-        await RecordCreatedSprintAsync(status.Root, command.IdempotencyKey, sprintId.Value, cancellationToken)
-            .ConfigureAwait(false);
         return new(true, sprintId, DiagnosticCodes.None);
     }
 
@@ -300,34 +338,70 @@ public sealed class SprintOrchestrator(
             : new(false, state.Sprint, outcome.DiagnosticCode);
     }
 
+    // Node ids become event-log aggregate ids; commit/artifact references become part of a frozen,
+    // cross-sprint-trusted definition, so both are constrained to a canonical, unambiguous alphabet
+    // rather than trusted as arbitrary strings.
+    // `\z` (absolute end), not `$`, which in .NET also matches immediately before a trailing '\n' —
+    // "aaa…a\n" must not validate as a canonical id.
+    private static readonly Regex CommitIdPattern = new(@"\A[0-9a-f]{40}\z|\A[0-9a-f]{64}\z", RegexOptions.Compiled);
+    private static readonly Regex ArtifactDigestPattern = new(@"\Asha256:[0-9a-f]{64}\z", RegexOptions.Compiled);
+
     /// <summary>
-    /// A raw commit dependency is immutable by construction. An artifact dependency that names its
-    /// source sprint is only "published" once that sprint reaches a terminal state; a non-terminal
-    /// source would still be mutable and is rejected before any side effect. An artifact dependency
-    /// with no source sprint is trusted as an already-published, content-addressed digest — there is
-    /// no Forge-tracked sprint to check.
+    /// A commit dependency must be a canonical, immutable object id — never a mutable ref such as a
+    /// branch name, and never abbreviated. An artifact dependency must be a full, canonical digest.
+    /// An artifact dependency that also names its source sprint claims that sprint published the
+    /// exact digest; that can only be trusted once a durable, cross-sprint publication record
+    /// exists, and none does yet (Stage 6 does not produce artifacts), so it is rejected outright —
+    /// checking the source sprint's own state first would not change that outcome, only leak whether
+    /// it exists or has completed. An artifact dependency with no source sprint is trusted as an
+    /// already-published, content-addressed digest — there is no Forge-tracked sprint to check.
     /// </summary>
-    private async Task<string> ValidateDependenciesAsync(
-        string root,
-        IReadOnlyList<SprintDependency> dependencies,
-        CancellationToken cancellationToken)
+    private static string ValidateDependencies(IReadOnlyList<SprintDependency> dependencies)
     {
         foreach (SprintDependency dependency in dependencies)
         {
-            if (dependency.Kind != SprintDependencyKind.Artifact || dependency.SourceSprintId is not { } sourceId)
+            if (dependency.Kind == SprintDependencyKind.Commit)
             {
+                if (!CommitIdPattern.IsMatch(dependency.Reference))
+                {
+                    return DiagnosticCodes.SprintDependencyInvalid;
+                }
+
                 continue;
             }
 
-            SprintWorkflowState? source = await store.LoadAsync(root, sourceId, cancellationToken)
-                .ConfigureAwait(false);
-            if (source is null || source.Sprint.State != SprintState.Completed)
+            if (!ArtifactDigestPattern.IsMatch(dependency.Reference))
             {
-                return DiagnosticCodes.SprintDependencyNotTerminal;
+                return DiagnosticCodes.SprintDependencyInvalid;
+            }
+
+            if (dependency.SourceSprintId is not null)
+            {
+                return DiagnosticCodes.SprintDependencyNotPublished;
             }
         }
 
         return DiagnosticCodes.None;
+    }
+
+    private static SprintId DeriveSprintId(Guid projectId, Guid idempotencyKey)
+    {
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes($"sprint|{projectId:D}|{idempotencyKey:D}"));
+        return new(new Guid(hash.AsSpan(0, 16)));
+    }
+
+    /// <summary>
+    /// The manifest's own `ProjectId`, not the resolved root path string: a project can move on
+    /// disk, and Windows paths can differ only in case for the same physical directory, but its
+    /// identity — and therefore every sprint id derived from it — must not.
+    /// </summary>
+    private async Task<Guid> ReadProjectIdAsync(string root, CancellationToken cancellationToken)
+    {
+        YamlConfigurationStore manifestStore =
+            new(ProjectRootResolver.ManifestPath(root), ConfigurationScope.Project, registry);
+        ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken).ConfigureAwait(false);
+        return document.ProjectId ??
+            throw new InvalidOperationException("An initialized project must have a project ID.");
     }
 
     private async Task<IReadOnlyDictionary<string, string>> ConfigurationSnapshotAsync(
@@ -367,67 +441,16 @@ public sealed class SprintOrchestrator(
         YamlConfigurationStore manifestStore =
             new(ProjectRootResolver.ManifestPath(root), ConfigurationScope.Project, registry);
         ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (document.Sprints?.Contains(sprintId.Value) == true)
+        {
+            // Repairing a retry whose sprint directory already exists: already registered.
+            return;
+        }
+
         List<Guid> sprints = [.. document.Sprints ?? [], sprintId.Value];
         await manifestStore
             .WriteAsync(document with { Sprints = sprints }, cancellationToken)
             .ConfigureAwait(false);
-    }
-
-    // A crash between the sprint's first durable event (above) and this ledger write is a real,
-    // unclosed window: a retried CreateSprintAsync call would not find its key here yet, so it
-    // creates a *second* sprint while the first sits orphaned (never registered in the manifest,
-    // so never surfaced or otherwise reachable). No cross-file transaction spans these two writes,
-    // and closing the window that way is out of scope here — the bounded consequence (a harmless,
-    // undiscoverable orphan directory, never corrupted or duplicated *visible* state) is judged
-    // acceptable for now rather than fixed.
-    private static string CreationLedgerPath(string root) =>
-        Path.Combine(ProjectRootResolver.ForgeDirectory(root), "sprints", "created.json");
-
-    private static async Task<Guid?> FindCreatedSprintAsync(
-        string root,
-        Guid idempotencyKey,
-        CancellationToken cancellationToken)
-    {
-        Dictionary<Guid, Guid> ledger = await ReadCreationLedgerAsync(root, cancellationToken)
-            .ConfigureAwait(false);
-        return ledger.TryGetValue(idempotencyKey, out Guid sprintId) ? sprintId : null;
-    }
-
-    private static async Task RecordCreatedSprintAsync(
-        string root,
-        Guid idempotencyKey,
-        Guid sprintId,
-        CancellationToken cancellationToken)
-    {
-        Dictionary<Guid, Guid> ledger = await ReadCreationLedgerAsync(root, cancellationToken)
-            .ConfigureAwait(false);
-        ledger[idempotencyKey] = sprintId;
-        await AtomicConfigurationFile
-            .WriteAsync(CreationLedgerPath(root), JsonSerializer.SerializeToUtf8Bytes(ledger), cancellationToken)
-            .ConfigureAwait(false);
-    }
-
-    private static async Task<Dictionary<Guid, Guid>> ReadCreationLedgerAsync(
-        string root,
-        CancellationToken cancellationToken)
-    {
-        string path = CreationLedgerPath(root);
-        if (!File.Exists(path))
-        {
-            return new();
-        }
-
-        try
-        {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            return JsonSerializer.Deserialize<Dictionary<Guid, Guid>>(bytes) ?? new();
-        }
-        catch (JsonException)
-        {
-            // An unreadable ledger degrades to "nothing created yet": at worst a retried create
-            // call produces one extra sprint instead of silently losing the request.
-            return new();
-        }
     }
 
     private static bool IsFresh(

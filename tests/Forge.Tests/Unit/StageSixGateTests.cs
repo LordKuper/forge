@@ -21,7 +21,8 @@ public sealed class StageSixGateTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
         // Drive a realistic mix of transitions: two work nodes (one auto-retried after a
-        // failure), a rejected human gate, a finding, and a handoff.
+        // failure), a rejected human gate, a finding, and a handoff. The gate depends on "b" so it
+        // only opens (and pauses the sprint) after both work nodes have already run their attempts.
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(
                 environment.ProjectRoot,
@@ -31,7 +32,7 @@ public sealed class StageSixGateTests
                 [
                     new("a", NodeKind.Work, []),
                     new("b", NodeKind.Work, ["a"]),
-                    new("gate", NodeKind.HumanGate, []),
+                    new("gate", NodeKind.HumanGate, ["b"]),
                 ]),
             cancellationToken)).SprintId!;
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
@@ -81,13 +82,11 @@ public sealed class StageSixGateTests
             messageKeys.Add(document.RootElement.GetProperty("message_key").GetString()!);
         }
 
-        string findingsPath = Path.Combine(sprintDirectory, "findings.json");
-        using (JsonDocument findings = JsonDocument.Parse(await File.ReadAllTextAsync(findingsPath, cancellationToken)))
+        string findingsDirectory = Path.Combine(sprintDirectory, "findings");
+        foreach (string findingPath in Directory.GetFiles(findingsDirectory, "*.json"))
         {
-            foreach (JsonProperty entry in findings.RootElement.EnumerateObject())
-            {
-                messageKeys.Add(entry.Value.GetProperty("message_key").GetString()!);
-            }
+            using JsonDocument finding = JsonDocument.Parse(await File.ReadAllTextAsync(findingPath, cancellationToken));
+            messageKeys.Add(finding.RootElement.GetProperty("message_key").GetString()!);
         }
 
         Assert.NotEmpty(messageKeys);

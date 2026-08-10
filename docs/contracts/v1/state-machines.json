@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "machines": {
     "self_update": {
       "initial": "current",
@@ -37,7 +37,7 @@
         "ready": ["running", "cancelled"],
         "running": ["awaiting_human", "blocked", "failed", "ready_to_finalize", "cancelled"],
         "awaiting_human": ["running", "blocked", "cancelled"],
-        "blocked": ["ready", "cancelled"],
+        "blocked": ["ready", "ready_to_finalize", "cancelled"],
         "failed": ["ready", "cancelled"],
         "ready_to_finalize": ["completed", "blocked"],
         "completed": [],

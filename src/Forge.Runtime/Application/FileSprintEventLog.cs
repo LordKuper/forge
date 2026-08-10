@@ -24,10 +24,25 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private const string EventsFileName = "events.jsonl";
     private const string IdempotencyFileName = "idempotency.json";
     private const string DefinitionFileName = "definition.json";
+    private const string CreatedMarkerFileName = "created.marker";
+    private const string LegacyFindingsFileName = "findings.json";
     private static readonly JsonSerializerOptions DefinitionJsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static string SprintDirectory(string projectRoot, SprintId id) =>
         Path.Combine(SprintsRoot(projectRoot), id.Value.ToString("N"));
+
+    /// <summary>
+    /// Marks a sprint's creation as durably complete: only sprints with this marker are returned by
+    /// <see cref="ListAsync"/>. Every other write below is safe to call before this marker exists —
+    /// a partially built sprint is fully addressable by every method that already knows its id — so
+    /// a crash before this call simply leaves an invisible, safely resumable sprint behind instead
+    /// of one <see cref="ListAsync"/> would otherwise surface as an orphan.
+    /// </summary>
+    public Task MarkSprintCreatedAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+        AtomicConfigurationFile.WriteAsync(
+            Path.Combine(SprintDirectory(projectRoot, id), CreatedMarkerFileName),
+            ReadOnlyMemory<byte>.Empty,
+            cancellationToken);
 
     public async Task<SprintWorkflowState?> LoadAsync(
         string projectRoot,
@@ -102,6 +117,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         WorkflowRecordCodec.ValidateNodeResult(result);
         string directory = ResultsDirectory(SprintDirectory(projectRoot, result.SprintId));
         Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, $"{result.AttemptId.Value:N}.json");
         PersistedNodeResult persisted = new()
         {
             NodeId = result.NodeId.Value,
@@ -113,10 +129,37 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Outputs = [.. result.Outputs],
             Diagnostics = [.. result.Diagnostics.Select(ToPersisted)],
         };
-        await AtomicConfigurationFile.WriteAsync(
-            Path.Combine(directory, $"{result.AttemptId.Value:N}.json"),
-            JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
-            cancellationToken).ConfigureAwait(false);
+        byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions);
+
+        // Write-once: a node result is immutable once recorded for a given attempt id, and a
+        // resumable compound operation retried after a crash must be free to call this again with
+        // the exact same result and get a safe no-op. The existence check and the write below share
+        // one lock per path so "already exists" is never raced by a second, concurrent write for the
+        // same attempt id — and an existing file's content is compared, not just its presence, so a
+        // genuinely different result for the same id surfaces as a conflict instead of silently
+        // keeping whichever write happened to land first.
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (File.Exists(path))
+            {
+                byte[] existing = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                if (!existing.AsSpan().SequenceEqual(bytes))
+                {
+                    throw new InvalidOperationException(
+                        $"A different node result already exists for attempt '{result.AttemptId.Value:D}'.");
+                }
+
+                return;
+            }
+
+            await AtomicConfigurationFile.WriteAsync(path, bytes, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task<IReadOnlyList<NodeResult>> GetNodeResultsAsync(
@@ -156,21 +199,55 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     {
         ArgumentNullException.ThrowIfNull(finding);
         WorkflowRecordCodec.ValidateFinding(finding);
-        Dictionary<Guid, PersistedFinding> findings = await ReadFindingsAsync(projectRoot, finding.SprintId, cancellationToken)
-            .ConfigureAwait(false);
-        findings[finding.FindingId] = ToPersisted(finding);
-        await AtomicConfigurationFile.WriteAsync(
-            FindingsPath(SprintDirectory(projectRoot, finding.SprintId)),
-            JsonSerializer.SerializeToUtf8Bytes(findings, DefinitionJsonOptions),
-            cancellationToken).ConfigureAwait(false);
+        string sprintDirectory = SprintDirectory(projectRoot, finding.SprintId);
+        await MigrateLegacyFindingsAsync(sprintDirectory, cancellationToken).ConfigureAwait(false);
+        string directory = FindingsDirectory(sprintDirectory);
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, $"{finding.FindingId:N}.json");
+
+        // One atomic file per finding id: two findings never share a file, so a concurrent write to
+        // a *different* id can never lose this one. A concurrent write to the *same* id is still a
+        // real race (e.g. two RecordFinding/ResolveFinding calls racing) — serialized here rather
+        // than left to whichever atomic replace lands last silently winning.
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            await AtomicConfigurationFile.WriteAsync(
+                path,
+                JsonSerializer.SerializeToUtf8Bytes(ToPersisted(finding), DefinitionJsonOptions),
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public async Task<IReadOnlyList<Finding>> GetFindingsAsync(
         string projectRoot,
         SprintId sprintId,
-        CancellationToken cancellationToken) =>
-        [.. (await ReadFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false))
-            .Select(entry => FromPersisted(sprintId, entry.Value))];
+        CancellationToken cancellationToken)
+    {
+        string sprintDirectory = SprintDirectory(projectRoot, sprintId);
+        await MigrateLegacyFindingsAsync(sprintDirectory, cancellationToken).ConfigureAwait(false);
+        string directory = FindingsDirectory(sprintDirectory);
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        List<Finding> findings = [];
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedFinding persisted = JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The finding at '{path}' is empty.");
+            findings.Add(FromPersisted(sprintId, persisted));
+        }
+
+        return findings;
+    }
 
     public async Task SaveHandoffAsync(string projectRoot, Handoff handoff, CancellationToken cancellationToken)
     {
@@ -230,7 +307,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         List<SprintId> ids = [];
         foreach (string directory in Directory.EnumerateDirectories(root))
         {
-            if (Guid.TryParseExact(Path.GetFileName(directory), "N", out Guid value))
+            if (Guid.TryParseExact(Path.GetFileName(directory), "N", out Guid value) &&
+                File.Exists(Path.Combine(directory, CreatedMarkerFileName)))
             {
                 ids.Add(new(value));
             }
@@ -240,11 +318,18 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     }
 
     /// <summary>
-    /// One lock per sprint directory serializes the read-check-append critical section below.
-    /// Nothing else in this store mutates a sprint concurrently, but nothing previously stopped
-    /// two in-process callers from both observing the same version and both winning the append;
-    /// different sprints still append fully in parallel (different keys, different semaphores).
+    /// One lock per key serializes a critical section below: sprint directory keys guard the
+    /// event log's read-check-append sequence, and finding/result/legacy-migration file path keys
+    /// guard a same-id read-then-replace. Different keys never contend (different sprints, different
+    /// findings, different results).
     /// </summary>
+    /// <remarks>
+    /// ponytail: entries are never evicted, so this grows by one `SemaphoreSlim` per distinct sprint
+    /// directory and per distinct finding/result/legacy-migration path ever touched, for the life of
+    /// the process. Fine at MVP scale (a CLI process is short-lived; a long-running host would still
+    /// need one entry per active sprint/record, not per operation). Add eviction (e.g. on sprint
+    /// completion) if a long-lived host process ever makes this measurable.
+    /// </remarks>
     private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(StringComparer.Ordinal);
 
     public async Task<AppendOutcome> AppendTransitionAsync(
@@ -292,10 +377,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 return new(false, null, DiagnosticCodes.WorkflowTransitionInvalid);
             }
 
-            Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
-            {
-                [WorkflowEvent.ToStateArgument] = toState,
-            };
+            Dictionary<string, string?> arguments = new(StringComparer.Ordinal);
             if (extraArguments is not null)
             {
                 foreach ((string key, string? value) in extraArguments)
@@ -303,6 +385,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     arguments[key] = value;
                 }
             }
+
+            // Assigned last so no caller-supplied extra argument — accidental or adversarial — can
+            // override the state this append was validated against above.
+            arguments[WorkflowEvent.ToStateArgument] = toState;
 
             WorkflowEvent proposed = new(
                 Guid.NewGuid(),
@@ -357,21 +443,58 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     private static string HandoffsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "handoffs");
 
-    private static string FindingsPath(string sprintDirectory) => Path.Combine(sprintDirectory, "findings.json");
+    private static string FindingsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "findings");
 
-    private static async Task<Dictionary<Guid, PersistedFinding>> ReadFindingsAsync(
-        string projectRoot,
-        SprintId sprintId,
-        CancellationToken cancellationToken)
+    /// <summary>
+    /// v0.9.0 stored every finding in one shared <c>findings.json</c>; the per-finding-file layout
+    /// replaced it without a migration, which would silently drop every existing finding on first
+    /// read after an update. Migrating lazily here — on the first finding read or write for a sprint
+    /// — needs no separate startup pass and stays correct for a sprint nobody touches again. Each
+    /// finding file is only ever written if absent, and the legacy file is deleted only once every
+    /// finding has landed in its own file, so an interrupted migration simply repeats the still-safe
+    /// no-op writes on the next call and completes normally.
+    /// </summary>
+    private static async Task MigrateLegacyFindingsAsync(string sprintDirectory, CancellationToken cancellationToken)
     {
-        string path = FindingsPath(SprintDirectory(projectRoot, sprintId));
-        if (!File.Exists(path))
+        string legacyPath = Path.Combine(sprintDirectory, LegacyFindingsFileName);
+        if (!File.Exists(legacyPath))
         {
-            return new();
+            return;
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        return JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ?? new();
+        SemaphoreSlim gate = Locks.GetOrAdd(legacyPath, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (!File.Exists(legacyPath))
+            {
+                return;
+            }
+
+            byte[] bytes = await File.ReadAllBytesAsync(legacyPath, cancellationToken).ConfigureAwait(false);
+            Dictionary<Guid, PersistedFinding> legacy =
+                JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ?? new();
+
+            string directory = FindingsDirectory(sprintDirectory);
+            Directory.CreateDirectory(directory);
+            foreach ((Guid findingId, PersistedFinding persisted) in legacy)
+            {
+                string findingPath = Path.Combine(directory, $"{findingId:N}.json");
+                if (!File.Exists(findingPath))
+                {
+                    await AtomicConfigurationFile.WriteAsync(
+                        findingPath,
+                        JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            File.Delete(legacyPath);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     private static PersistedDiagnostic ToPersisted(NodeDiagnostic diagnostic) =>

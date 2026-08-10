@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Bootstrap;
+using Forge.Configuration;
 using Forge.Providers;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -49,6 +50,24 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
     public T Resolve<T>()
         where T : notnull =>
         provider.GetRequiredService<T>();
+
+    /// <summary>Builds a fresh orchestrator/scheduler pair wired to a <see cref="FlakySprintStore"/>
+    /// wrapping the real store, sharing every other real dependency from this environment's
+    /// container — for tests that simulate a crash or a conflicting append mid compound operation.</summary>
+    public (SprintOrchestrator Orchestrator, SprintScheduler Scheduler, FlakySprintStore Store) ResolveWithFlakyStore()
+    {
+        FlakySprintStore store = new(Resolve<ISprintStore>());
+        SprintScheduler scheduler = new(store, Resolve<IClock>());
+        SprintOrchestrator orchestrator = new(
+            Resolve<ProjectRootResolver>(),
+            store,
+            Resolve<IConfigurationRegistry>(),
+            Resolve<IRepository>(),
+            Resolve<ScopedConfigurationService>(),
+            Resolve<IClock>(),
+            scheduler);
+        return (orchestrator, scheduler, store);
+    }
 
     /// <summary>Dispatches initialization exactly like a surface: snapshot first, then command.</summary>
     public async Task<InitializeProjectResult> InitializeAsync(
@@ -100,6 +119,17 @@ internal sealed class FakeRepository(string? head = null) : IRepository
 
     public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(head);
+}
+
+/// <summary>Like <see cref="FakeRepository"/>, but `Head` can change between calls — for tests that
+/// need to prove a *later* read is never re-consulted (e.g. a resumed sprint creation must reuse its
+/// already-frozen `baseCommit`, not re-read HEAD).</summary>
+internal sealed class MutableRepository : IRepository
+{
+    public string Head { get; set; } = new string('a', 40);
+
+    public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(Head);
 }
 
 /// <summary>Always fails, matching a project root that is not (or not yet) a Git repository.</summary>
