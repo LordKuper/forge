@@ -36,9 +36,9 @@ public sealed class RoutingLedgerTests
 
         for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
         {
-            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
             await ledger.RecordOutcomeAsync(
-                root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+                root.Path, sprintId, decision, false, FailureClass.Transient, cancellationToken);
         }
 
         RouteDecision blocked = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
@@ -60,9 +60,9 @@ public sealed class RoutingLedgerTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
         {
-            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
             await ledger.RecordOutcomeAsync(
-                root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+                root.Path, sprintId, decision, false, FailureClass.Transient, cancellationToken);
         }
 
         RouteDecision stillOpen = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
@@ -71,7 +71,7 @@ public sealed class RoutingLedgerTests
         clock.UtcNow += RoutingLedger.DefaultCooldown + TimeSpan.FromSeconds(1);
         RouteDecision trial = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
         Assert.Equal(RouteOutcome.Routed, trial.Outcome);
-        await ledger.RecordOutcomeAsync(root.Path, sprintId, "a", attemptId, Key, true, null, cancellationToken);
+        await ledger.RecordOutcomeAsync(root.Path, sprintId, trial, true, null, cancellationToken);
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
         Assert.Equal(CircuitState.Closed, breaker!.State);
@@ -90,9 +90,9 @@ public sealed class RoutingLedgerTests
 
         for (int i = 0; i < RoutingLedger.DefaultFailureThreshold + 2; i++)
         {
-            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
             await ledger.RecordOutcomeAsync(
-                root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Auth, cancellationToken);
+                root.Path, sprintId, decision, false, FailureClass.Auth, cancellationToken);
         }
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
@@ -116,14 +116,39 @@ public sealed class RoutingLedgerTests
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
         await ledger.RecordOutcomeAsync(
-            root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Policy, cancellationToken);
+            root.Path, sprintId, decision, false, FailureClass.Policy, cancellationToken);
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
         Assert.Null(breaker);
         RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
         Assert.Equal(RoutingLedger.DefaultRetryBudget, budget.Remaining);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExcludedFailureForADecisionThatWasNotRoutedDoesNotCreditAUnitItNeverSpent()
+    {
+        using TestRoot root = new();
+        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        for (int i = 0; i < RoutingLedger.DefaultRetryBudget; i++)
+        {
+            await ledger.DecideAsync(root.Path, sprintId, "a", AttemptId.New(), Key, cancellationToken);
+        }
+
+        RouteDecision exhausted = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.BudgetExhausted, exhausted.Outcome);
+
+        // Reporting an auth failure against a decision that was never actually routed (the caller
+        // should not do this, but nothing stops it) must not refund a unit that was never consumed.
+        await ledger.RecordOutcomeAsync(root.Path, sprintId, exhausted, false, FailureClass.Auth, cancellationToken);
+
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(0, budget.Remaining);
     }
 
     [Fact]
@@ -138,17 +163,16 @@ public sealed class RoutingLedgerTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
         {
-            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
             await ledger.RecordOutcomeAsync(
-                root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+                root.Path, sprintId, decision, false, FailureClass.Transient, cancellationToken);
         }
 
         clock.UtcNow += RoutingLedger.DefaultCooldown + TimeSpan.FromSeconds(1);
         RouteDecision trial = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
         Assert.Equal(RouteOutcome.Routed, trial.Outcome);
         DateTimeOffset trialTime = clock.UtcNow;
-        await ledger.RecordOutcomeAsync(
-            root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+        await ledger.RecordOutcomeAsync(root.Path, sprintId, trial, false, FailureClass.Transient, cancellationToken);
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
         Assert.Equal(CircuitState.Open, breaker!.State);
@@ -196,6 +220,24 @@ public sealed class RoutingLedgerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task AGenuinelyCorruptRouteDecisionLineSurfacesAsADiagnosableInvalidDataException()
+    {
+        using TestRoot root = new();
+        FileRoutingStore store = new();
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing", "decisions.jsonl");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        // Newline-terminated (not torn) but not valid JSON — real corruption this store never
+        // produces itself.
+        await File.WriteAllTextAsync(path, "{not json}\n", cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task TheRetryBudgetIsSharedAcrossDifferentNodesAndHealthKeysInTheSameSprint()
     {
         using TestRoot root = new();
@@ -228,9 +270,9 @@ public sealed class RoutingLedgerTests
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
-        await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
         await ledger.RecordOutcomeAsync(
-            root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Auth, cancellationToken);
+            root.Path, sprintId, decision, false, FailureClass.Auth, cancellationToken);
 
         IReadOnlyList<RouteDecision> decisions =
             await ledger.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);

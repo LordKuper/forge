@@ -339,7 +339,14 @@ public sealed class GitIsolationTests
         bool discarded = await isolation.DiscardAttemptAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
         Assert.True(discarded);
 
+        // `ExistsAsync` now means "registered *and* physically present", so it alone cannot tell a
+        // fully-removed worktree apart from a leaked directory whose registration alone was pruned —
+        // both directory absence and de-registration are asserted directly.
         Assert.False(await worktrees.ExistsAsync(repository.Root, attemptPath, cancellationToken));
+        Assert.False(Directory.Exists(attemptPath));
+        ProcessResult worktreeList = await repository.RunAsync(
+            repository.Root, ["worktree", "list", "--porcelain"], cancellationToken);
+        Assert.DoesNotContain(attemptPath, worktreeList.StandardOutput, StringComparison.OrdinalIgnoreCase);
         ProcessResult branches = await repository.RunAsync(
             repository.Root, ["branch", "--list", WorktreeLayout.AttemptBranch(attemptId)], cancellationToken);
         Assert.Equal(string.Empty, branches.StandardOutput.Trim());
@@ -373,12 +380,18 @@ public sealed class GitIsolationTests
 
         await isolation.ReconcileAsync(repository.Root, projectId, sprintId, cancellationToken);
 
-        Assert.False(await worktrees.ExistsAsync(
-            repository.Root, WorktreeLayout.AttemptPath(environment, projectId, sprintId, terminalAttempt), cancellationToken));
-        Assert.False(await worktrees.ExistsAsync(
-            repository.Root, WorktreeLayout.AttemptPath(environment, projectId, sprintId, unknownAttempt), cancellationToken));
-        Assert.True(await worktrees.ExistsAsync(
-            repository.Root, WorktreeLayout.AttemptPath(environment, projectId, sprintId, runningAttempt), cancellationToken));
+        string terminalPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, terminalAttempt);
+        string unknownPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, unknownAttempt);
+        string runningPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, runningAttempt);
+        // `ExistsAsync` now means "registered *and* physically present" — asserting the directory
+        // itself is gone (not just unregistered) is what actually proves reconciliation cleaned up,
+        // rather than merely pruned a registration and left files behind.
+        Assert.False(await worktrees.ExistsAsync(repository.Root, terminalPath, cancellationToken));
+        Assert.False(Directory.Exists(terminalPath));
+        Assert.False(await worktrees.ExistsAsync(repository.Root, unknownPath, cancellationToken));
+        Assert.False(Directory.Exists(unknownPath));
+        Assert.True(await worktrees.ExistsAsync(repository.Root, runningPath, cancellationToken));
+        Assert.True(Directory.Exists(runningPath));
     }
 
     /// <summary>Creates an attempt worktree and asserts it actually succeeded before the caller

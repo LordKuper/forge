@@ -102,6 +102,15 @@ attempt is left untouched by recovery (`ReconcileAsync`) — only a terminal or
 completely unknown attempt's worktree is removed — so recovery can never
 discard a worktree that might still be legitimately in use.
 
+"Removed outright" is a goal, not a guarantee `git` itself always keeps (an
+open file handle on Windows can make `worktree remove` refuse). Removal is
+therefore reported, not assumed: `DiscardAttemptAsync` and `IntegrateAsync`
+(which discards the just-merged attempt) return whether cleanup actually
+succeeded through `GitOperationResult.CleanupSucceeded`, kept deliberately
+independent of the operation's own `Succeeded` — a leaked worktree from a
+failed cleanup is not the same failure as a failed merge, and self-heals the
+next time `ReconcileAsync` runs for that sprint.
+
 ### Circuit breakers and the retry budget are scoped per sprint, not shared
 
 `RoutingLedger` keys a circuit breaker by `HealthKey(Provider, Model,
@@ -120,9 +129,18 @@ Once a breaker's cooldown elapses, the next decision moves it to
 cooldown (2 minutes) mirror `SprintScheduler.MaxAutomaticRetries`'s own fixed
 policy rather than introducing new configuration surface. An authentication
 or policy failure (`FailureClass.Auth` / `FailureClass.Policy`) is recorded
-as its own `RouteOutcome.Excluded` decision and never touches the breaker or
-the budget — matching `overview.md`'s "Authentication and policy failures are
-never disguised as transient failures."
+as its own `RouteOutcome.Excluded` decision and never touches the breaker,
+and refunds the budget unit it consumed *only* when the decision it responds
+to actually was `Routed` — a `RecordOutcomeAsync` call is matched to its
+`DecideAsync` result by requiring the caller to pass that exact
+`RouteDecision` back, not just its node/attempt/key, so a
+`CircuitOpen`/`BudgetExhausted` decision (which never consumed a unit) can
+never be refunded into extra budget. Matching `overview.md`'s "Authentication
+and policy failures are never disguised as transient failures." Every
+budget/breaker read-modify-write is additionally serialized per sprint (one
+in-process lock shared by `DecideAsync` and `RecordOutcomeAsync`), the same
+single-process guarantee `FileSprintEventLog`'s own per-sprint lock gives its
+event log.
 
 ### Every routing decision is durable
 

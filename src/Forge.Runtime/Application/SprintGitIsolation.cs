@@ -107,14 +107,21 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
         if (await worktrees.ExistsAsync(projectRoot, attemptPath, cancellationToken).ConfigureAwait(false))
         {
-            string existingHead = await worktrees.GetHeadAsync(projectRoot, attemptPath, cancellationToken)
+            string? existingHead = await TryGetHeadAsync(projectRoot, attemptPath, cancellationToken)
                 .ConfigureAwait(false);
-            return GitOperationResult.Ok(existingHead);
+            return existingHead is null
+                ? GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable)
+                : GitOperationResult.Ok(existingHead);
         }
 
         string integrationPath = WorktreeLayout.IntegrationPath(paths, projectId, sprintId);
-        string baseCommit = await worktrees.GetHeadAsync(projectRoot, integrationPath, cancellationToken)
+        string? baseCommit = await TryGetHeadAsync(projectRoot, integrationPath, cancellationToken)
             .ConfigureAwait(false);
+        if (baseCommit is null)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable);
+        }
+
         return await worktrees.CreateAsync(
             projectRoot, attemptPath, WorktreeLayout.AttemptBranch(attemptId), baseCommit, cancellationToken)
             .ConfigureAwait(false);
@@ -147,8 +154,13 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         try
         {
             string integrationPath = WorktreeLayout.IntegrationPath(paths, projectId, sprintId);
-            string actualTip = await worktrees.GetHeadAsync(projectRoot, integrationPath, cancellationToken)
+            string? actualTip = await TryGetHeadAsync(projectRoot, integrationPath, cancellationToken)
                 .ConfigureAwait(false);
+            if (actualTip is null)
+            {
+                return GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable);
+            }
+
             if (!string.Equals(actualTip, expectedIntegrationTip, StringComparison.OrdinalIgnoreCase))
             {
                 return GitOperationResult.Fail(DiagnosticCodes.WorktreeBaseMismatch);
@@ -189,10 +201,35 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     {
         string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
         string integrationPath = WorktreeLayout.IntegrationPath(paths, projectId, sprintId);
-        string newBase = await worktrees.GetHeadAsync(projectRoot, integrationPath, cancellationToken)
+        string? newBase = await TryGetHeadAsync(projectRoot, integrationPath, cancellationToken)
             .ConfigureAwait(false);
+        if (newBase is null)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable);
+        }
+
         return await worktrees.RebaseOntoAsync(
             projectRoot, attemptPath, previousBase, newBase, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// <see cref="IWorktreeManager.GetHeadAsync"/> throws when it cannot resolve a commit — the
+    /// right contract for a caller that already knows the worktree must exist, but every method
+    /// here calls it on a worktree this class does not fully control the lifetime of (an external
+    /// deletion, a not-yet-created attempt). Converts that failure into
+    /// <see langword="null"/> so every caller above fails closed with an ordinary
+    /// <see cref="GitOperationResult"/> instead of an uncaught exception.
+    /// </summary>
+    private async Task<string?> TryGetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await worktrees.GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>Discards an attempt's worktree and branch outright — the failure path of clean

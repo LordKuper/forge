@@ -42,6 +42,7 @@ public static class DiagnosticCodes
     public const string WorktreeRebaseConflict = "worktree_rebase_conflict";
     public const string WorktreeBaseMismatch = "worktree_base_mismatch";
     public const string WorktreeCommitInvalid = "worktree_commit_invalid";
+    public const string WorktreeUnavailable = "worktree_unavailable";
 }
 
 public enum StartupState

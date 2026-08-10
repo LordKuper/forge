@@ -186,19 +186,32 @@ public sealed class FileRoutingStore : IRoutingStore
         List<RouteDecision> decisions = [];
         foreach (string line in lines)
         {
-            PersistedDecision persisted = JsonSerializer.Deserialize<PersistedDecision>(line, JsonOptions) ??
-                throw new InvalidDataException($"A route decision line at '{path}' is empty.");
-            decisions.Add(new(
-                persisted.DecisionId,
-                sprintId,
-                persisted.NodeId,
-                new(Guid.Parse(persisted.AttemptId)),
-                new(persisted.Provider, persisted.Model, persisted.Surface),
-                WorkflowStateNames.Parse<RouteOutcome>(persisted.Outcome),
-                persisted.FailureClass is { } failureClass
-                    ? WorkflowStateNames.Parse<FailureClass>(failureClass)
-                    : null,
-                persisted.DecidedAt));
+            // A newline-terminated line that still fails to parse, or field-level content that
+            // fails to parse against its own expected shape (a malformed id, an unknown enum
+            // value), is real corruption — never produced by this store's own write path — and
+            // propagates as `InvalidDataException` uniformly, matching
+            // `FileSprintEventLog.AppendTransitionAsync`'s own precedent for genuine corruption
+            // rather than leaking whichever raw exception type each individual field parser throws.
+            try
+            {
+                PersistedDecision persisted = JsonSerializer.Deserialize<PersistedDecision>(line, JsonOptions) ??
+                    throw new InvalidDataException($"A route decision line at '{path}' is empty.");
+                decisions.Add(new(
+                    persisted.DecisionId,
+                    sprintId,
+                    persisted.NodeId,
+                    new(Guid.Parse(persisted.AttemptId)),
+                    new(persisted.Provider, persisted.Model, persisted.Surface),
+                    WorkflowStateNames.Parse<RouteOutcome>(persisted.Outcome),
+                    persisted.FailureClass is { } failureClass
+                        ? WorkflowStateNames.Parse<FailureClass>(failureClass)
+                        : null,
+                    persisted.DecidedAt));
+            }
+            catch (Exception error) when (error is JsonException or FormatException)
+            {
+                throw new InvalidDataException($"A route decision line at '{path}' is corrupt.", error);
+            }
         }
 
         return decisions;

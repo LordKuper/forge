@@ -97,7 +97,7 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
                 projectRoot, ["worktree", "add", path, "--", branch], cancellationToken).ConfigureAwait(false);
             return attached.ExitCode == 0
                 ? GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
-                : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed);
+                : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed, attached.StandardError);
         }
 
         ProcessResult retried = await RunAsync(
@@ -105,7 +105,7 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
             .ConfigureAwait(false);
         return retried.ExitCode == 0
             ? GitOperationResult.Ok(commit)
-            : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed);
+            : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed, retried.StandardError);
     }
 
     private async Task<bool> BranchExistsAsync(string projectRoot, string branch, CancellationToken cancellationToken)
@@ -137,14 +137,14 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
             .ConfigureAwait(false);
         if (reset.ExitCode != 0)
         {
-            return GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed);
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed, reset.StandardError);
         }
 
         ProcessResult clean = await RunInWorktreeAsync(path, ["clean", "-fd"], cancellationToken)
             .ConfigureAwait(false);
         return clean.ExitCode == 0
             ? GitOperationResult.Ok(commit)
-            : GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed);
+            : GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed, clean.StandardError);
     }
 
     public async Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken)
@@ -154,7 +154,8 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         string head = result.StandardOutput.Trim();
         if (result.ExitCode != 0 || head.Length == 0)
         {
-            throw new InvalidOperationException($"'git rev-parse HEAD' did not resolve a commit in '{path}'.");
+            throw new InvalidOperationException(
+                $"'git rev-parse HEAD' did not resolve a commit in '{path}': {result.StandardError}");
         }
 
         return head;
@@ -170,7 +171,7 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
             path, ["merge", "--ff-only", "--", sourceBranch], cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
-            return GitOperationResult.Fail(DiagnosticCodes.WorktreeIntegrationDiverged);
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeIntegrationDiverged, result.StandardError);
         }
 
         return GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
@@ -200,25 +201,56 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         // the worktree mid-rebase later. The abort's own outcome is not surfaced — the caller only
         // needs to know the gated rebase did not happen.
         await RunInWorktreeAsync(path, ["rebase", "--abort"], cancellationToken).ConfigureAwait(false);
-        return GitOperationResult.Fail(DiagnosticCodes.WorktreeRebaseConflict);
+        return GitOperationResult.Fail(DiagnosticCodes.WorktreeRebaseConflict, result.StandardError);
     }
 
-    /// <summary>Removes a linked worktree and its directory. Returns <see langword="true"/> if the
-    /// worktree ends up not registered — whether because it was already gone, or because this call
-    /// removed it — and <see langword="false"/> if `git` refused (e.g. an open file handle on
-    /// Windows), so a caller can tell a genuinely leaked worktree apart from a clean removal instead
-    /// of assuming success silently.</summary>
+    /// <summary>
+    /// Removes a linked worktree and its directory. Returns <see langword="true"/> only once the
+    /// directory is actually gone — whether it was already gone, `git` removed it cleanly, or (a
+    /// worktree `git` no longer tracks at all, e.g. after an earlier partial removal, or a
+    /// registration `ExistsAsync` never saw because the directory itself had already vanished) this
+    /// call deleted it directly — and <see langword="false"/> if anything left real content behind
+    /// (e.g. an open file handle on Windows), so a caller can tell a genuinely leaked worktree apart
+    /// from a clean removal instead of assuming success because `git` itself had nothing registered
+    /// to refuse.
+    /// </summary>
     public async Task<bool> RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken)
     {
-        if (!await ExistsAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
+        if (await ExistsAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
+        {
+            ProcessResult remove = await RunAsync(
+                projectRoot, ["worktree", "remove", "--force", path], cancellationToken).ConfigureAwait(false);
+            await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
+            if (remove.ExitCode != 0)
+            {
+                return false;
+            }
+        }
+        else
+        {
+            // A registration with no matching directory must not linger either, even though this
+            // call's job is the directory below, not the registration.
+            await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
+        }
+
+        if (!Directory.Exists(path))
         {
             return true;
         }
 
-        ProcessResult remove = await RunAsync(
-            projectRoot, ["worktree", "remove", "--force", path], cancellationToken).ConfigureAwait(false);
-        await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
-        return remove.ExitCode == 0;
+        try
+        {
+            Directory.Delete(path, true);
+            return true;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     /// <summary>Best-effort branch deletion. Returns <see langword="true"/> if the branch ends up

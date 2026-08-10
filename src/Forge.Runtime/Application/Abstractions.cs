@@ -19,7 +19,8 @@ public interface IFileSystem
 public sealed record ProcessRequest(
     string FileName,
     IReadOnlyList<string> Arguments,
-    string WorkingDirectory);
+    string WorkingDirectory,
+    IReadOnlyDictionary<string, string>? EnvironmentVariables = null);
 
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
@@ -48,16 +49,31 @@ public interface IRepository
     Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
-/// <summary><paramref name="CleanupSucceeded"/> is independent of <paramref name="Succeeded"/>: it
-/// only ever turns <see langword="false"/> when the operation itself already succeeded but a
-/// best-effort cleanup step afterward (removing an already-merged attempt's worktree/branch) did
-/// not — never conflated with the operation's own outcome, since a leaked worktree is a resource to
-/// reconcile later, not a reason to report the operation as failed.</summary>
-public sealed record GitOperationResult(bool Succeeded, string? Commit, string DiagnosticCode, bool CleanupSucceeded = true)
+/// <summary>
+/// <paramref name="CleanupSucceeded"/> is independent of <paramref name="Succeeded"/>: it only ever
+/// turns <see langword="false"/> when the operation itself already succeeded but a best-effort
+/// cleanup step afterward (removing an already-merged attempt's worktree/branch) did not — never
+/// conflated with the operation's own outcome, since a leaked worktree is a resource to reconcile
+/// later, not a reason to report the operation as failed. <paramref name="Detail"/> carries the
+/// failing `git` invocation's own `stderr` (truncated), present only on a failed
+/// <paramref name="DiagnosticCode"/> — `git`'s own diagnostic text about its worktree/branch/ref
+/// state is not sensitive, and without it a caller (or a CI log) has no way to tell *why* `git`
+/// refused beyond a fixed code shared by several distinct real causes.
+/// </summary>
+public sealed record GitOperationResult(
+    bool Succeeded, string? Commit, string DiagnosticCode, bool CleanupSucceeded = true, string? Detail = null)
 {
     public static GitOperationResult Ok(string? commit = null) => new(true, commit, DiagnosticCodes.None);
 
     public static GitOperationResult Fail(string diagnosticCode) => new(false, null, diagnosticCode);
+
+    public static GitOperationResult Fail(string diagnosticCode, string? detail) =>
+        new(false, null, diagnosticCode, Detail: Truncate(detail));
+
+    private static string? Truncate(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? null
+            : text.Length <= 500 ? text.Trim() : string.Concat(text.AsSpan(0, 500), "…");
 }
 
 /// <summary>
@@ -71,7 +87,10 @@ public sealed record GitOperationResult(bool Succeeded, string? Commit, string D
 /// </summary>
 public interface IWorktreeManager
 {
-    /// <summary>True if a worktree is already registered at <paramref name="path"/>.</summary>
+    /// <summary>True only if a worktree is both registered at <paramref name="path"/> *and* that
+    /// path is still a real, present directory — `git` itself keeps a registration around after its
+    /// directory is deleted out from under it until the next prune, and that alone must never read
+    /// as "exists" to a caller.</summary>
     Task<bool> ExistsAsync(string projectRoot, string path, CancellationToken cancellationToken);
 
     /// <summary>

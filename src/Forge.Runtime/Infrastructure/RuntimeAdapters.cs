@@ -36,6 +36,14 @@ public sealed class ProcessRunner : IProcessRunner
             UseShellExecute = false,
         };
 
+        if (request.EnvironmentVariables is not null)
+        {
+            foreach ((string key, string value) in request.EnvironmentVariables)
+            {
+                startInfo.EnvironmentVariables[key] = value;
+            }
+        }
+
         foreach (string argument in request.Arguments)
         {
             startInfo.ArgumentList.Add(argument);

@@ -18,16 +18,40 @@ internal sealed class GitTestRepository : IDisposable
 
     public string Root { get; }
 
+    /// <summary>
+    /// Points `git` at a global/system config that cannot exist, instead of whatever machine this
+    /// happens to run on: a `commit.gpgsign=true` with no usable key, a `core.hooksPath` pointing at
+    /// real hooks, or a `commit.template`/`user.signingkey` gap would otherwise break every commit
+    /// here unpredictably, and reproducing that failure would depend on the developer's or CI
+    /// runner's own machine state rather than this repository's own local config (set explicitly in
+    /// <see cref="CreateAsync"/>).
+    /// </summary>
+    private IReadOnlyDictionary<string, string> IsolatedEnvironment =>
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["GIT_CONFIG_GLOBAL"] = Path.Combine(Root, "no-such-global-gitconfig"),
+            ["GIT_CONFIG_SYSTEM"] = Path.Combine(Root, "no-such-system-gitconfig"),
+            ["GIT_CONFIG_NOSYSTEM"] = "1",
+        };
+
     public static async Task<GitTestRepository> CreateAsync(CancellationToken cancellationToken)
     {
         GitTestRepository repository = new();
         Directory.CreateDirectory(repository.Root);
-        await repository.RunAsync(repository.Root, ["init", "--initial-branch=main"], cancellationToken)
+        ProcessResult init = await repository
+            .RunAsync(repository.Root, ["init", "--initial-branch=main"], cancellationToken)
             .ConfigureAwait(false);
+        if (init.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'git init' failed in '{repository.Root}': {init.StandardError}");
+        }
+
         await repository.RunAsync(
             repository.Root, ["config", "user.email", "forge-tests@example.invalid"], cancellationToken)
             .ConfigureAwait(false);
         await repository.RunAsync(repository.Root, ["config", "user.name", "Forge Tests"], cancellationToken)
+            .ConfigureAwait(false);
+        await repository.RunAsync(repository.Root, ["config", "commit.gpgsign", "false"], cancellationToken)
             .ConfigureAwait(false);
         await repository.CommitFileAsync("README.md", "forge test repo", "initial", cancellationToken)
             .ConfigureAwait(false);
@@ -88,6 +112,12 @@ internal sealed class GitTestRepository : IDisposable
     {
         ProcessResult result = await RunAsync(workingDirectory, ["rev-parse", "HEAD"], cancellationToken)
             .ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"'git rev-parse HEAD' failed in '{workingDirectory}': {result.StandardError}");
+        }
+
         return result.StandardOutput.Trim();
     }
 
@@ -101,7 +131,7 @@ internal sealed class GitTestRepository : IDisposable
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken) =>
         Directory.Exists(workingDirectory)
-            ? runner.RunAsync(new("git", arguments, workingDirectory), cancellationToken)
+            ? runner.RunAsync(new("git", arguments, workingDirectory, IsolatedEnvironment), cancellationToken)
             : Task.FromResult(new ProcessResult(-1, string.Empty, $"'{workingDirectory}' does not exist."));
 
     public void Dispose()
