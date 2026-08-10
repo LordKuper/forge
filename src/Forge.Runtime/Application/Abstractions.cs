@@ -48,6 +48,88 @@ public interface IRepository
     Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
+public sealed record GitOperationResult(bool Succeeded, string? Commit, string DiagnosticCode)
+{
+    public static GitOperationResult Ok(string? commit = null) => new(true, commit, DiagnosticCodes.None);
+
+    public static GitOperationResult Fail(string diagnosticCode) => new(false, null, diagnosticCode);
+}
+
+/// <summary>
+/// Low-level, real-Git worktree operations. Every method targets a linked worktree by its absolute
+/// path; <c>projectRoot</c> is the main repository every worktree links back to. No method leaves
+/// the main repository itself checked out to a different branch or dirty — all mutation happens
+/// inside a linked worktree. Higher-level policy (which path/branch to use, when to create vs.
+/// reuse, ownership, the integration barrier, gated rebase) lives in
+/// <c>SprintGitIsolation</c>; this interface is intentionally as close to the `git` CLI surface as
+/// a typed contract can be.
+/// </summary>
+public interface IWorktreeManager
+{
+    /// <summary>True if a worktree is already registered at <paramref name="path"/>.</summary>
+    Task<bool> ExistsAsync(string projectRoot, string path, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Creates a new linked worktree at <paramref name="path"/>, checked out on a fresh
+    /// <paramref name="branch"/> created at <paramref name="commit"/>. Fails closed
+    /// (<c>worktree_create_failed</c>) if the path or branch is already in use — this never reuses
+    /// or resets an existing one; a caller that wants idempotent "ensure" semantics checks
+    /// <see cref="ExistsAsync"/> first.
+    /// </summary>
+    Task<GitOperationResult> CreateAsync(
+        string projectRoot,
+        string path,
+        string branch,
+        string commit,
+        CancellationToken cancellationToken);
+
+    /// <summary>True if <paramref name="path"/>'s working tree has any uncommitted (tracked or
+    /// untracked) change.</summary>
+    Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken);
+
+    /// <summary>Discards every uncommitted change and untracked file in <paramref name="path"/>,
+    /// then resets it to <paramref name="commit"/> — the dirty-recovery primitive: never continues
+    /// over an unknown diff.</summary>
+    Task<GitOperationResult> ResetHardAsync(
+        string projectRoot,
+        string path,
+        string commit,
+        CancellationToken cancellationToken);
+
+    Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Fast-forwards <paramref name="path"/>'s checked-out branch to <paramref name="sourceBranch"/>'s
+    /// tip. Fails closed (<c>worktree_integration_diverged</c>, no merge commit, no conflict
+    /// resolution) the moment history has diverged — the integration barrier's base check.
+    /// </summary>
+    Task<GitOperationResult> IntegrateFastForwardAsync(
+        string projectRoot,
+        string path,
+        string sourceBranch,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Replays the commits unique to <paramref name="path"/>'s checked-out branch since
+    /// <paramref name="upstream"/> onto <paramref name="ontoCommit"/>. Aborts and fails closed
+    /// (<c>worktree_rebase_conflict</c>) on the first conflict rather than leaving the worktree
+    /// mid-rebase — a gated rebase never resolves a conflict on its own.
+    /// </summary>
+    Task<GitOperationResult> RebaseOntoAsync(
+        string projectRoot,
+        string path,
+        string upstream,
+        string ontoCommit,
+        CancellationToken cancellationToken);
+
+    /// <summary>Removes a linked worktree and its directory. Safe to call on a path that is not
+    /// currently registered.</summary>
+    Task RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken);
+
+    /// <summary>Best-effort branch deletion; a missing branch is not an error.</summary>
+    Task DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken);
+}
+
 public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode, bool Replayed = false)
 {
     public static AppendOutcome Conflict { get; } = new(false, null, DiagnosticCodes.WorkflowEventConflict);
@@ -128,6 +210,45 @@ public interface ISprintStore
 }
 
 public interface IArtifactStore;
+
+/// <summary>
+/// Durable routing state for one sprint: a circuit breaker per <see cref="HealthKey"/>, one shared
+/// retry budget, and an append-only, reproducible log of every routing decision made. Scoped per
+/// sprint like every other durable record Stage 6 introduced — see <c>RoutingLedger</c>'s own
+/// remarks for why cross-sprint sharing is deliberately out of scope for now.
+/// </summary>
+public interface IRoutingStore
+{
+    Task<CircuitBreakerRecord?> GetCircuitBreakerAsync(
+        string projectRoot,
+        SprintId sprintId,
+        HealthKey key,
+        CancellationToken cancellationToken);
+
+    Task SaveCircuitBreakerAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CircuitBreakerRecord record,
+        CancellationToken cancellationToken);
+
+    Task<RetryBudgetRecord?> GetRetryBudgetAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    Task SaveRetryBudgetAsync(
+        string projectRoot,
+        SprintId sprintId,
+        RetryBudgetRecord record,
+        CancellationToken cancellationToken);
+
+    Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+}
 
 public interface ISafeLogger
 {

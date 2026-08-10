@@ -2,6 +2,25 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.10.0
+
+### Added
+
+- Sprints now isolate every write attempt in its own Git worktree, separate
+  from a sprint's integration worktree and from the user's own project
+  checkout, so nothing an attempt does is ever visible until it is
+  successfully integrated. Integration only ever fast-forwards, checked
+  against the integration branch's actual current state immediately before
+  merging; a stale attempt is recovered only through an explicit rebase, and
+  a rebase that conflicts is aborted and reported rather than left
+  half-finished. A failed or abandoned attempt's worktree and branch are
+  always discarded outright, so retrying always starts clean.
+- Fallback between providers now goes through per-provider/model/surface
+  circuit breakers with a cooldown, and a retry budget shared by an entire
+  sprint, so a flapping or failing provider cannot be retried without bound.
+  Every routing decision is recorded durably. Authentication and policy
+  failures are never treated as retryable.
+
 ## v0.9.1
 
 ### Fixed

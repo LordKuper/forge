@@ -118,6 +118,7 @@ public static class InfrastructureServices
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<IRepository, GitRepository>();
+        services.AddSingleton<IWorktreeManager, GitWorktreeManager>();
         // Forge's own release bundle download can run into the hundreds of megabytes; the
         // default 100-second HttpClient.Timeout covers the whole request, including the body,
         // and would abort a slow-connection download mid-stream.
