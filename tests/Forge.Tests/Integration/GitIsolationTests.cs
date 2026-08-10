@@ -160,7 +160,13 @@ public sealed class GitIsolationTests
         string pathB = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptB);
         await repository.CommitFileAsync("b.txt", "b", "add b", cancellationToken, pathB);
 
-        await isolation.IntegrateAsync(repository.Root, projectId, sprintId, attemptA, tip, cancellationToken);
+        GitOperationResult firstIntegration = await isolation.IntegrateAsync(
+            repository.Root, projectId, sprintId, attemptA, tip, cancellationToken);
+        Assert.True(firstIntegration.Succeeded);
+
+        string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
+        string headBeforeMismatch = await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken);
+        string headBeforeMismatchB = await worktrees.GetHeadAsync(repository.Root, pathB, cancellationToken);
 
         GitOperationResult mismatched = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptB, tip, cancellationToken);
@@ -168,6 +174,11 @@ public sealed class GitIsolationTests
         Assert.False(mismatched.Succeeded);
         Assert.Equal(DiagnosticCodes.WorktreeBaseMismatch, mismatched.DiagnosticCode);
         Assert.True(await worktrees.ExistsAsync(repository.Root, pathB, cancellationToken));
+        // "Changes nothing" is asserted directly, not just inferred from the diagnostic code: both
+        // the integration branch and B's own attempt branch must be exactly where they were before
+        // the rejected call.
+        Assert.Equal(headBeforeMismatch, await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken));
+        Assert.Equal(headBeforeMismatchB, await worktrees.GetHeadAsync(repository.Root, pathB, cancellationToken));
     }
 
     [Fact]

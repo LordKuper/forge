@@ -100,6 +100,10 @@ public sealed class RoutingLedgerTests
         IReadOnlyList<RouteDecision> decisions =
             await ledger.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
         Assert.All(decisions.Where(d => d.Outcome != RouteOutcome.Routed), d => Assert.Equal(RouteOutcome.Excluded, d.Outcome));
+        // An excluded failure must not count against the shared budget either — only the breaker
+        // half of that claim was covered before.
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(RoutingLedger.DefaultRetryBudget, budget.Remaining);
     }
 
     [Fact]
@@ -118,6 +122,76 @@ public sealed class RoutingLedgerTests
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
         Assert.Null(breaker);
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(RoutingLedger.DefaultRetryBudget, budget.Remaining);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AFailingHalfOpenTrialReopensTheBreakerWithAFreshCooldown()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileRoutingStore(), clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
+        {
+            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            await ledger.RecordOutcomeAsync(
+                root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+        }
+
+        clock.UtcNow += RoutingLedger.DefaultCooldown + TimeSpan.FromSeconds(1);
+        RouteDecision trial = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Routed, trial.Outcome);
+        DateTimeOffset trialTime = clock.UtcNow;
+        await ledger.RecordOutcomeAsync(
+            root.Path, sprintId, "a", attemptId, Key, false, FailureClass.Transient, cancellationToken);
+
+        CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
+        Assert.Equal(CircuitState.Open, breaker!.State);
+        Assert.Equal(trialTime + RoutingLedger.DefaultCooldown, breaker.CooldownUntil);
+        RouteDecision blockedAgain =
+            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.CircuitOpen, blockedAgain.Outcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATornTrailingRouteDecisionLineIsDiscardedRatherThanCorruptingTheNextAppend()
+    {
+        using TestRoot root = new();
+        FileRoutingStore store = new();
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        RouteDecision first = new(Guid.NewGuid(), sprintId, "a", attemptId, Key, RouteOutcome.Routed, null, DateTimeOffset.UnixEpoch);
+        await store.AppendRouteDecisionAsync(root.Path, first, cancellationToken);
+
+        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing", "decisions.jsonl");
+        byte[] completeBytes = await File.ReadAllBytesAsync(path, cancellationToken);
+        // Simulates a crash mid-append: a second, real event's buffer was only partially flushed —
+        // its bytes exist on disk but with no terminating newline.
+        await File.AppendAllTextAsync(path, "{\"decision_id\":\"not-terminated", cancellationToken);
+
+        IReadOnlyList<RouteDecision> beforeRepair =
+            await store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
+        Assert.Single(beforeRepair);
+        Assert.Equal(first.DecisionId, beforeRepair[0].DecisionId);
+
+        byte[] afterTruncate = await File.ReadAllBytesAsync(path, cancellationToken);
+        Assert.Equal(completeBytes, afterTruncate);
+
+        RouteDecision second = new(Guid.NewGuid(), sprintId, "a", attemptId, Key, RouteOutcome.Routed, null, DateTimeOffset.UnixEpoch);
+        await store.AppendRouteDecisionAsync(root.Path, second, cancellationToken);
+        IReadOnlyList<RouteDecision> afterRepair =
+            await store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
+
+        Assert.Equal(2, afterRepair.Count);
+        Assert.Equal(first.DecisionId, afterRepair[0].DecisionId);
+        Assert.Equal(second.DecisionId, afterRepair[1].DecisionId);
     }
 
     [Fact]

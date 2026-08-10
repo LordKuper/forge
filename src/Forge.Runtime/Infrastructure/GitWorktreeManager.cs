@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Forge.Application;
 
 namespace Forge.Infrastructure;
@@ -8,8 +9,15 @@ namespace Forge.Infrastructure;
 /// the main repository (`projectRoot`, for `worktree`/`branch` plumbing commands) or the linked
 /// worktree itself (for everything that inspects or mutates its checked-out content).
 /// </summary>
-public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktreeManager
+public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : IWorktreeManager
 {
+    // Matches `SprintOrchestrator.CommitIdPattern`: a commit-ish argument reaching this class must
+    // already be a canonical, full-length hex object id — never an abbreviation, a ref name, or
+    // anything that could be misread as a flag by `git`'s own argument parser. `\z`, not `$`, since
+    // `$` in .NET also matches immediately before a trailing '\n'.
+    [GeneratedRegex(@"\A[0-9a-f]{40}\z|\A[0-9a-f]{64}\z")]
+    private static partial Regex CommitPattern();
+
     public async Task<bool> ExistsAsync(string projectRoot, string path, CancellationToken cancellationToken)
     {
         ProcessResult result = await RunAsync(
@@ -25,7 +33,11 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
             if (line.StartsWith("worktree ", StringComparison.Ordinal) &&
                 string.Equals(NormalizePath(line["worktree ".Length..].Trim()), normalized, StringComparison.OrdinalIgnoreCase))
             {
-                return true;
+                // `git worktree list` still reports an entry whose directory was deleted out from
+                // under it (until the next `worktree prune`); treating that as "does not exist" is
+                // what lets every caller's own exists-then-create/recover logic self-heal instead of
+                // reaching a worktree-scoped git command with a working directory that is not there.
+                return Directory.Exists(path);
             }
         }
 
@@ -39,6 +51,11 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         string commit,
         CancellationToken cancellationToken)
     {
+        if (!CommitPattern().IsMatch(commit))
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? projectRoot);
         // A worktree lives under `%LOCALAPPDATA%\Forge\worktrees\<project>\<sprint>\...`, several
         // directory levels deeper than the user's own repository; combined with `git`'s own
@@ -47,8 +64,12 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         // for Windows silently works around that limit once this local (repo-scoped, not machine-
         // or user-wide) flag is set — idempotent, so setting it again on every call is harmless.
         await RunAsync(projectRoot, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
+        // A worktree whose directory was deleted out from under `git` (see `ExistsAsync`) still
+        // holds its path/branch registered until pruned; without this, re-creating it below would
+        // fail with "already registered"/"already used" instead of self-healing.
+        await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
         ProcessResult result = await RunAsync(
-            projectRoot, ["worktree", "add", "-b", branch, path, commit], cancellationToken)
+            projectRoot, ["worktree", "add", "-b", branch, path, "--", commit], cancellationToken)
             .ConfigureAwait(false);
         return result.ExitCode == 0
             ? GitOperationResult.Ok(commit)
@@ -57,7 +78,7 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
 
     public async Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken)
     {
-        ProcessResult result = await RunAsync(path, ["status", "--porcelain"], cancellationToken)
+        ProcessResult result = await RunInWorktreeAsync(path, ["status", "--porcelain"], cancellationToken)
             .ConfigureAwait(false);
         return result.ExitCode != 0 || result.StandardOutput.Trim().Length > 0;
     }
@@ -68,14 +89,20 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         string commit,
         CancellationToken cancellationToken)
     {
-        ProcessResult reset = await RunAsync(path, ["reset", "--hard", commit], cancellationToken)
+        if (!CommitPattern().IsMatch(commit))
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
+        ProcessResult reset = await RunInWorktreeAsync(path, ["reset", "--hard", commit], cancellationToken)
             .ConfigureAwait(false);
         if (reset.ExitCode != 0)
         {
             return GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed);
         }
 
-        ProcessResult clean = await RunAsync(path, ["clean", "-fd"], cancellationToken).ConfigureAwait(false);
+        ProcessResult clean = await RunInWorktreeAsync(path, ["clean", "-fd"], cancellationToken)
+            .ConfigureAwait(false);
         return clean.ExitCode == 0
             ? GitOperationResult.Ok(commit)
             : GitOperationResult.Fail(DiagnosticCodes.WorktreeResetFailed);
@@ -83,7 +110,8 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
 
     public async Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken)
     {
-        ProcessResult result = await RunAsync(path, ["rev-parse", "HEAD"], cancellationToken).ConfigureAwait(false);
+        ProcessResult result = await RunInWorktreeAsync(path, ["rev-parse", "HEAD"], cancellationToken)
+            .ConfigureAwait(false);
         string head = result.StandardOutput.Trim();
         if (result.ExitCode != 0 || head.Length == 0)
         {
@@ -99,8 +127,8 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         string sourceBranch,
         CancellationToken cancellationToken)
     {
-        ProcessResult result = await RunAsync(
-            path, ["merge", "--ff-only", sourceBranch], cancellationToken).ConfigureAwait(false);
+        ProcessResult result = await RunInWorktreeAsync(
+            path, ["merge", "--ff-only", "--", sourceBranch], cancellationToken).ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
             return GitOperationResult.Fail(DiagnosticCodes.WorktreeIntegrationDiverged);
@@ -116,7 +144,12 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         string ontoCommit,
         CancellationToken cancellationToken)
     {
-        ProcessResult result = await RunAsync(
+        if (!CommitPattern().IsMatch(upstream) || !CommitPattern().IsMatch(ontoCommit))
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
+        ProcessResult result = await RunInWorktreeAsync(
             path, ["rebase", "--onto", ontoCommit, upstream], cancellationToken).ConfigureAwait(false);
         if (result.ExitCode == 0)
         {
@@ -127,30 +160,66 @@ public sealed class GitWorktreeManager(IProcessRunner processRunner) : IWorktree
         // Fails closed: a conflicted rebase is aborted rather than left for the caller to discover
         // the worktree mid-rebase later. The abort's own outcome is not surfaced — the caller only
         // needs to know the gated rebase did not happen.
-        await RunAsync(path, ["rebase", "--abort"], cancellationToken).ConfigureAwait(false);
+        await RunInWorktreeAsync(path, ["rebase", "--abort"], cancellationToken).ConfigureAwait(false);
         return GitOperationResult.Fail(DiagnosticCodes.WorktreeRebaseConflict);
     }
 
-    public async Task RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken)
+    /// <summary>Removes a linked worktree and its directory. Returns <see langword="true"/> if the
+    /// worktree ends up not registered — whether because it was already gone, or because this call
+    /// removed it — and <see langword="false"/> if `git` refused (e.g. an open file handle on
+    /// Windows), so a caller can tell a genuinely leaked worktree apart from a clean removal instead
+    /// of assuming success silently.</summary>
+    public async Task<bool> RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken)
     {
         if (!await ExistsAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
         {
-            return;
+            return true;
         }
 
-        await RunAsync(projectRoot, ["worktree", "remove", "--force", path], cancellationToken)
-            .ConfigureAwait(false);
+        ProcessResult remove = await RunAsync(
+            projectRoot, ["worktree", "remove", "--force", path], cancellationToken).ConfigureAwait(false);
         await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
+        return remove.ExitCode == 0;
     }
 
-    public async Task DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken) =>
-        await RunAsync(projectRoot, ["branch", "-D", branch], cancellationToken).ConfigureAwait(false);
+    /// <summary>Best-effort branch deletion. Returns <see langword="true"/> if the branch ends up
+    /// not existing — whether it was already gone or this call deleted it — and
+    /// <see langword="false"/> if `git` refused to delete a branch that still exists (e.g. it is
+    /// still checked out somewhere).</summary>
+    public async Task<bool> DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunAsync(projectRoot, ["branch", "-D", "--", branch], cancellationToken)
+            .ConfigureAwait(false);
+        if (result.ExitCode == 0)
+        {
+            return true;
+        }
+
+        ProcessResult list = await RunAsync(projectRoot, ["branch", "--list", "--", branch], cancellationToken)
+            .ConfigureAwait(false);
+        return list.ExitCode == 0 && list.StandardOutput.Trim().Length == 0;
+    }
 
     private Task<ProcessResult> RunAsync(
         string workingDirectory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken) =>
         processRunner.RunAsync(new("git", arguments, workingDirectory), cancellationToken);
+
+    /// <summary>Guards every command whose working directory is a linked worktree (as opposed to
+    /// `projectRoot` itself): `git worktree list` can still report a worktree whose directory was
+    /// deleted out from under it (see `ExistsAsync`), and starting a native process with a
+    /// nonexistent working directory throws an unhandled `Win32Exception` instead of failing
+    /// closed. Every such caller already has a defined failure path (a non-zero exit code, or
+    /// `GetHeadAsync`'s own `InvalidOperationException`), so this only needs to route around the
+    /// crash — it never needs its own diagnostic code.</summary>
+    private Task<ProcessResult> RunInWorktreeAsync(
+        string path,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken) =>
+        Directory.Exists(path)
+            ? RunAsync(path, arguments, cancellationToken)
+            : Task.FromResult(new ProcessResult(-1, string.Empty, $"'{path}' does not exist."));
 
     private static string NormalizePath(string path) =>
         Path.GetFullPath(path).TrimEnd('\\', '/');

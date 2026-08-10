@@ -48,7 +48,12 @@ public interface IRepository
     Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
 }
 
-public sealed record GitOperationResult(bool Succeeded, string? Commit, string DiagnosticCode)
+/// <summary><paramref name="CleanupSucceeded"/> is independent of <paramref name="Succeeded"/>: it
+/// only ever turns <see langword="false"/> when the operation itself already succeeded but a
+/// best-effort cleanup step afterward (removing an already-merged attempt's worktree/branch) did
+/// not — never conflated with the operation's own outcome, since a leaked worktree is a resource to
+/// reconcile later, not a reason to report the operation as failed.</summary>
+public sealed record GitOperationResult(bool Succeeded, string? Commit, string DiagnosticCode, bool CleanupSucceeded = true)
 {
     public static GitOperationResult Ok(string? commit = null) => new(true, commit, DiagnosticCodes.None);
 
@@ -123,11 +128,14 @@ public interface IWorktreeManager
         CancellationToken cancellationToken);
 
     /// <summary>Removes a linked worktree and its directory. Safe to call on a path that is not
-    /// currently registered.</summary>
-    Task RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken);
+    /// currently registered. Returns <see langword="false"/> instead of throwing when `git` refuses
+    /// (e.g. an open file handle on Windows) — a caller must be able to tell a leaked worktree apart
+    /// from a clean removal.</summary>
+    Task<bool> RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken);
 
-    /// <summary>Best-effort branch deletion; a missing branch is not an error.</summary>
-    Task DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken);
+    /// <summary>Best-effort branch deletion; a missing branch is not an error. Returns
+    /// <see langword="false"/> if `git` refused to delete a branch that still exists.</summary>
+    Task<bool> DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken);
 }
 
 public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode, bool Replayed = false)

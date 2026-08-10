@@ -36,7 +36,11 @@ internal sealed class GitTestRepository : IDisposable
 
     /// <summary>Writes and commits one file on whatever branch is currently checked out at
     /// <paramref name="workingDirectory"/> (the main repo root by default, or a worktree path),
-    /// returning the new commit.</summary>
+    /// returning the new commit. Every `git` step's exit code is checked: a test whose setup
+    /// silently failed to actually produce a new commit (e.g. a lock, or a config gap on some
+    /// machine) must fail loudly at that setup step, never quietly degrade into asserting a
+    /// vacuously true result later — e.g. a fast-forward integration test "passing" only because it
+    /// happened to already be at the expected commit.</summary>
     public async Task<string> CommitFileAsync(
         string relativePath,
         string content,
@@ -45,12 +49,37 @@ internal sealed class GitTestRepository : IDisposable
         string? workingDirectory = null)
     {
         string directory = workingDirectory ?? Root;
+        string? beforeHead = await TryHeadAsync(directory, cancellationToken).ConfigureAwait(false);
         string path = Path.Combine(directory, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, content, cancellationToken).ConfigureAwait(false);
-        await RunAsync(directory, ["add", relativePath], cancellationToken).ConfigureAwait(false);
-        await RunAsync(directory, ["commit", "-m", message], cancellationToken).ConfigureAwait(false);
-        return await HeadAsync(directory, cancellationToken).ConfigureAwait(false);
+        ProcessResult add = await RunAsync(directory, ["add", relativePath], cancellationToken).ConfigureAwait(false);
+        if (add.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'git add' failed in '{directory}': {add.StandardError}");
+        }
+
+        ProcessResult commit = await RunAsync(directory, ["commit", "-m", message], cancellationToken)
+            .ConfigureAwait(false);
+        if (commit.ExitCode != 0)
+        {
+            throw new InvalidOperationException($"'git commit' failed in '{directory}': {commit.StandardError}");
+        }
+
+        string afterHead = await HeadAsync(directory, cancellationToken).ConfigureAwait(false);
+        if (afterHead == beforeHead)
+        {
+            throw new InvalidOperationException($"'git commit' in '{directory}' did not advance HEAD.");
+        }
+
+        return afterHead;
+    }
+
+    private async Task<string?> TryHeadAsync(string workingDirectory, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunAsync(workingDirectory, ["rev-parse", "HEAD"], cancellationToken)
+            .ConfigureAwait(false);
+        return result.ExitCode == 0 ? result.StandardOutput.Trim() : null;
     }
 
     public Task<string> HeadAsync(CancellationToken cancellationToken) => HeadAsync(Root, cancellationToken);

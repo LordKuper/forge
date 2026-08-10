@@ -133,17 +133,25 @@ public sealed class FileRoutingStore : IRoutingStore
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            await using FileStream stream = new(
+            // Same durability primitive `FileSprintEventLog.AppendLineAsync` uses: `WriteThrough`
+            // plus an explicit `Flush(true)` before this call returns, then an `fsync` of the
+            // directory entry — a crash can only ever tear the *last* line, and reading below
+            // tolerates exactly that.
+            await using (FileStream stream = new(
                 path,
                 FileMode.Append,
                 FileAccess.Write,
                 FileShare.Read,
                 4096,
-                FileOptions.Asynchronous | FileOptions.WriteThrough);
-            byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
-            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            stream.Flush(true);
+                FileOptions.Asynchronous | FileOptions.WriteThrough))
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
+                await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                stream.Flush(true);
+            }
+
+            DirectoryFlusher.Flush(directory);
         }
         finally
         {
@@ -157,19 +165,10 @@ public sealed class FileRoutingStore : IRoutingStore
         CancellationToken cancellationToken)
     {
         string path = DecisionsPath(projectRoot, sprintId);
-        if (!File.Exists(path))
-        {
-            return [];
-        }
-
+        List<string> lines = await ReadLinesAsync(path, cancellationToken).ConfigureAwait(false);
         List<RouteDecision> decisions = [];
-        foreach (string line in await File.ReadAllLinesAsync(path, cancellationToken).ConfigureAwait(false))
+        foreach (string line in lines)
         {
-            if (line.Length == 0)
-            {
-                continue;
-            }
-
             PersistedDecision persisted = JsonSerializer.Deserialize<PersistedDecision>(line, JsonOptions) ??
                 throw new InvalidDataException($"A route decision line at '{path}' is empty.");
             decisions.Add(new(
@@ -186,6 +185,61 @@ public sealed class FileRoutingStore : IRoutingStore
         }
 
         return decisions;
+    }
+
+    /// <summary>
+    /// Reads `decisions.jsonl` by byte offset, exactly like
+    /// `FileSprintEventLog.ReadEventsAsync`: every append writes its whole `json + '\n'` buffer as
+    /// one contiguous write, so a crash mid-append can only ever drop a *suffix* of that buffer. A
+    /// trailing segment with no newline at all is therefore always a torn write and is discarded
+    /// whole (never concatenated onto by the next append) rather than trusted just because it
+    /// happens to parse; a newline-terminated line that still fails to parse is real corruption and
+    /// propagates instead of being silently dropped.
+    /// </summary>
+    private static async Task<List<string>> ReadLinesAsync(string path, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+        {
+            return [];
+        }
+
+        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        List<string> lines = [];
+        int offset = 0;
+        while (offset < bytes.Length)
+        {
+            int newlineIndex = Array.IndexOf(bytes, (byte)'\n', offset);
+            if (newlineIndex < 0)
+            {
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
+                return lines;
+            }
+
+            int lineLength = newlineIndex - offset;
+            if (lineLength > 0)
+            {
+                lines.Add(Encoding.UTF8.GetString(bytes, offset, lineLength));
+            }
+
+            offset = newlineIndex + 1;
+        }
+
+        return lines;
+    }
+
+    private static async Task TruncateAsync(string path, long length, CancellationToken cancellationToken)
+    {
+        await using (FileStream stream = new(path, FileMode.Open, FileAccess.Write, FileShare.Read))
+        {
+            stream.SetLength(length);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is not null)
+        {
+            DirectoryFlusher.Flush(directory);
+        }
     }
 
     private static async Task WriteLockedAsync(string path, byte[] bytes, CancellationToken cancellationToken)

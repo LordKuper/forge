@@ -46,6 +46,10 @@ public static class WorktreeLayout
 /// </remarks>
 public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore store, IEnvironmentPaths paths)
 {
+    // ponytail: one entry per distinct sprint ever integrated into, never evicted — matches
+    // `FileSprintEventLog.Locks`'s own documented tradeoff. Fine at MVP scale (a CLI process is
+    // short-lived); add eviction (e.g. on sprint completion) if a long-lived host process ever
+    // makes this measurable.
     private static readonly ConcurrentDictionary<Guid, SemaphoreSlim> Locks = new();
 
     /// <summary>Creates the sprint's integration worktree at its frozen base commit if it does not
@@ -105,7 +109,11 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     /// <see cref="DiagnosticCodes.WorktreeBaseMismatch"/> and changes nothing; the caller must
     /// rebase (<see cref="RebaseAttemptAsync"/>) before retrying. On success the attempt's now-merged
     /// worktree and branch are discarded — nothing is ever left around to be reused by a later,
-    /// unrelated attempt.
+    /// unrelated attempt. The merge itself having succeeded is never conflated with that discard
+    /// also succeeding: a failed discard is reported through the result's own
+    /// <see cref="GitOperationResult.CleanupSucceeded"/>, not through <c>Succeeded</c> — the
+    /// integration is real (the commit is on the integration branch) even if a leaked worktree
+    /// needs a later reconciliation pass to clean up.
     /// </summary>
     public async Task<GitOperationResult> IntegrateAsync(
         string projectRoot,
@@ -135,9 +143,9 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
                 return merged;
             }
 
-            await DiscardAttemptAsync(projectRoot, projectId, sprintId, attemptId, cancellationToken)
+            bool cleanedUp = await DiscardAttemptAsync(projectRoot, projectId, sprintId, attemptId, cancellationToken)
                 .ConfigureAwait(false);
-            return merged;
+            return merged with { CleanupSucceeded = cleanedUp };
         }
         finally
         {
@@ -169,8 +177,13 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     }
 
     /// <summary>Discards an attempt's worktree and branch outright — the failure path of clean
-    /// replay: a failed attempt is never continued in place, only ever replaced by a fresh one.</summary>
-    public async Task DiscardAttemptAsync(
+    /// replay: a failed attempt is never continued in place, only ever replaced by a fresh one.
+    /// Returns <see langword="false"/> if either removal did not fully succeed (e.g. an open file
+    /// handle on Windows refusing the worktree removal) so a caller can tell a leaked worktree apart
+    /// from a clean discard instead of assuming success silently; either way, a leaked worktree here
+    /// is self-healed later by <see cref="ReconcileAsync"/> once the owning attempt reaches a
+    /// terminal state.</summary>
+    public async Task<bool> DiscardAttemptAsync(
         string projectRoot,
         Guid projectId,
         SprintId sprintId,
@@ -178,9 +191,12 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         CancellationToken cancellationToken)
     {
         string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
-        await worktrees.RemoveAsync(projectRoot, attemptPath, cancellationToken).ConfigureAwait(false);
-        await worktrees.DeleteBranchAsync(projectRoot, WorktreeLayout.AttemptBranch(attemptId), cancellationToken)
+        bool worktreeRemoved = await worktrees.RemoveAsync(projectRoot, attemptPath, cancellationToken)
             .ConfigureAwait(false);
+        bool branchDeleted = await worktrees
+            .DeleteBranchAsync(projectRoot, WorktreeLayout.AttemptBranch(attemptId), cancellationToken)
+            .ConfigureAwait(false);
+        return worktreeRemoved && branchDeleted;
     }
 
     /// <summary>

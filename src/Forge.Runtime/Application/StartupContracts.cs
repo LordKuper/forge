@@ -41,8 +41,7 @@ public static class DiagnosticCodes
     public const string WorktreeIntegrationDiverged = "worktree_integration_diverged";
     public const string WorktreeRebaseConflict = "worktree_rebase_conflict";
     public const string WorktreeBaseMismatch = "worktree_base_mismatch";
-    public const string CircuitOpen = "circuit_open";
-    public const string RetryBudgetExhausted = "retry_budget_exhausted";
+    public const string WorktreeCommitInvalid = "worktree_commit_invalid";
 }
 
 public enum StartupState

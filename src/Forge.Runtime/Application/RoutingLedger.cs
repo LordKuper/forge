@@ -75,8 +75,9 @@ public sealed class RoutingLedger(IRoutingStore store, IClock clock)
 
     /// <summary>Records the outcome of a call this ledger routed. A <see cref="FailureClass.Auth"/>
     /// or <see cref="FailureClass.Policy"/> failure is excluded outright — recorded as its own
-    /// route decision, but never applied to the breaker, so it can never masquerade as a transient,
-    /// retryable failure.</summary>
+    /// route decision, but never applied to the breaker, and its <see cref="DecideAsync"/> refunded
+    /// from the shared budget, so it can never masquerade as a transient, retryable failure nor
+    /// count against how many transient retries the rest of the sprint gets.</summary>
     public async Task RecordOutcomeAsync(
         string projectRoot,
         SprintId sprintId,
@@ -90,6 +91,11 @@ public sealed class RoutingLedger(IRoutingStore store, IClock clock)
         DateTimeOffset now = clock.UtcNow;
         if (!succeeded && failureClass is FailureClass.Auth or FailureClass.Policy)
         {
+            RetryBudgetRecord budget = await store.GetRetryBudgetAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false) ?? new(sprintId, DefaultRetryBudget, 0);
+            await store.SaveRetryBudgetAsync(
+                projectRoot, sprintId, budget with { Consumed = Math.Max(0, budget.Consumed - 1) }, cancellationToken)
+                .ConfigureAwait(false);
             await store.AppendRouteDecisionAsync(
                 projectRoot,
                 new(Guid.NewGuid(), sprintId, nodeId, attemptId, key, RouteOutcome.Excluded, failureClass, now),
