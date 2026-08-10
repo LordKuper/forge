@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Forge.Application;
 using Forge.Domain;
 using Forge.Tests.Support;
@@ -34,7 +35,7 @@ public sealed class GitIsolationTests
         GitOperationResult result = await isolation.EnsureIntegrationWorktreeAsync(
             repository.Root, projectId, sprintId, baseCommit, cancellationToken);
 
-        Assert.True(result.Succeeded);
+        AssertSucceeded(result);
         string path = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
         Assert.True(await worktrees.ExistsAsync(repository.Root, path, cancellationToken));
         Assert.Equal(baseCommit, await worktrees.GetHeadAsync(repository.Root, path, cancellationToken));
@@ -66,7 +67,7 @@ public sealed class GitIsolationTests
         GitOperationResult recovered = await isolation.EnsureIntegrationWorktreeAsync(
             repository.Root, projectId, sprintId, baseCommit, cancellationToken);
 
-        Assert.True(recovered.Succeeded);
+        AssertSucceeded(recovered);
         Assert.False(await worktrees.IsDirtyAsync(repository.Root, path, cancellationToken));
         Assert.Equal(baseCommit, await worktrees.GetHeadAsync(repository.Root, path, cancellationToken));
     }
@@ -94,7 +95,7 @@ public sealed class GitIsolationTests
             "feature.txt", "hello", "add feature", cancellationToken, attemptPath);
         GitOperationResult integrated = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptId, tip, cancellationToken);
-        Assert.True(integrated.Succeeded);
+        AssertSucceeded(integrated);
         string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
 
         // Simulates external deletion (not a Forge-driven `RemoveAsync`) — e.g. the user emptying a
@@ -104,7 +105,7 @@ public sealed class GitIsolationTests
         GitOperationResult recovered = await isolation.EnsureIntegrationWorktreeAsync(
             repository.Root, projectId, sprintId, tip, cancellationToken);
 
-        Assert.True(recovered.Succeeded);
+        AssertSucceeded(recovered);
         // The commit already integrated before the deletion must survive recovery — recreating the
         // worktree from the sprint's original frozen base (discarding this real history) would be a
         // silent, permanent data-loss regression.
@@ -133,9 +134,9 @@ public sealed class GitIsolationTests
         GitOperationResult second = await isolation.CreateAttemptWorktreeAsync(
             repository.Root, projectId, sprintId, attemptId, cancellationToken);
 
-        Assert.True(first.Succeeded);
+        AssertSucceeded(first);
         Assert.Equal(tip, first.Commit);
-        Assert.True(second.Succeeded);
+        AssertSucceeded(second);
         Assert.Equal(first.Commit, second.Commit);
     }
 
@@ -164,7 +165,7 @@ public sealed class GitIsolationTests
         GitOperationResult integrated = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptId, tip, cancellationToken);
 
-        Assert.True(integrated.Succeeded);
+        AssertSucceeded(integrated);
         Assert.Equal(attemptCommit, integrated.Commit);
         // A clean integration must also report a clean cleanup — `CleanupSucceeded` is a distinct
         // signal from `Succeeded`, and this is its only "both true" coverage.
@@ -205,7 +206,7 @@ public sealed class GitIsolationTests
 
         GitOperationResult firstIntegration = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptA, tip, cancellationToken);
-        Assert.True(firstIntegration.Succeeded);
+        AssertSucceeded(firstIntegration);
 
         string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
         string headBeforeMismatch = await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken);
@@ -256,16 +257,16 @@ public sealed class GitIsolationTests
 
         GitOperationResult firstIntegration = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptA, tip, cancellationToken);
-        Assert.True(firstIntegration.Succeeded);
+        AssertSucceeded(firstIntegration);
 
         GitOperationResult rebased = await isolation.RebaseAttemptAsync(
             repository.Root, projectId, sprintId, attemptB, tip, cancellationToken);
-        Assert.True(rebased.Succeeded);
+        AssertSucceeded(rebased);
 
         GitOperationResult secondIntegration = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptB, firstIntegration.Commit!, cancellationToken);
 
-        Assert.True(secondIntegration.Succeeded);
+        AssertSucceeded(secondIntegration);
         string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
         string finalHead = await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken);
         Assert.Equal(secondIntegration.Commit, finalHead);
@@ -304,7 +305,7 @@ public sealed class GitIsolationTests
 
         GitOperationResult integrated = await isolation.IntegrateAsync(
             repository.Root, projectId, sprintId, attemptC, tip, cancellationToken);
-        Assert.True(integrated.Succeeded);
+        AssertSucceeded(integrated);
 
         GitOperationResult rebased = await isolation.RebaseAttemptAsync(
             repository.Root, projectId, sprintId, attemptD, tip, cancellationToken);
@@ -394,6 +395,15 @@ public sealed class GitIsolationTests
         Assert.True(Directory.Exists(runningPath));
     }
 
+    /// <summary>A `git` failure's own `stderr` (<see cref="GitOperationResult.Detail"/>) is what
+    /// actually diagnoses a CI-only failure that cannot be reproduced locally; every success
+    /// assertion in this file goes through this helper instead of a bare `Assert.True` so that text
+    /// is never silently discarded on failure.</summary>
+    private static void AssertSucceeded(
+        GitOperationResult result,
+        [CallerArgumentExpression(nameof(result))] string? expression = null) =>
+        Assert.True(result.Succeeded, $"{expression} failed: {result.DiagnosticCode} ({result.Detail})");
+
     /// <summary>Creates an attempt worktree and asserts it actually succeeded before the caller
     /// proceeds to use its path — a silent creation failure must surface here, as a clear diagnostic
     /// code, rather than cascade into a confusing crash several calls later against a directory that
@@ -409,7 +419,8 @@ public sealed class GitIsolationTests
         GitOperationResult result = await isolation
             .CreateAttemptWorktreeAsync(projectRoot, projectId, sprintId, attemptId, cancellationToken)
             .ConfigureAwait(false);
-        Assert.True(result.Succeeded, $"CreateAttemptWorktreeAsync failed: {result.DiagnosticCode}");
+        Assert.True(
+            result.Succeeded, $"CreateAttemptWorktreeAsync failed: {result.DiagnosticCode} ({result.Detail})");
         return result;
     }
 
@@ -424,7 +435,7 @@ public sealed class GitIsolationTests
         string baseCommit = await repository.HeadAsync(cancellationToken);
         GitOperationResult result = await isolation.EnsureIntegrationWorktreeAsync(
             repository.Root, projectId, sprintId, baseCommit, cancellationToken);
-        Assert.True(result.Succeeded);
+        Assert.True(result.Succeeded, $"EnsureIntegrationWorktreeAsync failed: {result.DiagnosticCode} ({result.Detail})");
         return (sprintId, projectId, baseCommit);
     }
 

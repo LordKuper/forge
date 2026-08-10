@@ -153,6 +153,41 @@ public sealed class RoutingLedgerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ReportingAnOutcomeForADecisionThatWasNotRoutedNeverTouchesTheBreakerEitherDirection()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileRoutingStore(), clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
+        {
+            RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            await ledger.RecordOutcomeAsync(
+                root.Path, sprintId, decision, false, FailureClass.Transient, cancellationToken);
+        }
+
+        RouteDecision blocked = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.CircuitOpen, blocked.Outcome);
+        CircuitBreakerRecord? beforeReport =
+            await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
+
+        clock.UtcNow += TimeSpan.FromSeconds(1);
+        // A caller reporting an outcome for a decision the breaker itself already refused (nothing
+        // was ever attempted) must not move the breaker at all in either direction: crediting it as
+        // a success would close a breaker nothing actually tested, and crediting it as a failure
+        // would refresh the cooldown on every such misreport forever — a livelock, never recovering.
+        await ledger.RecordOutcomeAsync(root.Path, sprintId, blocked, false, FailureClass.Transient, cancellationToken);
+        await ledger.RecordOutcomeAsync(root.Path, sprintId, blocked, true, null, cancellationToken);
+
+        CircuitBreakerRecord? afterReport =
+            await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
+        Assert.Equal(beforeReport, afterReport);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task AFailingHalfOpenTrialReopensTheBreakerWithAFreshCooldown()
     {
         using TestRoot root = new();

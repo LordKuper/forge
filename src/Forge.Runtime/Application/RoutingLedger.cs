@@ -95,13 +95,16 @@ public sealed class RoutingLedger(IRoutingStore store, IClock clock)
     /// <summary>
     /// Records the outcome of a call this ledger routed — <paramref name="decision"/> must be the
     /// exact <see cref="RouteDecision"/> <see cref="DecideAsync"/> returned for that call, not just
-    /// its node/attempt/key, so the budget can be refunded only for a decision that actually
-    /// consumed a unit (<see cref="RouteOutcome.Routed"/>); refunding unconditionally would credit a
-    /// unit never spent for a <see cref="RouteOutcome.CircuitOpen"/>/<see cref="RouteOutcome.BudgetExhausted"/>
-    /// decision. A <see cref="FailureClass.Auth"/> or <see cref="FailureClass.Policy"/> failure is
-    /// excluded outright — recorded as its own route decision, but never applied to the breaker, and
-    /// (for a routed call) its budget unit refunded — so it can never masquerade as a transient,
-    /// retryable failure nor count against how many transient retries the rest of the sprint gets.
+    /// its node/attempt/key. A decision whose own <see cref="RouteDecision.Outcome"/> is not
+    /// <see cref="RouteOutcome.Routed"/> was never actually attempted — routing itself refused it —
+    /// so this is a full no-op for one: no budget was consumed to refund, and applying an outcome to
+    /// the breaker would be equally wrong in both directions (crediting a call that never happened
+    /// closes a breaker nothing tested; reporting one as failed re-opens it with a fresh cooldown
+    /// that never actually elapses, a livelock). A <see cref="FailureClass.Auth"/> or
+    /// <see cref="FailureClass.Policy"/> failure is excluded outright — recorded as its own route
+    /// decision, but never applied to the breaker, and its budget unit refunded — so it can never
+    /// masquerade as a transient, retryable failure nor count against how many transient retries the
+    /// rest of the sprint gets.
     /// </summary>
     public async Task RecordOutcomeAsync(
         string projectRoot,
@@ -112,6 +115,11 @@ public sealed class RoutingLedger(IRoutingStore store, IClock clock)
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(decision);
+        if (decision.Outcome != RouteOutcome.Routed)
+        {
+            return;
+        }
+
         SemaphoreSlim gate = Locks.GetOrAdd(sprintId.Value, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -119,15 +127,12 @@ public sealed class RoutingLedger(IRoutingStore store, IClock clock)
             DateTimeOffset now = clock.UtcNow;
             if (!succeeded && failureClass is FailureClass.Auth or FailureClass.Policy)
             {
-                if (decision.Outcome == RouteOutcome.Routed)
-                {
-                    RetryBudgetRecord budget = await store
-                        .GetRetryBudgetAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false) ??
-                        new(sprintId, DefaultRetryBudget, 0);
-                    await store.SaveRetryBudgetAsync(
-                        projectRoot, sprintId, budget with { Consumed = Math.Max(0, budget.Consumed - 1) },
-                        cancellationToken).ConfigureAwait(false);
-                }
+                RetryBudgetRecord budget = await store
+                    .GetRetryBudgetAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false) ??
+                    new(sprintId, DefaultRetryBudget, 0);
+                await store.SaveRetryBudgetAsync(
+                    projectRoot, sprintId, budget with { Consumed = Math.Max(0, budget.Consumed - 1) },
+                    cancellationToken).ConfigureAwait(false);
 
                 await store.AppendRouteDecisionAsync(
                     projectRoot,

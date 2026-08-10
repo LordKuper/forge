@@ -33,8 +33,9 @@ public static class WorktreeLayout
         Path.Combine(AttemptsRoot(paths, projectId, sprintId), ShortId(attemptId.Value));
 
     /// <summary>
-    /// The first 16 hex characters (64 bits) of a v4 GUID's own randomness — astronomically
-    /// collision-safe for a single user's local worktree cache, but far shorter than the full
+    /// The first 16 hex characters of a v4 GUID — 60 bits of actual randomness once the fixed
+    /// version nibble inside that prefix is excluded — astronomically collision-safe for a single
+    /// user's local worktree cache, but far shorter than the full
     /// 32-character form. Worktree paths nest several directory levels below
     /// <c>%LOCALAPPDATA%</c>, and `git` itself nests further administrative files below *that*
     /// (`.git\worktrees\&lt;name&gt;\...`, used during a rebase); several full-length ids stacked
@@ -316,13 +317,20 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     {
         if (!await worktrees.IsDirtyAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
         {
-            return GitOperationResult.Ok(
-                await worktrees.GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
+            string? cleanHead = await TryGetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false);
+            return cleanHead is null
+                ? GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable)
+                : GitOperationResult.Ok(cleanHead);
         }
 
         // Recovers only committed history — the branch pointer itself never moves here, so this
         // never continues over an unknown diff; it only discards uncommitted noise a crash left.
-        string head = await worktrees.GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false);
+        string? head = await TryGetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false);
+        if (head is null)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeUnavailable);
+        }
+
         return await worktrees.ResetHardAsync(projectRoot, path, head, cancellationToken).ConfigureAwait(false);
     }
 }

@@ -95,10 +95,17 @@ public interface IWorktreeManager
 
     /// <summary>
     /// Creates a new linked worktree at <paramref name="path"/>, checked out on a fresh
-    /// <paramref name="branch"/> created at <paramref name="commit"/>. Fails closed
-    /// (<c>worktree_create_failed</c>) if the path or branch is already in use — this never reuses
-    /// or resets an existing one; a caller that wants idempotent "ensure" semantics checks
-    /// <see cref="ExistsAsync"/> first.
+    /// <paramref name="branch"/> created at <paramref name="commit"/>. If that path/branch is
+    /// already in use because a prior worktree's directory went missing (see
+    /// <see cref="ExistsAsync"/>), this self-heals: a stale path registration is pruned, and if
+    /// <paramref name="branch"/> itself still exists — carrying real, otherwise-unreachable history
+    /// — a new worktree is re-attached to that *existing* branch instead of creating a fresh one, in
+    /// which case the returned <see cref="GitOperationResult.Commit"/> is that branch's actual tip,
+    /// not necessarily <paramref name="commit"/>. This never force-deletes a branch to make room —
+    /// only an explicit, caller-driven decision may ever discard branch history. Fails closed
+    /// (<c>worktree_create_failed</c>) only once neither a fresh nor an existing branch explains the
+    /// failure; a caller that wants idempotent "ensure" semantics for an *already-live* worktree
+    /// still checks <see cref="ExistsAsync"/> first rather than relying on this self-heal.
     /// </summary>
     Task<GitOperationResult> CreateAsync(
         string projectRoot,

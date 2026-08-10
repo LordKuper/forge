@@ -52,8 +52,9 @@ message for a working directory that does not exist, meaning `git worktree
 add` itself was failing there at that path depth. Rather than continue
 chasing exactly where any one Windows/`git` combination's limit sits,
 `WorktreeLayout.ShortId` keeps every id in this layout to the first 16 hex
-characters (64 bits) of the underlying GUID — collision-safe for a single
-user's local worktree cache — so the whole class of failure is avoided by
+characters of the underlying GUID (60 bits of actual randomness once the
+fixed version nibble inside that prefix is excluded) — collision-safe for a
+single user's local worktree cache — so the whole class of failure is avoided by
 construction. `core.longpaths=true` (repository-scoped, not system- or
 user-wide, set idempotently before every `git worktree add`) is kept as a
 second, defense-in-depth layer.
