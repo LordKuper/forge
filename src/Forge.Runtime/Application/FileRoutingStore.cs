@@ -165,7 +165,24 @@ public sealed class FileRoutingStore : IRoutingStore
         CancellationToken cancellationToken)
     {
         string path = DecisionsPath(projectRoot, sprintId);
-        List<string> lines = await ReadLinesAsync(path, cancellationToken).ConfigureAwait(false);
+        // `ReadLinesAsync` can itself write (truncating a torn trailing line) — the exact same path
+        // `AppendRouteDecisionAsync` writes to, so both share this lock. Without it, a read racing a
+        // concurrent append could observe a line the append had only partially flushed, truncate the
+        // file back down believing it torn, and destroy an append its own caller was already told
+        // succeeded — the same class of loss the torn-line handling exists to prevent, reintroduced
+        // on the read side.
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        List<string> lines;
+        try
+        {
+            lines = await ReadLinesAsync(path, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
         List<RouteDecision> decisions = [];
         foreach (string line in lines)
         {

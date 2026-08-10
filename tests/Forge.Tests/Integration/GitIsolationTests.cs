@@ -73,6 +73,46 @@ public sealed class GitIsolationTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task EnsureIntegrationWorktreeRecoversFromADeletedDirectoryWithoutLosingAlreadyIntegratedHistory()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        IWorktreeManager worktrees = environment.Resolve<IWorktreeManager>();
+        (SprintId sprintId, Guid projectId, string tip) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        string attemptCommit = await repository.CommitFileAsync(
+            "feature.txt", "hello", "add feature", cancellationToken, attemptPath);
+        GitOperationResult integrated = await isolation.IntegrateAsync(
+            repository.Root, projectId, sprintId, attemptId, tip, cancellationToken);
+        Assert.True(integrated.Succeeded);
+        string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
+
+        // Simulates external deletion (not a Forge-driven `RemoveAsync`) — e.g. the user emptying a
+        // temp/cache directory — leaving `git` still believing the worktree is registered.
+        Directory.Delete(integrationPath, true);
+
+        GitOperationResult recovered = await isolation.EnsureIntegrationWorktreeAsync(
+            repository.Root, projectId, sprintId, tip, cancellationToken);
+
+        Assert.True(recovered.Succeeded);
+        // The commit already integrated before the deletion must survive recovery — recreating the
+        // worktree from the sprint's original frozen base (discarding this real history) would be a
+        // silent, permanent data-loss regression.
+        Assert.Equal(attemptCommit, await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task CreateAttemptWorktreeBranchesFromTheIntegrationTipAndIsIdempotentForTheSameAttemptId()
     {
         if (!OperatingSystem.IsWindows())
@@ -116,7 +156,7 @@ public sealed class GitIsolationTests
         (SprintId sprintId, Guid projectId, string tip) =
             await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
         AttemptId attemptId = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
         string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
         string attemptCommit = await repository.CommitFileAsync(
             "feature.txt", "hello", "add feature", cancellationToken, attemptPath);
@@ -126,6 +166,9 @@ public sealed class GitIsolationTests
 
         Assert.True(integrated.Succeeded);
         Assert.Equal(attemptCommit, integrated.Commit);
+        // A clean integration must also report a clean cleanup — `CleanupSucceeded` is a distinct
+        // signal from `Succeeded`, and this is its only "both true" coverage.
+        Assert.True(integrated.CleanupSucceeded);
         string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
         Assert.Equal(attemptCommit, await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken));
         Assert.False(await worktrees.ExistsAsync(repository.Root, attemptPath, cancellationToken));
@@ -151,12 +194,12 @@ public sealed class GitIsolationTests
         // Both attempts branch from the same original tip *before* either integrates — the
         // concurrent-attempts scenario the base check exists for.
         AttemptId attemptA = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptA, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptA, cancellationToken);
         string pathA = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptA);
         await repository.CommitFileAsync("a.txt", "a", "add a", cancellationToken, pathA);
 
         AttemptId attemptB = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptB, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptB, cancellationToken);
         string pathB = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptB);
         await repository.CommitFileAsync("b.txt", "b", "add b", cancellationToken, pathB);
 
@@ -202,12 +245,12 @@ public sealed class GitIsolationTests
         // rebase below replays a genuine independent commit rather than a no-op onto its own
         // ancestor.
         AttemptId attemptA = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptA, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptA, cancellationToken);
         string pathA = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptA);
         await repository.CommitFileAsync("a.txt", "a", "add a", cancellationToken, pathA);
 
         AttemptId attemptB = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptB, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptB, cancellationToken);
         string pathB = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptB);
         await repository.CommitFileAsync("b.txt", "b", "add b", cancellationToken, pathB);
 
@@ -249,12 +292,12 @@ public sealed class GitIsolationTests
         // create the same new file with different content — a genuine conflict once D is replayed
         // onto the tip after C's own creation of that same path has already landed there.
         AttemptId attemptC = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptC, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptC, cancellationToken);
         string pathC = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptC);
         await repository.CommitFileAsync("conflict.txt", "from C", "C edits", cancellationToken, pathC);
 
         AttemptId attemptD = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptD, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptD, cancellationToken);
         string pathD = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptD);
         string attemptDCommit = await repository.CommitFileAsync(
             "conflict.txt", "from D", "D edits", cancellationToken, pathD);
@@ -289,11 +332,12 @@ public sealed class GitIsolationTests
         (SprintId sprintId, Guid projectId, string _) =
             await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
         AttemptId attemptId = AttemptId.New();
-        await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
         string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
         await repository.CommitFileAsync("scratch.txt", "abandoned work", "scratch", cancellationToken, attemptPath);
 
-        await isolation.DiscardAttemptAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        bool discarded = await isolation.DiscardAttemptAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        Assert.True(discarded);
 
         Assert.False(await worktrees.ExistsAsync(repository.Root, attemptPath, cancellationToken));
         ProcessResult branches = await repository.RunAsync(
@@ -324,7 +368,7 @@ public sealed class GitIsolationTests
         AttemptId unknownAttempt = AttemptId.New();
         foreach (AttemptId attemptId in new[] { terminalAttempt, runningAttempt, unknownAttempt })
         {
-            await isolation.CreateAttemptWorktreeAsync(repository.Root, projectId, sprintId, attemptId, cancellationToken);
+            await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
         }
 
         await isolation.ReconcileAsync(repository.Root, projectId, sprintId, cancellationToken);
@@ -335,6 +379,25 @@ public sealed class GitIsolationTests
             repository.Root, WorktreeLayout.AttemptPath(environment, projectId, sprintId, unknownAttempt), cancellationToken));
         Assert.True(await worktrees.ExistsAsync(
             repository.Root, WorktreeLayout.AttemptPath(environment, projectId, sprintId, runningAttempt), cancellationToken));
+    }
+
+    /// <summary>Creates an attempt worktree and asserts it actually succeeded before the caller
+    /// proceeds to use its path — a silent creation failure must surface here, as a clear diagnostic
+    /// code, rather than cascade into a confusing crash several calls later against a directory that
+    /// was never created.</summary>
+    private static async Task<GitOperationResult> CreateAttemptWorktreeOrFailAsync(
+        SprintGitIsolation isolation,
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        GitOperationResult result = await isolation
+            .CreateAttemptWorktreeAsync(projectRoot, projectId, sprintId, attemptId, cancellationToken)
+            .ConfigureAwait(false);
+        Assert.True(result.Succeeded, $"CreateAttemptWorktreeAsync failed: {result.DiagnosticCode}");
+        return result;
     }
 
     private static async Task<(SprintId SprintId, Guid ProjectId, string Tip)> SetUpIntegrationAsync(

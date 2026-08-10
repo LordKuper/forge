@@ -91,11 +91,18 @@ internal sealed class GitTestRepository : IDisposable
         return result.StandardOutput.Trim();
     }
 
+    /// <summary>A missing `workingDirectory` throws an unhandled `Win32Exception` from
+    /// `Process.Start` on Windows rather than failing in any way callers can distinguish from a real
+    /// `git` failure; guarded the same way `GitWorktreeManager.RunInWorktreeAsync` guards production
+    /// code, so a genuine creation failure surfaces as a normal, diagnosable non-zero exit instead of
+    /// an unrelated-looking crash several calls later.</summary>
     public Task<ProcessResult> RunAsync(
         string workingDirectory,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken) =>
-        runner.RunAsync(new("git", arguments, workingDirectory), cancellationToken);
+        Directory.Exists(workingDirectory)
+            ? runner.RunAsync(new("git", arguments, workingDirectory), cancellationToken)
+            : Task.FromResult(new ProcessResult(-1, string.Empty, $"'{workingDirectory}' does not exist."));
 
     public void Dispose()
     {

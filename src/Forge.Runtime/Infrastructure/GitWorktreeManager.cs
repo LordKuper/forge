@@ -57,23 +57,62 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         }
 
         Directory.CreateDirectory(Path.GetDirectoryName(path) ?? projectRoot);
-        // A worktree lives under `%LOCALAPPDATA%\Forge\worktrees\<project>\<sprint>\...`, several
-        // directory levels deeper than the user's own repository; combined with `git`'s own
-        // administrative files under `.git\worktrees\<name>\...`, that total can exceed Windows'
-        // default 260-character path limit even though no single segment looks unreasonable. `git`
-        // for Windows silently works around that limit once this local (repo-scoped, not machine-
-        // or user-wide) flag is set — idempotent, so setting it again on every call is harmless.
+        // `git` for Windows can silently work around Windows' default 260-character path limit for
+        // its own file access once this local (repo-scoped, not machine- or user-wide) flag is set —
+        // idempotent, so setting it again on every call is harmless. `WorktreeLayout` also keeps
+        // every id short specifically so this class of failure is avoided by construction rather
+        // than relied on this flag alone (see `WorktreeLayout.ShortId`'s own remarks).
         await RunAsync(projectRoot, ["config", "core.longpaths", "true"], cancellationToken).ConfigureAwait(false);
-        // A worktree whose directory was deleted out from under `git` (see `ExistsAsync`) still
-        // holds its path/branch registered until pruned; without this, re-creating it below would
-        // fail with "already registered"/"already used" instead of self-healing.
-        await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
-        ProcessResult result = await RunAsync(
+        ProcessResult created = await RunAsync(
             projectRoot, ["worktree", "add", "-b", branch, path, "--", commit], cancellationToken)
             .ConfigureAwait(false);
-        return result.ExitCode == 0
+        if (created.ExitCode == 0)
+        {
+            return GitOperationResult.Ok(commit);
+        }
+
+        // A worktree whose directory was deleted out from under `git` (see `ExistsAsync`) still
+        // holds its path registered until pruned — but pruning never touches the branch itself
+        // (confirmed directly against real `git`), so a bare retry after pruning could still fail
+        // with "a branch named '<branch>' already exists" forever. Clearing any leftover, no-longer-
+        // registered directory content is likewise safe only once pruning has run: a *registered*
+        // worktree's directory is never reached here — `ExistsAsync` would have short-circuited this
+        // whole method's caller before it did.
+        await RunAsync(projectRoot, ["worktree", "prune"], cancellationToken).ConfigureAwait(false);
+        if (!await ExistsAsync(projectRoot, path, cancellationToken).ConfigureAwait(false) &&
+            Directory.Exists(path))
+        {
+            Directory.Delete(path, true);
+        }
+
+        if (await BranchExistsAsync(projectRoot, branch, cancellationToken).ConfigureAwait(false))
+        {
+            // `branch` already carries real, otherwise-unreachable history — most likely this exact
+            // branch's own earlier worktree, whose directory later went missing (the integration
+            // branch is the case this matters for: it can hold every commit integrated so far).
+            // Re-attaching a *new* worktree to that *existing* branch preserves it. This never
+            // force-deletes a branch to make room: only an explicit, caller-driven decision may ever
+            // discard branch history, never this self-heal path.
+            ProcessResult attached = await RunAsync(
+                projectRoot, ["worktree", "add", path, "--", branch], cancellationToken).ConfigureAwait(false);
+            return attached.ExitCode == 0
+                ? GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false))
+                : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed);
+        }
+
+        ProcessResult retried = await RunAsync(
+            projectRoot, ["worktree", "add", "-b", branch, path, "--", commit], cancellationToken)
+            .ConfigureAwait(false);
+        return retried.ExitCode == 0
             ? GitOperationResult.Ok(commit)
             : GitOperationResult.Fail(DiagnosticCodes.WorktreeCreateFailed);
+    }
+
+    private async Task<bool> BranchExistsAsync(string projectRoot, string branch, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunAsync(projectRoot, ["branch", "--list", "--", branch], cancellationToken)
+            .ConfigureAwait(false);
+        return result.ExitCode == 0 && result.StandardOutput.Trim().Length > 0;
     }
 
     public async Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken)

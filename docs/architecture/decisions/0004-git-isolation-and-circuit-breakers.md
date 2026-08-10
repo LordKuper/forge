@@ -22,31 +22,58 @@ against real `git.exe` and a real routing ledger rather than against a fake.
 
 Every worktree Stage 7 creates — one sprint integration worktree, one per
 node write attempt — lives under
-`%LOCALAPPDATA%\Forge\worktrees\<project-id>\<sprint-id>\...`
+`%LOCALAPPDATA%\Forge\wt\<short-project-id>\<short-sprint-id>\...`
 (`Forge.Application.WorktreeLayout`), never inside `<project-root>` itself.
 Nesting a linked worktree inside the user's own checkout would need
 `.gitignore` coordination and would let an accidental `git add -A` in the
 user's repo sweep up an in-progress attempt's content; a location outside the
 working tree needs neither. Branch names are deterministic and namespaced
-(`forge/sprint/<id>`, `forge/attempt/<id>`), so no separate ownership ledger
-is needed: an attempt's worktree path *is* its ownership record, and the
-already-durable event-sourced attempt state from Stage 6
+(`forge/sprint/<short-id>`, `forge/attempt/<short-id>`), so no separate
+ownership ledger is needed: an attempt's worktree path *is* its ownership
+record, and the already-durable event-sourced attempt state from Stage 6
 (`SprintGitIsolation.ReconcileAsync`) is enough to tell a live attempt's
-worktree from an orphaned one on crash recovery.
+worktree from an orphaned one on crash recovery — matched by recomputing each
+live attempt's own short id, since the short id embedded in a directory name
+cannot be reversed back into the full id it came from (`WorktreeLayout.ShortId`).
 
-### `core.longpaths` is set on every worktree creation
+### Every id in the worktree/branch layout is short, and `core.longpaths` is set defensively
 
-A worktree path under `%LOCALAPPDATA%\Forge\worktrees\...` is several
-directory levels deeper than the user's own repository. Combined with git's
-own administrative files under `.git\worktrees\<name>\...` (used during a
-rebase), the total can exceed Windows' default 260-character path limit even
-when no individual segment looks unreasonable — confirmed directly: a gated
-rebase across two attempt worktrees at realistic nested paths reproducibly
-failed with `fatal: ... Filename too long` until `core.longpaths=true` was
-set, after which the identical operation succeeded. `GitWorktreeManager`
-therefore runs `git config core.longpaths true` (repository-scoped, not
-system- or user-wide) before every `git worktree add`; idempotent, so
-repeating it is harmless.
+A worktree path under `%LOCALAPPDATA%\Forge\wt\...` is several directory
+levels deeper than the user's own repository. Combined with git's own
+administrative files under `.git\worktrees\<name>\...` (used during a
+rebase), the total can exceed Windows' path limits even when no individual
+segment looks unreasonable — confirmed directly, twice: a gated rebase across
+two attempt worktrees at full-GUID-length nested paths reproducibly failed
+with `fatal: ... Filename too long` locally until `core.longpaths=true` was
+set; separately, attempt-worktree *creation* itself reproducibly failed on
+CI (a different Windows machine, `core.longpaths` already set) with an
+unhandled `Win32Exception: The directory name is invalid` — .NET's exact
+message for a working directory that does not exist, meaning `git worktree
+add` itself was failing there at that path depth. Rather than continue
+chasing exactly where any one Windows/`git` combination's limit sits,
+`WorktreeLayout.ShortId` keeps every id in this layout to the first 16 hex
+characters (64 bits) of the underlying GUID — collision-safe for a single
+user's local worktree cache — so the whole class of failure is avoided by
+construction. `core.longpaths=true` (repository-scoped, not system- or
+user-wide, set idempotently before every `git worktree add`) is kept as a
+second, defense-in-depth layer.
+
+### Deleting a worktree's directory never loses its branch's history
+
+`git worktree prune` clears a stale *path* registration but never touches
+the *branch* itself — confirmed directly against real `git`. A naive retry
+of `worktree add -b <branch>` after a directory went missing (e.g. the user
+emptied a temp/cache location) would therefore fail forever with "a branch
+named '<branch>' already exists" — or, if the retry instead force-deleted
+that branch to make room, would silently discard whatever it pointed to,
+which for the *integration* branch can be every commit integrated into the
+sprint so far. `GitWorktreeManager.CreateAsync`'s self-heal path checks
+whether the branch still exists after a failed create-and-prune and, if so,
+re-attaches a new worktree to that *existing* branch (`git worktree add
+<path> -- <branch>`, no `-b`) instead — recovering the worktree without ever
+force-deleting a branch. Only a leftover directory that is no longer a
+registered worktree at all is ever removed, and only once neither a fresh
+branch nor an existing one explains the failure.
 
 ### The integration barrier is a fast-forward-only merge with an explicit base check
 
@@ -102,7 +129,14 @@ never disguised as transient failures."
 `RoutingLedger.DecideAsync` and `RecordOutcomeAsync` both append to
 `decisions.jsonl` before returning, regardless of outcome — routed, circuit
 open, budget exhausted, or excluded. A fallback sequence is reproducible from
-this log alone.
+this log alone. Reading that log can itself write (truncating a torn
+trailing line — see `FileRoutingStore.ReadLinesAsync`'s own remarks), so a
+read holds the exact same per-path lock an append does; without that, a read
+racing a concurrent append could truncate away an append its own caller had
+already been told succeeded. This is a per-process guarantee only, matching
+the single-process assumption every other Stage 6/7 file store already makes
+(multiple Forge processes writing the same sprint concurrently is out of
+scope, same as `FileSprintEventLog`).
 
 ## Consequences
 

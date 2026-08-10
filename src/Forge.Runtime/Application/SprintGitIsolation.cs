@@ -9,22 +9,41 @@ namespace Forge.Application;
 /// user's main checkout and needs no `.gitignore` coordination.</summary>
 public static class WorktreeLayout
 {
-    public static string IntegrationBranch(SprintId sprintId) => $"forge/sprint/{sprintId.Value:N}";
+    public static string IntegrationBranch(SprintId sprintId) => $"forge/sprint/{ShortId(sprintId.Value)}";
 
-    public static string AttemptBranch(AttemptId attemptId) => $"forge/attempt/{attemptId.Value:N}";
+    public static string AttemptBranch(AttemptId attemptId) => AttemptBranchFromShortId(ShortId(attemptId.Value));
+
+    /// <summary>The exact branch name <see cref="AttemptBranch"/> would produce for the attempt id
+    /// this <paramref name="shortId"/> was derived from — usable by a caller (crash recovery) that
+    /// only has an attempt worktree's directory name, not its original full <see cref="AttemptId"/>,
+    /// since that full id cannot be recovered from the (deliberately lossy) short form.</summary>
+    internal static string AttemptBranchFromShortId(string shortId) => $"forge/attempt/{shortId}";
 
     public static string SprintRoot(IEnvironmentPaths paths, Guid projectId, SprintId sprintId) =>
         Path.Combine(
-            paths.LocalApplicationData, "worktrees", projectId.ToString("N"), "sprints", sprintId.Value.ToString("N"));
+            paths.LocalApplicationData, "Forge", "wt", ShortId(projectId), ShortId(sprintId.Value));
 
     public static string IntegrationPath(IEnvironmentPaths paths, Guid projectId, SprintId sprintId) =>
-        Path.Combine(SprintRoot(paths, projectId, sprintId), "integration");
+        Path.Combine(SprintRoot(paths, projectId, sprintId), "i");
 
     public static string AttemptsRoot(IEnvironmentPaths paths, Guid projectId, SprintId sprintId) =>
-        Path.Combine(SprintRoot(paths, projectId, sprintId), "attempts");
+        Path.Combine(SprintRoot(paths, projectId, sprintId), "a");
 
     public static string AttemptPath(IEnvironmentPaths paths, Guid projectId, SprintId sprintId, AttemptId attemptId) =>
-        Path.Combine(AttemptsRoot(paths, projectId, sprintId), attemptId.Value.ToString("N"));
+        Path.Combine(AttemptsRoot(paths, projectId, sprintId), ShortId(attemptId.Value));
+
+    /// <summary>
+    /// The first 16 hex characters (64 bits) of a v4 GUID's own randomness — astronomically
+    /// collision-safe for a single user's local worktree cache, but far shorter than the full
+    /// 32-character form. Worktree paths nest several directory levels below
+    /// <c>%LOCALAPPDATA%</c>, and `git` itself nests further administrative files below *that*
+    /// (`.git\worktrees\&lt;name&gt;\...`, used during a rebase); several full-length ids stacked
+    /// across that whole depth measurably risks Windows path-length limits that vary by machine and
+    /// were confirmed to fail in CI even with `core.longpaths` set (see the Stage 7 evidence in
+    /// `docs/plans/implementation-plan.md`), so every id in this filesystem/branch layout is kept
+    /// short unconditionally rather than relying on any one machine's path-length configuration.
+    /// </summary>
+    internal static string ShortId(Guid value) => value.ToString("N")[..16];
 }
 
 /// <summary>
@@ -206,6 +225,13 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     /// still in a non-terminal state is left untouched — its worktree may still be legitimately
     /// in use, and only the (future) executor that owns it may decide it is safe to discard.
     /// </summary>
+    /// <remarks>
+    /// A worktree's directory name is only the *short*, deliberately lossy form of its owning
+    /// attempt id (see <see cref="WorktreeLayout.ShortId"/>) — the full <see cref="AttemptId"/>
+    /// cannot be recovered from it. This matches every live, non-terminal attempt in durable state
+    /// by computing *its* short id instead (the same direction every other caller already derives
+    /// paths/branches in), rather than trying to parse a full id back out of the directory name.
+    /// </remarks>
     public async Task ReconcileAsync(
         string projectRoot,
         Guid projectId,
@@ -220,21 +246,27 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
 
         SprintWorkflowState? state = await store.LoadAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
+        HashSet<string> liveShortIds = new(StringComparer.Ordinal);
+        if (state is not null)
+        {
+            foreach (AttemptSnapshot attempt in state.Attempts.Values)
+            {
+                if (attempt.State is not
+                    (AttemptState.Succeeded or AttemptState.Failed or AttemptState.Abandoned or AttemptState.Cancelled))
+                {
+                    liveShortIds.Add(WorktreeLayout.ShortId(attempt.Id.Value));
+                }
+            }
+        }
+
         foreach (string directory in Directory.EnumerateDirectories(attemptsRoot))
         {
-            if (!Guid.TryParseExact(Path.GetFileName(directory), "N", out Guid rawAttemptId))
+            string shortId = Path.GetFileName(directory);
+            if (!liveShortIds.Contains(shortId))
             {
-                continue;
-            }
-
-            AttemptId attemptId = new(rawAttemptId);
-            AttemptSnapshot? attempt = null;
-            state?.Attempts.TryGetValue(rawAttemptId.ToString("D"), out attempt);
-            bool terminalOrUnknown = attempt is null ||
-                attempt.State is AttemptState.Succeeded or AttemptState.Failed or AttemptState.Abandoned or AttemptState.Cancelled;
-            if (terminalOrUnknown)
-            {
-                await DiscardAttemptAsync(projectRoot, projectId, sprintId, attemptId, cancellationToken)
+                await worktrees.RemoveAsync(projectRoot, directory, cancellationToken).ConfigureAwait(false);
+                await worktrees
+                    .DeleteBranchAsync(projectRoot, WorktreeLayout.AttemptBranchFromShortId(shortId), cancellationToken)
                     .ConfigureAwait(false);
             }
         }
