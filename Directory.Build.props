@@ -18,11 +18,6 @@
     <Deterministic>true</Deterministic>
     <ContinuousIntegrationBuild Condition="'$(CI)' == 'true'">true</ContinuousIntegrationBuild>
     <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
-    <!-- Lets tests/Forge.Tests (net10.0;net10.0-windows...) restore/build its whole reference graph, including the
-         Windows adapters, on Linux/macOS; see .github/scripts/test-portable.ps1. It only lifts the SDK's build-time
-         guard and has no effect on which TFM actually runs, so it is harmless on projects that never target
-         Windows. -->
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup Condition="'$(IsTestProject)' == 'true'">
     <Using Include="Xunit" />

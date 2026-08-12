@@ -11,27 +11,22 @@ public interface IDirectoryDurability
 /// <summary>
 /// Portable default. <see cref="File.OpenHandle(string, FileMode, FileAccess, FileShare, FileOptions, long)"/>
 /// refuses to open a directory on every current .NET platform (Windows needs backup-semantics this API cannot
-/// request; Linux/macOS reject it too), so this is a best-effort no-op rather than the durability guarantee its
-/// name implies. A composed <see cref="IDirectoryDurability"/> adapter is required for a real guarantee on any
-/// platform; see ADR 0007. Ceiling: no directory-entry durability without one. Upgrade path: an OS adapter (the
-/// Windows one already exists) or, if Linux/macOS ship, an adapter using a raw <c>open</c>/<c>fsync</c> P/Invoke.
+/// request; Linux/macOS reject it too), so this throws on every platform until a composed
+/// <see cref="IDirectoryDurability"/> adapter overrides it; see ADR 0007. Failing closed here is deliberate: a
+/// composition root that forgets to install a real adapter must find out immediately, not lose the durability
+/// guarantee silently. Test hosts that cannot compose a platform adapter install their own best-effort override
+/// instead of weakening this default; see tests/Forge.Tests/Support/PortableDurabilityFallback.cs.
 /// </summary>
 public sealed class BclDirectoryDurability : IDirectoryDurability
 {
     public void Flush(string directory)
     {
-        try
-        {
-            using SafeFileHandle handle = File.OpenHandle(
-                directory,
-                FileMode.Open,
-                FileAccess.Read,
-                FileShare.ReadWrite | FileShare.Delete);
-            RandomAccess.FlushToDisk(handle);
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
+        using SafeFileHandle handle = File.OpenHandle(
+            directory,
+            FileMode.Open,
+            FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        RandomAccess.FlushToDisk(handle);
     }
 }
 
