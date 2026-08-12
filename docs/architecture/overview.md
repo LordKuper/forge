@@ -179,7 +179,10 @@ errors.
 Fallback uses provider/model/surface circuit breakers and a shared retry budget.
 A failed write attempt is never continued in place by another model. Fallback
 replays from the original base commit in a clean worktree. Authentication and
-policy failures are never disguised as transient failures.
+policy failures are never disguised as transient failures. Sprint integration
+and per-attempt worktrees, the fast-forward integration barrier, gated rebase,
+and durable routing decisions are defined in
+[`decisions/0004-git-isolation-and-circuit-breakers.md`](decisions/0004-git-isolation-and-circuit-breakers.md).
 
 ## Memory and code intelligence
 

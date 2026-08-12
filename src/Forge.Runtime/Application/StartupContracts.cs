@@ -36,6 +36,13 @@ public static class DiagnosticCodes
     public const string WorkflowTransitionInvalid = "workflow_transition_invalid";
     public const string WorkflowStoreBusy = "workflow_store_busy";
     public const string WorkflowLogCorrupted = "workflow_log_corrupted";
+    public const string WorktreeCreateFailed = "worktree_create_failed";
+    public const string WorktreeResetFailed = "worktree_reset_failed";
+    public const string WorktreeIntegrationDiverged = "worktree_integration_diverged";
+    public const string WorktreeRebaseConflict = "worktree_rebase_conflict";
+    public const string WorktreeBaseMismatch = "worktree_base_mismatch";
+    public const string WorktreeCommitInvalid = "worktree_commit_invalid";
+    public const string WorktreeUnavailable = "worktree_unavailable";
 }
 
 public enum StartupState
