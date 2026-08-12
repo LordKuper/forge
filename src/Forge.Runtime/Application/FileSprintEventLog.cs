@@ -313,6 +313,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         try
         {
             List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            ValidateJournal(events);
             await MigrateLegacyRoutingAsync(directory, decision.SprintId, events, cancellationToken)
                 .ConfigureAwait(false);
             await AppendRoutingEventAsync(eventsPath, decision, events, cancellationToken).ConfigureAwait(false);
@@ -337,6 +338,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             {
                 List<WorkflowEvent> events =
                     [.. await ReadEventsAsync(EventsPath(directory), cancellationToken).ConfigureAwait(false)];
+                ValidateJournal(events);
                 await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
                 return events
                     .Where(item => item.Type == RouteDecisionEventType)
@@ -423,11 +425,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
             IReadOnlyList<WorkflowEvent> events =
                 await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
-            foreach (WorkflowEvent item in events)
-            {
-                _ = WorkflowFold.IsTransitionRecord(item);
-            }
-
+            ValidateJournal(events);
             long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
             if (currentVersion != expectedAggregateVersion)
             {
@@ -662,6 +660,14 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             .Select(item => item.Aggregate.Version)
             .DefaultIfEmpty(0)
             .Max();
+
+    private static void ValidateJournal(IEnumerable<WorkflowEvent> events)
+    {
+        foreach (WorkflowEvent item in events)
+        {
+            _ = WorkflowFold.IsTransitionRecord(item);
+        }
+    }
 
     private static string? CurrentStateText(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events

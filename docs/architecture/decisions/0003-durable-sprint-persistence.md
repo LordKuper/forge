@@ -40,14 +40,11 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   caller's expected version matches that aggregate's current version folded
   from the log (0 for an aggregate that does not exist yet); otherwise it is
   rejected with `workflow_event_conflict` and no side effect.
-- Idempotency uses two ledgers, both atomically written with
-  `AtomicConfigurationFile`: a per-sprint `idempotency.json` for transition
-  commands (run/cancel/resume — exactly one legal next action per sprint
-  version, so the key is deterministically derived the same way
-  `InitializeProjectCommand` derives its key), and a project-level
-  `.forge/sprints/created.json` for sprint creation (creating a sprint does
-  not change the project's own state version, so its idempotency key is an
-  opaque caller-supplied token recorded against the sprint it produced).
+- Transition idempotency uses per-sprint `idempotency.json`, atomically written
+  with `AtomicConfigurationFile`. Sprint creation derives its stable sprint id
+  from the canonical project root and opaque caller key, writes the sprint
+  directory idempotently, and publishes visibility last through that directory's
+  atomic `created.marker`; no project-level creation ledger exists.
 - No snapshot cache exists yet. Sprint event streams are expected to stay
   small (tens of events), so folding on every read is simpler than maintaining
   a second crash-recovery surface for a cache. This is a deliberate, revisitable

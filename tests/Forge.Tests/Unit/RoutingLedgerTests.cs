@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Domain;
 
@@ -269,6 +270,46 @@ public sealed class RoutingLedgerTests
 
         await Assert.ThrowsAsync<InvalidDataException>(
             () => store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken));
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RoutingPathsDoNotMutateOrMarkAJournalWithACorruptTransition(bool append)
+    {
+        using TestRoot root = new();
+        FileSprintEventLog store = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await store.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        string sprintDirectory = FileSprintEventLog.SprintDirectory(root.Path, sprintId);
+        string eventsPath = Path.Combine(sprintDirectory, "events.jsonl");
+        JsonNode corrupted = JsonNode.Parse(await File.ReadAllTextAsync(eventsPath, cancellationToken))!;
+        Assert.True(corrupted["arguments"]!.AsObject().Remove("to_state"));
+        string original = corrupted.ToJsonString() + "\n";
+        await File.WriteAllTextAsync(eventsPath, original, cancellationToken);
+        string routingDirectory = Path.Combine(sprintDirectory, "routing");
+        Directory.CreateDirectory(routingDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "retry-budget.json"),
+            "{\"total\":10,\"consumed\":0}",
+            cancellationToken);
+
+        Task action = append
+            ? store.AppendRouteDecisionAsync(
+                root.Path,
+                new(
+                    Guid.NewGuid(), sprintId, "a", AttemptId.New(), Key, RouteOutcome.Routed, null,
+                    DateTimeOffset.UnixEpoch),
+                cancellationToken)
+            : store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => action);
+        Assert.Equal(original, await File.ReadAllTextAsync(eventsPath, cancellationToken));
+        Assert.False(File.Exists(Path.Combine(routingDirectory, "migrated-to-sprint-journal")));
     }
 
     [Fact]
