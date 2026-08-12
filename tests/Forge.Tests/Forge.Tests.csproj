@@ -3,6 +3,9 @@
     <IsTestProject>true</IsTestProject>
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+    <!-- This project's own net10.0-windows TFM is subject to the same SDK guard as the adapter projects it
+         references; see the identical property on Forge.Runtime.Windows/Forge.Updater.Windows.csproj. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
