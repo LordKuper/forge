@@ -1,6 +1,5 @@
 using System.CommandLine;
 using System.Globalization;
-using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Localization;
@@ -80,7 +79,7 @@ public static class CliApplication
             StartupStatus status = await application
                 .GetStartupStatusAsync(root, cancellationToken)
                 .ConfigureAwait(false);
-            output.WriteLine(text.Resolve(StartupMessage(status.State)));
+            output.WriteLine(text.Resolve(SurfaceFormatting.StartupMessageKey(status.State)));
             if (parseResult.GetValue(startup))
             {
                 output.WriteLine(text.Resolve(MessageKeys.StartupChecksTitle));
@@ -88,7 +87,7 @@ public static class CliApplication
                 {
                     output.WriteLine(string.Create(
                         CultureInfo.InvariantCulture,
-                        $"  {Machine(check.Id)} {Machine(check.State)} {check.DiagnosticCode}"));
+                        $"  {SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"));
                 }
             }
 
@@ -162,7 +161,7 @@ public static class CliApplication
                 return ExitCodes.Ok;
             }
 
-            output.WriteLine(text.Resolve(StartupMessage(overview.Snapshot.Startup)));
+            output.WriteLine(text.Resolve(SurfaceFormatting.StartupMessageKey(overview.Snapshot.Startup)));
             WriteProject(text, output, overview.Startup.Project);
             WriteActions(text, output, overview.Snapshot.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
@@ -231,7 +230,7 @@ public static class CliApplication
             {
                 output.WriteLine(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"  {Machine(provider.Kind)} {Machine(provider.State)} {provider.Version ?? "-"}"));
+                    $"  {SurfaceFormatting.Machine(provider.Kind)} {SurfaceFormatting.Machine(provider.State)} {provider.Version ?? "-"}"));
             }
 
             return Report(diagnostics, diagnosticCode);
@@ -402,16 +401,9 @@ public static class CliApplication
         {
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
-                $"  {value.Key} = {value.Value.GetRawText()} ({Machine(value.Provenance)})"));
+                $"  {value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"));
         }
     }
-
-    private static string StartupMessage(StartupState state) => state switch
-    {
-        StartupState.Ready => MessageKeys.StartupReady,
-        StartupState.Blocked => MessageKeys.StartupBlocked,
-        _ => MessageKeys.StartupFailed,
-    };
 
     private static string RecoveryMessage(RecoverStartupResult result) =>
         result switch
@@ -430,7 +422,4 @@ public static class CliApplication
             _ => MessageKeys.InitFailed,
         };
 
-    private static string Machine<TEnum>(TEnum value)
-        where TEnum : struct, Enum =>
-        JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString()!);
 }

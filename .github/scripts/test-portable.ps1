@@ -7,14 +7,15 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-$neutralProjects = @(
-    'src/Forge.Runtime/Forge.Runtime.csproj',
-    'src/Forge.Updater/Forge.Updater.csproj',
+# Forge.Cli and Forge.Desktop.Presentation each transitively reference every other neutral project (Forge.Runtime,
+# Forge.Updater), so building these two standalone is enough to prove the whole neutral graph restores and builds
+# independently of the test project; Forge.Tests below then builds (and tests) that same graph again regardless.
+$leafProjects = @(
     'src/Forge.Cli/Forge.Cli.csproj',
     'src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj'
 )
 
-foreach ($project in $neutralProjects) {
+foreach ($project in $leafProjects) {
     dotnet restore $project --locked-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

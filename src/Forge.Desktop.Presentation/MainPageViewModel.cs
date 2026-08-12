@@ -1,6 +1,5 @@
 using System.Globalization;
 using System.Text;
-using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Localization;
@@ -43,7 +42,7 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
             .GetProjectConfigurationAsync(projectRoot, cancellationToken)
             .ConfigureAwait(false);
         return new(
-            text.Resolve(StartupMessage(snapshot.Startup)),
+            text.Resolve(SurfaceFormatting.StartupMessageKey(snapshot.Startup)),
             string.Create(
                 CultureInfo.InvariantCulture,
                 $"{text.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Project.Root}"),
@@ -54,7 +53,7 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
                 text.Resolve(MessageKeys.StartupChecksTitle),
                 startup.Checks.Select(check => string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{Machine(check.Id)} {Machine(check.State)} {check.DiagnosticCode}"))),
+                    $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
             snapshot.SuggestedActions.Count == 0
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(
@@ -68,7 +67,7 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
                     .Concat(project.Values)
                     .Select(value => string.Create(
                         CultureInfo.InvariantCulture,
-                        $"{value.Key} = {value.Value.GetRawText()} ({Machine(value.Provenance)})"))),
+                        $"{value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"))),
             Render(
                 text.Resolve(MessageKeys.DiagnosticsTitle),
                 new[]
@@ -164,14 +163,4 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
         return builder.ToString().TrimEnd();
     }
 
-    private static string StartupMessage(StartupState state) => state switch
-    {
-        StartupState.Ready => MessageKeys.StartupReady,
-        StartupState.Blocked => MessageKeys.StartupBlocked,
-        _ => MessageKeys.StartupFailed,
-    };
-
-    private static string Machine<TEnum>(TEnum value)
-        where TEnum : struct, Enum =>
-        JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString()!);
 }

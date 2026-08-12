@@ -55,13 +55,12 @@ public sealed class PortableBundleActivation(string root)
     public static void ExtractArchive(string archive, string staging)
     {
         string fullStaging = Path.GetFullPath(staging);
-        string prefix = fullStaging + Path.DirectorySeparatorChar;
         Directory.CreateDirectory(fullStaging);
         using System.IO.Compression.ZipArchive zip = System.IO.Compression.ZipFile.OpenRead(archive);
         foreach (System.IO.Compression.ZipArchiveEntry entry in zip.Entries)
         {
             string destination = Path.GetFullPath(Path.Combine(fullStaging, entry.FullName));
-            if (!destination.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            if (!IsUnder(destination, fullStaging))
             {
                 throw new InvalidDataException("The release package contains an unsafe path.");
             }
@@ -124,6 +123,8 @@ public sealed class PortableBundleActivation(string root)
             }
         }
     }
+
+    public void ClearCurrentVersion() => File.Delete(Path.Combine(root, "current.json"));
 
     public void ArchiveFailedVersion(string source, string version, string archiveId)
     {

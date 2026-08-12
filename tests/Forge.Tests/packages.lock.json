@@ -446,8 +446,8 @@
       "forge.cli": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )",
-          "Forge.Updater": "[0.11.0, )",
+          "Forge.Runtime": "[0.12.0, )",
+          "Forge.Updater": "[0.12.0, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -455,7 +455,7 @@
       "forge.desktop.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )"
+          "Forge.Runtime": "[0.12.0, )"
         }
       },
       "forge.runtime": {
@@ -465,6 +465,9 @@
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
         }
+      },
+      "forge.runtime.windows": {
+        "type": "Project"
       },
       "forge.updater": {
         "type": "Project"
@@ -984,8 +987,8 @@
       "forge.cli": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )",
-          "Forge.Updater": "[0.11.0, )",
+          "Forge.Runtime": "[0.12.0, )",
+          "Forge.Updater": "[0.12.0, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -993,7 +996,7 @@
       "forge.desktop.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )"
+          "Forge.Runtime": "[0.12.0, )"
         }
       },
       "forge.runtime": {
@@ -1007,7 +1010,7 @@
       "forge.runtime.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )"
+          "Forge.Runtime": "[0.12.0, )"
         }
       },
       "forge.updater": {
@@ -1016,8 +1019,8 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.11.0, )",
-          "Forge.Updater": "[0.11.0, )",
+          "Forge.Runtime": "[0.12.0, )",
+          "Forge.Updater": "[0.12.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },

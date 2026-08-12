@@ -3,6 +3,10 @@
     <IsTestProject>true</IsTestProject>
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+    <!-- Restoring this multi-targeted project evaluates every TargetFrameworks entry, including on Linux/macOS,
+         where the SDK otherwise refuses to resolve the Windows framework reference (NETSDK1100). The portable
+         net10.0 TFM is still the only one actually built and run there; see .github/scripts/test-portable.ps1. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
@@ -19,6 +23,9 @@
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />
+    <!-- The real Windows durability adapter, installed by Installer/WindowsDurabilityAssemblyInitializer.cs,
+         supersedes the portable fallback below; excluded here so the two module initializers never race. -->
+    <Compile Remove="Support/PortableDurabilityFallback.cs" />
     <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>

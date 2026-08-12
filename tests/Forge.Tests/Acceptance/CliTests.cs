@@ -12,6 +12,21 @@ public sealed class CliTests
 {
     [Fact]
     [Trait("Category", "Acceptance")]
+    public void RootCommandOmitsInstallAndUpdateWhenNoPlatformIsComposed()
+    {
+        using TestEnvironment environment = new();
+        ResourceLocalizationCatalog catalog = new();
+
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        Assert.DoesNotContain(root.Subcommands, command => command.Name is "install" or "update");
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task ModelsCommandReportsReadyProviders()
     {
         using TestEnvironment environment = new(

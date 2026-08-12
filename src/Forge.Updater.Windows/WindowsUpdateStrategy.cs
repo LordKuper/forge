@@ -142,7 +142,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                     return installation;
                 }
 
-                File.Delete(Path.Combine(root, "current.json"));
+                activation.ClearCurrentVersion();
                 WindowsCommandShim.Remove(root);
                 if (shortcutSnapshot is not null)
                 {
@@ -153,7 +153,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
             {
-                File.Delete(Path.Combine(root, "current.json"));
+                activation.ClearCurrentVersion();
                 WindowsCommandShim.Remove(root);
                 if (shortcutSnapshot is not null)
                 {

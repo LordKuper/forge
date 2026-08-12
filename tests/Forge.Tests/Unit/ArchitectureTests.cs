@@ -130,29 +130,44 @@ public sealed class ArchitectureTests
         Assert.Equal(expected, actual);
     }
 
-    private static IEnumerable<SourceProject> SourceProjects()
+    // The source tree does not change within a test run, and every [Fact] above needs the full project list, so
+    // it is parsed once and shared instead of re-walking/re-parsing src/*.csproj per assertion.
+    private static readonly Lazy<IReadOnlyList<SourceProject>> Projects = new(LoadSourceProjects);
+
+    private static readonly Lazy<IReadOnlyDictionary<string, bool>> AdapterByFullPath = new(
+        () => SourceProjects().ToDictionary(
+            project => Path.GetFullPath(project.Path),
+            project => project.IsOsAdapter,
+            StringComparer.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<SourceProject> SourceProjects() => Projects.Value;
+
+    private static List<SourceProject> LoadSourceProjects()
     {
         string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
+        List<SourceProject> projects = [];
         foreach (string project in Directory.GetFiles(sourceRoot, "*.csproj", SearchOption.AllDirectories))
         {
             XDocument document = XDocument.Load(project);
-            string raw = File.ReadAllText(project);
-            yield return new(
+            projects.Add(new(
                 Path.GetFileNameWithoutExtension(project),
                 project,
                 document.Descendants("ProjectReference").Select(item => (string)item.Attribute("Include")!).ToArray(),
                 document.Descendants("TargetFramework").Concat(document.Descendants("TargetFrameworks"))
                     .SelectMany(element => element.Value.Split(';', StringSplitOptions.RemoveEmptyEntries))
                     .ToArray(),
-                raw.Contains("<ForgeOsAdapter>true</ForgeOsAdapter>", StringComparison.Ordinal),
-                raw.Contains("<OutputType>Exe</OutputType>", StringComparison.Ordinal) ||
-                    raw.Contains("<OutputType>WinExe</OutputType>", StringComparison.Ordinal));
+                document.Descendants("ForgeOsAdapter")
+                    .Any(element => bool.TryParse(element.Value, out bool value) && value),
+                document.Descendants("OutputType")
+                    .Any(element => string.Equals(element.Value, "Exe", StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(element.Value, "WinExe", StringComparison.OrdinalIgnoreCase))));
         }
+
+        return projects;
     }
 
     private static bool IsOsAdapter(string projectPath) =>
-        File.Exists(projectPath) &&
-        File.ReadAllText(projectPath).Contains("<ForgeOsAdapter>true</ForgeOsAdapter>", StringComparison.Ordinal);
+        AdapterByFullPath.Value.TryGetValue(Path.GetFullPath(projectPath), out bool isAdapter) && isAdapter;
 
     private static string ResolveReference(string fromProject, string relativeReference) =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(fromProject)!, relativeReference));
