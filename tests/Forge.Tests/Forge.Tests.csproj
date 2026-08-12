@@ -3,10 +3,6 @@
     <IsTestProject>true</IsTestProject>
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
-    <!-- Restoring this multi-targeted project evaluates every TargetFrameworks entry, including on Linux/macOS,
-         where the SDK otherwise refuses to resolve the Windows framework reference (NETSDK1100). The portable
-         net10.0 TFM is still the only one actually built and run there; see .github/scripts/test-portable.ps1. -->
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
