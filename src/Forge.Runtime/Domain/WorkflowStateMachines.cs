@@ -30,7 +30,8 @@ public static class WorkflowStateMachines
             ],
             [SprintState.AwaitingHuman] =
                 [SprintState.Running, SprintState.Blocked, SprintState.Cancelled],
-            [SprintState.Blocked] = [SprintState.Ready, SprintState.Cancelled],
+            // Retained for v1 compatibility; current finding recovery uses ready -> running.
+            [SprintState.Blocked] = [SprintState.Ready, SprintState.ReadyToFinalize, SprintState.Cancelled],
             [SprintState.Failed] = [SprintState.Ready, SprintState.Cancelled],
             [SprintState.ReadyToFinalize] = [SprintState.Completed, SprintState.Blocked],
             [SprintState.Completed] = [],
@@ -67,8 +68,8 @@ public static class WorkflowStateMachines
                 [AttemptState.Validating, AttemptState.Failed, AttemptState.Cancelled],
             [AttemptState.Validating] = [AttemptState.Succeeded, AttemptState.Failed],
             [AttemptState.Succeeded] = [],
-            [AttemptState.Failed] = [],
-            // Read compatibility for pre-v0.11 journals; no new transition reaches this state.
+            // Retained for v1 compatibility; current orchestration leaves failed attempts failed.
+            [AttemptState.Failed] = [AttemptState.Abandoned],
             [AttemptState.Abandoned] = [],
             [AttemptState.Cancelled] = [],
         };

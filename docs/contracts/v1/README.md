@@ -21,8 +21,10 @@ and newer minor only when unknown optional fields can be ignored safely.
 The local Host transport is defined by ADR 0005. It serializes these application
 contracts but is not a second capability model. `project.snapshot` is the
 authoritative read model and `control.events` is its incremental invalidation
-stream; pipe handshakes, framing, leases, and client reconnect are shared
-transport/runtime requirements.
+stream. The v1.0 `startup.status`, `project.status`, `project.next`, and
+`sprint.inspect` capabilities remain compatible projections of the same snapshot;
+they are not independent Host queries. Pipe handshakes, framing, leases, and
+client reconnect are shared transport/runtime requirements.
 
 The Stage 0 gate builds every schema with the pinned JsonSchema.Net validator,
 resolves cross-schema references, requires format validation, and evaluates every

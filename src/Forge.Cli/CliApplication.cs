@@ -117,7 +117,7 @@ public static class CliApplication
             string? root = parseResult.GetValue(projectRoot);
             // The command dispatches exactly what the recommendation exposes, including its
             // expected state version and idempotency key.
-            ProjectSnapshot snapshot = await application
+            ProjectStatusSnapshot snapshot = await application
                 .GetProjectSnapshotAsync(root, cancellationToken)
                 .ConfigureAwait(false);
             SuggestedAction? suggestion = snapshot.SuggestedActions.FirstOrDefault(
@@ -159,13 +159,13 @@ public static class CliApplication
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
+                output.WriteLine(StatusJson.Serialize(overview.Status));
                 return ExitCodes.Ok;
             }
 
-            output.WriteLine(text.Resolve(StartupMessage(overview.Snapshot.Startup)));
+            output.WriteLine(text.Resolve(StartupMessage(overview.Status.Startup)));
             WriteProject(text, output, overview.Startup.Project);
-            WriteActions(text, output, overview.Snapshot.SuggestedActions);
+            WriteActions(text, output, overview.Status.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });
@@ -190,11 +190,11 @@ public static class CliApplication
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(overview.Snapshot.SuggestedActions));
+                output.WriteLine(StatusJson.Serialize(overview.Status.SuggestedActions));
                 return ExitCodes.Ok;
             }
 
-            WriteActions(text, output, overview.Snapshot.SuggestedActions);
+            WriteActions(text, output, overview.Status.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });

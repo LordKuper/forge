@@ -9,7 +9,7 @@ public static class StatusJson
 {
     public static JsonSerializerOptions Options { get; } = Create();
 
-    public static string Serialize(ProjectSnapshot snapshot) =>
+    public static string Serialize(ProjectStatusSnapshot snapshot) =>
         JsonSerializer.Serialize(snapshot, Options);
 
     public static string Serialize(IReadOnlyList<SuggestedAction> actions) =>

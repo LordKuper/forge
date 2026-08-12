@@ -774,6 +774,47 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             }
         }
 
+        // The old store updated retry-budget.json before appending a Routed decision and updated
+        // it before appending an Excluded refund. A crash between those writes leaves the snapshot
+        // one unit ahead of or behind decisions.jsonl. Reconcile that durable snapshot into
+        // deterministic journal records before marking migration complete.
+        string budgetPath = Path.Combine(legacyDirectory, "retry-budget.json");
+        if (File.Exists(budgetPath))
+        {
+            using JsonDocument document = JsonDocument.Parse(
+                await File.ReadAllBytesAsync(budgetPath, cancellationToken).ConfigureAwait(false));
+            JsonElement root = document.RootElement;
+            int total = root.GetProperty("total").GetInt32();
+            int targetConsumed = root.GetProperty("consumed").GetInt32();
+            if (total != RoutingLedger.DefaultRetryBudget || targetConsumed < 0 || targetConsumed > total)
+            {
+                throw new InvalidDataException("The legacy routing retry budget is invalid.");
+            }
+
+            int recordedConsumed = RoutingConsumption(events);
+            DateTimeOffset migratedAt = new(File.GetLastWriteTimeUtc(budgetPath));
+            HealthKey migrationKey = new("migration", "legacy-retry-budget", "sprint");
+            for (int index = recordedConsumed; index < targetConsumed; index++)
+            {
+                await AppendRoutingEventAsync(
+                    eventsPath,
+                    LegacyDecision(sprintId, migrationKey, RouteOutcome.Routed, migratedAt, $"budget-consume-{index}"),
+                    events,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            for (int index = targetConsumed; index < recordedConsumed; index++)
+            {
+                await AppendRoutingEventAsync(
+                    eventsPath,
+                    LegacyDecision(
+                        sprintId, migrationKey, RouteOutcome.Excluded, migratedAt, $"budget-refund-{index}",
+                        FailureClass.Policy),
+                    events,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
         string breakersDirectory = Path.Combine(legacyDirectory, "breakers");
         if (Directory.Exists(breakersDirectory))
         {
@@ -833,6 +874,25 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         await AtomicConfigurationFile.WriteAsync(marker, ReadOnlyMemory<byte>.Empty, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private static int RoutingConsumption(IEnumerable<WorkflowEvent> events)
+    {
+        int consumed = 0;
+        foreach (WorkflowEvent item in events.Where(item => item.Type == RouteDecisionEventType))
+        {
+            RouteOutcome outcome = WorkflowStateNames.Parse<RouteOutcome>(
+                item.Arguments.GetValueOrDefault("outcome") ??
+                throw new InvalidDataException($"Routing event '{item.EventId}' is missing 'outcome'."));
+            consumed = outcome switch
+            {
+                RouteOutcome.Routed => consumed + 1,
+                RouteOutcome.Excluded => Math.Max(0, consumed - 1),
+                _ => consumed,
+            };
+        }
+
+        return consumed;
     }
 
     private static RouteDecision LegacyDecision(

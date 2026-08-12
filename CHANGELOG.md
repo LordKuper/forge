@@ -32,8 +32,10 @@ User-facing Forge changes are listed by release, newest first.
   one sprint journal, one three-profile review engine, and exact Git/file/`rg`
   context retrieval. Removed runtime sprint registration from project manifests
   and separate routing persistence; legacy routing sidecars migrate
-  idempotently. Semantic indexes are deferred until exact retrieval shows a
-  measured gap.
+  idempotently, including reconciliation of the old retry-budget snapshot after
+  interrupted writes. Published v1 query names and state-machine edges remain
+  compatible projections even when current orchestration uses the simpler path.
+  Semantic indexes are deferred until exact retrieval shows a measured gap.
 - Established a repository-wide cross-platform code rule: only marked, minimal
   leaf OS adapters may use platform APIs. Added a Stage 8 migration and automated
   architecture gate for existing CLI, durability, Desktop, updater, and test

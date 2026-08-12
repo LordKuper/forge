@@ -14,9 +14,12 @@ public sealed class SurfaceParityTests
     /// <summary>The Desktop control that exposes each implemented capability.</summary>
     private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
     {
+        [CapabilityIds.StartupStatus] = ["StartupChecksLabel"],
         [CapabilityIds.ProjectSnapshot] =
             ["StartupChecksLabel", "StatusLabel", "ProjectStateLabel", "SuggestedActionsLabel"],
         [CapabilityIds.ProjectInitialize] = ["InitializeButton", "ProjectRootEntry"],
+        [CapabilityIds.ProjectStatus] = ["StatusLabel", "ProjectStateLabel"],
+        [CapabilityIds.ProjectNext] = ["SuggestedActionsLabel"],
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
     };

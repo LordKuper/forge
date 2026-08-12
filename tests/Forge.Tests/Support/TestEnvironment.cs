@@ -75,7 +75,7 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         bool confirmed,
         CancellationToken cancellationToken)
     {
-        ProjectSnapshot snapshot = await Application
+        ProjectStatusSnapshot snapshot = await Application
             .GetProjectSnapshotAsync(root, cancellationToken)
             .ConfigureAwait(false);
         return await Application

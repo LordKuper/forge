@@ -62,10 +62,10 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   creation marker. Project manifest configuration never registers runtime sprint
   ids; legacy `sprints` input is accepted only for read compatibility and omitted
   on the next write.
-- New failed attempts are terminal; the legacy `abandoned` state remains readable
-  but unreachable. A finding-blocked sprint returns through ordinary
-  `ready -> running -> ready_to_finalize` transitions instead of a special
-  `blocked -> ready_to_finalize` edge.
+- Current orchestration leaves failed attempts failed and returns a finding-blocked
+  sprint through ordinary `ready -> running -> ready_to_finalize` transitions.
+  The published v1 `failed -> abandoned` and `blocked -> ready_to_finalize` edges
+  remain legal compatibility paths but are not used by the new orchestration.
 
 `overview.md`'s system boundary diagram is updated from `SQLite/CAS` to one
 sprint journal plus immutable artifacts. Artifact payloads remain separate files

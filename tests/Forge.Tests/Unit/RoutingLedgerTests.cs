@@ -357,4 +357,44 @@ public sealed class RoutingLedgerTests
         Assert.Equal(CircuitState.Open, breaker!.State);
         Assert.True(File.Exists(Path.Combine(routingDirectory, "migrated-to-sprint-journal")));
     }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyRetryBudgetReconcilesEitherOldCrashOrdering(bool budgetWriteWasAhead)
+    {
+        using TestRoot root = new();
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string routingDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing");
+        Directory.CreateDirectory(routingDirectory);
+        if (!budgetWriteWasAhead)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(routingDirectory, "decisions.jsonl"),
+                $$"""
+                {"decision_id":"{{Guid.NewGuid():D}}","node_id":"a","attempt_id":"{{attemptId.Value:D}}","provider":"claude_code","model":"sonnet","surface":"sprint","outcome":"routed","failure_class":null,"decided_at":"1970-01-01T00:00:00+00:00"}
+                """ + "\n",
+                TestContext.Current.CancellationToken);
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "retry-budget.json"),
+            $$"""{"total":10,"consumed":{{(budgetWriteWasAhead ? 1 : 0)}}}""",
+            TestContext.Current.CancellationToken);
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
+
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+        IReadOnlyList<RouteDecision> decisions = await ledger.GetRouteDecisionsAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+
+        RouteOutcome[] expected = budgetWriteWasAhead
+            ? [RouteOutcome.Routed]
+            : [RouteOutcome.Routed, RouteOutcome.Excluded];
+        Assert.Equal(budgetWriteWasAhead ? 1 : 0, budget.Consumed);
+        Assert.Equal(expected, decisions.Select(item => item.Outcome));
+    }
 }

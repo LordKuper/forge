@@ -44,7 +44,7 @@ public partial class MainPage : ContentPage
             .GetOverviewAsync(ProjectRoot, CancellationToken.None)
             .ConfigureAwait(true);
         StartupStatus startup = overview.Startup;
-        ProjectSnapshot snapshot = overview.Snapshot;
+        ProjectStatusSnapshot snapshot = overview.Status;
         StatusLabel.Text = text.Resolve(StartupMessage(snapshot.Startup));
         ProjectRootLabel.Text = string.Create(
             CultureInfo.InvariantCulture,
@@ -128,7 +128,7 @@ public partial class MainPage : ContentPage
 
     private async Task InitializeAsync()
     {
-        ProjectSnapshot snapshot = await application
+        ProjectStatusSnapshot snapshot = await application
             .GetProjectSnapshotAsync(ProjectRoot, CancellationToken.None)
             .ConfigureAwait(true);
         bool confirmed = await DisplayAlertAsync(
