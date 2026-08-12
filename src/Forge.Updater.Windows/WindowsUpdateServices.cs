@@ -33,6 +33,7 @@ public static class WindowsUpdateServices
         services.Replace(ServiceDescriptor
             .Singleton<Forge.Application.IPlatformPreflight, WindowsPlatformPreflight>());
         services.AddSingleton<WindowsInstaller>();
+        services.AddSingleton<IPlatformInstaller>(provider => provider.GetRequiredService<WindowsInstaller>());
         return services;
     }
 }
@@ -42,13 +43,19 @@ public sealed class WindowsInstaller(
     IUpdateLock updateLock,
     IForgeReleaseClient releaseClient,
     IReleaseVerifier releaseVerifier,
-    WindowsUpdateStrategy strategy)
+    WindowsUpdateStrategy strategy) : IPlatformInstaller
 {
     private readonly IUpdateTargetDetector targetDetector = targetDetector ?? throw new ArgumentNullException(nameof(targetDetector));
     private readonly IUpdateLock updateLock = updateLock ?? throw new ArgumentNullException(nameof(updateLock));
     private readonly IForgeReleaseClient releaseClient = releaseClient ?? throw new ArgumentNullException(nameof(releaseClient));
     private readonly IReleaseVerifier releaseVerifier = releaseVerifier ?? throw new ArgumentNullException(nameof(releaseVerifier));
     private readonly WindowsUpdateStrategy strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
+
+    async ValueTask<InstallationResult> IPlatformInstaller.InstallLatestAsync(CancellationToken cancellationToken)
+    {
+        WindowsInstallationResult result = await InstallLatestAsync(cancellationToken).ConfigureAwait(false);
+        return new(result.Succeeded, result.VersionDirectory, result.Diagnostic);
+    }
 
     public async ValueTask<WindowsInstallationResult> InstallLatestAsync(CancellationToken cancellationToken)
     {

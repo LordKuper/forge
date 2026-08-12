@@ -53,11 +53,17 @@ public sealed class WindowsHostSelfTester(TimeSpan? timeout = null) : IWindowsHo
     }
 }
 
+/// <summary>
+/// Windows-specific slice of an update: host self-test naming, command shim, desktop shortcut, and PATH
+/// registration. Version-pointer tracking, staging, and archive orchestration are shared, OS-agnostic behavior
+/// owned by <see cref="PortableBundleActivation"/>.
+/// </summary>
 public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 {
     private static readonly string[] HostNames = ["forge.exe", "Forge.Desktop.exe"];
     private readonly IReleaseAssetDownloader downloader;
     private readonly string root;
+    private readonly PortableBundleActivation activation;
     private readonly IWindowsHostSelfTester selfTester;
     private readonly IWindowsUserPathRegistrar? pathRegistrar;
     private readonly IWindowsDesktopShortcut? desktopShortcut;
@@ -72,6 +78,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         this.downloader = downloader ?? throw new ArgumentNullException(nameof(downloader));
         ArgumentException.ThrowIfNullOrWhiteSpace(root);
         this.root = Path.GetFullPath(root);
+        activation = new PortableBundleActivation(this.root);
         this.selfTester = selfTester ?? new WindowsHostSelfTester();
         this.pathRegistrar = pathRegistrar;
         this.desktopShortcut = desktopShortcut;
@@ -101,10 +108,10 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         }
 
         string version = release.Version.ToString();
-        string destination = Path.Combine(VersionRoot, version);
+        string destination = Path.Combine(activation.VersionRoot, version);
         try
         {
-            string? current = ReadCurrentVersion();
+            string? current = activation.ReadCurrentVersion();
             if (string.Equals(current, version, StringComparison.Ordinal) && Directory.Exists(destination))
             {
                 return CompleteInstallation(destination);
@@ -128,7 +135,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             try
             {
                 shortcutSnapshot = desktopShortcut?.Capture();
-                WriteCurrentVersion(version);
+                activation.WriteCurrentVersion(version);
                 WindowsInstallationResult installation = CompleteInstallation(destination);
                 if (installation.Succeeded)
                 {
@@ -141,7 +148,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 {
                     desktopShortcut!.Restore(shortcutSnapshot);
                 }
-                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
+                activation.ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return installation;
             }
             catch (Exception exception) when (exception is IOException or InvalidDataException or JsonException or UnauthorizedAccessException)
@@ -152,7 +159,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 {
                     desktopShortcut!.Restore(shortcutSnapshot);
                 }
-                ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
+                activation.ArchiveFailedVersion(destination, version, Guid.NewGuid().ToString("N"));
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,
                     "Windows installation activation could not complete."));
@@ -173,14 +180,14 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
     {
         ArgumentNullException.ThrowIfNull(release);
         ArgumentNullException.ThrowIfNull(target);
-        string staging = Path.Combine(VersionRoot, $".staging-{Guid.NewGuid():N}");
+        string staging = Path.Combine(activation.VersionRoot, $".staging-{Guid.NewGuid():N}");
         string archive = Path.Combine(root, $".download-{Guid.NewGuid():N}.zip");
         bool staged = false;
         try
         {
-            Directory.CreateDirectory(VersionRoot);
-            await DownloadAndVerifyAsync(release, archive, cancellationToken).ConfigureAwait(false);
-            ExtractArchive(archive, staging);
+            Directory.CreateDirectory(activation.VersionRoot);
+            await PortableBundleActivation.DownloadAndVerifyAsync(downloader, release, archive, cancellationToken).ConfigureAwait(false);
+            PortableBundleActivation.ExtractArchive(archive, staging);
             foreach (string hostName in HostNames)
             {
                 string hostPath = Path.Combine(staging, hostName);
@@ -215,7 +222,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
 
             if (!staged)
             {
-                DeleteDirectory(staging);
+                PortableBundleActivation.DeleteDirectory(staging);
             }
         }
     }
@@ -229,28 +236,28 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         ArgumentNullException.ThrowIfNull(restart);
         cancellationToken.ThrowIfCancellationRequested();
         string version = staged.Release.Version.ToString();
-        string destination = Path.Combine(VersionRoot, version);
+        string destination = Path.Combine(activation.VersionRoot, version);
         string activationId = Guid.NewGuid().ToString("N");
         string previous = string.Empty;
         ActivationReceipt? receipt = null;
         bool moved = false;
         try
         {
-            if (!IsUnder(staged.Location, VersionRoot) || !Directory.Exists(staged.Location))
+            if (!PortableBundleActivation.IsUnder(staged.Location, activation.VersionRoot) || !Directory.Exists(staged.Location))
             {
                 return ValueTask.FromResult(ActivationResult.Failure("The staged release is not eligible for activation."));
             }
 
-            previous = ReadCurrentVersion() ?? string.Empty;
-            if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(VersionRoot, previous)))
+            previous = activation.ReadCurrentVersion() ?? string.Empty;
+            if (string.IsNullOrEmpty(previous) || !Directory.Exists(Path.Combine(activation.VersionRoot, previous)))
             {
-                DeleteDirectory(staged.Location);
+                PortableBundleActivation.DeleteDirectory(staged.Location);
                 return ValueTask.FromResult(ActivationResult.Failure("No previous verified Windows release is available for rollback."));
             }
 
             if (Directory.Exists(destination))
             {
-                ArchiveFailedVersion(destination, version, $"{activationId}-displaced");
+                activation.ArchiveFailedVersion(destination, version, $"{activationId}-displaced");
             }
 
             Directory.Move(staged.Location, destination);
@@ -260,7 +267,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 previous,
                 version,
                 Path.Combine(destination, restart.ExpectedIdentity.Surface == UpdateSurface.Desktop ? "Forge.Desktop.exe" : "forge.exe"));
-            WriteCurrentVersion(version);
+            activation.WriteCurrentVersion(version);
             UpdateDiagnostic installationResult = EnsureInstalledSurfaces(destination);
             if (installationResult.Code != UpdateDiagnosticCode.None)
             {
@@ -275,8 +282,8 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             {
                 try
                 {
-                    WriteCurrentVersion(previous);
-                    ArchiveFailedVersion(destination, version, activationId);
+                    activation.WriteCurrentVersion(previous);
+                    activation.ArchiveFailedVersion(destination, version, activationId);
                 }
                 catch (Exception recoveryException) when (recoveryException is IOException or UnauthorizedAccessException)
                 {
@@ -285,7 +292,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             }
             else
             {
-                DeleteDirectory(staged.Location);
+                PortableBundleActivation.DeleteDirectory(staged.Location);
             }
 
             return ValueTask.FromResult(ActivationResult.Failure("Windows release activation could not complete.", receipt));
@@ -300,24 +307,24 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
         cancellationToken.ThrowIfCancellationRequested();
         if (!SemanticVersion.TryParse(receipt.PreviousVersion, out _) ||
             !SemanticVersion.TryParse(receipt.ActivatedVersion, out _) ||
-            !Directory.Exists(Path.Combine(VersionRoot, receipt.PreviousVersion)))
+            !Directory.Exists(Path.Combine(activation.VersionRoot, receipt.PreviousVersion)))
         {
             return ValueTask.FromResult(RollbackResult.Failure("No previous verified Windows release is available for rollback."));
         }
 
         try
         {
-            WriteCurrentVersion(receipt.PreviousVersion);
-            UpdateDiagnostic installationResult = EnsureInstalledSurfaces(Path.Combine(VersionRoot, receipt.PreviousVersion));
+            activation.WriteCurrentVersion(receipt.PreviousVersion);
+            UpdateDiagnostic installationResult = EnsureInstalledSurfaces(Path.Combine(activation.VersionRoot, receipt.PreviousVersion));
             if (installationResult.Code != UpdateDiagnosticCode.None)
             {
                 return ValueTask.FromResult(RollbackResult.Failure(installationResult.Detail));
             }
 
-            string activated = Path.Combine(VersionRoot, receipt.ActivatedVersion);
+            string activated = Path.Combine(activation.VersionRoot, receipt.ActivatedVersion);
             if (Directory.Exists(activated))
             {
-                ArchiveFailedVersion(activated, receipt.ActivatedVersion, receipt.ActivationId);
+                activation.ArchiveFailedVersion(activated, receipt.ActivatedVersion, receipt.ActivationId);
             }
 
             return ValueTask.FromResult(new RollbackResult(true, UpdateDiagnostic.None));
@@ -327,8 +334,6 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             return ValueTask.FromResult(RollbackResult.Failure("Windows release rollback could not complete."));
         }
     }
-
-    private string VersionRoot => Path.Combine(root, "versions");
 
     private WindowsInstallationResult CompleteInstallation(string destination)
     {
@@ -346,133 +351,4 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             ? pathRegistrar?.Ensure(Path.Combine(root, "current")) ?? UpdateDiagnostic.None
             : shortcutResult;
     }
-
-    private void ArchiveFailedVersion(string source, string version, string archiveId)
-    {
-        string failed = Path.Combine(root, "failed", $"{version}-{archiveId}");
-        Directory.CreateDirectory(Path.GetDirectoryName(failed)!);
-        Directory.Move(source, failed);
-    }
-
-    private async Task DownloadAndVerifyAsync(
-        VerifiedRelease release,
-        string destination,
-        CancellationToken cancellationToken)
-    {
-        await using Stream source = await downloader.DownloadAsync(release.Asset, cancellationToken).ConfigureAwait(false);
-        await using FileStream output = new(
-            destination,
-            FileMode.CreateNew,
-            FileAccess.Write,
-            FileShare.None,
-            81920,
-            FileOptions.Asynchronous | FileOptions.WriteThrough);
-        using System.Security.Cryptography.IncrementalHash hash = System.Security.Cryptography.IncrementalHash.CreateHash(System.Security.Cryptography.HashAlgorithmName.SHA256);
-        byte[] buffer = new byte[81920];
-        long size = 0;
-        int read;
-        while ((read = await source.ReadAsync(buffer, cancellationToken).ConfigureAwait(false)) != 0)
-        {
-            await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-            hash.AppendData(buffer, 0, read);
-            size += read;
-        }
-
-        await output.FlushAsync(cancellationToken).ConfigureAwait(false);
-        output.Flush(true);
-        if (size != release.Asset.Size ||
-            !string.Equals(Convert.ToHexString(hash.GetHashAndReset()), release.Sha256, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new System.Security.Cryptography.CryptographicException("The verified release changed before staging.");
-        }
-    }
-
-    private static void ExtractArchive(string archive, string staging)
-    {
-        string fullStaging = Path.GetFullPath(staging);
-        string prefix = fullStaging + Path.DirectorySeparatorChar;
-        Directory.CreateDirectory(fullStaging);
-        using System.IO.Compression.ZipArchive zip = System.IO.Compression.ZipFile.OpenRead(archive);
-        foreach (System.IO.Compression.ZipArchiveEntry entry in zip.Entries)
-        {
-            string destination = Path.GetFullPath(Path.Combine(fullStaging, entry.FullName));
-            if (!destination.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                throw new InvalidDataException("The release package contains an unsafe path.");
-            }
-
-            if (string.IsNullOrEmpty(entry.Name))
-            {
-                Directory.CreateDirectory(destination);
-                continue;
-            }
-
-            Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-            System.IO.Compression.ZipFileExtensions.ExtractToFile(entry, destination, false);
-        }
-    }
-
-    private string? ReadCurrentVersion()
-    {
-        string path = Path.Combine(root, "current.json");
-        if (!File.Exists(path))
-        {
-            return null;
-        }
-
-        string? version = JsonSerializer.Deserialize<CurrentVersion>(File.ReadAllText(path))?.Version;
-        if (!SemanticVersion.TryParse(version, out _))
-        {
-            throw new InvalidDataException("The current Windows release pointer is invalid.");
-        }
-
-        return version;
-    }
-
-    private void WriteCurrentVersion(string version)
-    {
-        string path = Path.Combine(root, "current.json");
-        string temporary = $"{path}.{Guid.NewGuid():N}.tmp";
-        try
-        {
-            byte[] json = JsonSerializer.SerializeToUtf8Bytes(new CurrentVersion(version));
-            using (FileStream stream = new(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None, 4096, FileOptions.WriteThrough))
-            {
-                stream.Write(json);
-                stream.Flush(true);
-            }
-
-            if (File.Exists(path))
-            {
-                File.Replace(temporary, path, $"{path}.previous", true);
-            }
-            else
-            {
-                File.Move(temporary, path);
-            }
-        }
-        finally
-        {
-            if (File.Exists(temporary))
-            {
-                File.Delete(temporary);
-            }
-        }
-    }
-
-    private static bool IsUnder(string path, string directory)
-    {
-        string rootPath = Path.GetFullPath(directory) + Path.DirectorySeparatorChar;
-        return Path.GetFullPath(path).StartsWith(rootPath, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static void DeleteDirectory(string path)
-    {
-        if (Directory.Exists(path))
-        {
-            Directory.Delete(path, true);
-        }
-    }
-
-    private sealed record CurrentVersion(string Version);
 }

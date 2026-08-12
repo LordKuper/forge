@@ -1,7 +1,10 @@
 <Solution>
   <Project Path="src/Forge.Cli/Forge.Cli.csproj" />
+  <Project Path="src/Forge.Cli.Windows/Forge.Cli.Windows.csproj" />
   <Project Path="src/Forge.Desktop/Forge.Desktop.csproj" />
+  <Project Path="src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj" />
   <Project Path="src/Forge.Runtime/Forge.Runtime.csproj" />
+  <Project Path="src/Forge.Runtime.Windows/Forge.Runtime.Windows.csproj" />
   <Project Path="src/Forge.Updater.Windows/Forge.Updater.Windows.csproj" />
   <Project Path="src/Forge.Updater/Forge.Updater.csproj" />
   <Project Path="tests/Forge.Tests/Forge.Tests.csproj" />

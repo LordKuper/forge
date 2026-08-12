@@ -5,7 +5,6 @@ using Forge.Localization;
 using Forge.Providers;
 using Forge.Tests.Support;
 using Forge.Updater;
-using Forge.Updater.Windows;
 
 namespace Forge.AcceptanceTests;
 
@@ -151,7 +150,7 @@ public sealed class CliTests
             output,
             environment.Application,
             install: _ => ValueTask.FromResult(
-                new WindowsInstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
+                new InstallationResult(true, "C:\\Forge", UpdateDiagnostic.None)));
 
         int exitCode = await root
             .Parse(["install"])
@@ -199,7 +198,7 @@ public sealed class CliTests
                 Text(catalog),
                 output,
                 environment.Application,
-                install: _ => ValueTask.FromResult(WindowsInstallationResult.Failure(new(
+                install: _ => ValueTask.FromResult(InstallationResult.Failure(new(
                     UpdateDiagnosticCode.ReleaseUnavailable,
                     "The release endpoint could not be reached."))));
 

@@ -10,13 +10,16 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-    <Compile Remove="Acceptance/**/*.cs;Installer/**/*.cs;Integration/**/*.cs;Support/**/*.cs;Unit/**/*.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+  <ItemGroup>
+    <Compile Remove="Installer/**/*.cs" />
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+    <Compile Include="Installer/**/*.cs" />
+    <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

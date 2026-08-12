@@ -20,7 +20,7 @@ try {
     dotnet restore (Join-Path $repositoryRoot 'Forge.slnx') --locked-mode
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Cli\Forge.Cli.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --property:PublishReadyToRun=false --output $stagingDirectory
+    dotnet publish (Join-Path $repositoryRoot 'src\Forge.Cli.Windows\Forge.Cli.Windows.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --property:PublishReadyToRun=false --output $stagingDirectory
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     dotnet publish (Join-Path $repositoryRoot 'src\Forge.Desktop\Forge.Desktop.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --property:PublishReadyToRun=false --output $stagingDirectory

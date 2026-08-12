@@ -3,36 +3,83 @@ using Forge.Configuration;
 
 namespace Forge.UnitTests;
 
+/// <summary>Mechanically enforces the ADR 0007 cross-platform/OS-adapter boundary.</summary>
 public sealed class ArchitectureTests
 {
     [Fact]
     [Trait("Category", "Architecture")]
-    public void RuntimeDoesNotReferencePlatformProjects()
+    public void NeutralProjectsDoNotReferenceAnOsAdapter()
     {
-        string project = Path.Combine(
-            RepositoryRoot.Find(),
-            "src",
-            "Forge.Runtime",
-            "Forge.Runtime.csproj");
+        foreach (SourceProject project in SourceProjects())
+        {
+            if (project.IsOsAdapter)
+            {
+                continue;
+            }
 
-        Assert.DoesNotContain(
-            ProjectReferences(project),
-            reference => reference.Contains("Windows", StringComparison.Ordinal));
+            IEnumerable<string> adapterReferences = project.References
+                .Where(reference => IsOsAdapter(ResolveReference(project.Path, reference)));
+            Assert.True(
+                !adapterReferences.Any(),
+                $"{project.Name} is neutral but references the OS adapter(s): {string.Join(", ", adapterReferences)}.");
+        }
     }
 
     [Fact]
     [Trait("Category", "Architecture")]
-    public void UpdaterCoreDoesNotReferencePlatformProjects()
+    public void NeutralProjectsDoNotTargetAnOsSpecificFramework()
     {
-        string project = Path.Combine(
-            RepositoryRoot.Find(),
-            "src",
-            "Forge.Updater",
-            "Forge.Updater.csproj");
+        foreach (SourceProject project in SourceProjects())
+        {
+            if (project.IsOsAdapter)
+            {
+                continue;
+            }
 
-        Assert.DoesNotContain(
-            ProjectReferences(project),
-            reference => reference.Contains("Windows", StringComparison.Ordinal));
+            Assert.True(
+                !project.TargetFrameworks.Any(ContainsOsMoniker),
+                $"{project.Name} is neutral but targets an OS-specific framework: {string.Join(';', project.TargetFrameworks)}.");
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
+    public void LeafOsAdaptersOnlyReferenceNeutralProjects()
+    {
+        foreach (SourceProject project in SourceProjects())
+        {
+            if (!project.IsOsAdapter || project.IsCompositionRoot)
+            {
+                // A composition root (a native executable/UI bootstrap) selects and wires leaf adapters together;
+                // every other adapter implements one port and may depend inward on neutral contracts only.
+                continue;
+            }
+
+            IEnumerable<string> adapterReferences = project.References
+                .Where(reference => IsOsAdapter(ResolveReference(project.Path, reference)));
+            Assert.True(
+                !adapterReferences.Any(),
+                $"{project.Name} is a leaf OS adapter but references another adapter: {string.Join(", ", adapterReferences)}.");
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
+    public void LeafOsAdaptersAreNamedForTheirOperatingSystem()
+    {
+        foreach (SourceProject project in SourceProjects())
+        {
+            if (!project.IsOsAdapter || project.IsCompositionRoot)
+            {
+                // A composition root's name is the product's native executable/UI host, not a technical adapter
+                // label (e.g. "Forge.Desktop"), so ADR 0007's naming rule applies only to the leaf adapters it wires.
+                continue;
+            }
+
+            Assert.True(
+                project.Name.Contains("Windows", StringComparison.Ordinal),
+                $"{project.Name} is marked ForgeOsAdapter but its name does not identify an operating system.");
+        }
     }
 
     [Fact]
@@ -56,7 +103,9 @@ public sealed class ArchitectureTests
         string[] boundaryProjects =
         [
             "Forge.Cli",
+            "Forge.Cli.Windows",
             "Forge.Desktop",
+            "Forge.Desktop.Presentation",
         ];
         string[] bypasses = boundaryProjects
             .SelectMany(project => Directory.GetFiles(
@@ -81,10 +130,47 @@ public sealed class ArchitectureTests
         Assert.Equal(expected, actual);
     }
 
-    private static IEnumerable<string> ProjectReferences(string project) =>
-        XDocument.Load(project)
-            .Descendants("ProjectReference")
-            .Select(item => (string)item.Attribute("Include")!);
+    private static IEnumerable<SourceProject> SourceProjects()
+    {
+        string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
+        foreach (string project in Directory.GetFiles(sourceRoot, "*.csproj", SearchOption.AllDirectories))
+        {
+            XDocument document = XDocument.Load(project);
+            string raw = File.ReadAllText(project);
+            yield return new(
+                Path.GetFileNameWithoutExtension(project),
+                project,
+                document.Descendants("ProjectReference").Select(item => (string)item.Attribute("Include")!).ToArray(),
+                document.Descendants("TargetFramework").Concat(document.Descendants("TargetFrameworks"))
+                    .SelectMany(element => element.Value.Split(';', StringSplitOptions.RemoveEmptyEntries))
+                    .ToArray(),
+                raw.Contains("<ForgeOsAdapter>true</ForgeOsAdapter>", StringComparison.Ordinal),
+                raw.Contains("<OutputType>Exe</OutputType>", StringComparison.Ordinal) ||
+                    raw.Contains("<OutputType>WinExe</OutputType>", StringComparison.Ordinal));
+        }
+    }
+
+    private static bool IsOsAdapter(string projectPath) =>
+        File.Exists(projectPath) &&
+        File.ReadAllText(projectPath).Contains("<ForgeOsAdapter>true</ForgeOsAdapter>", StringComparison.Ordinal);
+
+    private static string ResolveReference(string fromProject, string relativeReference) =>
+        Path.GetFullPath(Path.Combine(Path.GetDirectoryName(fromProject)!, relativeReference));
+
+    private static bool ContainsOsMoniker(string targetFramework) =>
+        targetFramework.Contains("-windows", StringComparison.OrdinalIgnoreCase) ||
+        targetFramework.Contains("-linux", StringComparison.OrdinalIgnoreCase) ||
+        targetFramework.Contains("-macos", StringComparison.OrdinalIgnoreCase) ||
+        targetFramework.Contains("-ios", StringComparison.OrdinalIgnoreCase) ||
+        targetFramework.Contains("-android", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record SourceProject(
+        string Name,
+        string Path,
+        IReadOnlyList<string> References,
+        IReadOnlyList<string> TargetFrameworks,
+        bool IsOsAdapter,
+        bool IsCompositionRoot);
 }
 
 internal static class RepositoryRoot

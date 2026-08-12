@@ -17,7 +17,10 @@ if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 dotnet build Forge.slnx --no-restore --configuration Release
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-dotnet test Forge.slnx --no-build --configuration Release
+# The BCL cannot open a Windows directory handle for a durability flush (see ADR 0007); only the composed
+# Windows TFM installs that adapter, so it is the one whose test run reflects the real shipped product here.
+# tests/portable-tests.ps1 exercises the net10.0 TFM on Linux/macOS, where the portable flush works natively.
+dotnet test Forge.slnx --no-build --configuration Release --framework net10.0-windows10.0.19041.0
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
 $auditJson = dotnet list Forge.slnx package --vulnerable --include-transitive --format json

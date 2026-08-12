@@ -6,7 +6,6 @@ using Forge.Configuration;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Updater;
-using Forge.Updater.Windows;
 
 namespace Forge.Cli;
 
@@ -17,7 +16,7 @@ public static class CliApplication
         TextWriter output,
         ForgeApplication application,
         TextWriter? error = null,
-        Func<CancellationToken, ValueTask<WindowsInstallationResult>>? install = null,
+        Func<CancellationToken, ValueTask<InstallationResult>>? install = null,
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -317,12 +316,12 @@ public static class CliApplication
     private static Command CreateInstallCommand(
         SurfaceText text,
         TextWriter output,
-        Func<CancellationToken, ValueTask<WindowsInstallationResult>> install)
+        Func<CancellationToken, ValueTask<InstallationResult>> install)
     {
         Command command = new("install", text.Resolve(MessageKeys.InstallDescription));
         command.SetAction(async (_, cancellationToken) =>
         {
-            WindowsInstallationResult result = await install(cancellationToken).ConfigureAwait(false);
+            InstallationResult result = await install(cancellationToken).ConfigureAwait(false);
             output.WriteLine(result.Succeeded
                 ? text.Resolve(MessageKeys.InstallCompleted)
                 : text.Resolve(MessageKeys.InstallFailed));

@@ -1,24 +1,23 @@
-using System.ComponentModel;
-using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 
 namespace Forge.Configuration;
 
-internal static partial class DirectoryFlusher
+/// <summary>Durably flushes a directory entry to disk after a rename/create inside it.</summary>
+public interface IDirectoryDurability
 {
-    private const uint GenericWrite = 0x40000000;
-    private const uint ShareReadWriteDelete = 0x00000007;
-    private const uint OpenExisting = 3;
-    private const uint BackupSemantics = 0x02000000;
+    void Flush(string directory);
+}
 
-    public static void Flush(string directory)
+/// <summary>
+/// Portable default: works everywhere <see cref="File.OpenHandle(string, FileMode, FileAccess, FileShare, FileOptions, long)"/>
+/// can open the directory as a handle. On Windows a directory handle needs backup-semantics, which this API cannot
+/// request, so a composed <see cref="IDirectoryDurability"/> adapter is required for a real Windows deployment; see
+/// ADR 0007.
+/// </summary>
+public sealed class BclDirectoryDurability : IDirectoryDurability
+{
+    public void Flush(string directory)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            FlushWindows(directory);
-            return;
-        }
-
         using SafeFileHandle handle = File.OpenHandle(
             directory,
             FileMode.Open,
@@ -26,47 +25,18 @@ internal static partial class DirectoryFlusher
             FileShare.ReadWrite | FileShare.Delete);
         RandomAccess.FlushToDisk(handle);
     }
+}
 
-    private static void FlushWindows(string directory)
-    {
-        using SafeFileHandle handle = CreateFile(
-            directory,
-            GenericWrite,
-            ShareReadWriteDelete,
-            0,
-            OpenExisting,
-            BackupSemantics,
-            0);
-        if (handle.IsInvalid)
-        {
-            throw new Win32Exception(
-                Marshal.GetLastPInvokeError(),
-                "Failed to open the configuration directory for flushing.");
-        }
+public static class DirectoryFlusher
+{
+    private static IDirectoryDurability durability = new BclDirectoryDurability();
 
-        if (!FlushFileBuffers(handle))
-        {
-            throw new Win32Exception(
-                Marshal.GetLastPInvokeError(),
-                "Failed to flush the configuration directory.");
-        }
-    }
+    public static void Flush(string directory) => durability.Flush(directory);
 
-    [LibraryImport(
-        "kernel32.dll",
-        EntryPoint = "CreateFileW",
-        SetLastError = true,
-        StringMarshalling = StringMarshalling.Utf16)]
-    private static partial SafeFileHandle CreateFile(
-        string fileName,
-        uint desiredAccess,
-        uint shareMode,
-        nint securityAttributes,
-        uint creationDisposition,
-        uint flagsAndAttributes,
-        nint templateFile);
-
-    [LibraryImport("kernel32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static partial bool FlushFileBuffers(SafeFileHandle file);
+    /// <summary>
+    /// Installs a platform-specific durability strategy. Composition roots call this once at startup, before any
+    /// flush; it is not safe to swap concurrently with in-flight flushes.
+    /// </summary>
+    public static void UseDurability(IDirectoryDurability strategy) =>
+        durability = strategy ?? throw new ArgumentNullException(nameof(strategy));
 }

@@ -1,23 +1,7 @@
 {
   "version": 2,
   "dependencies": {
-    "net10.0": {
-      "System.CommandLine": {
-        "type": "Direct",
-        "requested": "[2.0.10, )",
-        "resolved": "2.0.10",
-        "contentHash": "6i1D6/U3i1f/PiXTt9pDvbJwdXEe0F2DZPup6BHzeIu5yPk/lkFzgtrJnPbj54JWUh8Y9vJeKG/TZIT6MkF8TA=="
-      },
-      "Terminal.Gui": {
-        "type": "Direct",
-        "requested": "[1.18.0, )",
-        "resolved": "1.18.0",
-        "contentHash": "zhc1oAUoH8vfbgeak8rC919dPsU1kK0+QDqn9VoSYSfZJ5EDdoyVCWK+4AFp4QNGUQz2ysy3ULAnMu3v7xfJLA==",
-        "dependencies": {
-          "NStack.Core": "1.1.1",
-          "System.Management": "8.0.0"
-        }
-      },
+    "net10.0-windows10.0.19041": {
       "Humanizer.Core": {
         "type": "Transitive",
         "resolved": "3.0.10",
@@ -295,6 +279,15 @@
           "System.CodeDom": "8.0.0"
         }
       },
+      "forge.cli": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.11.0, )",
+          "Forge.Updater": "[0.11.0, )",
+          "System.CommandLine": "[2.0.10, )",
+          "Terminal.Gui": "[1.18.0, )"
+        }
+      },
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
@@ -303,8 +296,22 @@
           "YamlDotNet": "[18.1.0, )"
         }
       },
+      "forge.runtime.windows": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.11.0, )"
+        }
+      },
       "forge.updater": {
         "type": "Project"
+      },
+      "forge.updater.windows": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.11.0, )",
+          "Forge.Updater": "[0.11.0, )",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
+        }
       },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
@@ -362,11 +369,57 @@
           "Microsoft.Extensions.Logging.Abstractions": "10.0.10"
         }
       },
+      "System.CommandLine": {
+        "type": "CentralTransitive",
+        "requested": "[2.0.10, )",
+        "resolved": "2.0.10",
+        "contentHash": "6i1D6/U3i1f/PiXTt9pDvbJwdXEe0F2DZPup6BHzeIu5yPk/lkFzgtrJnPbj54JWUh8Y9vJeKG/TZIT6MkF8TA=="
+      },
+      "Terminal.Gui": {
+        "type": "CentralTransitive",
+        "requested": "[1.18.0, )",
+        "resolved": "1.18.0",
+        "contentHash": "zhc1oAUoH8vfbgeak8rC919dPsU1kK0+QDqn9VoSYSfZJ5EDdoyVCWK+4AFp4QNGUQz2ysy3ULAnMu3v7xfJLA==",
+        "dependencies": {
+          "NStack.Core": "1.1.1",
+          "System.Management": "8.0.0"
+        }
+      },
       "YamlDotNet": {
         "type": "CentralTransitive",
         "requested": "[18.1.0, )",
         "resolved": "18.1.0",
         "contentHash": "5K+9KFg2TdTl7VXv88Qzi/0lqK6JFoNP3lRuImPYGRV7K/QYklDyTrj4+A+KAki1JsQi6qKY+hDyY7d6WRqjrw=="
+      }
+    },
+    "net10.0-windows10.0.19041/win-arm64": {
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
+      },
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "jrK22i5LRzxZCfGb+tGmke2VH7oE0DvcDlJ1HAKYU8cPmD8XnpUT0bYn2Gy98GEhGjtfbR/sxKTVb+dE770pfA==",
+        "dependencies": {
+          "System.CodeDom": "8.0.0"
+        }
+      }
+    },
+    "net10.0-windows10.0.19041/win-x64": {
+      "System.Diagnostics.EventLog": {
+        "type": "Transitive",
+        "resolved": "10.0.10",
+        "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
+      },
+      "System.Management": {
+        "type": "Transitive",
+        "resolved": "8.0.0",
+        "contentHash": "jrK22i5LRzxZCfGb+tGmke2VH7oE0DvcDlJ1HAKYU8cPmD8XnpUT0bYn2Gy98GEhGjtfbR/sxKTVb+dE770pfA==",
+        "dependencies": {
+          "System.CodeDom": "8.0.0"
+        }
       }
     }
   }

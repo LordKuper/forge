@@ -12,11 +12,14 @@
     <WindowsPackageType>None</WindowsPackageType>
     <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
     <RuntimeIdentifier Condition="'$(RuntimeIdentifier)' == ''">win-x64</RuntimeIdentifier>
+    <ForgeOsAdapter>true</ForgeOsAdapter>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <PackageReference Include="Microsoft.Maui.Controls" />
+    <ProjectReference Include="..\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
     <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
+    <ProjectReference Include="..\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

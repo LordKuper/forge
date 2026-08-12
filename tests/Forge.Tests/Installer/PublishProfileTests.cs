@@ -9,7 +9,7 @@ public sealed class PublishProfileTests
     public void BothHostsDefineWindowsPublishProfile(string runtimeIdentifier)
     {
         string root = FindRoot();
-        foreach (string host in new[] { "Forge.Cli", "Forge.Desktop" })
+        foreach (string host in new[] { "Forge.Cli.Windows", "Forge.Desktop" })
         {
             string path = Path.Combine(
                 root,
@@ -26,7 +26,8 @@ public sealed class PublishProfileTests
     [Trait("Category", "Installer")]
     public void CliDeclaresBothWindowsRuntimeIdentifiers()
     {
-        string project = File.ReadAllText(Path.Combine(FindRoot(), "src", "Forge.Cli", "Forge.Cli.csproj"));
+        string project = File.ReadAllText(
+            Path.Combine(FindRoot(), "src", "Forge.Cli.Windows", "Forge.Cli.Windows.csproj"));
 
         Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
     }
@@ -37,7 +38,7 @@ public sealed class PublishProfileTests
     {
         string script = File.ReadAllText(Path.Combine(FindRoot(), "build", "Publish-WindowsBundle.ps1"));
 
-        Assert.Contains("Forge.Cli\\Forge.Cli.csproj", script, StringComparison.Ordinal);
+        Assert.Contains("Forge.Cli.Windows\\Forge.Cli.Windows.csproj", script, StringComparison.Ordinal);
         Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
         Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
         Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
@@ -50,10 +51,11 @@ public sealed class PublishProfileTests
     {
         string root = FindRoot();
         string strategy = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater.Windows", "WindowsUpdateStrategy.cs"));
+        string activation = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater", "PortableBundleActivation.cs"));
 
         Assert.False(File.Exists(Path.Combine(root, "install.ps1")));
         Assert.Contains("DownloadAndVerifyAsync", strategy, StringComparison.Ordinal);
-        Assert.Contains("File.Replace", strategy, StringComparison.Ordinal);
+        Assert.Contains("File.Replace", activation, StringComparison.Ordinal);
     }
 
     private static string FindRoot()
