@@ -1,7 +1,7 @@
 # AI-assisted software delivery research
 
 **Status:** research summary  
-**Updated:** 2026-08-03
+**Updated:** 2026-08-12
 
 This document preserves the research conclusions that inform Forge. It is not a
 second architecture specification: the [architecture overview](overview.md),
@@ -46,12 +46,40 @@ Use repository rules, task artifacts, structured handoffs, Git, `rg`, and
 targeted file reads. The MVP owns no semantic index; add one only after a
 measured exact-retrieval failure justifies its freshness and lifecycle cost.
 
+For multi-step retrieval, accept a bounded declarative query plan rather than
+model-authored executable code. Deterministic code validates the read-only
+operations, applies budgets, and returns only the selected structured bundle to
+the next model call while retaining enough provenance to rebuild it.
+
+### Treat context and capabilities as explicit inputs
+
+Every model node starts fresh and receives only a frozen context manifest and the
+capabilities resolved for its execution profile. Parent transcripts, ambient
+tools, and human-only commands are not inherited. A child cannot widen the
+parent's authority.
+
+### Require an explicit terminal result
+
+Process completion is not workflow completion. A worker must return one
+schema-valid terminal result for its attempt; normal exit without that result is
+a failure. Deterministic validation and gates, never provider wording or exit
+code alone, decide success.
+
 ### Keep configuration and generated outputs scoped
 
 Personal interaction preferences and reproducible project policy have different
 owners and lifecycles. Generated harness-native files are derived outputs, not
 the source of truth. This avoids synchronizing the same rule set manually
 across tools.
+
+### Learn through reviewable proposals
+
+Reusable lessons may become post-MVP knowledge proposals backed by durable
+events and artifacts. They remain inert until a human approves a diff against
+the canonical `.forge/` source. Generated provider skills, transcripts, and raw
+provider output never write project knowledge directly. Optional personal
+memory is separate, hard-capped, frozen per attempt, and limited to preferences
+and verified environment facts.
 
 ### Make reviews independent and convergent
 
@@ -79,6 +107,7 @@ proof of convergence.
 | Spec-driven development | explicit intent, plan, and acceptance artifacts | generating documents without execution traceability |
 | Agent catalogs | shared source and progressive disclosure | importing a large role catalog before it is needed |
 | Tree-sitter, LSP, and SCIP | defer until exact retrieval measurably fails | requiring an index for ordinary repository work |
+| Hermes Agent | bounded hot context, on-demand exact recall, fresh subagent context, explicit worker outcomes, compact tool pipelines, and approval-gated skill learning | arbitrary model-authored execution, transcript-backed project truth, silent skill mutation, model-judged completion, shadow Git checkpoints, and unrestricted hooks |
 
 ## Deferred questions
 
@@ -88,5 +117,16 @@ proof of convergence.
 - Whether organization-scale artifact distribution should use OCI bundles.
 - Which provider capabilities are sufficiently stable for automatic toolchain
   update and verification.
+- Whether approved knowledge proposals and hard-capped personal memory improve
+  measured task quality enough to justify their post-MVP lifecycle and security
+  cost.
 
 These are product decisions, not prerequisites for the Windows MVP.
+
+## Hermes Agent references
+
+- [Programmatic tool calling](https://hermes-agent.nousresearch.com/docs/user-guide/features/code-execution/)
+- [Subagent delegation](https://hermes-agent.nousresearch.com/docs/user-guide/features/delegation/)
+- [Persistent memory](https://hermes-agent.nousresearch.com/docs/user-guide/features/memory/)
+- [Approval-gated skill writes](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills/)
+- [Kanban worker lanes](https://hermes-agent.nousresearch.com/docs/user-guide/features/kanban-worker-lanes/)

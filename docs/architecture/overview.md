@@ -289,6 +289,15 @@ progressive disclosure:
 3. project knowledge, accepted ADRs, and structured handoffs;
 4. exact Git, file, and `rg` lookup under a recorded token budget.
 
+Every model node starts without inherited conversational context. Forge supplies
+a frozen, content-addressed context manifest and the capability allowlist from
+the node's execution profile. A model may propose a versioned declarative
+context-query plan containing only bounded, read-only Git, file, and `rg`
+operations. Forge validates and executes the plan, then admits only the selected,
+budgeted result bundle to model context. The plan, source commit, selections,
+digests, truncation, and rationale remain reproducible; model-authored scripts or
+shell pipelines are not context engines and cannot widen capabilities.
+
 Forge builds no full-text, Tree-sitter, LSP, graph, SCIP, or semantic index for
 the MVP. Add one only after measurements show exact retrieval misses a required
 lookup and the index can prove freshness against the source commit.
@@ -345,6 +354,23 @@ and worktrees resolved through cross-platform .NET per-user paths, while the
 shared project lease still prevents concurrent writers. Host publishing uses
 CoreCLR rather than NativeAOT until named-mutex behavior passes the full OS matrix.
 
+## Post-MVP learning
+
+After the MVP, Forge may derive an evidence-backed `KnowledgeProposal` from a
+successful sprint, a corrected failure, or explicit operator instruction. A
+proposal identifies its canonical `.forge/` target, applicability, source event
+and artifact references, and a reviewable diff. It is inert until a human
+approves it through the normal versioned, idempotent gate; approval updates the
+canonical source and only then regenerates provider-native views. Provider prose,
+transcripts, and generated skills never update project knowledge directly.
+
+An optional post-MVP per-user hot-memory snapshot may retain only a small,
+hard-capped set of personal preferences and verified environment facts. It is
+frozen at attempt start, never stores project truth or credentials, and rejects
+overflow instead of silently dropping entries. Project recall continues to use
+canonical project files and durable sprint artifacts, not a conversation-history
+database.
+
 ## Security and observability
 
 Project content, provider output, generated files, skills, hooks, and prompts are
@@ -379,6 +405,8 @@ The release gate requires:
 - attention dashboard, human-gate, keyboard, screen-reader, high-contrast, and
   reduced-motion acceptance;
 - canonical agent-integration generation and development/release isolation;
+- reproducible declarative context-query plans, frozen per-node context and
+  capability boundaries, and explicit schema-valid terminal results;
 - stdin-only prompts, minimal provider environments, bounded streaming, dual
   watchdogs, process-tree cleanup, durable rate-limit resumption, operator
   supersession, independent-lineage review, ASD convergence, and notification
