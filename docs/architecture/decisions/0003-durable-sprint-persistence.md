@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-05
+- Revised: 2026-08-12
 - Contract version: 1.0.0
 
 ## Context
@@ -53,20 +54,31 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   simplification (`ponytail:` comment on `FileSprintEventLog`), not a
   structural limit — nothing in the event schema or the fold function assumes
   it.
+- The same journal records routing decisions and provider outcomes. Retry budget
+  and circuit-breaker state are folded from those records; there is no separate
+  routing store or routing snapshot. Pre-v0.11 routing sidecars migrate once with
+  deterministic event ids and remain read-only rollback evidence.
+- Sprint discovery enumerates completed sprint directories through their durable
+  creation marker. Project manifest configuration never registers runtime sprint
+  ids; legacy `sprints` input is accepted only for read compatibility and omitted
+  on the next write.
+- New failed attempts are terminal; the legacy `abandoned` state remains readable
+  but unreachable. A finding-blocked sprint returns through ordinary
+  `ready -> running -> ready_to_finalize` transitions instead of a special
+  `blocked -> ready_to_finalize` edge.
 
-`overview.md`'s system boundary diagram is updated from `SQLite/CAS` to
-`Event log/CAS` to match. Content-addressed artifact storage (CAS) is
-unaffected and remains a separate, later concern (Stage 6 findings/handoffs,
-Stage 9 memory).
+`overview.md`'s system boundary diagram is updated from `SQLite/CAS` to one
+sprint journal plus immutable artifacts. Artifact payloads remain separate files
+addressed by digest; Forge adds no generic CAS service for the MVP.
 
 ## Consequences
 
 - Zero new dependencies for Stage 6's persistence core.
-- `sprint.inspect` (listing/filtering across many sprints, nodes, findings)
+- `project.snapshot` (listing/filtering across many sprints, nodes, findings)
   will need to scan and fold per-sprint logs rather than issue a SQL query;
   acceptable at MVP sprint-count scale, revisited if evaluation data shows
   otherwise.
-- Multi-process concurrent writers to the same sprint are not supported (single
-  Forge process per user, matching the existing MVP boundary); the append path
-  relies on `FileShare.Read` to fail loudly rather than corrupt on a concurrent
-  writer, it does not coordinate between them.
+- Store internals do not coordinate multiple writers. ADR 0005 makes this safe at
+  the application boundary: one Forge Host owns mutations and holds a shared
+  per-project OS lease; a competing host fails before reaching the append path.
+  `FileShare.Read` remains a final fail-loudly guard, not the ownership mechanism.

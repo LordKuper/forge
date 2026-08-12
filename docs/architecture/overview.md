@@ -1,7 +1,7 @@
 # Forge architecture overview
 
 **Status:** target MVP architecture
-**Updated:** 2026-07-27
+**Updated:** 2026-08-12
 
 This concise English overview is the canonical architecture summary. The
 [research summary](ai-agentic-software-development-workflow.md) captures the
@@ -13,47 +13,99 @@ through durable, isolated, policy-controlled software-delivery workflows. Models
 provide judgment; deterministic code owns state, routing, retries, Git,
 permissions, validation, and release gates.
 
-Normative Stage 0 decisions and machine contracts live in:
+Normative architecture decisions and machine contracts live in:
 
 - [`decisions/0001-stage-0-foundation.md`](decisions/0001-stage-0-foundation.md)
+- [`decisions/0005-local-host-and-control-plane.md`](decisions/0005-local-host-and-control-plane.md)
+- [`decisions/0006-supervised-execution-and-review-convergence.md`](decisions/0006-supervised-execution-and-review-convergence.md)
+- [`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md)
 - [`../contracts/v1/`](../contracts/v1/)
 - [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
 ## MVP boundary
 
-The MVP is a per-user Windows application with two equal interaction surfaces:
+The MVP distribution is per-user Windows with two equal interaction surfaces:
 
 - `forge` CLI/TUI;
 - .NET MAUI Desktop on WinUI 3.
 
-Both surfaces call the same application commands, queries, immutable DTOs, typed
-events, permission policies, and status advisor. Neither surface contains
-business orchestration or directly calls provider CLIs, Git, SQLite, or updater
-implementations.
+Both surfaces are clients of a per-user, cross-platform headless Forge Host and
+call the same versioned commands, project snapshot, typed
+events, permission policies, and status advisor over current-user local IPC.
+Neither surface contains business orchestration or directly calls provider CLIs,
+Git, event stores, or updater implementations. Active work survives either
+client's exit, restart, crash, or compatible update.
 
-The only MVP workflow is `implementation-critical`. Linux, macOS, package-manager
-distribution, machine-wide installation, lightweight workflows, distributed
-workers, SaaS, and enterprise policy are deferred.
+The only MVP workflow is `implementation-critical`. All reusable Forge code is
+cross-platform; only explicit, minimal OS adapters may use platform APIs. The
+Host, protocol, client, CLI/TUI, workflow, contracts, and reusable Desktop state
+are tested on Windows, Linux, and macOS. This does not enable a non-Windows MVP
+surface or distribution. Linux and macOS installers/Desktop hosts,
+package-manager distribution, machine-wide installation, lightweight workflows,
+distributed workers, SaaS, and enterprise policy are deferred.
 
 ## System boundary
 
 ```text
-CLI/TUI ─┐
-         ├─ Presentation contracts ─ Application ─ Domain
-Desktop ─┘                              │
-                                       ├─ Workflow engine
-                                       ├─ Status advisor
-                                       ├─ Configuration/localization
-                                       └─ Interfaces
-                                           ├─ Provider adapters
-                                           ├─ Git/worktrees
-                                           ├─ Event log/CAS
-                                           ├─ Files/process/network
-                                           └─ Platform update strategy
+OS bootstrap ─ Cross-platform CLI/TUI ─┐
+                                      ├─ Versioned local protocol ─ Forge Host ─ Application ─ Domain
+OS UI host ─ Cross-platform UI model ──┘                                  │
+                                           ├─ Workflow engine
+                                           ├─ Status advisor/projections
+                                           ├─ Configuration/localization
+                                           └─ Interfaces
+                                               ├─ Provider adapters
+                                               ├─ Git/worktrees
+                                               ├─ Sprint journal/artifacts
+                                               ├─ Files/process/network
+                                               └─ Platform update strategy
 ```
 
 The dependency direction points inward. Infrastructure implements application
-interfaces. Platform-neutral updater code never references the Windows strategy.
+interfaces. Neutral code never references an OS adapter. A thin OS bootstrap or
+native UI host selects adapters and delegates to neutral code; it contains no
+workflow or presentation state. The host is the only workflow writer. A
+cross-platform, current-user named mutex prevents release, development, test,
+CLI, or Desktop instances from concurrently mutating one `.forge/` tree.
+
+## Platform boundary
+
+Cross-platform is the default for every Forge project, including Host, CLI/TUI,
+application, domain, contracts, protocols, persistence, provider/Git adapters,
+update policy, and reusable Desktop presentation. These projects use portable
+.NET TFMs and the same behavior on Windows, Linux, and macOS. Portable runtime
+detection may report capabilities or select an adapter; it may not perform the
+native operation inline.
+
+Code that must call an OS API lives in a dedicated, marked leaf adapter. An
+adapter translates a neutral port to one native operation and normalizes the
+result. Installer activation, PATH/shortcut integration, native Desktop hosting,
+OS notifications, secret storage, and a proven BCL process/file-durability gap
+are valid adapter boundaries. Workflow, policy, retries, persistence,
+protocols, and presentation state are not. See
+[`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md).
+
+## Local control plane
+
+The local protocol uses length-prefixed UTF-8 JSON over one cross-platform
+`System.IO.Pipes` transport and begins with a version and capability handshake.
+Forge uses `NamedPipeServerStream`/`NamedPipeClientStream` with
+`PipeOptions.CurrentUserOnly`; .NET maps them to Windows named pipes or Unix-domain
+sockets and enforces the same-user boundary. A platform-neutral transport
+interface owns framing and connection lifecycle, with no Forge OS adapters.
+Request-size limits, deadlines, correlation ids, schema validation, authorization,
+expected state versions, confirmations, and idempotency apply before dispatch. It
+introduces no alternate command model, TCP fallback, or permission bypass.
+
+`GetProjectSnapshot(detail, sprint_id?)` is the authoritative read model for
+startup, status, suggested actions, tree, sprint detail, provider/integration
+state, findings, gates, artifacts, and routing. `forge status`, `next`, `tree`,
+`sprint inspect`, and Desktop screens project this DTO locally. `ReadControlEvents`
+merges unseen records from durable per-sprint journals through an opaque cursor;
+follow mode uses bounded short polling. The snapshot is authoritative after reconnect or cursor failure, and
+prompts, transcripts, raw commands, and terminal output never enter either
+contract. See
+[`decisions/0005-local-host-and-control-plane.md`](decisions/0005-local-host-and-control-plane.md).
 
 ## Startup pipeline
 
@@ -65,12 +117,13 @@ Every public surface uses the same ordered bootstrap:
 4. select a platform update strategy;
 5. verify the latest stable Forge release;
 6. stage, verify, activate, restart, and roll back when required;
-7. discover, update, and recheck provider CLIs;
-8. verify an explicit project root;
-9. load or explicitly initialize `.forge/`;
-10. validate and synchronize project configuration;
-11. build a versioned project status snapshot;
-12. rank safe next actions and open the requested surface.
+7. connect to or start a compatible Forge Host and complete its handshake;
+8. discover, update, and recheck provider CLIs;
+9. verify an explicit project root;
+10. load or explicitly initialize `.forge/`;
+11. validate and synchronize project configuration;
+12. build the versioned project snapshot;
+13. rank safe next actions and open the requested surface.
 
 Update or provider uncertainty is fail-closed for project and sprint work.
 Recovery diagnostics remain available.
@@ -87,6 +140,11 @@ Forge accepts only a newer published stable SemVer release from
 checksum verification. Activation uses
 an immutable version directory, atomic current pointer, self-test, one-use
 restart token, startup handshake, and rollback.
+
+A compatible running Host may finish active attempts while clients move to a new
+version, then drain and restart when idle. An incompatible Host replacement waits
+for idle or requires explicit cancellation; updates never kill active work
+silently.
 
 ## Project source of truth
 
@@ -160,10 +218,14 @@ sprint is forbidden.
 The workflow engine persists transitions before side effects, uses idempotency
 keys, resumes after crashes, and distinguishes sprint, node, and attempt
 lifecycles. Deterministic gates decide pass/fail; models never self-certify
-tests. Sprint/node/attempt state is event-sourced in an append-only,
-localization-safe log under `.forge/sprints/{id}/`, folded into current state
-on every read rather than trusted from a cache (see
+tests. Sprint/node/attempt transitions, routing decisions, and provider outcomes
+share one append-only, localization-safe journal under `.forge/sprints/{id}/`.
+Workflow state, retry balance, and circuit breakers are folded on every read (see
 [`decisions/0003-durable-sprint-persistence.md`](decisions/0003-durable-sprint-persistence.md)).
+
+An explicit operator supersession cancels a non-terminal attempt, discards its
+worktree, records a bounded instruction artifact, and starts a fresh attempt from
+the same recorded base. It never edits the frozen plan or continues partial edits.
 
 ## Provider execution and fallback
 
@@ -176,7 +238,16 @@ consume versioned JSON/JSONL, validate schema-constrained output, and normalize
 quota, rate-limit, authentication, policy, transient, and malformed-output
 errors.
 
-Fallback uses provider/model/surface circuit breakers and a shared retry budget.
+Prompts travel through redirected standard input, never process arguments or
+environment variables. Provider children receive a minimal allowlisted
+environment. Forge consumes bounded stdout/stderr streams concurrently and
+supervises each process with separate absolute-session and activity-based idle
+deadlines. Cancellation or timeout terminates the owned process tree and records
+the exact safe outcome. Provider activity may update a throttled heartbeat but
+provider prose never drives workflow state.
+
+Fallback uses provider/model/surface circuit breakers and a shared retry budget,
+both folded from the sprint journal rather than separate routing files.
 A failed write attempt is never continued in place by another model. Fallback
 replays from the original base commit in a clean worktree. Authentication and
 policy failures are never disguised as transient failures. Sprint integration
@@ -184,24 +255,47 @@ and per-attempt worktrees, the fast-forward integration barrier, gated rebase,
 and durable routing decisions are defined in
 [`decisions/0004-git-isolation-and-circuit-breakers.md`](decisions/0004-git-isolation-and-circuit-breakers.md).
 
-## Memory and code intelligence
+A retryable rate limit records `resume_not_before`, releases the executor slot,
+and is re-enqueued durably by Forge Host; no worker sleeps through the delay.
+Planning, implementation, and review use three provider/model/effort/sandbox/
+deadline profiles frozen into the sprint. Internal and external review share the
+review profile with different lineage and inputs; finalization is deterministic.
+See
+[`decisions/0006-supervised-execution-and-review-convergence.md`](decisions/0006-supervised-execution-and-review-convergence.md).
 
-Durable state does not live in transcripts. Context is assembled through
+## Review convergence
+
+One review engine accepts a scope and rubric for design or implementation.
+Reviewers start with fresh context. A reviewer sharing the implementation's
+provider/model lineage may report advisory findings but cannot satisfy the
+independent-review gate. Every internal verdict proves scoped file and rubric
+coverage; incomplete coverage is re-dispatched once in the same iteration.
+
+Design and implementation review counters are independent. Default consecutive
+severity budgets are low `1`, medium `1`, high `2`, and critical `10`: the floor
+rises from all findings to medium, high, and finally critical-only. Before the
+next iteration exceeds the cumulative budget, a human chooses to continue at the
+critical floor, accept/override current findings with rationale, or abort. Two
+consecutive identical normalized external finding sets trigger the same gate.
+Forge does not infer review stagnation from HEAD or diff changes.
+
+## Context assembly
+
+Durable state does not live in transcripts. MVP context is assembled through
 progressive disclosure:
 
 1. always-on rules and workflow contracts;
-2. sprint-scoped specifications, decisions, and handoffs;
-3. project knowledge and accepted ADRs;
-4. exact Git/file/ripgrep lookup;
-5. Tree-sitter and LSP symbol context;
-6. optional graph or SCIP indexes.
+2. sprint-scoped specifications and decisions;
+3. project knowledge, accepted ADRs, and structured handoffs;
+4. exact Git, file, and `rg` lookup under a recorded token budget.
 
-Indexes are derived caches and must prove freshness against source commit and tool
-version. Critical references require file or language-server evidence.
+Forge builds no full-text, Tree-sitter, LSP, graph, SCIP, or semantic index for
+the MVP. Add one only after measurements show exact retrieval misses a required
+lookup and the index can prove freshness against the source commit.
 
 ## Status and next actions
 
-`ProjectStatusSnapshot` is immutable and versioned. The active sprint is an
+`ProjectSnapshot` is immutable and versioned. The active sprint is an
 explicit selection or the only non-terminal sprint; Forge never silently chooses
 among multiple candidates.
 
@@ -220,6 +314,37 @@ Every recommendation carries rationale, preconditions, safety class, target,
 command, idempotency key, and expected state version. Stale recommendations are
 rejected without side effects.
 
+The dashboard emphasizes work needing attention: human gates, blockers, failures,
+and newly completed work before active or informational work. Status always has a
+text and shape representation in addition to color. Keyboard navigation,
+screen-reader names and announcements, high contrast, and reduced motion are MVP
+acceptance requirements. Attention navigation changes only the selected view; it
+never mutates workflow state or infers status from provider prose.
+
+Human gates present rationale, bounded diff/artifact references, findings, and
+compatibility/security impact through one shared decision contract. Approval or
+rejection is an explicit human-only command with confirmation, expected state
+version, and idempotency; an agent integration cannot self-approve.
+
+Desktop/OS notifications mirror durable `awaiting_human`, `blocked`, `failed`,
+and `completed` events. They are user-configurable, best-effort, redacted, and
+deduplicated; delivery never changes workflow state. Network channels and custom
+notification scripts are deferred.
+
+## Agent integration and instance identity
+
+The `.forge/` compiler generates Claude Code and Codex skill/plugin views from one
+canonical integration source. Outputs contain source hashes, ownership markers,
+minimum Forge/protocol versions, and no human-only authority. Generation and
+optional installation are idempotent and never overwrite unknown user-owned
+files.
+
+Release, Debug, and tests use `forge`, `forge-dev`, and unique ephemeral instance
+ids respectively. They have distinct IPC endpoints, configuration, logs, caches,
+and worktrees resolved through cross-platform .NET per-user paths, while the
+shared project lease still prevents concurrent writers. Host publishing uses
+CoreCLR rather than NativeAOT until named-mutex behavior passes the full OS matrix.
+
 ## Security and observability
 
 Project content, provider output, generated files, skills, hooks, and prompts are
@@ -227,9 +352,15 @@ untrusted data. Policy and permission checks precede execution. Logs and
 diagnostic bundles pass through structured redaction before persistence or
 display; full environment dumps and raw credentials are forbidden.
 
+`forge doctor --bundle` is allowlist-based. It may include versions, startup and
+project summaries, event-log integrity, worktree registrations, routing/retry
+state, writable probes, and safe error metadata. It excludes source/diff content,
+prompts, provider output, raw commands, secrets, unredacted personal paths, and
+any payload whose safe parsing or redaction cannot be proven.
+
 OpenTelemetry traces cover startup, updates, providers, routing, attempts,
-workflow transitions, recommendations, and reviews. Metrics and diagnostics use
-stable codes and never contain localized user content or secrets.
+deadlines, deferrals, workflow transitions, notifications, and reviews. Metrics
+and diagnostics use stable codes and never contain localized user content or secrets.
 
 ## Release acceptance
 
@@ -240,6 +371,18 @@ The release gate requires:
 - checksums and SBOM;
 - clean-profile installer and update tests;
 - CLI/TUI and Desktop capability parity;
+- host continuity, protocol compatibility, project single-writer, snapshot/event
+  read-back, and client reconnect tests;
+- cross-platform Host/protocol/lease tests on Windows, Linux, and macOS;
+- portable-TFM, dependency-boundary, native-import, and three-OS build/test gates
+  for all neutral projects, with adapter tests on their declared OS;
+- attention dashboard, human-gate, keyboard, screen-reader, high-contrast, and
+  reduced-motion acceptance;
+- canonical agent-integration generation and development/release isolation;
+- stdin-only prompts, minimal provider environments, bounded streaming, dual
+  watchdogs, process-tree cleanup, durable rate-limit resumption, operator
+  supersession, independent-lineage review, ASD convergence, and notification
+  deduplication;
 - English/Russian localization completeness;
 - scoped-configuration and artifact-language acceptance;
 - updater, provider, workflow, fallback, recovery, and security suites;

@@ -141,7 +141,7 @@ public sealed class ProjectInitializationTests
     {
         using TestEnvironment environment = new();
 
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot,
             TestContext.Current.CancellationToken);
         InitializeProjectResult result = await environment.Application.InitializeProjectAsync(

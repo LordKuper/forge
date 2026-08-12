@@ -301,6 +301,38 @@
       }
     },
     {
+      "name": "project snapshot accepts full sprint detail in the same read model",
+      "schema": "project-status-snapshot",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state_version": 4,
+        "generated_at": "2026-08-12T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "detail": "full",
+        "active_sprint_id": "44444444-4444-4444-8444-444444444444",
+        "sprints": [{
+          "id": "44444444-4444-4444-8444-444444444444",
+          "creation_sequence": 1,
+          "state": "running",
+          "workflow": "implementation-critical",
+          "base_sha": "0123456789abcdef0123456789abcdef01234567"
+        }],
+        "attention": [],
+        "suggested_actions": [],
+        "details": {
+          "sprint_id": "44444444-4444-4444-8444-444444444444",
+          "nodes": [{"id": "implementation", "state": "running", "kind": "work"}],
+          "attempts": [{"id": "55555555-5555-4555-8555-555555555555", "state": "running", "owner_id": "implementation"}],
+          "findings": [],
+          "gates": [],
+          "artifacts": [],
+          "routing": {"retry_remaining": 9, "resume_not_before": null}
+        }
+      }
+    },
+    {
       "name": "project status rejects more than five suggestions",
       "schema": "project-status-snapshot",
       "valid": false,

@@ -1,5 +1,4 @@
 using Forge.Application;
-using Forge.Configuration;
 using Forge.Domain;
 using Forge.Tests.Support;
 
@@ -206,32 +205,25 @@ public sealed class SprintResilienceTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task RetryingCreateSprintRepairsAMissingManifestEntryWithoutDuplicatingTheSprint()
+    public async Task CreatingAndRetryingASprintDoesNotMutateTheProjectManifest()
     {
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        IConfigurationRegistry registry = environment.Resolve<IConfigurationRegistry>();
         ISprintStore store = environment.Resolve<ISprintStore>();
         Guid idempotencyKey = Guid.NewGuid();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string before = await File.ReadAllTextAsync(manifestPath, cancellationToken);
 
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, idempotencyKey), cancellationToken)).SprintId!;
-
-        // Simulate a crash between the sprint directory landing and the manifest write: strip the
-        // manifest entry back out while the sprint directory itself stays fully built.
-        YamlConfigurationStore manifestStore = new(
-            ProjectRootResolver.ManifestPath(environment.ProjectRoot), ConfigurationScope.Project, registry);
-        ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken);
-        await manifestStore.WriteAsync(document with { Sprints = [] }, cancellationToken);
 
         CreateSprintResult retried = await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, idempotencyKey), cancellationToken);
 
         Assert.True(retried.Succeeded);
         Assert.Equal(sprintId, retried.SprintId);
-        ConfigurationDocument repaired = await manifestStore.ReadAsync(cancellationToken);
-        Assert.Equal([sprintId.Value], repaired.Sprints);
+        Assert.Equal(before, await File.ReadAllTextAsync(manifestPath, cancellationToken));
         Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 

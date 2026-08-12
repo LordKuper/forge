@@ -117,8 +117,8 @@ public static class CliApplication
             string? root = parseResult.GetValue(projectRoot);
             // The command dispatches exactly what the recommendation exposes, including its
             // expected state version and idempotency key.
-            ProjectStatusSnapshot snapshot = await application
-                .GetProjectStatusAsync(root, cancellationToken)
+            ProjectSnapshot snapshot = await application
+                .GetProjectSnapshotAsync(root, cancellationToken)
                 .ConfigureAwait(false);
             SuggestedAction? suggestion = snapshot.SuggestedActions.FirstOrDefault(
                 action => action.ActionId == ForgeApplication.InitializeProjectAction);
@@ -159,13 +159,13 @@ public static class CliApplication
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(overview.Status));
+                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
                 return ExitCodes.Ok;
             }
 
-            output.WriteLine(text.Resolve(StartupMessage(overview.Status.Startup)));
+            output.WriteLine(text.Resolve(StartupMessage(overview.Snapshot.Startup)));
             WriteProject(text, output, overview.Startup.Project);
-            WriteActions(text, output, overview.Status.SuggestedActions);
+            WriteActions(text, output, overview.Snapshot.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });
@@ -190,11 +190,11 @@ public static class CliApplication
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(overview.Status.SuggestedActions));
+                output.WriteLine(StatusJson.Serialize(overview.Snapshot.SuggestedActions));
                 return ExitCodes.Ok;
             }
 
-            WriteActions(text, output, overview.Status.SuggestedActions);
+            WriteActions(text, output, overview.Snapshot.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });

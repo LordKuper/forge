@@ -14,10 +14,10 @@ public sealed class StatusAdvisorTests
     {
         using TestEnvironment environment = new();
 
-        ProjectStatusSnapshot first = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot first = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
-        ProjectStatusSnapshot second = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot second = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -41,7 +41,7 @@ public sealed class StatusAdvisorTests
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -61,7 +61,7 @@ public sealed class StatusAdvisorTests
     public async Task InitializedProjectAdvancesTheStateVersion()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot before = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot before = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
         await environment.InitializeAsync(
@@ -69,7 +69,7 @@ public sealed class StatusAdvisorTests
             true,
             TestContext.Current.CancellationToken);
 
-        ProjectStatusSnapshot after = await environment.Application.GetProjectStatusAsync(
+        ProjectSnapshot after = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -97,7 +97,7 @@ public sealed class StatusAdvisorTests
                 JsonSerializer.SerializeToElement("ru"),
                 TestContext.Current.CancellationToken);
 
-            ProjectStatusSnapshot snapshot = await environment.Application.GetProjectStatusAsync(
+            ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
                 null,
                 TestContext.Current.CancellationToken);
             using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));

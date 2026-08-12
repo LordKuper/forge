@@ -109,8 +109,7 @@ public sealed class SprintOrchestrator(
         if (existingSprints.Contains(sprintId))
         {
             // Every creation write for this exact (project, idempotency key) pair already landed and
-            // was marked complete — the only possibly-missing step is manifest registration, below.
-            await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
+            // was marked complete. The sprint journal is the only runtime registry.
             return new(true, sprintId, DiagnosticCodes.None);
         }
 
@@ -201,7 +200,6 @@ public sealed class SprintOrchestrator(
             .ConfigureAwait(false);
         await store.MarkSprintCreatedAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
 
-        await RegisterSprintAsync(status.Root, sprintId, cancellationToken).ConfigureAwait(false);
         return new(true, sprintId, DiagnosticCodes.None);
     }
 
@@ -424,7 +422,7 @@ public sealed class SprintOrchestrator(
 
     /// <summary>
     /// A stable digest over the project's frozen artifact-language policy, so a generated
-    /// artifact's metadata can name exactly which policy snapshot governed it (Stage 8+); nothing
+    /// artifact's metadata can name exactly which policy snapshot governed it (Stage 9+); nothing
     /// here produces an artifact yet.
     /// </summary>
     private static string ArtifactPolicySnapshotHash(IReadOnlyDictionary<string, string> configurationSnapshot)
@@ -434,23 +432,6 @@ public sealed class SprintOrchestrator(
         byte[] hash = SHA256.HashData(
             Encoding.UTF8.GetBytes($"artifacts.language.user_facing={userFacing}|artifacts.language.agent_facing={agentFacing}"));
         return $"sha256:{Convert.ToHexStringLower(hash)}";
-    }
-
-    private async Task RegisterSprintAsync(string root, SprintId sprintId, CancellationToken cancellationToken)
-    {
-        YamlConfigurationStore manifestStore =
-            new(ProjectRootResolver.ManifestPath(root), ConfigurationScope.Project, registry);
-        ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken).ConfigureAwait(false);
-        if (document.Sprints?.Contains(sprintId.Value) == true)
-        {
-            // Repairing a retry whose sprint directory already exists: already registered.
-            return;
-        }
-
-        List<Guid> sprints = [.. document.Sprints ?? [], sprintId.Value];
-        await manifestStore
-            .WriteAsync(document with { Sprints = sprints }, cancellationToken)
-            .ConfigureAwait(false);
     }
 
     private static bool IsFresh(

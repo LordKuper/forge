@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.0.0",
+  "contract_version": "1.1.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -8,14 +8,14 @@
   },
   "capabilities": [
     {
-      "id": "startup.status",
+      "id": "project.snapshot",
       "kind": "query",
-      "contract": "GetStartupStatus",
-      "events": ["StartupCheckChanged"],
-      "cli": "forge doctor --startup",
-      "desktop": "Startup/Refresh",
-      "permission": "read",
-      "acceptance": "startup-status-parity"
+      "contract": "GetProjectSnapshot",
+      "events": ["ProjectSnapshotInvalidated"],
+      "cli": "forge status [--json]",
+      "desktop": "Dashboard/Refresh",
+      "permission": "read_redacted",
+      "acceptance": "project-snapshot-parity"
     },
     {
       "id": "project.initialize",
@@ -28,24 +28,14 @@
       "acceptance": "project-init-parity"
     },
     {
-      "id": "project.status",
+      "id": "control.events",
       "kind": "query",
-      "contract": "GetProjectStatus",
-      "events": ["ProjectStatusChanged"],
-      "cli": "forge status [--json]",
-      "desktop": "Dashboard/Refresh",
-      "permission": "read",
-      "acceptance": "project-status-parity"
-    },
-    {
-      "id": "project.next",
-      "kind": "query",
-      "contract": "GetSuggestedActions",
-      "events": ["SuggestedActionsChanged"],
-      "cli": "forge next [--json]",
-      "desktop": "Dashboard/RecommendedActions",
-      "permission": "read",
-      "acceptance": "suggested-actions-parity"
+      "contract": "ReadControlEvents",
+      "events": ["ControlEventAvailable"],
+      "cli": "forge events [--after <cursor>] [--follow] [--json]",
+      "desktop": "LiveUpdates/Poll",
+      "permission": "read_redacted",
+      "acceptance": "control-events-parity"
     },
     {
       "id": "sprint.manage",
@@ -58,19 +48,19 @@
       "acceptance": "sprint-lifecycle-parity"
     },
     {
-      "id": "sprint.inspect",
-      "kind": "query",
-      "contract": "InspectSprintGraph",
-      "events": ["NodeChanged", "AttemptChanged"],
-      "cli": "forge sprint <list|status|inspect>",
-      "desktop": "SprintDetails/Open",
-      "permission": "read",
-      "acceptance": "sprint-inspection-parity"
+      "id": "attempt.supersede",
+      "kind": "command",
+      "contract": "SupersedeAttempt",
+      "events": ["AttemptSuperseded", "AttemptChanged"],
+      "cli": "forge attempt supersede <attempt-id> --instruction-file <path|->",
+      "desktop": "AttemptDetails/Supersede",
+      "permission": "human_attempt_supersede_confirm",
+      "acceptance": "attempt-supersession-parity"
     },
     {
       "id": "workflow.review",
       "kind": "command",
-      "contract": "ResolveHumanGate",
+      "contract": "ResolveHumanGateWithContext",
       "events": ["GateResolved", "FindingChanged"],
       "cli": "forge gate <approve|reject>",
       "desktop": "Review/ResolveGate",
@@ -98,6 +88,16 @@
       "acceptance": "sync-validation-parity"
     },
     {
+      "id": "integration.skill",
+      "kind": "command",
+      "contract": "GenerateInstallAgentIntegration",
+      "events": ["AgentIntegrationChanged"],
+      "cli": "forge integration skill <generate|install|remove>",
+      "desktop": "Settings/AgentIntegration",
+      "permission": "integration_write_confirm",
+      "acceptance": "agent-integration-parity"
+    },
+    {
       "id": "provider.health",
       "kind": "query",
       "contract": "GetProviderHealth",
@@ -116,6 +116,16 @@
       "desktop": "Diagnostics/Open",
       "permission": "read_redacted",
       "acceptance": "observability-parity"
+    },
+    {
+      "id": "diagnostics.bundle",
+      "kind": "command",
+      "contract": "CreateSafeDiagnosticBundle",
+      "events": ["DiagnosticBundleCreated"],
+      "cli": "forge doctor --bundle",
+      "desktop": "Diagnostics/CreateBundle",
+      "permission": "diagnostic_export_confirm",
+      "acceptance": "diagnostic-bundle-parity"
     },
     {
       "id": "quality.evaluate",

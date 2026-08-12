@@ -45,6 +45,7 @@ public enum AttemptState
     Validating,
     Succeeded,
     Failed,
+    /// <summary>Read compatibility for journals written before v0.11.0; no new transition reaches it.</summary>
     Abandoned,
     Cancelled,
 }

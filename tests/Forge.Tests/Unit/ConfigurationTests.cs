@@ -352,6 +352,49 @@ public sealed class ConfigurationTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ProjectStoreDropsTheLegacyRuntimeSprintRegistryOnWrite()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, ".forge", "manifest.yaml");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            await File.WriteAllTextAsync(
+                path,
+                """
+                schema_version: 1.0.0
+                project_id: 7d634db2-586e-49c0-9da6-69292575be19
+                workflow: implementation-critical
+                artifacts:
+                  language:
+                    user_facing: en
+                    agent_facing: en
+                sprints:
+                  - 44444444-4444-4444-8444-444444444444
+                """,
+                TestContext.Current.CancellationToken);
+            YamlConfigurationStore store =
+                new(path, ConfigurationScope.Project, new ConfigurationRegistry());
+
+            ConfigurationDocument document = await store.ReadAsync(TestContext.Current.CancellationToken);
+            await store.WriteAsync(document, TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(
+                "sprints:",
+                await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken),
+                StringComparison.Ordinal);
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
     private static Task WriteUserLanguageAsync(JsonConfigurationStore store, string language) =>
         store.WriteAsync(
             new(

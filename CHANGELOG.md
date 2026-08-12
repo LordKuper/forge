@@ -2,6 +2,49 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.11.0
+
+### Added
+
+- The target MVP architecture now includes a cross-platform, per-user headless
+  Forge Host as the only workflow writer. CLI/TUI and Desktop will use a
+  versioned local protocol over the cross-platform .NET named-pipe API so provider
+  attempts survive client restarts. A current-user .NET named mutex prevents
+  competing writers. Forge needs no Host OS adapters; the Windows MVP remains
+  unchanged.
+- Added a planned shared project snapshot and cursor-based durable event read-back,
+  an attention-oriented accessible dashboard, contextual human-gate decisions,
+  canonical Claude Code/Codex skill generation, allowlisted diagnostic bundles,
+  and isolated release/development/test instances.
+- Added target supervised provider execution with stdin-only prompts, minimal
+  child environments, bounded streaming, session/idle watchdogs, whole-process-
+  tree cleanup, durable rate-limit resumption, human attempt supersession,
+  three execution profiles, local notifications, and independently
+  eligible reviewers.
+- Added bounded review convergence based on Agentic Software Development:
+  independent phase counters, fresh reviewer contexts, coverage ledgers, rising
+  severity floors, repeated external-finding escalation, and a human decision at
+  the iteration limit. Git/diff stalemate heuristics are explicitly excluded.
+
+### Changed
+
+- Simplified the target and implemented architecture around one project snapshot,
+  one sprint journal, one three-profile review engine, and exact Git/file/`rg`
+  context retrieval. Removed runtime sprint registration from project manifests
+  and separate routing persistence; legacy routing sidecars migrate
+  idempotently. Semantic indexes are deferred until exact retrieval shows a
+  measured gap.
+- Established a repository-wide cross-platform code rule: only marked, minimal
+  leaf OS adapters may use platform APIs. Added a Stage 8 migration and automated
+  architecture gate for existing CLI, durability, Desktop, updater, and test
+  coupling while keeping the MVP distribution Windows-only.
+- Inserted the host/control-plane work as Stage 8 and resequenced the compiler,
+  memory, implementation workflow, hardening, and release stages. Cookbook and
+  terminal-emulator features remain outside the MVP.
+- Revised the target provider invocation contract from prompt arguments and
+  buffered output to redirected stdin and supervised incremental streams before
+  real workflow execution is enabled.
+
 ## v0.10.0
 
 ### Added

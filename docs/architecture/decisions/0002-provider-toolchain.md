@@ -1,8 +1,8 @@
 # ADR 0002: Provider toolchain management
 
-- Status: Accepted (revised 2026-08-04)
+- Status: Accepted (revised 2026-08-12)
 - Date: 2026-08-04
-- Contract version: 1.0.0
+- Contract version: 1.1.0
 
 ## Context
 
@@ -12,12 +12,8 @@ without shell-string concatenation. D-005 required revalidating both vendors'
 current Windows installation and update mechanisms immediately before
 implementation, since earlier planning predated verification.
 
-This ADR was first accepted with Forge downloading and verifying binaries
-directly from each vendor's GitHub releases, independent of any vendor
-installer. That design worked and was verified live, but does not use the
-mechanism either vendor recommends, and was revised the same day in favor of
-running each vendor's own native Windows install/update script. The
-"Superseded design" section at the end records what changed and why.
+Forge follows each vendor's supported installation and execution contract rather
+than maintaining a parallel provider distribution channel.
 
 ## Research findings (2026-08-04)
 
@@ -51,6 +47,9 @@ running each vendor's own native Windows install/update script. The
   `turn.failed`, and an `item.*` family; exact `item.*` subtype strings are
   not published.
 
+ADR 0006 refines provider execution for unattended workflow attempts. It does
+not change discovery, installation, update, or version verification.
+
 ## Decision
 
 Forge runs each vendor's own recommended Windows install/update mechanism and
@@ -79,11 +78,10 @@ never re-implements release verification itself:
   installed binary.
 - Discovery and execution always invoke the resolved absolute executable path
   directly through `IProcessRunner`'s argument list — never a PATH-resolved
-  shim and never `cmd.exe` — so a prompt can never be reinterpreted as a shell
-  operator. Every CLI invocation places a literal `--` immediately before the
-  prompt argument, so a prompt that itself starts with `-`/`--` (for example
-  `--dangerously-skip-permissions`) can never be parsed as a flag by the
-  vendor CLI.
+  shim and never `cmd.exe`. Stage 11 execution sends the prompt through
+  redirected standard input, never an argument, environment variable, or log,
+  as required by ADR 0006. This also removes command-line length and option
+  injection as prompt concerns.
 - Project configuration cannot override provider location or version; only
   the fixed vendor-documented path is consulted.
 - The `Providers` startup check performs discovery only; it never mutates
@@ -99,21 +97,24 @@ never re-implements release verification itself:
 
 ## Execution and output normalization
 
-Non-interactive invocation follows each vendor's documented headless mode:
+Non-interactive invocation follows each vendor's headless mode and reads the
+prompt from redirected standard input:
 
-- Codex: `codex exec --json -- <prompt>`. Classification uses only the
+- Codex: `codex exec --json` with no positional prompt. Classification uses only the
   documented top-level prefixes: `turn.*` maps to `Result`, `item.*` maps to
   `ToolUse`, everything else (including `thread.*`) is `Unknown`. Text
   extraction is intentionally a no-op for Codex: `item.*` subtype field names
   are not published, so guessing them risks silently wrong data.
-- Claude Code: `claude -p --output-format stream-json --verbose -- <prompt>`.
+- Claude Code: `claude --print --output-format stream-json --verbose`.
   `assistant` maps to `Message` and `result` maps to `Result`; `system` and
   `user` map to `Unknown`. Text is read from the `text`-typed blocks in
   `message.content[]`, skipping any `tool_use` blocks in the same array.
 
-Every output line must parse as a JSON object; a line that does not is a
-`malformed_output` failure for the whole run rather than a silently dropped
-line. A non-zero exit classifies into a stable `ProviderFailureKind`
+Stdout and stderr are read concurrently with the bounded incremental parser,
+minimal child environment, deadlines, and process-tree cleanup defined in ADR
+0006. Every output line must parse as a JSON object; a line that does not is a
+`malformed_output` failure for the whole run rather than a silently dropped line.
+A non-zero exit classifies into a stable `ProviderFailureKind`
 (`authentication`, `rate_limited`, `quota_exceeded`, `policy`, `transient`,
 `unknown`) by a best-effort keyword match over the process's own error text,
 since neither vendor publishes an exhaustive error-code table; an unmatched
@@ -132,24 +133,6 @@ model each vendor already recommends to every other user of their CLI.
 Recovery is vendor-owned: a failed install/update leaves whatever the vendor
 script left behind and reports `provider_update_failed`; sprint work stays
 blocked until both providers reach `ready`.
-
-## Superseded design (2026-08-04, same day)
-
-The design first accepted here had Forge query each vendor's GitHub
-`releases/latest`, verify the matching Windows asset against GitHub's own
-per-asset SHA-256 `digest` field (not either vendor's separately published
-checksum manifest, which is scoped inconsistently — Codex's
-`codex-package_SHA256SUMS` covers only its combined `.tar.gz` bundles, not
-the standalone `.exe`), and stage verified binaries into an immutable
-`%LOCALAPPDATA%\Forge\providers\<provider>\versions\<version>\` directory
-with an atomically replaced `current.json` pointer, mirroring the Windows
-self-update layout in ADR 0001. It was implemented, tested, and verified live
-against both vendor repos before being replaced by the design above at the
-maintainer's explicit direction: use the native methods vendors recommend
-rather than a Forge-owned parallel distribution channel. Kept here because
-the verification work (confirming GitHub's per-asset `digest` field exists
-and is authoritative) remains valid background for any future decision to
-revisit self-hosted verification.
 
 ## Open decisions
 

@@ -56,6 +56,8 @@ public sealed record RetryBudgetRecord(SprintId SprintId, int Total, int Consume
 public enum RouteOutcome
 {
     Routed,
+    Succeeded,
+    Failed,
     CircuitOpen,
     BudgetExhausted,
     Excluded,

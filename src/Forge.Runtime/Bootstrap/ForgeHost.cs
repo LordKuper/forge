@@ -59,7 +59,6 @@ public static class ForgeHost
         services.AddSingleton<ISprintStore, FileSprintEventLog>();
         services.AddSingleton<SprintScheduler>();
         services.AddSingleton<SprintOrchestrator>();
-        services.AddSingleton<IRoutingStore, FileRoutingStore>();
         services.AddSingleton<SprintGitIsolation>();
         services.AddSingleton<RoutingLedger>();
         services.AddSingleton<StartupRecovery>();

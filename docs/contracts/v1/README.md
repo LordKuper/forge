@@ -1,6 +1,8 @@
 # Forge contracts v1
 
-Contract version `1.0.0` freezes Stage 0 boundaries.
+The v1 contract family freezes Stage 0 boundaries. Registries evolve
+independently through compatible minor versions; `capabilities.json` and
+`state-machines.json` declare their current versions.
 
 ## Normative files
 
@@ -15,6 +17,12 @@ Contract version `1.0.0` freezes Stage 0 boundaries.
 Unknown properties are rejected unless a schema explicitly permits them.
 Producers write the declared major version. Consumers may accept an equal major
 and newer minor only when unknown optional fields can be ignored safely.
+
+The local Host transport is defined by ADR 0005. It serializes these application
+contracts but is not a second capability model. `project.snapshot` is the
+authoritative read model and `control.events` is its incremental invalidation
+stream; pipe handshakes, framing, leases, and client reconnect are shared
+transport/runtime requirements.
 
 The Stage 0 gate builds every schema with the pinned JsonSchema.Net validator,
 resolves cross-schema references, requires format validation, and evaluates every
@@ -32,12 +40,19 @@ gate on workstations and CI.
 | 5 | platform | `platform_not_supported` | No registered platform strategy |
 | 6 | update | `self_update_failed` | Forge update/verification/handshake failed |
 | 7 | provider | `provider_update_failed` | Provider install/update/recheck failed |
+| 7 | provider | `provider_idle_timeout` | Provider attempt exceeded its no-activity deadline |
+| 7 | provider | `provider_session_timeout` | Provider attempt exceeded its absolute deadline |
 | 8 | authorization | `permission_denied` | Policy denied the command |
 | 9 | confirmation | `confirmation_required` | Required human confirmation absent |
 | 10 | concurrency | `suggestion_stale` | Expected state version no longer matches |
+| 10 | concurrency | `project_in_use` | Another Forge Host owns the project writer lease |
+| 10 | concurrency | `control_cursor_stale` | Event cursor cannot continue; refresh from the returned anchor |
 | 11 | workflow | `workflow_blocked` | Durable workflow cannot safely advance |
+| 11 | workflow | `review_iteration_limit` | Review requires a human convergence decision |
+| 11 | workflow | `review_repeated_findings` | External review repeated an identical normalized finding set |
 | 12 | dependency | `dependency_unavailable` | Required immutable input is unavailable |
 | 13 | internal | `internal_error` | Sanitized unexpected failure |
+| 14 | compatibility | `host_protocol_incompatible` | Client and Host protocol majors cannot communicate |
 
 Machine stdout contains only the requested schema. Diagnostics use stderr and
 carry `code`, `category`, `message_key`, typed `arguments`, `correlation_id`, and

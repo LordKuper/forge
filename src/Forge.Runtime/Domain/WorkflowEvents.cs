@@ -97,11 +97,13 @@ public static class WorkflowFold
         Dictionary<string, AttemptSnapshot> attempts = new(StringComparer.Ordinal);
         foreach (WorkflowEvent current in events)
         {
-            string toState = current.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? value) &&
-                value is not null
-                ? value
-                : throw new InvalidDataException(
-                    $"Event '{current.EventId}' is missing '{WorkflowEvent.ToStateArgument}'.");
+            if (!current.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) ||
+                toState is null)
+            {
+                // Non-transition records such as routing decisions share the sprint journal but do
+                // not participate in the sprint/node/attempt fold.
+                continue;
+            }
             switch (current.Aggregate.Kind)
             {
                 case AggregateKind.Sprint:
