@@ -9,21 +9,29 @@ public interface IDirectoryDurability
 }
 
 /// <summary>
-/// Portable default: works everywhere <see cref="File.OpenHandle(string, FileMode, FileAccess, FileShare, FileOptions, long)"/>
-/// can open the directory as a handle. On Windows a directory handle needs backup-semantics, which this API cannot
-/// request, so a composed <see cref="IDirectoryDurability"/> adapter is required for a real Windows deployment; see
-/// ADR 0007.
+/// Portable default. <see cref="File.OpenHandle(string, FileMode, FileAccess, FileShare, FileOptions, long)"/>
+/// refuses to open a directory on every current .NET platform (Windows needs backup-semantics this API cannot
+/// request; Linux/macOS reject it too), so this is a best-effort no-op rather than the durability guarantee its
+/// name implies. A composed <see cref="IDirectoryDurability"/> adapter is required for a real guarantee on any
+/// platform; see ADR 0007. Ceiling: no directory-entry durability without one. Upgrade path: an OS adapter (the
+/// Windows one already exists) or, if Linux/macOS ship, an adapter using a raw <c>open</c>/<c>fsync</c> P/Invoke.
 /// </summary>
 public sealed class BclDirectoryDurability : IDirectoryDurability
 {
     public void Flush(string directory)
     {
-        using SafeFileHandle handle = File.OpenHandle(
-            directory,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.ReadWrite | FileShare.Delete);
-        RandomAccess.FlushToDisk(handle);
+        try
+        {
+            using SafeFileHandle handle = File.OpenHandle(
+                directory,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            RandomAccess.FlushToDisk(handle);
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }
 

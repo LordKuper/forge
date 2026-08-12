@@ -19,9 +19,6 @@
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />
-    <!-- The real Windows durability adapter, installed by Installer/WindowsDurabilityAssemblyInitializer.cs,
-         supersedes the portable fallback below; excluded here so the two module initializers never race. -->
-    <Compile Remove="Support/PortableDurabilityFallback.cs" />
     <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
