@@ -30,6 +30,7 @@ public sealed record WorkflowEvent(
     Guid? CausationId = null)
 {
     public const string ToStateArgument = "to_state";
+    public const string RouteDecisionRecordedType = "RouteDecisionRecorded";
 
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
@@ -97,19 +98,18 @@ public static class WorkflowFold
         Dictionary<string, AttemptSnapshot> attempts = new(StringComparer.Ordinal);
         foreach (WorkflowEvent current in events)
         {
-            if (!current.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) ||
-                toState is null)
+            if (!IsTransitionRecord(current))
             {
-                // Non-transition records such as routing decisions share the sprint journal but do
-                // not participate in the sprint/node/attempt fold.
                 continue;
             }
+
+            string toState = current.Arguments[WorkflowEvent.ToStateArgument]!;
             switch (current.Aggregate.Kind)
             {
                 case AggregateKind.Sprint:
-                    // Meaningful only for *this* event's own `toState`, never inherited from an
-                    // earlier block — a fresh `blocked` always carries its own reason (or none),
-                    // and any other transition leaves the sprint with no current reason at all.
+                    // Meaningful only for this event. Finding recovery deliberately carries its
+                    // reason across the intermediate `ready` state so a crash can resume safely;
+                    // other transitions omit it and clear the prior reason.
                     string? blockedReason = current.Arguments.TryGetValue(
                         WorkflowEvent.BlockedReasonArgument,
                         out string? blockedReasonValue)
@@ -168,5 +168,40 @@ public static class WorkflowFold
             nodes,
             attempts,
             events.Count == 0 ? -1 : events[^1].Sequence);
+    }
+
+    internal static bool IsTransitionRecord(WorkflowEvent current)
+    {
+        bool hasState = current.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) &&
+            toState is not null;
+        if (current.Type != WorkflowEvent.RouteDecisionRecordedType)
+        {
+            return hasState
+                ? true
+                : throw new InvalidDataException(
+                    $"Transition event '{current.EventId}' is missing '{WorkflowEvent.ToStateArgument}'.");
+        }
+
+        if (hasState || current.Aggregate.Kind != AggregateKind.Sprint || current.Aggregate.Version < 1 ||
+            current.MessageKey != "routing.decision_recorded")
+        {
+            throw new InvalidDataException($"Routing event '{current.EventId}' has an invalid envelope.");
+        }
+
+        string Required(string key) => current.Arguments.GetValueOrDefault(key) is { Length: > 0 } value
+            ? value
+            : throw new InvalidDataException($"Routing event '{current.EventId}' is missing '{key}'.");
+        _ = Guid.Parse(Required("attempt_id"));
+        _ = Required("node_id");
+        _ = Required("provider");
+        _ = Required("model");
+        _ = Required("surface");
+        _ = WorkflowStateNames.Parse<RouteOutcome>(Required("outcome"));
+        if (current.Arguments.GetValueOrDefault("failure_class") is { } failure)
+        {
+            _ = WorkflowStateNames.Parse<FailureClass>(failure);
+        }
+
+        return false;
     }
 }

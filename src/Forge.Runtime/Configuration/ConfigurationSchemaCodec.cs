@@ -223,11 +223,6 @@ internal static class ConfigurationSchemaCodec
 
         public ProjectArtifacts Artifacts { get; set; } = new();
 
-        // Read-only compatibility with manifests written before v0.11.0. Runtime sprint identity
-        // belongs to the sprint journal; serializing this object again intentionally drops the
-        // legacy registry instead of maintaining a second source of truth.
-        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
-        public string[]? Sprints { get; set; }
     }
 
     internal sealed class ProjectArtifacts

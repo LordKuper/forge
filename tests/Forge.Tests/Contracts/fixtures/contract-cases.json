@@ -274,8 +274,8 @@
       }
     },
     {
-      "name": "project status resolves the suggested action reference",
-      "schema": "project-status-snapshot",
+      "name": "project snapshot resolves the suggested action reference",
+      "schema": "project-snapshot",
       "valid": true,
       "instance": {
         "schema_version": "1.0.0",
@@ -302,7 +302,7 @@
     },
     {
       "name": "project snapshot accepts full sprint detail in the same read model",
-      "schema": "project-status-snapshot",
+      "schema": "project-snapshot",
       "valid": true,
       "instance": {
         "schema_version": "1.0.0",
@@ -333,8 +333,8 @@
       }
     },
     {
-      "name": "project status rejects more than five suggestions",
-      "schema": "project-status-snapshot",
+      "name": "project snapshot rejects more than five suggestions",
+      "schema": "project-snapshot",
       "valid": false,
       "instance": {
         "schema_version": "1.0.0",
@@ -348,8 +348,8 @@
       }
     },
     {
-      "name": "project status rejects an invalid sprint Git object ID length",
-      "schema": "project-status-snapshot",
+      "name": "project snapshot rejects an invalid sprint Git object ID length",
+      "schema": "project-snapshot",
       "valid": false,
       "instance": {
         "schema_version": "1.0.0",

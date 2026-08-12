@@ -740,8 +740,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Blocked || state.Sprint.BlockedReason != BlockedByFinding ||
-            state.Nodes.Count == 0)
+        bool beginsRecovery = state.Sprint.State == SprintState.Blocked &&
+            state.Sprint.BlockedReason == BlockedByFinding;
+        bool resumesRecovery = state.Sprint.State == SprintState.Ready &&
+            state.Sprint.BlockedReason == BlockedByFinding;
+        if ((!beginsRecovery && !resumesRecovery) || state.Nodes.Count == 0)
         {
             return;
         }
@@ -759,19 +762,28 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return;
         }
 
-        AppendOutcome ready = await store.AppendTransitionAsync(
-            projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
-            "workflow.sprint_ready", WorkflowStateNames.ToSnakeCase(SprintState.Ready),
-            state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
-        if (!ready.Succeeded)
+        if (beginsRecovery)
         {
-            return;
+            AppendOutcome ready = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+                "workflow.sprint_ready", WorkflowStateNames.ToSnakeCase(SprintState.Ready),
+                state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = BlockedByFinding,
+                }).ConfigureAwait(false);
+            if (!ready.Succeeded)
+            {
+                return;
+            }
+
+            state = ready.State!;
         }
 
         AppendOutcome running = await store.AppendTransitionAsync(
             projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
             "workflow.sprint_running", WorkflowStateNames.ToSnakeCase(SprintState.Running),
-            ready.State!.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+            state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
         if (running.Succeeded)
         {
             await EvaluateCompletionAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);

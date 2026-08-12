@@ -33,9 +33,10 @@ User-facing Forge changes are listed by release, newest first.
   context retrieval. Removed runtime sprint registration from project manifests
   and separate routing persistence; legacy routing sidecars migrate
   idempotently, including reconciliation of the old retry-budget snapshot after
-  interrupted writes. Published v1 query names and state-machine edges remain
-  compatible projections even when current orchestration uses the simpler path.
-  Semantic indexes are deferred until exact retrieval shows a measured gap.
+  interrupted writes. The pre-1.0 query names and state-machine edges replaced by
+  this architecture are removed without deprecated aliases; persisted routing
+  data still migrates safely. Semantic indexes are deferred until exact retrieval
+  shows a measured gap.
 - Established a repository-wide cross-platform code rule: only marked, minimal
   leaf OS adapters may use platform APIs. Added a Stage 8 migration and automated
   architecture gate for existing CLI, durability, Desktop, updater, and test
@@ -46,6 +47,12 @@ User-facing Forge changes are listed by release, newest first.
 - Revised the target provider invocation contract from prompt arguments and
   buffered output to redirected stdin and supervised incremental streams before
   real workflow execution is enabled.
+
+### Fixed
+
+- Sprint journals now reject transition records missing `to_state` instead of
+  folding stale state, and finding recovery resumes safely after interruption at
+  every append boundary.
 
 ## v0.10.0
 

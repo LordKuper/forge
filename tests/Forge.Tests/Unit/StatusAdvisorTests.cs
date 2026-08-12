@@ -10,33 +10,14 @@ public sealed class StatusAdvisorTests
 {
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task VersionOneStatusAndActionAliasesProjectTheUnifiedSnapshot()
-    {
-        using TestEnvironment environment = new();
-
-        ProjectOverview overview = await environment.Application.GetOverviewAsync(
-            null, TestContext.Current.CancellationToken);
-        ProjectStatusSnapshot legacyStatus = await environment.Application.GetProjectStatusAsync(
-            null, TestContext.Current.CancellationToken);
-        IReadOnlyList<SuggestedAction> legacyActions = await environment.Application.GetSuggestedActionsAsync(
-            null, TestContext.Current.CancellationToken);
-
-        Assert.Same(overview.Status, overview.Snapshot);
-        Assert.Equal(overview.Snapshot.StateVersion, legacyStatus.StateVersion);
-        Assert.Equal(overview.Snapshot.SuggestedActions.Select(item => item.ActionId),
-            legacyActions.Select(item => item.ActionId));
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task UninitializedProjectRecommendsInitializationDeterministically()
     {
         using TestEnvironment environment = new();
 
-        ProjectStatusSnapshot first = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot first = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
-        ProjectStatusSnapshot second = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot second = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -60,7 +41,7 @@ public sealed class StatusAdvisorTests
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -80,7 +61,7 @@ public sealed class StatusAdvisorTests
     public async Task InitializedProjectAdvancesTheStateVersion()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot before = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot before = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
         await environment.InitializeAsync(
@@ -88,7 +69,7 @@ public sealed class StatusAdvisorTests
             true,
             TestContext.Current.CancellationToken);
 
-        ProjectStatusSnapshot after = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot after = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -116,7 +97,7 @@ public sealed class StatusAdvisorTests
                 JsonSerializer.SerializeToElement("ru"),
                 TestContext.Current.CancellationToken);
 
-            ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
                 null,
                 TestContext.Current.CancellationToken);
             using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));

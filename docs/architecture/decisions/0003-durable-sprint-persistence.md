@@ -60,12 +60,10 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   deterministic event ids and remain read-only rollback evidence.
 - Sprint discovery enumerates completed sprint directories through their durable
   creation marker. Project manifest configuration never registers runtime sprint
-  ids; legacy `sprints` input is accepted only for read compatibility and omitted
-  on the next write.
-- Current orchestration leaves failed attempts failed and returns a finding-blocked
-  sprint through ordinary `ready -> running -> ready_to_finalize` transitions.
-  The published v1 `failed -> abandoned` and `blocked -> ready_to_finalize` edges
-  remain legal compatibility paths but are not used by the new orchestration.
+  ids; the removed pre-1.0 `sprints` field is rejected.
+- Failed attempts are terminal and the obsolete `abandoned` state is removed. A
+  finding-blocked sprint returns through the crash-resumable ordinary
+  `ready -> running -> ready_to_finalize` path; the direct blocked edge is removed.
 
 `overview.md`'s system boundary diagram is updated from `SQLite/CAS` to one
 sprint journal plus immutable artifacts. Artifact payloads remain separate files

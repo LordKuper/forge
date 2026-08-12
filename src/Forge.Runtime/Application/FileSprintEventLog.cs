@@ -26,7 +26,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private const string DefinitionFileName = "definition.json";
     private const string CreatedMarkerFileName = "created.marker";
     private const string LegacyFindingsFileName = "findings.json";
-    private const string RouteDecisionEventType = "RouteDecisionRecorded";
+    private const string RouteDecisionEventType = WorkflowEvent.RouteDecisionRecordedType;
     private const string LegacyRoutingDirectoryName = "routing";
     private const string LegacyRoutingMigratedMarker = "migrated-to-sprint-journal";
     private static readonly JsonSerializerOptions DefinitionJsonOptions = ConfigurationSchemaCodec.SerializerOptions;
@@ -423,6 +423,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
             IReadOnlyList<WorkflowEvent> events =
                 await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+            foreach (WorkflowEvent item in events)
+            {
+                _ = WorkflowFold.IsTransitionRecord(item);
+            }
+
             long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
             if (currentVersion != expectedAggregateVersion)
             {
@@ -653,7 +658,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private static long CurrentVersion(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
             .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id &&
-                item.Arguments.ContainsKey(WorkflowEvent.ToStateArgument))
+                WorkflowFold.IsTransitionRecord(item))
             .Select(item => item.Aggregate.Version)
             .DefaultIfEmpty(0)
             .Max();
@@ -661,7 +666,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private static string? CurrentStateText(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
             .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id &&
-                item.Arguments.ContainsKey(WorkflowEvent.ToStateArgument))
+                WorkflowFold.IsTransitionRecord(item))
             .OrderByDescending(item => item.Aggregate.Version)
             .FirstOrDefault()
             ?.Arguments.GetValueOrDefault(WorkflowEvent.ToStateArgument);

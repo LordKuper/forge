@@ -27,8 +27,8 @@
 
 - Every commit MUST follow the latest stable [Conventional Commits](https://www.conventionalcommits.org/) specification: `<type>[optional scope][!]: <description>`.
 - Use `feat` for features and `fix` for fixes. Other allowed types are `docs`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, and `revert`.
-- Mark incompatible changes with `!` and a `BREAKING CHANGE:` footer. Keep the subject specific; use the body only for material rationale or impact and footers for issue references.
-- Every feature branch MUST increase the Forge version in its canonical source and derived metadata according to the latest stable [Semantic Versioning](https://semver.org/) specification. Use at least `PATCH`; use `MINOR` for compatible features and `MAJOR` for incompatible changes.
+- At or after `1.0.0`, mark incompatible changes with `!` and a `BREAKING CHANGE:` footer. Before `1.0.0`, public contracts are unstable: a `MINOR` release MAY replace them without aliases or a deprecation period when the changelog and PR state the impact. Keep the subject specific; use the body only for material rationale or impact and footers for issue references.
+- Every feature branch MUST increase the Forge version in its canonical source and derived metadata according to the latest stable [Semantic Versioning](https://semver.org/) specification. Use at least `PATCH`; use `MINOR` for compatible features and intentional pre-1.0 contract replacement; use `MAJOR` for incompatible changes after `1.0.0`.
 - The source version, artifact versions, annotated tag, and GitHub Release version MUST match. Never reuse a released version.
 - Never commit secrets, personal data, local IDE state, or generated files that are not release inputs.
 
@@ -46,7 +46,7 @@
 - Update user and technical documentation with changes to public behavior, configuration, CLI, API, or data formats.
 - Keep dependency changes minimal and justified; update lock files and reject dependencies with known critical vulnerabilities.
 - Keep migrations and persisted formats backward-compatible or declare a breaking change and provide a tested upgrade or rollback path.
-- Version public contracts and machine-readable formats and test their compatibility.
+- Version public contracts and machine-readable formats. Before `1.0.0`, test the declared current contract; at or after `1.0.0`, also test backward compatibility.
 - Builds and tests MUST be reproducible from a clean checkout with pinned tools and dependencies.
 - Never expose secrets or sensitive data in logs or errors.
 

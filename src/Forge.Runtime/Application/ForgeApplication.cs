@@ -25,11 +25,7 @@ public sealed record ConfigurationView(
     public static ConfigurationView Empty { get; } = new([], DiagnosticCodes.None);
 }
 
-public sealed record ProjectOverview(StartupStatus Startup, ProjectStatusSnapshot Status)
-{
-    /// <summary>The unified snapshot name used by the v1.1 control-plane contract.</summary>
-    public ProjectStatusSnapshot Snapshot => Status;
-}
+public sealed record ProjectOverview(StartupStatus Startup, ProjectSnapshot Snapshot);
 
 /// <summary>
 /// The single entry point both surfaces use. Presentation adapters format and collect input;
@@ -48,7 +44,7 @@ public sealed class ForgeApplication(
     public const string InitializeProjectAction = "initialize_project";
 
     /// <summary>The key any surface must present to initialize the observed project state.</summary>
-    public static Guid InitializationKey(ProjectStatusSnapshot snapshot)
+    public static Guid InitializationKey(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return StatusAdvisor.IdempotencyKey(
@@ -72,23 +68,10 @@ public sealed class ForgeApplication(
         return new(startup, advisor.CreateSnapshot(startup));
     }
 
-    public async Task<ProjectStatusSnapshot> GetProjectSnapshotAsync(
+    public async Task<ProjectSnapshot> GetProjectSnapshotAsync(
         string? projectRoot,
         CancellationToken cancellationToken) =>
         (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Snapshot;
-
-    /// <summary>Compatibility alias for the v1.0 <c>project.status</c> contract.</summary>
-    public Task<ProjectStatusSnapshot> GetProjectStatusAsync(
-        string? projectRoot,
-        CancellationToken cancellationToken) =>
-        GetProjectSnapshotAsync(projectRoot, cancellationToken);
-
-    /// <summary>Compatibility projection for the v1.0 <c>project.next</c> contract.</summary>
-    public async Task<IReadOnlyList<SuggestedAction>> GetSuggestedActionsAsync(
-        string? projectRoot,
-        CancellationToken cancellationToken) =>
-        (await GetProjectSnapshotAsync(projectRoot, cancellationToken).ConfigureAwait(false))
-            .SuggestedActions;
 
     /// <summary>
     /// Read-only discovery, matching the `provider.health` capability's declared `query`/`read`

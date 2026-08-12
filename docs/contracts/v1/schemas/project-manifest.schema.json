@@ -24,13 +24,6 @@
           }
         }
       }
-    },
-    "sprints": {
-      "deprecated": true,
-      "description": "Read-only compatibility field from Forge before v0.11.0; ignored and removed on write.",
-      "type": "array",
-      "items": {"type": "string", "format": "uuid"},
-      "uniqueItems": true
     }
   },
   "$defs": {

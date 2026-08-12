@@ -14,7 +14,7 @@ public sealed class StatusAdvisor(IClock clock)
     public const string ContractVersion = "1.0.0";
     private const int MaximumResults = 5;
 
-    public ProjectStatusSnapshot CreateSnapshot(StartupStatus startup)
+    public ProjectSnapshot CreateSnapshot(StartupStatus startup)
     {
         ArgumentNullException.ThrowIfNull(startup);
         long stateVersion = StateVersion(startup.Project);

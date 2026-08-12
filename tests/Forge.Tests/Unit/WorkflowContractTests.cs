@@ -58,7 +58,6 @@ public sealed class WorkflowContractTests
                 "validating",
                 "succeeded",
                 "failed",
-                "abandoned",
                 "cancelled",
             ],
             Enum.GetValues<AttemptState>().Select(WorkflowStateNames.ToSnakeCase));
@@ -71,7 +70,7 @@ public sealed class WorkflowContractTests
     [InlineData(SprintState.Ready, SprintState.Running, true)]
     [InlineData(SprintState.Running, SprintState.ReadyToFinalize, true)]
     [InlineData(SprintState.ReadyToFinalize, SprintState.Completed, true)]
-    [InlineData(SprintState.Blocked, SprintState.ReadyToFinalize, true)]
+    [InlineData(SprintState.Blocked, SprintState.ReadyToFinalize, false)]
     [InlineData(SprintState.Blocked, SprintState.Running, false)]
     [InlineData(SprintState.Completed, SprintState.Draft, false)]
     [InlineData(SprintState.Cancelled, SprintState.Ready, false)]
@@ -91,7 +90,6 @@ public sealed class WorkflowContractTests
     [Trait("Category", "Contract")]
     [InlineData(AttemptState.Created, AttemptState.Preparing, true)]
     [InlineData(AttemptState.Validating, AttemptState.Succeeded, true)]
-    [InlineData(AttemptState.Failed, AttemptState.Abandoned, true)]
     [InlineData(AttemptState.Succeeded, AttemptState.Failed, false)]
     public void AttemptTransitionsMatchFrozenV1Contract(AttemptState from, AttemptState to, bool expected) =>
         Assert.Equal(expected, WorkflowStateMachines.CanTransition(from, to));

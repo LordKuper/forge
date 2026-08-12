@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://forge.dev/schemas/v1/project-status-snapshot.schema.json",
+  "$id": "https://forge.dev/schemas/v1/project-snapshot.schema.json",
   "title": "ProjectSnapshot v1",
   "type": "object",
   "additionalProperties": false,

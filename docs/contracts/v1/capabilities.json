@@ -8,16 +8,6 @@
   },
   "capabilities": [
     {
-      "id": "startup.status",
-      "kind": "query",
-      "contract": "GetStartupStatus",
-      "events": ["StartupCheckChanged"],
-      "cli": "forge doctor --startup",
-      "desktop": "Startup/Refresh",
-      "permission": "read",
-      "acceptance": "startup-status-parity"
-    },
-    {
       "id": "project.snapshot",
       "kind": "query",
       "contract": "GetProjectSnapshot",
@@ -36,26 +26,6 @@
       "desktop": "ProjectPicker/Initialize",
       "permission": "project_write_confirm",
       "acceptance": "project-init-parity"
-    },
-    {
-      "id": "project.status",
-      "kind": "query",
-      "contract": "GetProjectStatus",
-      "events": ["ProjectStatusChanged"],
-      "cli": "forge status [--json]",
-      "desktop": "Dashboard/Refresh",
-      "permission": "read",
-      "acceptance": "project-status-parity"
-    },
-    {
-      "id": "project.next",
-      "kind": "query",
-      "contract": "GetSuggestedActions",
-      "events": ["SuggestedActionsChanged"],
-      "cli": "forge next [--json]",
-      "desktop": "Dashboard/RecommendedActions",
-      "permission": "read",
-      "acceptance": "suggested-actions-parity"
     },
     {
       "id": "control.events",
@@ -78,16 +48,6 @@
       "acceptance": "sprint-lifecycle-parity"
     },
     {
-      "id": "sprint.inspect",
-      "kind": "query",
-      "contract": "InspectSprintGraph",
-      "events": ["NodeChanged", "AttemptChanged"],
-      "cli": "forge sprint <list|status|inspect>",
-      "desktop": "SprintDetails/Open",
-      "permission": "read",
-      "acceptance": "sprint-inspection-parity"
-    },
-    {
       "id": "attempt.supersede",
       "kind": "command",
       "contract": "SupersedeAttempt",
@@ -100,7 +60,7 @@
     {
       "id": "workflow.review",
       "kind": "command",
-      "contract": "ResolveHumanGate",
+      "contract": "ResolveHumanGateWithContext",
       "events": ["GateResolved", "FindingChanged"],
       "cli": "forge gate <approve|reject>",
       "desktop": "Review/ResolveGate",

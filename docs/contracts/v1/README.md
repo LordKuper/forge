@@ -1,7 +1,8 @@
 # Forge contracts v1
 
-The v1 contract family freezes Stage 0 boundaries. Registries evolve
-independently through compatible minor versions; `capabilities.json` and
+The v1 contract family defines the current pre-1.0 boundaries. Until Forge
+`1.0.0`, these public contracts are unstable and a Forge MINOR release may remove
+or replace them without aliases or a deprecation period. `capabilities.json` and
 `state-machines.json` declare their current versions.
 
 ## Normative files
@@ -21,10 +22,8 @@ and newer minor only when unknown optional fields can be ignored safely.
 The local Host transport is defined by ADR 0005. It serializes these application
 contracts but is not a second capability model. `project.snapshot` is the
 authoritative read model and `control.events` is its incremental invalidation
-stream. The v1.0 `startup.status`, `project.status`, `project.next`, and
-`sprint.inspect` capabilities remain compatible projections of the same snapshot;
-they are not independent Host queries. Pipe handshakes, framing, leases, and
-client reconnect are shared transport/runtime requirements.
+stream; pipe handshakes, framing, leases, and client reconnect are shared
+transport/runtime requirements.
 
 The Stage 0 gate builds every schema with the pinned JsonSchema.Net validator,
 resolves cross-schema references, requires format validation, and evaluates every
@@ -76,7 +75,9 @@ forbidden. If safe structured parsing fails, the payload is dropped and a
 
 ## Contract evolution
 
-Breaking field, meaning, state, or transition changes require a new major
-directory. Additive optional changes require a minor contract version and
-fixtures proving old-reader behavior. Persisted data migrations are explicit,
-independent by scope, atomic, and reversible.
+Before Forge `1.0.0`, field, meaning, state, transition, and API replacements may
+remain in this directory with a contract-version increase and current fixtures.
+At or after `1.0.0`, breaking changes require a new major directory; additive
+optional changes require a minor contract version and old-reader fixtures.
+Persisted data migrations remain explicit, independent by scope, atomic, and
+reversible at every Forge version.

@@ -519,6 +519,50 @@ public sealed class SprintResilienceTests
         Assert.Equal(SprintState.AwaitingHuman, resumed.Sprint.State);
     }
 
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(1, SprintState.Blocked)]
+    [InlineData(2, SprintState.Ready)]
+    [InlineData(3, SprintState.Running)]
+    public async Task FindingRecoveryResumesAfterEveryInterruptedAppend(
+        int failedAppend,
+        SprintState interruptedState)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+        int baseline = store.AppendCount;
+        store.FailAt[baseline + failedAppend] = AppendOutcome.Conflict;
+
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved,
+            cancellationToken);
+        Assert.Equal(
+            interruptedState,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding.FindingId, FindingStatus.Resolved,
+            cancellationToken);
+
+        Assert.Equal(
+            SprintState.ReadyToFinalize,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SprintIdentityIsStableAcrossDifferentPathCasingForTheSameProject()

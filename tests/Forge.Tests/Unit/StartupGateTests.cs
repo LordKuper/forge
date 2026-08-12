@@ -32,7 +32,7 @@ public sealed class StartupGateTests
         using TestEnvironment environment = new();
         await WriteCorruptUserConfigurationAsync(environment);
 
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 
@@ -47,7 +47,7 @@ public sealed class StartupGateTests
     public async Task ForeignIdempotencyKeyIsRejectedWithoutSideEffect()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot,
             TestContext.Current.CancellationToken);
 
@@ -65,7 +65,7 @@ public sealed class StartupGateTests
     public async Task RecommendedIdempotencyKeyIsAccepted()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
         SuggestedAction action = snapshot.SuggestedActions.Single();
@@ -87,7 +87,7 @@ public sealed class StartupGateTests
     public async Task ReplayingACompletedInitializationIsRejected()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
         InitializeProjectCommand command = new(
@@ -112,7 +112,7 @@ public sealed class StartupGateTests
     public async Task CancellationLeavesNoStagingTree()
     {
         using TestEnvironment environment = new();
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
         using CancellationTokenSource cancellation = new();
@@ -250,7 +250,7 @@ public sealed class StartupGateTests
             null,
             true,
             TestContext.Current.CancellationToken);
-        ProjectStatusSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             null,
             TestContext.Current.CancellationToken);
 

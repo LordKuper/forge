@@ -45,8 +45,6 @@ public enum AttemptState
     Validating,
     Succeeded,
     Failed,
-    /// <summary>Compatibility state retained for v1 journals; current orchestration does not emit it.</summary>
-    Abandoned,
     Cancelled,
 }
 

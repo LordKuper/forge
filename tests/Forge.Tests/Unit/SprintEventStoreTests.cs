@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Domain;
 
@@ -120,6 +121,32 @@ public sealed class SprintEventStoreTests
         Assert.NotNull(state);
         Assert.Equal(SprintState.Draft, state.Sprint.State);
         Assert.Equal(0, state.LastSequence);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATransitionMissingToStateFailsClosedWithoutAppendingFromStaleState()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        JsonNode corrupted = JsonNode.Parse(await File.ReadAllTextAsync(eventsPath, cancellationToken))!;
+        Assert.True(corrupted["arguments"]!.AsObject().Remove("to_state"));
+        await File.WriteAllTextAsync(eventsPath, corrupted.ToJsonString() + "\n", cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => log.LoadAsync(root.Path, sprintId, cancellationToken));
+        AppendOutcome append = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_ready", "ready", 1, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(append.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowLogCorrupted, append.DiagnosticCode);
+        Assert.Single(await File.ReadAllLinesAsync(eventsPath, cancellationToken));
     }
 
     [Fact]

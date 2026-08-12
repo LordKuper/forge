@@ -354,7 +354,7 @@ public sealed class ConfigurationTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task ProjectStoreDropsTheLegacyRuntimeSprintRegistryOnWrite()
+    public async Task ProjectStoreRejectsTheRemovedRuntimeSprintRegistry()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
         string path = Path.Combine(directory, ".forge", "manifest.yaml");
@@ -378,13 +378,8 @@ public sealed class ConfigurationTests
             YamlConfigurationStore store =
                 new(path, ConfigurationScope.Project, new ConfigurationRegistry());
 
-            ConfigurationDocument document = await store.ReadAsync(TestContext.Current.CancellationToken);
-            await store.WriteAsync(document, TestContext.Current.CancellationToken);
-
-            Assert.DoesNotContain(
-                "sprints:",
-                await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken),
-                StringComparison.Ordinal);
+            await Assert.ThrowsAsync<InvalidDataException>(
+                () => store.ReadAsync(TestContext.Current.CancellationToken));
         }
         finally
         {
