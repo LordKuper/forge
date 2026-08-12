@@ -726,8 +726,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     private const string BlockedByGate = "gate";
 
     /// <summary>
-    /// The one narrow, explicit path that may move a `blocked` sprint straight to
-    /// `ready_to_finalize`: called only from <see cref="ResolveFindingAsync"/>, and only advances
+    /// The one narrow, explicit path that may resume a finding-blocked sprint automatically:
+    /// called only from <see cref="ResolveFindingAsync"/>, and only advances
     /// when the sprint's durable `blocked_reason` is itself <see cref="BlockedByFinding"/> — not
     /// merely when every node happens to be settled good, which a stuck node's manual retry-and-skip
     /// produces identically to a genuine late-finding block, and would otherwise let resolving an
@@ -740,8 +740,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Blocked || state.Sprint.BlockedReason != BlockedByFinding ||
-            state.Nodes.Count == 0)
+        bool beginsRecovery = state.Sprint.State == SprintState.Blocked &&
+            state.Sprint.BlockedReason == BlockedByFinding;
+        bool resumesRecovery = state.Sprint.State == SprintState.Ready &&
+            state.Sprint.BlockedReason == BlockedByFinding;
+        if ((!beginsRecovery && !resumesRecovery) || state.Nodes.Count == 0)
         {
             return;
         }
@@ -759,10 +762,32 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return;
         }
 
-        await store.AppendTransitionAsync(
+        if (beginsRecovery)
+        {
+            AppendOutcome ready = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+                "workflow.sprint_ready", WorkflowStateNames.ToSnakeCase(SprintState.Ready),
+                state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = BlockedByFinding,
+                }).ConfigureAwait(false);
+            if (!ready.Succeeded)
+            {
+                return;
+            }
+
+            state = ready.State!;
+        }
+
+        AppendOutcome running = await store.AppendTransitionAsync(
             projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
-            "workflow.sprint_ready_to_finalize", WorkflowStateNames.ToSnakeCase(SprintState.ReadyToFinalize),
+            "workflow.sprint_running", WorkflowStateNames.ToSnakeCase(SprintState.Running),
             state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+        if (running.Succeeded)
+        {
+            await EvaluateCompletionAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public async Task<RecordFindingResult> RecordFindingAsync(

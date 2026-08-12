@@ -45,7 +45,6 @@ public enum AttemptState
     Validating,
     Succeeded,
     Failed,
-    Abandoned,
     Cancelled,
 }
 

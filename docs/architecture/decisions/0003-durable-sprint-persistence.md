@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-05
+- Revised: 2026-08-12
 - Contract version: 1.0.0
 
 ## Context
@@ -39,34 +40,42 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   caller's expected version matches that aggregate's current version folded
   from the log (0 for an aggregate that does not exist yet); otherwise it is
   rejected with `workflow_event_conflict` and no side effect.
-- Idempotency uses two ledgers, both atomically written with
-  `AtomicConfigurationFile`: a per-sprint `idempotency.json` for transition
-  commands (run/cancel/resume — exactly one legal next action per sprint
-  version, so the key is deterministically derived the same way
-  `InitializeProjectCommand` derives its key), and a project-level
-  `.forge/sprints/created.json` for sprint creation (creating a sprint does
-  not change the project's own state version, so its idempotency key is an
-  opaque caller-supplied token recorded against the sprint it produced).
+- Transition idempotency uses per-sprint `idempotency.json`, atomically written
+  with `AtomicConfigurationFile`. Sprint creation derives its stable sprint id
+  from the canonical project root and opaque caller key, writes the sprint
+  directory idempotently, and publishes visibility last through that directory's
+  atomic `created.marker`; no project-level creation ledger exists.
 - No snapshot cache exists yet. Sprint event streams are expected to stay
   small (tens of events), so folding on every read is simpler than maintaining
   a second crash-recovery surface for a cache. This is a deliberate, revisitable
   simplification (`ponytail:` comment on `FileSprintEventLog`), not a
   structural limit — nothing in the event schema or the fold function assumes
   it.
+- The same journal records routing decisions and provider outcomes. Retry budget
+  and circuit-breaker state are folded from those records; there is no separate
+  routing store or routing snapshot. Pre-v0.11 routing sidecars migrate once with
+  deterministic event ids and remain read-only rollback evidence.
+- Sprint discovery enumerates completed sprint directories through their durable
+  creation marker. Project manifest configuration never registers runtime sprint
+  ids. The reader validates and strips the persisted pre-v0.11 `sprints` registry
+  before current-contract validation, and the next write omits it; the field is
+  not exposed by the current schema or application API.
+- Failed attempts are terminal and the obsolete `abandoned` state is removed. A
+  finding-blocked sprint returns through the crash-resumable ordinary
+  `ready -> running -> ready_to_finalize` path; the direct blocked edge is removed.
 
-`overview.md`'s system boundary diagram is updated from `SQLite/CAS` to
-`Event log/CAS` to match. Content-addressed artifact storage (CAS) is
-unaffected and remains a separate, later concern (Stage 6 findings/handoffs,
-Stage 9 memory).
+`overview.md`'s system boundary diagram is updated from `SQLite/CAS` to one
+sprint journal plus immutable artifacts. Artifact payloads remain separate files
+addressed by digest; Forge adds no generic CAS service for the MVP.
 
 ## Consequences
 
 - Zero new dependencies for Stage 6's persistence core.
-- `sprint.inspect` (listing/filtering across many sprints, nodes, findings)
+- `project.snapshot` (listing/filtering across many sprints, nodes, findings)
   will need to scan and fold per-sprint logs rather than issue a SQL query;
   acceptable at MVP sprint-count scale, revisited if evaluation data shows
   otherwise.
-- Multi-process concurrent writers to the same sprint are not supported (single
-  Forge process per user, matching the existing MVP boundary); the append path
-  relies on `FileShare.Read` to fail loudly rather than corrupt on a concurrent
-  writer, it does not coordinate between them.
+- Store internals do not coordinate multiple writers. ADR 0005 makes this safe at
+  the application boundary: one Forge Host owns mutations and holds a shared
+  per-project OS lease; a competing host fails before reaching the append path.
+  `FileShare.Read` remains a final fail-loudly guard, not the ownership mechanism.

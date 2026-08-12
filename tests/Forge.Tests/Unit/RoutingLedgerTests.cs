@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Domain;
 
@@ -12,7 +13,7 @@ public sealed class RoutingLedgerTests
     public async Task TheFirstDecisionForAFreshKeyRoutesAndConsumesOneUnitOfTheSharedBudget()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
@@ -29,7 +30,7 @@ public sealed class RoutingLedgerTests
     public async Task TheBreakerOpensAfterTheConfiguredNumberOfConsecutiveTransientFailuresAndBlocksFurtherRouting()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -54,7 +55,7 @@ public sealed class RoutingLedgerTests
     {
         using TestRoot root = new();
         FakeClock clock = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), clock);
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -83,7 +84,7 @@ public sealed class RoutingLedgerTests
     public async Task AnAuthFailureIsExcludedAndNeverTripsTheBreaker()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -111,7 +112,7 @@ public sealed class RoutingLedgerTests
     public async Task APolicyFailureIsExcludedAndNeverTripsTheBreaker()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -131,7 +132,7 @@ public sealed class RoutingLedgerTests
     public async Task AnExcludedFailureForADecisionThatWasNotRoutedDoesNotCreditAUnitItNeverSpent()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -157,7 +158,7 @@ public sealed class RoutingLedgerTests
     {
         using TestRoot root = new();
         FakeClock clock = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), clock);
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -192,7 +193,7 @@ public sealed class RoutingLedgerTests
     {
         using TestRoot root = new();
         FakeClock clock = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), clock);
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -222,14 +223,14 @@ public sealed class RoutingLedgerTests
     public async Task ATornTrailingRouteDecisionLineIsDiscardedRatherThanCorruptingTheNextAppend()
     {
         using TestRoot root = new();
-        FileRoutingStore store = new();
+        FileSprintEventLog store = new(new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         RouteDecision first = new(Guid.NewGuid(), sprintId, "a", attemptId, Key, RouteOutcome.Routed, null, DateTimeOffset.UnixEpoch);
         await store.AppendRouteDecisionAsync(root.Path, first, cancellationToken);
 
-        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing", "decisions.jsonl");
+        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
         byte[] completeBytes = await File.ReadAllBytesAsync(path, cancellationToken);
         // Simulates a crash mid-append: a second, real event's buffer was only partially flushed —
         // its bytes exist on disk but with no terminating newline.
@@ -258,10 +259,10 @@ public sealed class RoutingLedgerTests
     public async Task AGenuinelyCorruptRouteDecisionLineSurfacesAsADiagnosableInvalidDataException()
     {
         using TestRoot root = new();
-        FileRoutingStore store = new();
+        FileSprintEventLog store = new(new FakeClock());
         SprintId sprintId = SprintId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing", "decisions.jsonl");
+        string path = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         // Newline-terminated (not torn) but not valid JSON — real corruption this store never
         // produces itself.
@@ -271,12 +272,52 @@ public sealed class RoutingLedgerTests
             () => store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken));
     }
 
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task RoutingPathsDoNotMutateOrMarkAJournalWithACorruptTransition(bool append)
+    {
+        using TestRoot root = new();
+        FileSprintEventLog store = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await store.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        string sprintDirectory = FileSprintEventLog.SprintDirectory(root.Path, sprintId);
+        string eventsPath = Path.Combine(sprintDirectory, "events.jsonl");
+        JsonNode corrupted = JsonNode.Parse(await File.ReadAllTextAsync(eventsPath, cancellationToken))!;
+        Assert.True(corrupted["arguments"]!.AsObject().Remove("to_state"));
+        string original = corrupted.ToJsonString() + "\n";
+        await File.WriteAllTextAsync(eventsPath, original, cancellationToken);
+        string routingDirectory = Path.Combine(sprintDirectory, "routing");
+        Directory.CreateDirectory(routingDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "retry-budget.json"),
+            "{\"total\":10,\"consumed\":0}",
+            cancellationToken);
+
+        Task action = append
+            ? store.AppendRouteDecisionAsync(
+                root.Path,
+                new(
+                    Guid.NewGuid(), sprintId, "a", AttemptId.New(), Key, RouteOutcome.Routed, null,
+                    DateTimeOffset.UnixEpoch),
+                cancellationToken)
+            : store.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => action);
+        Assert.Equal(original, await File.ReadAllTextAsync(eventsPath, cancellationToken));
+        Assert.False(File.Exists(Path.Combine(routingDirectory, "migrated-to-sprint-journal")));
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task TheRetryBudgetIsSharedAcrossDifferentNodesAndHealthKeysInTheSameSprint()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         HealthKey otherKey = new("codex", "gpt", "sprint");
@@ -300,7 +341,7 @@ public sealed class RoutingLedgerTests
     public async Task RouteDecisionsAreDurablyRecordedInOrder()
     {
         using TestRoot root = new();
-        RoutingLedger ledger = new(new FileRoutingStore(), new FakeClock());
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
         SprintId sprintId = SprintId.New();
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -316,5 +357,85 @@ public sealed class RoutingLedgerTests
         Assert.Equal(RouteOutcome.Routed, decisions[0].Outcome);
         Assert.Equal(RouteOutcome.Excluded, decisions[1].Outcome);
         Assert.Equal(FailureClass.Auth, decisions[1].FailureClass);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LegacyRoutingSidecarsMigrateOnceIntoTheSprintJournal()
+    {
+        using TestRoot root = new();
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        Guid decisionId = Guid.NewGuid();
+        string routingDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing");
+        string breakersDirectory = Path.Combine(routingDirectory, "breakers");
+        Directory.CreateDirectory(breakersDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "decisions.jsonl"),
+            $$"""
+            {"decision_id":"{{decisionId:D}}","node_id":"a","attempt_id":"{{attemptId.Value:D}}","provider":"claude_code","model":"sonnet","surface":"sprint","outcome":"routed","failure_class":null,"decided_at":"1970-01-01T00:00:00+00:00"}
+            """ + "\n",
+            TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(breakersDirectory, "legacy.json"),
+            """
+            {"provider":"claude_code","model":"sonnet","surface":"sprint","state":"open","consecutive_failures":3,"opened_at":"1970-01-01T00:00:00+00:00","cooldown_until":"1970-01-01T00:02:00+00:00","updated_at":"1970-01-01T00:00:00+00:00"}
+            """,
+            TestContext.Current.CancellationToken);
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
+
+        IReadOnlyList<RouteDecision> first = await ledger.GetRouteDecisionsAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+        IReadOnlyList<RouteDecision> second = await ledger.GetRouteDecisionsAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+        CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(
+            root.Path, sprintId, Key, TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, first.Count);
+        Assert.Equal(first, second);
+        Assert.Equal(decisionId, first[0].DecisionId);
+        Assert.Equal(CircuitState.Open, breaker!.State);
+        Assert.True(File.Exists(Path.Combine(routingDirectory, "migrated-to-sprint-journal")));
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task LegacyRetryBudgetReconcilesEitherOldCrashOrdering(bool budgetWriteWasAhead)
+    {
+        using TestRoot root = new();
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string routingDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing");
+        Directory.CreateDirectory(routingDirectory);
+        if (!budgetWriteWasAhead)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(routingDirectory, "decisions.jsonl"),
+                $$"""
+                {"decision_id":"{{Guid.NewGuid():D}}","node_id":"a","attempt_id":"{{attemptId.Value:D}}","provider":"claude_code","model":"sonnet","surface":"sprint","outcome":"routed","failure_class":null,"decided_at":"1970-01-01T00:00:00+00:00"}
+                """ + "\n",
+                TestContext.Current.CancellationToken);
+        }
+
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "retry-budget.json"),
+            $$"""{"total":10,"consumed":{{(budgetWriteWasAhead ? 1 : 0)}}}""",
+            TestContext.Current.CancellationToken);
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
+
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+        IReadOnlyList<RouteDecision> decisions = await ledger.GetRouteDecisionsAsync(
+            root.Path, sprintId, TestContext.Current.CancellationToken);
+
+        RouteOutcome[] expected = budgetWriteWasAhead
+            ? [RouteOutcome.Routed]
+            : [RouteOutcome.Routed, RouteOutcome.Excluded];
+        Assert.Equal(budgetWriteWasAhead ? 1 : 0, budget.Consumed);
+        Assert.Equal(expected, decisions.Select(item => item.Outcome));
     }
 }

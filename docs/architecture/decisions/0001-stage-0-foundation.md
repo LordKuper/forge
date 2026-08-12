@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-27
+- Revised: 2026-08-12
 - Contract version: 1.0.0
 
 ## Context
@@ -15,16 +16,19 @@ records the decisions and recovery guarantees behind them.
 
 ### MVP boundary
 
-- The MVP supports a per-user Windows installation and Windows runtime only.
+- The MVP supports a per-user Windows installation and distribution only. This
+  release boundary does not permit platform-specific reusable code; ADR 0007
+  requires a cross-platform core and minimal leaf OS adapters.
 - `implementation-critical` is the only enabled workflow.
 - The updater core is platform-neutral. Only `WindowsUpdateStrategy` is
-  registered; any other target returns `platform_not_supported` before network
+  registered by the Windows composition adapter; any other target returns
+  `platform_not_supported` before network
   or filesystem mutation.
 - `<project-root>/.forge/` is the sole canonical project-configuration tree.
   User configuration lives at `%LOCALAPPDATA%\Forge\config.json`.
-- Linux, macOS, package-manager distribution, machine-wide installation,
-  lightweight workflows, distributed workers, SaaS, and enterprise policy are
-  deferred.
+- Linux and macOS distributions and native adapters, package-manager
+  distribution, machine-wide installation, lightweight workflows, distributed
+  workers, SaaS, and enterprise policy are deferred.
 
 ### Release and update trust
 
@@ -89,15 +93,17 @@ presentation-independent redaction pipeline runs before persistence or display.
 
 ### Presentation parity and orchestration
 
-CLI/TUI and .NET MAUI Desktop are equal adapters over immutable commands, queries,
-DTOs, and typed events. Presentation projects may format, navigate, and collect
-input, but may not call providers, Git, SQLite, filesystem mutation, or updater
+CLI/TUI and .NET MAUI Desktop are equal clients over immutable commands, one
+project snapshot, and typed events. ADR 0005 refines process ownership: a headless Forge Host
+owns orchestration and mutation, and both presentations use its versioned local
+protocol. Presentation projects may format, navigate, and collect input, but may
+not call providers, Git, event stores, filesystem mutation, or updater
 implementations, define business orchestration, or define separate permission
 rules. A public capability is releasable only when every field in
 `capabilities.json` is implemented and its shared acceptance test passes on both
 surfaces.
 
-Desktop uses one process per Windows user and may own multiple project windows.
+Desktop uses one client process per Windows user and may own multiple project windows.
 Recent projects and per-project navigation intent are user-scope conveniences,
 not workflow state. Restart restores a view by querying durable application state;
 it never resumes work from serialized UI objects. A second launch activates the
@@ -109,7 +115,9 @@ the same commands and cannot bypass those controls.
 
 ### Status and deterministic guidance
 
-`ProjectStatusSnapshot` is immutable and versioned. An active sprint is the
+`ProjectSnapshot` is the immutable, versioned read model. Summary, next-action,
+tree, sprint-detail, startup, and integration-status views are projections of
+that DTO, not separate application queries. An active sprint is the
 explicit surface selection or the sole non-terminal sprint. With multiple
 non-terminal sprints, Forge selects none.
 
@@ -159,7 +167,8 @@ English catalog is mandatory.
 
 ## Technology choices
 
-- .NET 10; .NET MAUI with WinUI 3 for Windows Desktop.
+- .NET 10; .NET MAUI with WinUI 3 for the minimal Windows Desktop host, with
+  reusable presentation state kept neutral under ADR 0007.
 - `System.CommandLine` for CLI parsing; Terminal.Gui for the optional full-screen
   TUI adapter.
 - `Microsoft.Extensions.DependencyInjection` for composition.

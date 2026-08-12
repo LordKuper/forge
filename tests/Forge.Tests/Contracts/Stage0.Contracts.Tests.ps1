@@ -27,7 +27,7 @@ $requiredSchemas = @(
     'handoff',
     'finding',
     'node-result',
-    'project-status-snapshot',
+    'project-snapshot',
     'suggested-action',
     'user-config',
     'language-pack'

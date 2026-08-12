@@ -74,7 +74,6 @@ internal static class ConfigurationSchemaCodec
                         "artifacts.language.agent_facing"),
                 },
             },
-            Sprints = document.Sprints?.Select(item => item.ToString("D")).ToArray(),
         };
         Validate(
             JsonSerializer.SerializeToElement(persisted, JsonOptions),
@@ -98,8 +97,7 @@ internal static class ConfigurationSchemaCodec
             1,
             values,
             Guid.Parse(persisted.ProjectId),
-            persisted.Workflow,
-            persisted.Sprints?.Select(Guid.Parse).ToArray());
+            persisted.Workflow);
     }
 
     public static void ValidateProject(JsonElement element) =>
@@ -225,12 +223,6 @@ internal static class ConfigurationSchemaCodec
 
         public ProjectArtifacts Artifacts { get; set; } = new();
 
-        // A concrete array, not `IReadOnlyList<string>`: YamlDotNet's default deserializer cannot
-        // construct a value for an interface-typed property, so it silently stays null on read
-        // even though a value was serialized — losing every previously registered sprint on the
-        // next write. Every other collection persisted through this codec already uses a concrete
-        // type for exactly this reason.
-        public string[]? Sprints { get; set; }
     }
 
     internal sealed class ProjectArtifacts

@@ -81,4 +81,12 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
     public Task<IReadOnlyList<Handoff>> GetHandoffsAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetHandoffsAsync(projectRoot, sprintId, cancellationToken);
+
+    public Task AppendRouteDecisionAsync(
+        string projectRoot, RouteDecision decision, CancellationToken cancellationToken) =>
+        inner.AppendRouteDecisionAsync(projectRoot, decision, cancellationToken);
+
+    public Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
+        string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+        inner.GetRouteDecisionsAsync(projectRoot, sprintId, cancellationToken);
 }

@@ -37,7 +37,7 @@
         "ready": ["running", "cancelled"],
         "running": ["awaiting_human", "blocked", "failed", "ready_to_finalize", "cancelled"],
         "awaiting_human": ["running", "blocked", "cancelled"],
-        "blocked": ["ready", "ready_to_finalize", "cancelled"],
+        "blocked": ["ready", "cancelled"],
         "failed": ["ready", "cancelled"],
         "ready_to_finalize": ["completed", "blocked"],
         "completed": [],
@@ -60,15 +60,14 @@
     },
     "attempt": {
       "initial": "created",
-      "terminal": ["succeeded", "abandoned", "cancelled"],
+      "terminal": ["succeeded", "failed", "cancelled"],
       "transitions": {
         "created": ["preparing", "cancelled"],
         "preparing": ["running", "failed", "cancelled"],
         "running": ["validating", "failed", "cancelled"],
         "validating": ["succeeded", "failed"],
         "succeeded": [],
-        "failed": ["abandoned"],
-        "abandoned": [],
+        "failed": [],
         "cancelled": []
       }
     }

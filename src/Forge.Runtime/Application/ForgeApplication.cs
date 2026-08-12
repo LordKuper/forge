@@ -25,7 +25,7 @@ public sealed record ConfigurationView(
     public static ConfigurationView Empty { get; } = new([], DiagnosticCodes.None);
 }
 
-public sealed record ProjectOverview(StartupStatus Startup, ProjectStatusSnapshot Status);
+public sealed record ProjectOverview(StartupStatus Startup, ProjectSnapshot Snapshot);
 
 /// <summary>
 /// The single entry point both surfaces use. Presentation adapters format and collect input;
@@ -44,7 +44,7 @@ public sealed class ForgeApplication(
     public const string InitializeProjectAction = "initialize_project";
 
     /// <summary>The key any surface must present to initialize the observed project state.</summary>
-    public static Guid InitializationKey(ProjectStatusSnapshot snapshot)
+    public static Guid InitializationKey(ProjectSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
         return StatusAdvisor.IdempotencyKey(
@@ -68,10 +68,10 @@ public sealed class ForgeApplication(
         return new(startup, advisor.CreateSnapshot(startup));
     }
 
-    public async Task<ProjectStatusSnapshot> GetProjectStatusAsync(
+    public async Task<ProjectSnapshot> GetProjectSnapshotAsync(
         string? projectRoot,
         CancellationToken cancellationToken) =>
-        (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
+        (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Snapshot;
 
     /// <summary>
     /// Read-only discovery, matching the `provider.health` capability's declared `query`/`read`
@@ -83,12 +83,6 @@ public sealed class ForgeApplication(
     /// <summary>Installs or updates any provider that is not ready, then rechecks both.</summary>
     public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.EnsureReadyAsync(cancellationToken);
-
-    public async Task<IReadOnlyList<SuggestedAction>> GetSuggestedActionsAsync(
-        string? projectRoot,
-        CancellationToken cancellationToken) =>
-        (await GetProjectStatusAsync(projectRoot, cancellationToken).ConfigureAwait(false))
-            .SuggestedActions;
 
     /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
     public async Task<RecoverStartupResult> RecoverStartupAsync(

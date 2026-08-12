@@ -1,5 +1,4 @@
 using Forge.Application;
-using Forge.Configuration;
 using Forge.Domain;
 using Forge.Tests.Support;
 
@@ -206,32 +205,25 @@ public sealed class SprintResilienceTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task RetryingCreateSprintRepairsAMissingManifestEntryWithoutDuplicatingTheSprint()
+    public async Task CreatingAndRetryingASprintDoesNotMutateTheProjectManifest()
     {
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        IConfigurationRegistry registry = environment.Resolve<IConfigurationRegistry>();
         ISprintStore store = environment.Resolve<ISprintStore>();
         Guid idempotencyKey = Guid.NewGuid();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string before = await File.ReadAllTextAsync(manifestPath, cancellationToken);
 
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, idempotencyKey), cancellationToken)).SprintId!;
-
-        // Simulate a crash between the sprint directory landing and the manifest write: strip the
-        // manifest entry back out while the sprint directory itself stays fully built.
-        YamlConfigurationStore manifestStore = new(
-            ProjectRootResolver.ManifestPath(environment.ProjectRoot), ConfigurationScope.Project, registry);
-        ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken);
-        await manifestStore.WriteAsync(document with { Sprints = [] }, cancellationToken);
 
         CreateSprintResult retried = await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, idempotencyKey), cancellationToken);
 
         Assert.True(retried.Succeeded);
         Assert.Equal(sprintId, retried.SprintId);
-        ConfigurationDocument repaired = await manifestStore.ReadAsync(cancellationToken);
-        Assert.Equal([sprintId.Value], repaired.Sprints);
+        Assert.Equal(before, await File.ReadAllTextAsync(manifestPath, cancellationToken));
         Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 
@@ -525,6 +517,50 @@ public sealed class SprintResilienceTests
 
         Assert.Equal(NodeState.AwaitingHuman, resumed.Nodes["gate"].State);
         Assert.Equal(SprintState.AwaitingHuman, resumed.Sprint.State);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(1, SprintState.Blocked)]
+    [InlineData(2, SprintState.Ready)]
+    [InlineData(3, SprintState.Running)]
+    public async Task FindingRecoveryResumesAfterEveryInterruptedAppend(
+        int failedAppend,
+        SprintState interruptedState)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+        RecordFindingResult recorded = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+        int baseline = store.AppendCount;
+        store.FailAt[baseline + failedAppend] = AppendOutcome.Conflict;
+
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved,
+            cancellationToken);
+        Assert.Equal(
+            interruptedState,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
+
+        await scheduler.ResolveFindingAsync(
+            environment.ProjectRoot, sprintId, recorded.Finding.FindingId, FindingStatus.Resolved,
+            cancellationToken);
+
+        Assert.Equal(
+            SprintState.ReadyToFinalize,
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
     }
 
     [Fact]

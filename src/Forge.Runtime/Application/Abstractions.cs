@@ -241,40 +241,6 @@ public interface ISprintStore
         string projectRoot,
         SprintId sprintId,
         CancellationToken cancellationToken);
-}
-
-public interface IArtifactStore;
-
-/// <summary>
-/// Durable routing state for one sprint: a circuit breaker per <see cref="HealthKey"/>, one shared
-/// retry budget, and an append-only, reproducible log of every routing decision made. Scoped per
-/// sprint like every other durable record Stage 6 introduced — see <c>RoutingLedger</c>'s own
-/// remarks for why cross-sprint sharing is deliberately out of scope for now.
-/// </summary>
-public interface IRoutingStore
-{
-    Task<CircuitBreakerRecord?> GetCircuitBreakerAsync(
-        string projectRoot,
-        SprintId sprintId,
-        HealthKey key,
-        CancellationToken cancellationToken);
-
-    Task SaveCircuitBreakerAsync(
-        string projectRoot,
-        SprintId sprintId,
-        CircuitBreakerRecord record,
-        CancellationToken cancellationToken);
-
-    Task<RetryBudgetRecord?> GetRetryBudgetAsync(
-        string projectRoot,
-        SprintId sprintId,
-        CancellationToken cancellationToken);
-
-    Task SaveRetryBudgetAsync(
-        string projectRoot,
-        SprintId sprintId,
-        RetryBudgetRecord record,
-        CancellationToken cancellationToken);
 
     Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken);
 
@@ -283,6 +249,8 @@ public interface IRoutingStore
         SprintId sprintId,
         CancellationToken cancellationToken);
 }
+
+public interface IArtifactStore;
 
 public interface ISafeLogger
 {

@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-10
+- Revised: 2026-08-12
 - Contract version: 1.0.0
 
 ## Context
@@ -13,7 +14,7 @@ auth/policy exclusions (`docs/plans/implementation-plan.md` Stage 7;
 `docs/architecture/overview.md` "Provider execution and fallback"). No node
 executor exists yet — Stage 6 built the DAG scheduler ahead of its own
 executor, and Stage 7 continues that pattern: it builds the Git and routing
-primitives a future executor (Stage 10) will call, exercised here directly
+primitives a future executor (Stage 11) will call, exercised here directly
 against real `git.exe` and a real routing ledger rather than against a fake.
 
 ## Decisions
@@ -83,8 +84,8 @@ attempt's branch. `SprintGitIsolation.IntegrateAsync` first re-reads the
 integration worktree's actual `HEAD` and compares it against the caller's
 `expectedIntegrationTip`; a mismatch fails closed with
 `worktree_base_mismatch` and changes nothing — this is the base check. The
-merge itself is additionally serialized per sprint (an in-process lock,
-matching the single-process assumption `FileSprintEventLog` already makes),
+merge itself is additionally serialized per sprint (an in-process lock inside
+the single writer guaranteed by ADR 0005),
 so two attempts finishing at once integrate one at a time rather than racing.
 Recovery from a stale base is only ever the explicit
 `SprintGitIsolation.RebaseAttemptAsync` — `git rebase --onto <new-tip>
@@ -115,9 +116,10 @@ next time `ReconcileAsync` runs for that sprint.
 ### Circuit breakers and the retry budget are scoped per sprint, not shared
 
 `RoutingLedger` keys a circuit breaker by `HealthKey(Provider, Model,
-Surface)` and shares one retry budget across every node/attempt in a sprint,
-both durable per sprint (`.forge/sprints/{id}/routing/`) through
-`IRoutingStore`. This does not share breaker/budget state across concurrent
+Surface)` and shares one retry budget across every node/attempt in a sprint.
+Both are folded from routing decisions and outcomes in the sprint journal; no
+separate `IRoutingStore`, breaker file, or retry-budget file exists. This does
+not share breaker/budget state across concurrent
 sprints on the same project, or across projects — a real provider outage
 affecting every sprint identically is a gap this leaves open. Promoting this
 to project or user scope is deferred until evaluation data shows flapping
@@ -139,34 +141,26 @@ to actually was `Routed` — a `RecordOutcomeAsync` call is matched to its
 never be refunded into extra budget. Matching `overview.md`'s "Authentication
 and policy failures are never disguised as transient failures." Every
 budget/breaker read-modify-write is additionally serialized per sprint (one
-in-process lock shared by `DecideAsync` and `RecordOutcomeAsync`), the same
-single-process guarantee `FileSprintEventLog`'s own per-sprint lock gives its
-event log.
+in-process lock shared by `DecideAsync` and `RecordOutcomeAsync`), inside the
+single writer guaranteed by ADR 0005.
 
-### Every routing decision is durable
+### Routing reuses the sprint journal
 
-`RoutingLedger.DecideAsync` and `RecordOutcomeAsync` both append to
-`decisions.jsonl` before returning, regardless of outcome — routed, circuit
-open, budget exhausted, or excluded. A fallback sequence is reproducible from
-this log alone. Reading that log can itself write (truncating a torn
-trailing line — see `FileRoutingStore.ReadLinesAsync`'s own remarks), so a
-read holds the exact same per-path lock an append does; without that, a read
-racing a concurrent append could truncate away an append its own caller had
-already been told succeeded. This is a per-process guarantee only, matching
-the single-process assumption every other Stage 6/7 file store already makes
-(multiple Forge processes writing the same sprint concurrently is out of
-scope, same as `FileSprintEventLog`).
+`RoutingLedger.DecideAsync` and `RecordOutcomeAsync` append routed, succeeded,
+failed, circuit-open, budget-exhausted, and excluded records to `events.jsonl`.
+The existing journal lock, write-through append, torn-tail recovery, cursor, and
+redaction rules apply unchanged. A fallback sequence, retry balance, and breaker
+state are reproducible from this one stream. ADR 0005 prevents another Forge Host
+from reaching the same mutation path through the project lease.
 
 ## Consequences
 
-- No new external dependency; `GitWorktreeManager` and `FileRoutingStore`
-  follow the same real-process and atomic-file-write conventions Stage 1–6
-  already established.
+- No new external dependency or routing persistence abstraction.
 - `IWorktreeManager`/`SprintGitIsolation` are exercised in this stage's tests
   against real temporary Git repositories (`git.exe`), not fakes — worktree,
   merge, and rebase semantics are exactly what a fake would risk getting
   wrong silently.
 - No CLI/Desktop wiring and no real node executor exist yet; `forge sprint
   rebase` (declared in `docs/contracts/v1/capabilities.json`) and actual
-  provider-driven attempt execution remain Stage 10 work, same as the Stage 6
+  provider-driven attempt execution remain Stage 11 work, same as the Stage 6
   scheduler waited for its executor.

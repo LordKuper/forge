@@ -15,7 +15,7 @@ namespace Forge.Application;
 /// </summary>
 /// <remarks>
 /// ponytail: no snapshot cache. Sprint event streams are small (dozens of events), so folding on
-/// every read avoids a second crash-recovery surface for cheap I/O. Add a cache if sprint.inspect
+/// every read avoids a second crash-recovery surface for cheap I/O. Add a cache if project snapshot
 /// profiling ever shows folding is the bottleneck.
 /// </remarks>
 public sealed class FileSprintEventLog(IClock clock) : ISprintStore
@@ -26,6 +26,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private const string DefinitionFileName = "definition.json";
     private const string CreatedMarkerFileName = "created.marker";
     private const string LegacyFindingsFileName = "findings.json";
+    private const string RouteDecisionEventType = WorkflowEvent.RouteDecisionRecordedType;
+    private const string LegacyRoutingDirectoryName = "routing";
+    private const string LegacyRoutingMigratedMarker = "migrated-to-sprint-journal";
     private static readonly JsonSerializerOptions DefinitionJsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static string SprintDirectory(string projectRoot, SprintId id) =>
@@ -296,6 +299,63 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         return handoffs;
     }
 
+    public async Task AppendRouteDecisionAsync(
+        string projectRoot,
+        RouteDecision decision,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(decision);
+        string directory = SprintDirectory(projectRoot, decision.SprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            ValidateJournal(events);
+            await MigrateLegacyRoutingAsync(directory, decision.SprintId, events, cancellationToken)
+                .ConfigureAwait(false);
+            await AppendRoutingEventAsync(eventsPath, decision, events, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            try
+            {
+                List<WorkflowEvent> events =
+                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken).ConfigureAwait(false)];
+                ValidateJournal(events);
+                await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
+                return events
+                    .Where(item => item.Type == RouteDecisionEventType)
+                    .Select(item => FromRoutingEvent(sprintId, item))
+                    .ToArray();
+            }
+            catch (JsonException error)
+            {
+                throw new InvalidDataException($"The sprint journal for '{sprintId.Value}' is corrupt.", error);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken)
     {
         string root = SprintsRoot(projectRoot);
@@ -365,6 +425,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
             IReadOnlyList<WorkflowEvent> events =
                 await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+            ValidateJournal(events);
             long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
             if (currentVersion != expectedAggregateVersion)
             {
@@ -594,17 +655,277 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     private static long CurrentVersion(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
-            .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id)
+            .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id &&
+                WorkflowFold.IsTransitionRecord(item))
             .Select(item => item.Aggregate.Version)
             .DefaultIfEmpty(0)
             .Max();
 
+    private static void ValidateJournal(IEnumerable<WorkflowEvent> events)
+    {
+        foreach (WorkflowEvent item in events)
+        {
+            _ = WorkflowFold.IsTransitionRecord(item);
+        }
+    }
+
     private static string? CurrentStateText(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
-            .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id)
+            .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id &&
+                WorkflowFold.IsTransitionRecord(item))
             .OrderByDescending(item => item.Aggregate.Version)
             .FirstOrDefault()
             ?.Arguments.GetValueOrDefault(WorkflowEvent.ToStateArgument);
+
+    private static RouteDecision FromRoutingEvent(SprintId sprintId, WorkflowEvent item)
+    {
+        try
+        {
+            string Required(string key) => item.Arguments.GetValueOrDefault(key) ??
+                throw new InvalidDataException($"Routing event '{item.EventId}' is missing '{key}'.");
+            return new(
+                item.EventId,
+                sprintId,
+                Required("node_id"),
+                new(Guid.Parse(Required("attempt_id"))),
+                new(Required("provider"), Required("model"), Required("surface")),
+                WorkflowStateNames.Parse<RouteOutcome>(Required("outcome")),
+                item.Arguments.GetValueOrDefault("failure_class") is { } failure
+                    ? WorkflowStateNames.Parse<FailureClass>(failure)
+                    : null,
+                item.OccurredAt);
+        }
+        catch (FormatException error)
+        {
+            throw new InvalidDataException($"Routing event '{item.EventId}' is corrupt.", error);
+        }
+    }
+
+    private static async Task AppendRoutingEventAsync(
+        string eventsPath,
+        RouteDecision decision,
+        List<WorkflowEvent> events,
+        CancellationToken cancellationToken)
+    {
+        if (events.Any(item => item.EventId == decision.DecisionId))
+        {
+            return;
+        }
+
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            ["node_id"] = decision.NodeId,
+            ["attempt_id"] = decision.AttemptId.Value.ToString("D"),
+            ["provider"] = decision.Key.Provider,
+            ["model"] = decision.Key.Model,
+            ["surface"] = decision.Key.Surface,
+            ["outcome"] = WorkflowStateNames.ToSnakeCase(decision.Outcome),
+            ["failure_class"] = decision.FailureClass is { } failure
+                ? WorkflowStateNames.ToSnakeCase(failure)
+                : null,
+        };
+        long sprintVersion = CurrentVersion(
+            events,
+            AggregateKind.Sprint,
+            decision.SprintId.Value.ToString("D"));
+        WorkflowEvent routingEvent = new(
+            decision.DecisionId,
+            events.Count,
+            decision.DecidedAt,
+            RouteDecisionEventType,
+            new(AggregateKind.Sprint, decision.SprintId.Value.ToString("D"), Math.Max(1, sprintVersion)),
+            "routing.decision_recorded",
+            arguments);
+        await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(routingEvent), cancellationToken)
+            .ConfigureAwait(false);
+        events.Add(routingEvent);
+    }
+
+    /// <summary>Imports the pre-v0.11 routing sidecar once. Deterministic event ids make an
+    /// interrupted import safe to repeat; the old files remain read-only rollback evidence.</summary>
+    private static async Task MigrateLegacyRoutingAsync(
+        string sprintDirectory,
+        SprintId sprintId,
+        List<WorkflowEvent> events,
+        CancellationToken cancellationToken)
+    {
+        string legacyDirectory = Path.Combine(sprintDirectory, LegacyRoutingDirectoryName);
+        string marker = Path.Combine(legacyDirectory, LegacyRoutingMigratedMarker);
+        if (!Directory.Exists(legacyDirectory) || File.Exists(marker))
+        {
+            return;
+        }
+
+        string eventsPath = EventsPath(sprintDirectory);
+        string decisionsPath = Path.Combine(legacyDirectory, "decisions.jsonl");
+        if (File.Exists(decisionsPath))
+        {
+            string content = await File.ReadAllTextAsync(decisionsPath, cancellationToken).ConfigureAwait(false);
+            int completeLength = content.LastIndexOf('\n') + 1;
+            foreach (string line in content[..completeLength].Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                using JsonDocument document = JsonDocument.Parse(line);
+                JsonElement root = document.RootElement;
+                RouteDecision decision = new(
+                    root.GetProperty("decision_id").GetGuid(),
+                    sprintId,
+                    root.GetProperty("node_id").GetString()!,
+                    new(Guid.Parse(root.GetProperty("attempt_id").GetString()!)),
+                    new(
+                        root.GetProperty("provider").GetString()!,
+                        root.GetProperty("model").GetString()!,
+                        root.GetProperty("surface").GetString()!),
+                    WorkflowStateNames.Parse<RouteOutcome>(root.GetProperty("outcome").GetString()!),
+                    root.TryGetProperty("failure_class", out JsonElement failure) &&
+                        failure.ValueKind == JsonValueKind.String
+                        ? WorkflowStateNames.Parse<FailureClass>(failure.GetString()!)
+                        : null,
+                    root.GetProperty("decided_at").GetDateTimeOffset());
+                await AppendRoutingEventAsync(eventsPath, decision, events, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        // The old store updated retry-budget.json before appending a Routed decision and updated
+        // it before appending an Excluded refund. A crash between those writes leaves the snapshot
+        // one unit ahead of or behind decisions.jsonl. Reconcile that durable snapshot into
+        // deterministic journal records before marking migration complete.
+        string budgetPath = Path.Combine(legacyDirectory, "retry-budget.json");
+        if (File.Exists(budgetPath))
+        {
+            using JsonDocument document = JsonDocument.Parse(
+                await File.ReadAllBytesAsync(budgetPath, cancellationToken).ConfigureAwait(false));
+            JsonElement root = document.RootElement;
+            int total = root.GetProperty("total").GetInt32();
+            int targetConsumed = root.GetProperty("consumed").GetInt32();
+            if (total != RoutingLedger.DefaultRetryBudget || targetConsumed < 0 || targetConsumed > total)
+            {
+                throw new InvalidDataException("The legacy routing retry budget is invalid.");
+            }
+
+            int recordedConsumed = RoutingConsumption(events);
+            DateTimeOffset migratedAt = new(File.GetLastWriteTimeUtc(budgetPath));
+            HealthKey migrationKey = new("migration", "legacy-retry-budget", "sprint");
+            for (int index = recordedConsumed; index < targetConsumed; index++)
+            {
+                await AppendRoutingEventAsync(
+                    eventsPath,
+                    LegacyDecision(sprintId, migrationKey, RouteOutcome.Routed, migratedAt, $"budget-consume-{index}"),
+                    events,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
+            for (int index = targetConsumed; index < recordedConsumed; index++)
+            {
+                await AppendRoutingEventAsync(
+                    eventsPath,
+                    LegacyDecision(
+                        sprintId, migrationKey, RouteOutcome.Excluded, migratedAt, $"budget-refund-{index}",
+                        FailureClass.Policy),
+                    events,
+                    cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        string breakersDirectory = Path.Combine(legacyDirectory, "breakers");
+        if (Directory.Exists(breakersDirectory))
+        {
+            foreach (string path in Directory.EnumerateFiles(breakersDirectory, "*.json"))
+            {
+                using JsonDocument document = JsonDocument.Parse(
+                    await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false));
+                JsonElement root = document.RootElement;
+                HealthKey key = new(
+                    root.GetProperty("provider").GetString()!,
+                    root.GetProperty("model").GetString()!,
+                    root.GetProperty("surface").GetString()!);
+                CircuitState state = WorkflowStateNames.Parse<CircuitState>(root.GetProperty("state").GetString()!);
+                int failures = root.GetProperty("consecutive_failures").GetInt32();
+                DateTimeOffset updatedAt = root.GetProperty("updated_at").GetDateTimeOffset();
+                DateTimeOffset failureTime = root.TryGetProperty("opened_at", out JsonElement openedAt) &&
+                    openedAt.ValueKind == JsonValueKind.String
+                    ? openedAt.GetDateTimeOffset()
+                    : updatedAt;
+                int syntheticFailures = state == CircuitState.Open || state == CircuitState.HalfOpen
+                    ? Math.Max(RoutingLedger.DefaultFailureThreshold, failures)
+                    : failures;
+                for (int index = 0; index < syntheticFailures; index++)
+                {
+                    await AppendRoutingEventAsync(
+                        eventsPath,
+                        LegacyDecision(sprintId, key, RouteOutcome.Failed, failureTime, $"breaker-failed-{index}"),
+                        events,
+                        cancellationToken).ConfigureAwait(false);
+                }
+
+                if (state == CircuitState.Closed && failures == 0)
+                {
+                    await AppendRoutingEventAsync(
+                        eventsPath,
+                        LegacyDecision(sprintId, key, RouteOutcome.Succeeded, updatedAt, "breaker-closed"),
+                        events,
+                        cancellationToken).ConfigureAwait(false);
+                }
+                else if (state == CircuitState.HalfOpen)
+                {
+                    await AppendRoutingEventAsync(
+                        eventsPath,
+                        LegacyDecision(sprintId, key, RouteOutcome.Routed, updatedAt, "breaker-half-open"),
+                        events,
+                        cancellationToken).ConfigureAwait(false);
+                    await AppendRoutingEventAsync(
+                        eventsPath,
+                        LegacyDecision(
+                            sprintId, key, RouteOutcome.Excluded, updatedAt, "breaker-half-open-refund",
+                            FailureClass.Policy),
+                        events,
+                        cancellationToken).ConfigureAwait(false);
+                }
+            }
+        }
+
+        await AtomicConfigurationFile.WriteAsync(marker, ReadOnlyMemory<byte>.Empty, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    private static int RoutingConsumption(IEnumerable<WorkflowEvent> events)
+    {
+        int consumed = 0;
+        foreach (WorkflowEvent item in events.Where(item => item.Type == RouteDecisionEventType))
+        {
+            RouteOutcome outcome = WorkflowStateNames.Parse<RouteOutcome>(
+                item.Arguments.GetValueOrDefault("outcome") ??
+                throw new InvalidDataException($"Routing event '{item.EventId}' is missing 'outcome'."));
+            consumed = outcome switch
+            {
+                RouteOutcome.Routed => consumed + 1,
+                RouteOutcome.Excluded => Math.Max(0, consumed - 1),
+                _ => consumed,
+            };
+        }
+
+        return consumed;
+    }
+
+    private static RouteDecision LegacyDecision(
+        SprintId sprintId,
+        HealthKey key,
+        RouteOutcome outcome,
+        DateTimeOffset decidedAt,
+        string discriminator,
+        FailureClass? failureClass = null)
+    {
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(
+            Encoding.UTF8.GetBytes($"routing-migration|{sprintId.Value:D}|{key.Canonical}|{discriminator}"));
+        return new(
+            new Guid(hash.AsSpan(0, 16)),
+            sprintId,
+            "migration",
+            new(Guid.Empty),
+            key,
+            outcome,
+            failureClass,
+            decidedAt);
+    }
 
     /// <summary>
     /// The single store-level guarantee that every append, from any caller, actually respects the

@@ -60,7 +60,7 @@ public static class WorktreeLayout
 /// </summary>
 /// <remarks>
 /// ponytail: no executor lives here. What a `Work` node's attempt actually does inside its worktree
-/// (invoke a provider, commit its edits) is Stage 10's job; this class only creates, integrates,
+/// (invoke a provider, commit its edits) is Stage 11's job; this class only creates, integrates,
 /// rebases, and discards the worktrees such an executor will use, matching how
 /// <c>SprintScheduler</c> was built ahead of its own executor in Stage 6.
 /// </remarks>
@@ -290,7 +290,7 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
             foreach (AttemptSnapshot attempt in state.Attempts.Values)
             {
                 if (attempt.State is not
-                    (AttemptState.Succeeded or AttemptState.Failed or AttemptState.Abandoned or AttemptState.Cancelled))
+                    (AttemptState.Succeeded or AttemptState.Failed or AttemptState.Cancelled))
                 {
                     liveShortIds.Add(WorktreeLayout.ShortId(attempt.Id.Value));
                 }

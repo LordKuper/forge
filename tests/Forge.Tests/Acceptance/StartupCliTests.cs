@@ -90,7 +90,7 @@ public sealed class StartupCliTests
         int exitCode = await InvokeAsync(environment, output, ["status", "--json"]);
 
         Assert.Equal(0, exitCode);
-        AssertValid("project-status-snapshot", output.ToString());
+        AssertValid("project-snapshot", output.ToString());
     }
 
     [Fact]

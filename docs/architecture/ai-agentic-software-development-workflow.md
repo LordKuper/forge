@@ -42,10 +42,9 @@ the application command path.
 
 ### Retrieve code context progressively
 
-Start with repository rules, task artifacts, Git, search, and targeted file
-reads. Add syntax, language-server, graph, or semantic indexes only when they
-improve a concrete lookup. Derived indexes are accelerators and must prove
-freshness against the source commit and tool version.
+Use repository rules, task artifacts, structured handoffs, Git, `rg`, and
+targeted file reads. The MVP owns no semantic index; add one only after a
+measured exact-retrieval failure justifies its freshness and lifecycle cost.
 
 ### Keep configuration and generated outputs scoped
 
@@ -61,6 +60,14 @@ the implementer's hidden reasoning. Findings are resolved through bounded
 iterations; later passes focus on critical regressions. A review that finds no
 issues must say so explicitly.
 
+Forge uses one scope/rubric-driven review engine: reviewer lineage must differ
+from implementation lineage to satisfy the independent gate; design and
+implementation each own a durable counter; fresh reviewers prove file and rubric coverage; and cumulative low/medium/high/
+critical budgets raise the severity floor. Identical normalized external finding
+sets or the cumulative iteration limit create an explicit human
+continue/accept-or-override/abort gate. Git or diff inactivity is not treated as
+proof of convergence.
+
 ## Evaluated patterns
 
 | Pattern | Adopt | Do not adopt as-is |
@@ -71,7 +78,7 @@ issues must say so explicitly.
 | Codebase Memory | rebuildable structural retrieval | treating an index as source of truth |
 | Spec-driven development | explicit intent, plan, and acceptance artifacts | generating documents without execution traceability |
 | Agent catalogs | shared source and progressive disclosure | importing a large role catalog before it is needed |
-| Tree-sitter, LSP, and SCIP | semantic lookup where text search is insufficient | requiring an index for ordinary repository work |
+| Tree-sitter, LSP, and SCIP | defer until exact retrieval measurably fails | requiring an index for ordinary repository work |
 
 ## Deferred questions
 

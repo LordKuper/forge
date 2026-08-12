@@ -56,7 +56,7 @@ public sealed record SprintStatus(
     string Workflow,
     string BaseSha);
 
-public sealed record ProjectStatusSnapshot(
+public sealed record ProjectSnapshot(
     string SchemaVersion,
     long StateVersion,
     DateTimeOffset GeneratedAt,
