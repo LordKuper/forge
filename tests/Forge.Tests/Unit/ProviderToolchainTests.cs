@@ -88,6 +88,11 @@ public sealed class ProviderToolchainTests
     [Trait("Category", "Unit")]
     public async Task InstallOrUpdateRunsTheNativeInstallerWhenMissing()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         using TestEnvironment environment = new();
         bool ranInstaller = false;
         CodexProviderStrategy strategy = CreateCodexStrategy(environment, request =>

@@ -567,6 +567,13 @@ public sealed class SprintResilienceTests
     [Trait("Category", "Unit")]
     public async Task SprintIdentityIsStableAcrossDifferentPathCasingForTheSameProject()
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Linux/macOS filesystems are case-sensitive; a differently cased path is a different path there,
+            // not the same project under a different string, so this test's premise only holds on Windows.
+            return;
+        }
+
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
         ISprintStore store = environment.Resolve<ISprintStore>();
