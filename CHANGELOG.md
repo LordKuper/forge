@@ -35,8 +35,9 @@ User-facing Forge changes are listed by release, newest first.
   idempotently, including reconciliation of the old retry-budget snapshot after
   interrupted writes. The pre-1.0 query names and state-machine edges replaced by
   this architecture are removed without deprecated aliases; persisted routing
-  data still migrates safely. Semantic indexes are deferred until exact retrieval
-  shows a measured gap.
+  data and the old manifest sprint registry still migrate safely without being
+  exposed as current contracts. Semantic indexes are deferred until exact
+  retrieval shows a measured gap.
 - Established a repository-wide cross-platform code rule: only marked, minimal
   leaf OS adapters may use platform APIs. Added a Stage 8 migration and automated
   architecture gate for existing CLI, durability, Desktop, updater, and test

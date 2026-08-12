@@ -57,7 +57,9 @@ Sprint/node/attempt state is event-sourced in plain files, not SQLite:
   deterministic event ids and remain read-only rollback evidence.
 - Sprint discovery enumerates completed sprint directories through their durable
   creation marker. Project manifest configuration never registers runtime sprint
-  ids; the removed pre-1.0 `sprints` field is rejected.
+  ids. The reader validates and strips the persisted pre-v0.11 `sprints` registry
+  before current-contract validation, and the next write omits it; the field is
+  not exposed by the current schema or application API.
 - Failed attempts are terminal and the obsolete `abandoned` state is removed. A
   finding-blocked sprint returns through the crash-resumable ordinary
   `ready -> running -> ready_to_finalize` path; the direct blocked edge is removed.

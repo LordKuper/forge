@@ -12,9 +12,6 @@ public sealed class YamlConfigurationStore(
     ConfigurationScope scope,
     IConfigurationRegistry registry) : IConfigurationStore
 {
-    private readonly IDeserializer deserializer = new DeserializerBuilder()
-        .WithNamingConvention(UnderscoredNamingConvention.Instance)
-        .Build();
     private readonly IDeserializer rawDeserializer = new DeserializerBuilder().Build();
     private readonly ISerializer serializer = new SerializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
@@ -71,10 +68,13 @@ public sealed class YamlConfigurationStore(
     {
         string yaml = await File.ReadAllTextAsync(filePath, cancellationToken).ConfigureAwait(false);
         object? raw = rawDeserializer.Deserialize<object>(yaml);
-        JsonElement rawElement = JsonSerializer.SerializeToElement(NormalizeYaml(raw));
+        object? normalized = NormalizeYaml(raw);
+        StripLegacySprintRegistry(normalized);
+        JsonElement rawElement = JsonSerializer.SerializeToElement(normalized);
         ConfigurationSchemaCodec.ValidateProject(rawElement);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
-            deserializer.Deserialize<ConfigurationSchemaCodec.ProjectConfiguration>(yaml) ??
+            rawElement.Deserialize<ConfigurationSchemaCodec.ProjectConfiguration>(
+                ConfigurationSchemaCodec.SerializerOptions) ??
             throw new InvalidDataException("Project configuration is empty.");
         ConfigurationDocument result = ConfigurationSchemaCodec.FromProject(persisted);
         ValidateScope(result);
@@ -91,6 +91,23 @@ public sealed class YamlConfigurationStore(
 
     private static bool IsRecoverable(Exception error) =>
         error is YamlException or InvalidDataException or ConfigurationScopeException or FormatException;
+
+    /// <summary>Migrates persisted pre-v0.11 data before validating the current pre-1.0 contract.
+    /// The removed registry is not exposed by the schema or application API.</summary>
+    private static void StripLegacySprintRegistry(object? normalized)
+    {
+        if (normalized is not Dictionary<string, object?> root ||
+            !root.Remove("sprints", out object? legacy))
+        {
+            return;
+        }
+
+        if (legacy is not object?[] values || values.Any(item => item is not string text || !Guid.TryParse(text, out _)) ||
+            values.OfType<string>().Distinct(StringComparer.OrdinalIgnoreCase).Count() != values.Length)
+        {
+            throw new InvalidDataException("The legacy project sprint registry is invalid.");
+        }
+    }
 
     private static object? NormalizeYaml(object? value) =>
         value switch
