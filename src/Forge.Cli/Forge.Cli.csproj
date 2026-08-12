@@ -1,14 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <AssemblyName>forge</AssemblyName>
-    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
-    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
-  </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Terminal.Gui" />
     <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
-    <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
+    <ProjectReference Include="..\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
 </Project>

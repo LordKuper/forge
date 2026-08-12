@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.12.0
+
+### Changed
+
+- Migrated the ADR 0007 cross-platform boundary: the CLI, durability, Desktop, and updater code that reused
+  Windows APIs now lives behind three thin, explicitly marked Windows adapters (`Forge.Cli.Windows`,
+  `Forge.Runtime.Windows`, `Forge.Updater.Windows`), while the CLI commands, Desktop presentation logic, and
+  update policy/orchestration are cross-platform. An automated architecture gate enforces the boundary, and the
+  neutral projects now build and test on Windows, Linux, and macOS in CI. The Windows MVP distribution and its
+  behavior are unchanged.
+- Extended the target workflow with reproducible declarative context-query plans, fresh per-node context and
+  capability boundaries, and explicit terminal results. Recorded approval-gated knowledge proposals and bounded
+  personal memory as post-MVP candidates while excluding transcript-backed project memory, model-judged
+  completion, shadow checkpoints, unrestricted hooks, and silent skill mutation.
+
 ## v0.11.0
 
 ### Added

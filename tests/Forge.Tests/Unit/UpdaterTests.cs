@@ -231,6 +231,53 @@ public sealed class UpdaterTests
         }
     }
 
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(
+        new[] { "status" },
+        null,
+        new[] { "status" })]
+    [InlineData(
+        new[] { "--restart-token", "abc", "status" },
+        "abc",
+        new[] { "status" })]
+    [InlineData(
+        new[] { "--restart-token", "abc" },
+        "abc",
+        new string[0])]
+    [InlineData(
+        new string[0],
+        null,
+        new string[0])]
+    public void StartupArgumentsParsesTheLeadingRestartTokenPair(
+        string[] arguments,
+        string? expectedToken,
+        string[] expectedRemaining)
+    {
+        StartupArguments parsed = StartupArguments.Parse(arguments);
+
+        Assert.Equal(expectedToken, parsed.RestartToken);
+        Assert.Equal(expectedRemaining, parsed.Remaining);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(new[] { "--self-test" }, true)]
+    [InlineData(new string[0], false)]
+    [InlineData(new[] { "--self-test", "extra" }, false)]
+    [InlineData(new[] { "status" }, false)]
+    public void StartupArgumentsIsSelfTestRequiresTheSoleRemainingArgument(string[] arguments, bool expected) =>
+        Assert.Equal(expected, StartupArguments.Parse(arguments).IsSelfTest);
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void StartupArgumentsIsSelfTestAfterConsumingARestartToken()
+    {
+        StartupArguments parsed = StartupArguments.Parse(["--restart-token", "abc", "--self-test"]);
+
+        Assert.True(parsed.IsSelfTest);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public void CorruptRestartTokenRemainsPendingUntilRevoked()

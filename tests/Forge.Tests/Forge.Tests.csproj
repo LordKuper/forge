@@ -3,6 +3,9 @@
     <IsTestProject>true</IsTestProject>
     <TargetFramework></TargetFramework>
     <TargetFrameworks>net10.0;net10.0-windows10.0.19041.0</TargetFrameworks>
+    <!-- This project's own net10.0-windows TFM is subject to the same SDK guard as the adapter projects it
+         references; see the identical property on Forge.Runtime.Windows/Forge.Updater.Windows.csproj. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
@@ -10,13 +13,19 @@
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
   </ItemGroup>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0'">
-    <Compile Remove="Acceptance/**/*.cs;Installer/**/*.cs;Integration/**/*.cs;Support/**/*.cs;Unit/**/*.cs" />
-  </ItemGroup>
-  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+  <ItemGroup>
+    <Compile Remove="Installer/**/*.cs" />
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
+    <Compile Include="Installer/**/*.cs" />
+    <!-- The real Windows durability adapter, installed by Installer/WindowsDurabilityAssemblyInitializer.cs,
+         supersedes the portable fallback below; excluded here so the two module initializers never race. -->
+    <Compile Remove="Support/PortableDurabilityFallback.cs" />
+    <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

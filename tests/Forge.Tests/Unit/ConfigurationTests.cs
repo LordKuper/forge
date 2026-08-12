@@ -7,6 +7,26 @@ public sealed class ConfigurationTests
 {
     [Fact]
     [Trait("Category", "Unit")]
+    public void BclDirectoryDurabilityFailsClosedInsteadOfSilentlyDegrading()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-durability-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            // Pins the assumption every composed IDirectoryDurability adapter (and the test-only portable
+            // fallback) depends on: the BCL cannot open a directory handle on any current .NET platform, so the
+            // default fails closed rather than silently no-opping. If a future SDK ever makes this succeed, this
+            // test starts failing instead of the gap going unnoticed.
+            Assert.Throws<UnauthorizedAccessException>(() => new BclDirectoryDurability().Flush(directory));
+        }
+        finally
+        {
+            Directory.Delete(directory, true);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void WrongScopeIsRejectedWithStableDiagnostic()
     {
         ConfigurationRegistry registry = new();

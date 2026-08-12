@@ -60,7 +60,7 @@
 
 **Depends on:** Stages 4–7.
 
-- [ ] P8.1–P8.8 — Enforce ADR 0007: mark OS adapters; make CLI/shared tests portable; move Windows composition and directory-flush interop to minimal adapters; split reusable Desktop state from WinUI; audit the Windows updater adapter.
+- [x] P8.1–P8.8 — Enforce ADR 0007: mark OS adapters; make CLI/shared tests portable; move Windows composition and directory-flush interop to minimal adapters; split reusable Desktop state from WinUI; audit the Windows updater adapter.
 - [ ] P8.9–P8.17 — Add portable `Forge.Host` and client SDK as the only workflow writer; implement discovery, start, reconnect, message limits, deadlines, correlation, version/capability handshake, and stable diagnostics.
 - [ ] P8.18–P8.24 — Use one asynchronous `System.IO.Pipes` transport and one named `Mutex` project lease through cross-platform BCL APIs; add no OS branch, TCP fallback, or transport package.
 - [ ] P8.25–P8.33 — Implement `GetProjectSnapshot(detail, sprint_id?)` and `ReadControlEvents`. Project summary, next action, tree, sprint inspection, provider/integration status, CLI output, and Desktop views must be local projections of the snapshot.
@@ -81,21 +81,22 @@
 
 - [ ] P10.1–P10.8 — Build a versioned context manifest from rules, sprint specifications/decisions, accepted ADRs, structured handoffs, exact Git/file/`rg` reads, and a token budget.
 - [ ] P10.9–P10.12 — Record source commit, selected paths, digests, truncation, and retrieval rationale; rebuild the same context without a transcript.
+- [ ] P10.13–P10.20 — Add a versioned declarative context-query plan for bounded read-only Git/file/`rg` operations. Validate paths, operation and result limits, source commit, and profile capabilities; return only a selected structured result bundle, never execute model-authored scripts or shell pipelines as a context engine.
 
-**Gate:** context is bounded, sprint-scoped, reproducible, and based on exact source evidence. The MVP owns no full-text, Tree-sitter, LSP, graph, SCIP, or semantic index.
+**Gate:** context is bounded, sprint-scoped, reproducible, and based on exact source evidence; query plans cannot mutate the project or widen capabilities, and their result bundles rebuild byte-for-byte from recorded inputs. The MVP owns no full-text, Tree-sitter, LSP, graph, SCIP, or semantic index.
 
 ## Stage 11 — `implementation-critical` workflow and parity
 
 - [ ] P11.1–P11.12 — Implement intake, planning, threat/rule rubrics, task DAG, isolated implementation, deterministic tests, review, human approval, and finalization. Use behavior nodes and rubric data, not a seven-role catalog.
-- [ ] P11.13–P11.20 — Freeze only planning, implementation, and review execution profiles. Internal/external review share one engine and profile with distinct lineage/input; finalization is deterministic.
+- [ ] P11.13–P11.20 — Freeze only planning, implementation, and review execution profiles, including capability allowlists. Every model node starts without a parent transcript and receives only its frozen context manifest and profile capabilities; a node cannot widen them or invoke human-only commands. Internal/external review share one engine and profile with distinct lineage/input; finalization is deterministic.
 - [ ] P11.21–P11.31 — Implement the ASD review engine: separate design/implementation counters, fresh contexts, full-first/incremental-later scope, file/rubric coverage, same-iteration approval, severity floors, repeated normalized-finding detection, and human convergence gates.
-- [ ] P11.32–P11.40 — Replace prompt arguments/buffered output with stdin, minimal child environments, bounded concurrent JSON/JSONL streams, safe tails, and typed activity.
+- [ ] P11.32–P11.40 — Replace prompt arguments/buffered output with stdin, minimal child environments, bounded concurrent JSON/JSONL streams, safe tails, and typed activity. Require exactly one schema-valid terminal result for the owned attempt; zero exit without it, duplicates, and contradictions fail closed.
 - [ ] P11.41–P11.47 — Add absolute/idle deadlines, distinct outcomes, and whole-process-tree cleanup verified on Windows, Linux, and macOS before any native containment adapter.
 - [ ] P11.48–P11.55 — Implement durable rate-limit deferral and human-only attempt supersession with confirmation, version, idempotency, bounded instruction, cancellation, worktree discard, linkage, and clean replacement.
 - [ ] P11.56–P11.66 — Complete CLI/TUI and Desktop projections, commands, attention navigation, human gates, recovery, English/Russian localization, configuration editors, accessibility, and parity tests.
 - [ ] P11.67–P11.72 — Add best-effort local notifications for `awaiting_human`, `blocked`, `failed`, and `completed`, deduplicated from journal event ids and redacted.
 
-**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; review follows ADR 0006; rate-limit, supersession, notification, and crash recovery are durable.
+**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; nodes inherit neither ambient context nor authority; process exit cannot self-certify completion; review follows ADR 0006; rate-limit, supersession, notification, and crash recovery are durable.
 
 ## Stage 12 — Diagnostics, evaluations, and hardening
 
@@ -111,6 +112,22 @@
 - [ ] P13.11–P13.24 — Run clean-profile install/update/rollback and end-to-end workflow acceptance: providers, project init, concurrent sprints, fallback, client restart/update, single writer, snapshot/events, human gates, supervised execution, deferral, supersession, review convergence, notifications, diagnostics, localization, and release/development isolation.
 
 **Final gate:** every stage is complete, the signed Windows MVP is reproducible, architecture matches implementation, CI is green, and no blocking/high finding remains.
+
+## Post-MVP learning backlog
+
+- [ ] Derive an evidence-backed `KnowledgeProposal` only from a successful sprint, a corrected failure, or explicit operator instruction. Record applicability, canonical `.forge/` target, source event/artifact references, and a reviewable diff.
+- [ ] Reuse the existing human-gate contract to inspect, approve, or reject each proposal. Approval updates canonical `.forge/` content and then regenerates owned provider views; agents cannot approve, directly edit generated skills, or learn from raw transcripts/provider prose.
+- [ ] Evaluate an optional per-user hot-memory snapshot for personal preferences and verified environment facts. Keep it separate from project scope, hard-capped, frozen at attempt start, injection-scanned, credential-free, and explicit on overflow; never store project truth in it.
+- [ ] Retrieve project knowledge from canonical files and content-addressed sprint artifacts. Add full-text or semantic recall only after an evaluation proves exact lookup insufficient and freshness against the source commit is enforceable.
+- [ ] Ship learning only after evaluations demonstrate better task quality without regressions in reproducibility, prompt-injection resistance, approval integrity, privacy, or context cost; include proposal provenance, rollback, migration, and expiry tests.
+
+## Intentionally not planned
+
+- Model-authored executable tool pipelines; declarative context-query plans cover the useful case.
+- Shadow Git checkpoints; isolated attempt worktrees and explicit supersession already provide rollback and replay.
+- LLM goal judges or provider exit codes as completion authorities; deterministic workflow gates own completion.
+- Conversation-history databases as project memory; transcripts are neither state nor canonical knowledge.
+- Unrestricted lifecycle hooks or silent agent-managed skill writes; extensions and learned changes require validation, bounded authority, and explicit approval.
 
 ## Deferred
 

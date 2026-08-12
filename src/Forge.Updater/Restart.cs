@@ -174,6 +174,24 @@ public sealed class StartupHandshake(IRestartTokenService tokens)
             : new(UpdateDiagnosticCode.HandshakeFailed, "The restart token is missing, expired, replayed, or bound to a different release identity.");
 }
 
+/// <summary>
+/// Both surfaces accept the same two startup-only argument forms before their own commands: a leading
+/// <c>--restart-token &lt;token&gt;</c> pair, and a standalone <c>--self-test</c> once that pair is stripped.
+/// </summary>
+public readonly record struct StartupArguments(string? RestartToken, IReadOnlyList<string> Remaining)
+{
+    public bool IsSelfTest =>
+        Remaining.Count == 1 && string.Equals(Remaining[0], "--self-test", StringComparison.Ordinal);
+
+    public static StartupArguments Parse(IReadOnlyList<string> args)
+    {
+        ArgumentNullException.ThrowIfNull(args);
+        return args.Count >= 2 && string.Equals(args[0], "--restart-token", StringComparison.Ordinal)
+            ? new(args[1], args.Skip(2).ToArray())
+            : new(null, args);
+    }
+}
+
 public sealed class RejectingRestartCoordinator : IRestartCoordinator
 {
     public ValueTask<UpdateDiagnostic> RestartAsync(

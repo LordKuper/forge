@@ -23,16 +23,13 @@ public partial class App : Microsoft.Maui.Controls.Application
         this.application = application;
         this.restartTokens = restartTokens;
         this.targetDetector = targetDetector;
-        string[] arguments = Environment.GetCommandLineArgs();
-        if (arguments.Skip(1).Contains("--self-test", StringComparer.Ordinal))
+        StartupArguments arguments = StartupArguments.Parse(Environment.GetCommandLineArgs().Skip(1).ToArray());
+        if (arguments.IsSelfTest)
         {
             Environment.Exit(0);
         }
 
-        if (arguments.Length >= 3 && string.Equals(arguments[1], "--restart-token", StringComparison.Ordinal))
-        {
-            restartToken = arguments[2];
-        }
+        restartToken = arguments.RestartToken;
     }
 
     protected override Window CreateWindow(IActivationState? activationState)

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>forge</AssemblyName>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <ForgeOsAdapter>true</ForgeOsAdapter>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Forge.Cli\Forge.Cli.csproj" />
+    <ProjectReference Include="..\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
+    <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
+  </ItemGroup>
+</Project>

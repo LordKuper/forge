@@ -45,6 +45,12 @@ JSON/JSONL incrementally; and applies redaction before any durable or presentati
 boundary. Oversized or malformed frames fail closed. Provider prose, terminal
 text, and heartbeat text never determine workflow state.
 
+A zero process exit code proves only that the provider transport ended normally.
+An attempt succeeds only after Forge receives a schema-valid terminal result for
+the owned attempt and every deterministic gate passes. Exit without an explicit
+terminal result is a provider failure; duplicate or contradictory terminal
+results fail closed.
+
 ### Forge Host supervises every provider process
 
 Every attempt has two frozen deadlines: an absolute session deadline and an idle
@@ -87,9 +93,12 @@ Agents and generated integrations cannot invoke this human-only command.
 The sprint snapshot resolves one profile for planning, implementation, and
 review. Internal and external review use the same review profile with distinct
 lineage and inputs. Finalization is deterministic code, not a model phase. Each profile records
-provider, model, effort, sandbox/permission policy, session deadline, and idle
-deadline. Missing values inherit from the project model policy before the sprint
-starts; running sprints never follow later configuration changes.
+provider, model, effort, sandbox/permission policy, capability allowlist, session
+deadline, and idle deadline. Missing values inherit from the project model policy
+before the sprint starts; running sprints never follow later configuration
+changes. A node receives only its frozen context manifest and profile
+capabilities; it inherits no parent transcript and cannot grant itself or a child
+additional tools or human-only commands.
 
 An independent-review gate requires a reviewer execution lineage distinct from
 the implementation lineage. Lineage includes provider family, model family, and
@@ -145,6 +154,8 @@ scripts, and notification-held secrets remain deferred.
   path before real node execution is enabled.
 - Provider hangs, rate limits, cancellation, and steering become durable workflow
   outcomes visible through the project snapshot and event read-back.
+- Normal provider exit cannot masquerade as successful workflow completion, and
+  model nodes cannot widen their context or capabilities.
 - Review cost narrows deterministically while critical findings remain undroppable
   until a recorded human decision.
 - Forge adds no provider wrapper, notification broker, review database, or process

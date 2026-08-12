@@ -399,6 +399,12 @@
         "resolved": "10.0.10",
         "contentHash": "OvGz3PrzuAI/Sj7LTcXcCe3FClRI1IyRMZjNONcZtFh+Ww7nAtSh4kh08r8KVe/xxkXJPjR0Y1jF7H+N42d4xQ=="
       },
+      "forge.desktop.presentation": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.11.0, )"
+        }
+      },
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
@@ -407,14 +413,20 @@
           "YamlDotNet": "[18.1.0, )"
         }
       },
+      "forge.runtime.windows": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.11.0, )"
+        }
+      },
       "forge.updater": {
         "type": "Project"
       },
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.6.5, )",
-          "Forge.Updater": "[0.6.5, )",
+          "Forge.Runtime": "[0.11.0, )",
+          "Forge.Updater": "[0.11.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
