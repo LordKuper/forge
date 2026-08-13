@@ -89,6 +89,76 @@ public sealed class ForgeHostProcessTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task ASuccessorHostRecoversTheProjectLeaseAfterTheFirstHostCrashes()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // Same Windows-only process-spawn scope as ClientDiscoversStartsAndPingsARealHostProcess.
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult initialized = await environment
+            .InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        Assert.True(initialized.Succeeded);
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        string executablePath = Path.Combine(AppContext.BaseDirectory, "Forge.Host.exe");
+        Assert.True(File.Exists(executablePath), $"'{executablePath}' must ship next to the test binaries.");
+
+        // Two different instance ids for the same project — proving both that the project lease is
+        // shared across instances (ADR 0005) and that a *crashed* (not gracefully stopped) prior
+        // owner's abandoned named-mutex lease is still recoverable by a real successor process.
+        string firstInstanceId = InstanceIdentity.CreateEphemeral();
+        string secondInstanceId = InstanceIdentity.CreateEphemeral();
+        int firstProcessId = -1;
+        int secondProcessId = -1;
+        try
+        {
+            await using (ForgeHostClient firstClient = new(
+                new NamedPipeControlTransport(),
+                new ForgeHostClientOptions(projectId, firstInstanceId, "1.0.0-test")))
+            {
+                ControlDiagnostic connected = await firstClient.EnsureConnectedAsync(
+                    async ct => firstProcessId = await ForgeHostLauncher
+                        .StartAsync(executablePath, environment.ProjectRoot, firstInstanceId, ct)
+                        .ConfigureAwait(false),
+                    cancellationToken);
+                Assert.Equal(ControlDiagnosticCode.None, connected.Code);
+                Assert.Equal(ControlDiagnosticCode.None, (await firstClient.PingAsync(cancellationToken)).Diagnostic.Code);
+            }
+
+            // Kill, not a graceful stop: the mutex is never released, so it becomes abandoned at the
+            // OS level — the exact scenario MutexProjectLease.TryAcquire's AbandonedMutexException
+            // handling exists for, which nothing in this suite exercised with a real process before.
+            using (Process first = Process.GetProcessById(firstProcessId))
+            {
+                first.Kill(true);
+                Assert.True(first.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds));
+            }
+
+            await using ForgeHostClient secondClient = new(
+                new NamedPipeControlTransport(),
+                new ForgeHostClientOptions(projectId, secondInstanceId, "1.0.0-test"));
+            ControlDiagnostic secondConnected = await secondClient.EnsureConnectedAsync(
+                async ct => secondProcessId = await ForgeHostLauncher
+                    .StartAsync(executablePath, environment.ProjectRoot, secondInstanceId, ct)
+                    .ConfigureAwait(false),
+                cancellationToken);
+
+            Assert.Equal(ControlDiagnosticCode.None, secondConnected.Code);
+            Assert.Equal(ControlDiagnosticCode.None, (await secondClient.PingAsync(cancellationToken)).Diagnostic.Code);
+        }
+        finally
+        {
+            TryKillProcess(firstProcessId);
+            TryKillProcess(secondProcessId);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task ClientDiscoversStartsAndPingsARealHostProcess()
     {
         if (!OperatingSystem.IsWindows())
@@ -141,6 +211,25 @@ public sealed class ForgeHostProcessTests
                     // The process already exited between GetProcessById and Kill/WaitForExit.
                 }
             }
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        if (processId <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            process.Kill(true);
+            process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            // The process already exited between GetProcessById and Kill/WaitForExit.
         }
     }
 }

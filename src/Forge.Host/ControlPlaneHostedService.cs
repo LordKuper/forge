@@ -9,7 +9,23 @@ using YamlDotNet.Core;
 
 namespace Forge.Host;
 
-public sealed record ControlPlaneOptions(string ProjectRoot, string InstanceId);
+/// <summary>
+/// <paramref name="HandshakeTimeout"/> bounds how long a connected-but-silent client may take to
+/// send its handshake; <paramref name="RequestTimeout"/> bounds how long an idle, already-handshaken
+/// client may go without sending a request. Both default to their production values and exist as
+/// overrides so a test can prove the timeout path itself fires without waiting out the real
+/// deadline.
+/// </summary>
+public sealed record ControlPlaneOptions(
+    string ProjectRoot,
+    string InstanceId,
+    TimeSpan? HandshakeTimeout = null,
+    TimeSpan? RequestTimeout = null)
+{
+    public TimeSpan Handshake => HandshakeTimeout ?? TimeSpan.FromSeconds(10);
+
+    public TimeSpan Request => RequestTimeout ?? TimeSpan.FromMinutes(5);
+}
 
 /// <summary>
 /// The Host's control plane: acquires the project lease, listens for connections, and serves the handshake plus
@@ -92,7 +108,7 @@ public sealed class ControlPlaneHostedService(
         // than half-implementing the read path. Serving reads from a lease-less Host is deferred to the
         // multi-host isolation slice (P8.34-P8.41), which is where that behavior gets real test coverage
         // (hostile clients, stale clients, crash recovery) instead of being bolted on here.
-        string leaseName = InstanceIdentity.ComputeLeaseName(options.InstanceId, projectId);
+        string leaseName = InstanceIdentity.ComputeLeaseName(projectId);
         lease = MutexProjectLease.TryAcquire(leaseName, TimeSpan.FromSeconds(2));
         if (lease is null)
         {
@@ -173,10 +189,24 @@ public sealed class ControlPlaneHostedService(
 
             while (!cancellationToken.IsCancellationRequested)
             {
-                byte[] requestBytes = await scoped.ReceiveAsync(TimeSpan.FromMinutes(5), cancellationToken)
+                byte[] requestBytes = await scoped.ReceiveAsync(options.Request, cancellationToken)
                     .ConfigureAwait(false);
-                ControlRequest? request =
-                    JsonSerializer.Deserialize<ControlRequest>(requestBytes, ControlProtocol.JsonOptions);
+                ControlRequest? request;
+                try
+                {
+                    request = JsonSerializer.Deserialize<ControlRequest>(requestBytes, ControlProtocol.JsonOptions);
+                }
+                catch (JsonException exception)
+                {
+                    // A request envelope that isn't valid JSON at all carries no CorrelationId to
+                    // reply to — the same fail-closed outcome an empty/garbage handshake gets below,
+                    // rather than letting the exception escape this connection's serving task
+                    // unobserved (see DispatchAsync's own IOException/UnauthorizedAccessException
+                    // widening for the same class of gap on the payload side).
+                    LogConnectionEnded(logger, exception);
+                    return;
+                }
+
                 if (request is null)
                 {
                     return;
@@ -199,12 +229,15 @@ public sealed class ControlPlaneHostedService(
         ControlHandshakeRequest? request;
         try
         {
-            byte[] requestBytes = await connection.ReceiveAsync(TimeSpan.FromSeconds(10), cancellationToken)
+            byte[] requestBytes = await connection.ReceiveAsync(options.Handshake, cancellationToken)
                 .ConfigureAwait(false);
             request = JsonSerializer.Deserialize<ControlHandshakeRequest>(requestBytes, ControlProtocol.JsonOptions);
         }
-        catch (ControlProtocolException exception)
+        catch (Exception exception) when (exception is ControlProtocolException or JsonException)
         {
+            // A garbage (non-JSON) first message gets the same fail-closed outcome as an
+            // incomplete/timed-out handshake — never an unobserved exception on the fire-and-forget
+            // serving task (see DispatchAsync's and the request loop's identical widening above).
             LogHandshakeIncomplete(logger, exception);
             return false;
         }

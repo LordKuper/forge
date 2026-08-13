@@ -94,7 +94,7 @@ public sealed class StartupTests
     public async Task MalformedUserConfigurationFailsStartupWithoutOverwritingIt()
     {
         using TestEnvironment environment = new();
-        string path = Path.Combine(environment.LocalApplicationData, "Forge", "config.json");
+        string path = ConfigurationStoreFactory.UserPath(environment);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 
@@ -109,6 +109,30 @@ public sealed class StartupTests
         Assert.Equal(
             "{broken",
             await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExistingPreInstanceIsolationConfigurationFileIsMigratedIntoTheNewInstanceScopedPath()
+    {
+        using TestEnvironment environment = new();
+        string legacyPath = Path.Combine(environment.LocalApplicationData, "Forge", "config.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(legacyPath)!);
+        const string content = """{"schema_version":"1.0.0","language":{"ui":"ru"},"interaction":{}}""";
+        await File.WriteAllTextAsync(legacyPath, content, TestContext.Current.CancellationToken);
+
+        StartupStatus status = await environment.Application.GetStartupStatusAsync(
+            null,
+            TestContext.Current.CancellationToken);
+
+        string currentPath = ConfigurationStoreFactory.UserPath(environment);
+        Assert.NotEqual(legacyPath, currentPath);
+        Assert.True(File.Exists(currentPath), $"'{currentPath}' should have been migrated from the legacy path.");
+        Assert.Equal(content, await File.ReadAllTextAsync(currentPath, TestContext.Current.CancellationToken));
+        // Copied, not moved: the legacy file survives so a rollback or a concurrently starting
+        // instance is never disrupted.
+        Assert.True(File.Exists(legacyPath));
+        Assert.Equal(StartupCheckState.Passed, Check(status, StartupCheckId.UserConfiguration).State);
     }
 
     private static StartupCheck Check(StartupStatus status, StartupCheckId id) =>

@@ -47,7 +47,7 @@ public sealed class StartupRecovery(ScopedConfigurationStores stores, IEnvironme
         IConfigurationStore store = project ? stores.Project(startup.Project.Root) : stores.User;
         string path = project
             ? ConfigurationStoreFactory.ProjectPath(startup.Project.Root)
-            : ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+            : ConfigurationStoreFactory.UserPath(environment);
         try
         {
             // A readable file is never the failure this repair owns.

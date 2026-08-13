@@ -37,7 +37,7 @@ public sealed class StatusAdvisorTests
     public async Task FailedStartupRanksRecoveryWithTheFailingCheck()
     {
         using TestEnvironment environment = new();
-        string path = ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+        string path = ConfigurationStoreFactory.UserPath(environment);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 

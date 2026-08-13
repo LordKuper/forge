@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Forge.Application;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Forge.Infrastructure;
 
@@ -107,14 +108,38 @@ public sealed class NetworkClient(HttpClient client) : INetworkClient
         client.GetStreamAsync(uri, cancellationToken);
 }
 
-public sealed class SystemEnvironmentPaths : IEnvironmentPaths
+/// <summary>
+/// The real, OS-backed <see cref="IEnvironmentPaths"/>. <see cref="InstanceId"/> defaults to the
+/// build configuration's release/Debug split — matching <c>Forge.Host.Client.InstanceIdentity</c>'s
+/// <c>Release</c>/<c>Debug</c> constants, duplicated rather than referenced because
+/// <c>Forge.Host.Client</c> is a leaf transport/protocol project and this neutral engine project
+/// takes no dependency on it (see <c>ControlProtocol.JsonOptions</c>'s doc comment for the same
+/// pattern). A composition root that already knows a more specific instance id (e.g. Forge.Host's
+/// own <c>--instance-id</c>, including the unique ephemeral id automated tests spawn a real Host
+/// process with) supplies it explicitly instead.
+/// </summary>
+public sealed class SystemEnvironmentPaths(string? instanceId = null) : IEnvironmentPaths
 {
+    private const string ReleaseInstanceId = "forge";
+    private const string DebugInstanceId = "forge-dev";
+
+    private static readonly string DefaultInstanceId =
+#if DEBUG
+        DebugInstanceId;
+#else
+        ReleaseInstanceId;
+#endif
+
     public string LocalApplicationData { get; } =
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
     public string UserProfile { get; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     public string CurrentDirectory => Environment.CurrentDirectory;
+
+    // Whitespace-only is treated the same as omitted: a blank --instance-id must never silently
+    // collapse Path.Combine's instance segment back to the unscoped path this type exists to avoid.
+    public string InstanceId { get; } = string.IsNullOrWhiteSpace(instanceId) ? DefaultInstanceId : instanceId;
 }
 
 public static class InfrastructureServices
@@ -132,7 +157,12 @@ public static class InfrastructureServices
         // and would abort a slow-connection download mid-stream.
         services.AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
         services.AddSingleton<INetworkClient, NetworkClient>();
-        services.AddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
+        // TryAdd, matching IPlatformPreflight's convention (ForgeHost.cs): signals this is an
+        // intended override point. Forge.Host's composition root always overrides this with an
+        // instance-scoped SystemEnvironmentPaths afterward via a plain AddSingleton, which still
+        // wins for singular resolution regardless of Try here — this only makes that override
+        // relationship explicit instead of an accident of registration order.
+        services.TryAddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
         services.AddSingleton<ISafeLogger, SafeLogger>();
         return services;
     }

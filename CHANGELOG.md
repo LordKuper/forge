@@ -2,6 +2,44 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.15.0
+
+### Fixed
+
+- Fixed a bug where the project write lease was accidentally scoped per
+  instance (release/Debug/test) instead of per project: a Debug build and the
+  installed release, or two ephemeral test Hosts, could previously become
+  concurrent writers of the same `.forge/` tree. The lease is now shared
+  across every instance of one project, exactly as ADR 0005 requires; only
+  the IPC pipe name stays instance-scoped.
+- User configuration and sprint worktrees are now isolated per instance id
+  (release, Debug, and each ephemeral test instance), so they no longer
+  collide on one shared `%LOCALAPPDATA%\Forge\config.json`/worktree tree. An
+  existing user configuration file from before this change is migrated
+  automatically (copied, not moved) into its new instance-scoped location the
+  first time an instance starts.
+- Forge Host no longer lets an unparseable (non-JSON) request payload escape
+  unhandled, including as the very first (handshake) message: the offending
+  connection is closed cleanly with a logged diagnostic instead of hanging
+  silently.
+
+### Changed
+
+- Sprint worktrees created before this release live under the old, unscoped
+  `%LOCALAPPDATA%\Forge\wt\` path and are not automatically migrated or
+  cleaned up (unlike user configuration, above). If you ran a sprint before
+  upgrading to this version, confirm no attempts are in progress, then remove
+  that directory manually and run `git worktree prune` in your project to
+  reclaim the old worktree registrations.
+
+### Added
+
+- Host connection deadlines (handshake and idle-request) are now
+  configurable, and the control plane has new test coverage for hostile and
+  stale clients (garbage payloads, a client that never handshakes, a client
+  that disconnects mid-idle) and for recovering a project lease abandoned by
+  a Host that crashed rather than shut down cleanly.
+
 ## v0.14.0
 
 ### Added

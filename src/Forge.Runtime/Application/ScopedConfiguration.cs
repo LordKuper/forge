@@ -38,7 +38,7 @@ public sealed class ScopedConfigurationStores(
     public const int SchemaVersion = 1;
 
     public IConfigurationStore User { get; } =
-        factory.CreateUserStore(environment.LocalApplicationData);
+        factory.CreateUserStore(environment);
 
     public IConfigurationStore Project(string projectRoot) => factory.CreateProjectStore(projectRoot);
 }
