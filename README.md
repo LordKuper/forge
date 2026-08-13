@@ -51,8 +51,8 @@ dotnet workload install maui-windows --skip-manifest-update
 ## Build and test
 
 Restore uses committed NuGet lock files. Run both validation scripts before
-creating a pull request, `lint.ps1` first so the formatting it applies is
-the code `test-stage1.ps1` then builds and tests:
+creating a pull request, `lint.ps1` first so that `test-stage1.ps1` then
+builds and tests the already-formatted code:
 
 ```powershell
 pwsh ./.github/scripts/lint.ps1
