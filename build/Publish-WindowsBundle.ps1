@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('win-x64', 'win-arm64')]
     [string]$RuntimeIdentifier,
-    [string]$OutputDirectory
+    [string]$OutputDirectory,
+    [switch]$SkipRestore
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,8 +18,10 @@ $bundlePath = Join-Path $OutputDirectory "forge-windows-$($RuntimeIdentifier.Sub
 
 try {
     New-Item -ItemType Directory -Path $stagingDirectory -Force | Out-Null
-    dotnet restore (Join-Path $repositoryRoot 'Forge.slnx') --locked-mode
-    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    if (-not $SkipRestore) {
+        dotnet restore (Join-Path $repositoryRoot 'Forge.slnx') --locked-mode
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
 
     dotnet publish (Join-Path $repositoryRoot 'src\Forge.Cli.Windows\Forge.Cli.Windows.csproj') --configuration Release --runtime $RuntimeIdentifier --self-contained true --no-restore --property:PublishReadyToRun=false --output $stagingDirectory
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

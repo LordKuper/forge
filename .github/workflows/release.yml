@@ -1,9 +1,6 @@
 name: Release Forge
 
 on:
-  pull_request:
-    branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review, edited]
   push:
     branches: [main]
 
@@ -11,93 +8,8 @@ permissions:
   contents: read
 
 jobs:
-  dotnet:
-    name: Validate .NET solution
-    runs-on: windows-2025
-    env:
-      CI: true
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
-        with:
-          global-json-file: global.json
-
-      - name: Install MAUI Windows workload
-        shell: pwsh
-        run: dotnet workload install maui-windows --skip-manifest-update
-
-      - name: Validate Stage 1
-        shell: pwsh
-        run: ./.github/scripts/test-stage1.ps1
-
-  portable:
-    name: Validate portable core (${{ matrix.os }})
-    strategy:
-      matrix:
-        os: [ubuntu-24.04, macos-14]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Set up .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
-        with:
-          global-json-file: global.json
-
-      - name: Validate the ADR 0007 neutral projects
-        shell: pwsh
-        run: ./.github/scripts/test-portable.ps1
-
-  test:
-    name: Test release publisher
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Verify toolchain
-        shell: pwsh
-        run: ./.github/scripts/assert-toolchain.ps1
-
-      - name: Test
-        shell: pwsh
-        run: ./.github/tests/publish-release.Tests.ps1
-
-      - name: Validate Stage 0 contracts
-        shell: pwsh
-        run: ./tests/Forge.Tests/Contracts/Stage0.Contracts.Tests.ps1
-
-  validate:
-    if: github.event_name == 'pull_request'
-    name: Validate release
-    needs: [dotnet, test, portable]
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          fetch-depth: 0
-
-      - name: Verify toolchain
-        shell: pwsh
-        run: ./.github/scripts/assert-toolchain.ps1
-
-      - name: Validate
-        shell: pwsh
-        env:
-          RELEASE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          RELEASE_COMMIT_BODY: ${{ github.event.pull_request.body }}
-          RELEASE_COMMIT_SUBJECT: ${{ github.event.pull_request.title }}
-        run: ./.github/scripts/publish-release.ps1 -ValidateOnly
-
   release:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     name: Publish release
-    needs: [dotnet, test, portable]
     permissions:
       contents: write
     runs-on: windows-2025
@@ -115,6 +27,8 @@ jobs:
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           global-json-file: global.json
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
 
       - name: Install MAUI Windows workload
         shell: pwsh
@@ -124,8 +38,10 @@ jobs:
         shell: pwsh
         run: |
           $output = Join-Path $PWD 'artifacts/release'
-          ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-x64 -OutputDirectory $output
-          ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-arm64 -OutputDirectory $output
+          dotnet restore Forge.slnx --locked-mode
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-x64 -OutputDirectory $output -SkipRestore
+          ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-arm64 -OutputDirectory $output -SkipRestore
           $bundles = @(Get-ChildItem -LiteralPath $output -Filter '*.zip' | Sort-Object Name)
           $checksums = foreach ($bundle in $bundles) {
             $hash = Get-FileHash -LiteralPath $bundle.FullName -Algorithm SHA256

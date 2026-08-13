@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.13.1
+
+### Changed
+
+- Split the release workflow into `ci.yml` (build/test on PR open, sync,
+  reopen, ready-for-review), `release-validation.yml` (fast VERSION/
+  changelog/commit checks, including on PR edits), and `release.yml`
+  (publish on push to `main`, no longer re-running already-passed PR
+  checks). Stale PR runs now cancel automatically, NuGet restore is cached
+  in Windows jobs, format/vulnerability-audit checks run in a job parallel
+  to build/test instead of after it, and the Windows release build restores
+  dependencies once instead of once per architecture.
+
 ## v0.13.0
 
 ### Added
