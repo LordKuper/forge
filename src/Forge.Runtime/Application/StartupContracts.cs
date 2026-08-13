@@ -31,7 +31,7 @@ public static class DiagnosticCodes
     public const string NodeKindMismatch = "node_kind_mismatch";
     public const string NodeTransitionInvalid = "node_transition_invalid";
     public const string AttemptOwnershipMismatch = "attempt_ownership_mismatch";
-    public const string AttemptTransitionInvalid = "attempt_transition_invalid";
+    public const string AttemptTerminal = "attempt_terminal";
     public const string FindingNotFound = "finding_not_found";
     public const string WorkflowRecordInvalid = "workflow_record_invalid";
     public const string WorkflowTransitionInvalid = "workflow_transition_invalid";

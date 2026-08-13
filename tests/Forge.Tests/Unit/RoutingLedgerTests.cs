@@ -383,6 +383,59 @@ public sealed class RoutingLedgerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ABreakerTripOnTheSameKeyNeverClearsAnUnrelatedPendingDeferral()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        FileSprintEventLog store = new(clock);
+        RoutingLedger ledger = new(store, clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        DateTimeOffset start = clock.UtcNow;
+        for (int i = 0; i < RoutingLedger.DefaultFailureThreshold; i++)
+        {
+            RouteDecision decision =
+                await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+            await ledger.RecordOutcomeAsync(
+                root.Path, sprintId, decision, false, FailureClass.Transient, cancellationToken);
+        }
+
+        RouteDecision open = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.CircuitOpen, open.Outcome);
+        DateTimeOffset resumeAt = start + TimeSpan.FromMinutes(5);
+        // An unrelated deferral recorded directly against the durable store for the same key —
+        // e.g. a rate limit reported by a different attempt while this one's breaker was already
+        // tripped for an unrelated reason.
+        await store.AppendRouteDecisionAsync(
+            root.Path,
+            new(
+                Guid.NewGuid(), sprintId, "a", attemptId, Key, RouteOutcome.Deferred, FailureClass.Transient,
+                clock.UtcNow, resumeAt),
+            cancellationToken);
+
+        // The breaker is still open (its 2-minute cooldown is shorter than the 5-minute deferral),
+        // so it keeps producing fresh CircuitOpen decisions for the same key in between.
+        clock.UtcNow = start + TimeSpan.FromMinutes(1);
+        RouteDecision stillOpen =
+            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.CircuitOpen, stillOpen.Outcome);
+
+        // Once the breaker's cooldown elapses, the deferral — recorded before the breaker's own
+        // CircuitOpen decisions above — must still be honored rather than silently discarded.
+        clock.UtcNow = start + RoutingLedger.DefaultCooldown + TimeSpan.FromSeconds(1);
+        RouteDecision stillDeferred =
+            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Deferred, stillDeferred.Outcome);
+        Assert.Equal(resumeAt, stillDeferred.ResumeNotBefore);
+
+        clock.UtcNow = resumeAt;
+        RouteDecision resumed = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Routed, resumed.Outcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task GetResumeNotBeforeReturnsTheSoonestPendingDeferralAcrossKeysAndNullOnceAllElapse()
     {
         using TestRoot root = new();

@@ -223,21 +223,14 @@ public sealed class RoutingLedger(ISprintStore store, IClock clock)
         return current;
     }
 
-    /// <summary>The latest decision for <paramref name="key"/> determines whether it is currently
-    /// deferred: a <see cref="RouteOutcome.Deferred"/> decision sets the wait, and any later decision
-    /// of any other outcome (a fresh <see cref="RouteOutcome.Routed"/> once the wait elapsed, or a
-    /// terminal outcome recorded against it) clears it. The caller compares the result against "now"
-    /// — a past timestamp here is simply an elapsed wait, not a cleared one.</summary>
-    private static DateTimeOffset? BuildDeferredUntil(HealthKey key, IEnumerable<RouteDecision> decisions)
-    {
-        DateTimeOffset? deferredUntil = null;
-        foreach (RouteDecision decision in decisions.Where(item => item.Key == key))
-        {
-            deferredUntil = decision.Outcome == RouteOutcome.Deferred ? decision.ResumeNotBefore : null;
-        }
-
-        return deferredUntil;
-    }
+    /// <summary>The most recent <see cref="RouteOutcome.Deferred"/> decision for <paramref name="key"/>
+    /// determines the wait, ignoring every other outcome in between — a <see cref="RouteOutcome.CircuitOpen"/>
+    /// or <see cref="RouteOutcome.BudgetExhausted"/> decision for the same key says nothing about
+    /// whether the rate-limit wait is still pending and must never be read as clearing it. Every
+    /// caller compares the result against "now", so an elapsed wait simply stops applying on its own
+    /// — no explicit "clear" case is needed here.</summary>
+    private static DateTimeOffset? BuildDeferredUntil(HealthKey key, IEnumerable<RouteDecision> decisions) =>
+        decisions.LastOrDefault(item => item.Key == key && item.Outcome == RouteOutcome.Deferred)?.ResumeNotBefore;
 
     private static CircuitBreakerRecord Trip(CircuitBreakerRecord current, DateTimeOffset now)
     {

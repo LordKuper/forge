@@ -338,7 +338,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
             long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
@@ -352,7 +353,6 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 new Dictionary<string, string?>(StringComparer.Ordinal));
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(activity), cancellationToken)
                 .ConfigureAwait(false);
-            events.Add(activity);
         }
         finally
         {

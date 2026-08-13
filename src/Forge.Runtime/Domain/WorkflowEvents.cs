@@ -107,9 +107,14 @@ public static class WorkflowFold
             if (current.Type == WorkflowEvent.AttemptActivityRecordedType)
             {
                 // Validated like every other envelope (throws loudly on corruption) but never a
-                // transition: it must never gate on or advance a state-machine version.
+                // transition: it must never gate on or advance a state-machine version. Applied only
+                // while the attempt is still non-terminal — the authoritative, race-free half of
+                // "never resurrects a settled attempt": a heartbeat that lands after a concurrent
+                // completion (append-time only checks the attempt was non-terminal at read time) is
+                // silently dropped here on replay instead of leaving a stray post-terminal timestamp.
                 _ = IsTransitionRecord(current);
-                if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? activeAttempt))
+                if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? activeAttempt) &&
+                    !WorkflowStateMachines.IsTerminal(activeAttempt.State))
                 {
                     attempts[current.Aggregate.Id] = activeAttempt with { LastActivityAt = current.OccurredAt };
                 }

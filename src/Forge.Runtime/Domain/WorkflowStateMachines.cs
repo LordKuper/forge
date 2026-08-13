@@ -76,4 +76,8 @@ public static class WorkflowStateMachines
     public static bool CanTransition(NodeState from, NodeState to) => Node[from].Contains(to);
 
     public static bool CanTransition(AttemptState from, AttemptState to) => Attempt[from].Contains(to);
+
+    /// <summary>An attempt state with no outgoing edges in the frozen machine above — derived
+    /// rather than a second hardcoded state list, so it can never drift from the table it reads.</summary>
+    public static bool IsTerminal(AttemptState state) => Attempt[state].Count == 0;
 }

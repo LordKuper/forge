@@ -359,7 +359,7 @@ public sealed class SprintSchedulerTests
             environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
 
         Assert.False(recorded.Succeeded);
-        Assert.Equal(DiagnosticCodes.AttemptTransitionInvalid, recorded.DiagnosticCode);
+        Assert.Equal(DiagnosticCodes.AttemptTerminal, recorded.DiagnosticCode);
     }
 
     [Fact]

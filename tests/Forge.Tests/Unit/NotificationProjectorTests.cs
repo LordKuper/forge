@@ -78,6 +78,24 @@ public sealed class NotificationProjectorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void ASprintReachingFailedProjectsAFailedNotification()
+    {
+        Guid sprintId = Guid.NewGuid();
+        ControlEventRecord failed = new(
+            sprintId,
+            new(
+                Guid.NewGuid(), 3, DateTimeOffset.UnixEpoch, "SprintChanged",
+                new(AggregateKind.Sprint, sprintId.ToString("D"), 4), "workflow.sprint_failed",
+                new Dictionary<string, string?> { [WorkflowEvent.ToStateArgument] = "failed" }));
+
+        NotificationProjection projection = Assert.Single(NotificationProjector.Project([failed]));
+
+        Assert.Equal(NotificationKind.Failed, projection.Kind);
+        Assert.Equal(sprintId, projection.SprintId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void EveryEventIdIsUniqueEvenAcrossRepeatedReadsSoACallerCanDedupOnItAlone()
     {
         Guid sprintId = Guid.NewGuid();

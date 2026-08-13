@@ -443,9 +443,9 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowEventConflict);
         }
 
-        if (attempt.State is AttemptState.Succeeded or AttemptState.Failed or AttemptState.Cancelled)
+        if (WorkflowStateMachines.IsTerminal(attempt.State))
         {
-            return new(false, attempt, DiagnosticCodes.AttemptTransitionInvalid);
+            return new(false, attempt, DiagnosticCodes.AttemptTerminal);
         }
 
         await store.AppendAttemptActivityAsync(projectRoot, sprintId, attemptId, cancellationToken)
