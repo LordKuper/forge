@@ -47,4 +47,14 @@
   <data name="RecoveryFailed" xml:space="preserve"><value>Восстановление запуска для этой ошибки недоступно.</value></data>
   <data name="DiagnosticsTitle" xml:space="preserve"><value>Диагностика:</value></data>
   <data name="RecoveryNotNeeded" xml:space="preserve"><value>Нет ошибок запуска, восстановление не требуется.</value></data>
+  <data name="SprintsTitle" xml:space="preserve"><value>Спринты:</value></data>
+  <data name="NoSprints" xml:space="preserve"><value>Спринтов пока нет.</value></data>
+  <data name="SprintDetailsTitle" xml:space="preserve"><value>Детали спринта:</value></data>
+  <data name="NodesLabel" xml:space="preserve"><value>Узлы:</value></data>
+  <data name="AttemptsLabel" xml:space="preserve"><value>Попытки:</value></data>
+  <data name="FindingsLabel" xml:space="preserve"><value>Замечания:</value></data>
+  <data name="RoutingLabel" xml:space="preserve"><value>Маршрутизация:</value></data>
+  <data name="EventsDescription" xml:space="preserve"><value>Прочитать инкрементальные события рабочего процесса.</value></data>
+  <data name="EventsTitle" xml:space="preserve"><value>События:</value></data>
+  <data name="NoEvents" xml:space="preserve"><value>Новых событий нет.</value></data>
 </root>

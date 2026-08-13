@@ -1,6 +1,6 @@
 # Forge MVP implementation plan
 
-**Updated:** 2026-08-12
+**Updated:** 2026-08-13
 **Status:** active
 
 ## Rules
@@ -9,12 +9,13 @@
 - Update normative ADRs and versioned contracts before implementation.
 - Keep one command model, one project snapshot, one sprint journal, and one review engine.
 - Keep every project cross-platform unless it is a marked minimal leaf OS adapter under ADR 0007.
+- Keep provider-neutral policy in the core and every vendor/OS detail in its provider-owned adapter under ADR 0008.
 - Defer work that has no MVP acceptance case or measured need.
 
 ## Progress
 
 - [x] Stages 0–7 — Foundation, solution, updater, startup, providers, durable workflow, Git isolation, and routing.
-- [ ] Stage 8 — Cross-platform Host and local control plane.
+- [ ] Stage 8 — Cross-platform Host, local control plane, and modular providers.
 - [ ] Stage 9 — `.forge/` compiler and agent integration.
 - [ ] Stage 10 — Reproducible context assembly.
 - [ ] Stage 11 — `implementation-critical` workflow and UI parity.
@@ -43,7 +44,7 @@
 
 - [x] Implement fail-closed startup, scoped configuration, localization, explicit project-root initialization, atomic `.forge/` publication, status snapshot, suggestions, and both initial surfaces.
 
-### Stage 5 — Provider toolchain
+### Stage 5 — Provider toolchain proof
 
 - [x] Implement read-only discovery, explicit vendor-native install/update, bounded version probes, absolute process invocation, Codex/Claude JSON normalization, redaction, and stable failures.
 
@@ -56,24 +57,29 @@
 - [x] Implement integration/attempt worktrees, fast-forward integration, gated rebase, clean replay, cleanup recovery, fixed sprint retry budget, and provider/model/surface circuit breakers.
 - [x] Simplify persistence: discover sprints from journal creation markers, omit runtime sprint ids from the manifest, record routing in the sprint journal, fold budget/breakers from it, and migrate legacy routing sidecars idempotently.
 
-## Stage 8 — Cross-platform Host and local control plane
+## Stage 8 — Cross-platform Host, local control plane, and modular providers
 
 **Depends on:** Stages 4–7.
 
 - [x] P8.1–P8.8 — Enforce ADR 0007: mark OS adapters; make CLI/shared tests portable; move Windows composition and directory-flush interop to minimal adapters; split reusable Desktop state from WinUI; audit the Windows updater adapter.
 - [x] P8.9–P8.17 — Add portable `Forge.Host` and client SDK as the only workflow writer; implement discovery, start, reconnect, message limits, deadlines, correlation, version/capability handshake, and stable diagnostics.
 - [x] P8.18–P8.24 — Use one asynchronous `System.IO.Pipes` transport and one named `Mutex` project lease through cross-platform BCL APIs; add no OS branch, TCP fallback, or transport package.
-- [ ] P8.25–P8.33 — Implement `GetProjectSnapshot(detail, sprint_id?)` and `ReadControlEvents`. Project summary, next action, tree, sprint inspection, provider/integration status, CLI output, and Desktop views must be local projections of the snapshot.
+- [x] P8.25–P8.33 — Implement `GetProjectSnapshot(detail, sprint_id?)` and `ReadControlEvents`. Project summary, next action, tree, sprint inspection, provider/integration status, CLI output, and Desktop views must be local projections of the snapshot.
 - [ ] P8.34–P8.41 — Isolate release, Debug, and tests by instance id; test same-user enforcement, hostile clients, crashes, abandoned leases, stale clients, recovery, and three-OS behavior.
 - [ ] P8.42–P8.47 — Add Host-owned `resume_not_before` scheduling, safe activity updates, notification projection, and idempotent timer recovery without sleeping executor slots.
+- [ ] P8.48–P8.54 — Version the user-configuration, provider-health, startup-check, snapshot, diagnostic, and execution-profile contracts for ordered provider enablement, update/authentication state, lineage evidence, compatibility, and migration.
+- [ ] P8.55–P8.63 — Reduce the core to `ILlmProvider`, `ProviderId`, and generic lifecycle/routing policy. Move all Codex details to `Forge.Providers.Codex.Windows` and all Claude Code details to `Forge.Providers.Claude.Windows`; remove concrete provider registrations and any shared `Forge.Providers.Windows` concept from neutral code.
+- [ ] P8.64–P8.71 — Register built-ins explicitly with `AddCodexProvider()` and `AddClaudeProvider()`; validate unique ids; resolve omitted, empty, ordered, duplicate, and unknown `providers.enabled` values; intersect and freeze project provider constraints without probing disabled providers.
+- [ ] P8.72–P8.82 — Implement enabled-provider startup: bounded local probe, cached release lookup, conditional vendor update, install/repair, per-user interprocess lock, post-update probe, and final authentication check. Use 24-hour success and one-hour failure retry windows; make refresh bypass the cache but not the availability comparison; disable Claude's background auto-updater during normal execution.
+- [ ] P8.83–P8.88 — Project normalized registered/enabled/disabled/version/update/authentication/readiness states through startup, `forge models`, snapshot, CLI, and Desktop. Keep `forge models` read-only and refresh limited to enabled providers; never persist raw authentication output or identity.
 
-**Gate:** neutral projects pass on Windows, Linux, and macOS; adapter tests pass on their OS; one Host owns mutations; active work survives client loss; both surfaces read the same snapshot/events; architecture checks reject platform leakage and alternate read models.
+**Gate:** neutral projects pass on Windows, Linux, and macOS; adapter tests pass on their OS; one Host owns mutations; active work survives client loss; both surfaces read the same snapshot/events; architecture checks reject platform leakage, concrete providers in the core, cross-provider dependencies, a shared Windows provider library, and alternate read models. Disabled providers cause no lifecycle side effects; enabled providers update only when needed and must pass explicit authentication readiness.
 
 ## Stage 9 — `.forge/` compiler and agent integration
 
 - [ ] P9.1–P9.8 — Parse manifest/YAML/Markdown/frontmatter into validated semantic input with safe paths, references, scopes, and context limits.
-- [ ] P9.9–P9.16 — Generate reproducible Claude/Codex-native outputs with source hashes, generator versions, drift detection, validation, and artifact-language metadata.
-- [ ] P9.17–P9.24 — Generate, inspect, install, and remove one canonical Forge integration for both providers; document snapshot/events/commands and recovery; exclude human authority; never overwrite unknown files.
+- [ ] P9.9–P9.16 — Generate reproducible native outputs for configured providers with source hashes, generator versions, drift detection, validation, and artifact-language metadata.
+- [ ] P9.17–P9.24 — Generate, inspect, install, and remove one canonical Forge integration for each enabled provider; document snapshot/events/commands and recovery; exclude human authority; never overwrite unknown files.
 
 **Gate:** `.forge/` remains canonical, generated files are reproducible and owned, and agents cannot invoke human-only commands.
 
@@ -88,28 +94,28 @@
 ## Stage 11 — `implementation-critical` workflow and parity
 
 - [ ] P11.1–P11.12 — Implement intake, planning, threat/rule rubrics, task DAG, isolated implementation, deterministic tests, review, human approval, and finalization. Use behavior nodes and rubric data, not a seven-role catalog.
-- [ ] P11.13–P11.20 — Freeze only planning, implementation, and review execution profiles, including capability allowlists. Every model node starts without a parent transcript and receives only its frozen context manifest and profile capabilities; a node cannot widen them or invoke human-only commands. Internal/external review share one engine and profile with distinct lineage/input; finalization is deterministic.
-- [ ] P11.21–P11.31 — Implement the ASD review engine: separate design/implementation counters, fresh contexts, full-first/incremental-later scope, file/rubric coverage, same-iteration approval, severity floors, repeated normalized-finding detection, and human convergence gates.
+- [ ] P11.13–P11.20 — Freeze only planning, implementation, and review execution profiles, including ordered provider candidates and capability allowlists. Every model node starts without a parent transcript and receives only its frozen context manifest and profile capabilities; a node cannot widen them or invoke human-only commands. Internal/external review share one engine and profile with fresh attempts and bounded inputs; finalization is deterministic.
+- [ ] P11.21–P11.31 — Implement the ASD review engine: separate design/implementation counters, fresh contexts, full-first/incremental-later scope, file/rubric coverage, same-iteration approval, severity floors, repeated normalized-finding detection, and human convergence gates. Select a different provider/model lineage first, then fall back in normal configured priority when none is available; record achieved separation without creating a human gate.
 - [ ] P11.32–P11.40 — Replace prompt arguments/buffered output with stdin, minimal child environments, bounded concurrent JSON/JSONL streams, safe tails, and typed activity. Require exactly one schema-valid terminal result for the owned attempt; zero exit without it, duplicates, and contradictions fail closed.
 - [ ] P11.41–P11.47 — Add absolute/idle deadlines, distinct outcomes, and whole-process-tree cleanup verified on Windows, Linux, and macOS before any native containment adapter.
 - [ ] P11.48–P11.55 — Implement durable rate-limit deferral and human-only attempt supersession with confirmation, version, idempotency, bounded instruction, cancellation, worktree discard, linkage, and clean replacement.
 - [ ] P11.56–P11.66 — Complete CLI/TUI and Desktop projections, commands, attention navigation, human gates, recovery, English/Russian localization, configuration editors, accessibility, and parity tests.
 - [ ] P11.67–P11.72 — Add best-effort local notifications for `awaiting_human`, `blocked`, `failed`, and `completed`, deduplicated from journal event ids and redacted.
 
-**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; nodes inherit neither ambient context nor authority; process exit cannot self-certify completion; review follows ADR 0006; rate-limit, supersession, notification, and crash recovery are durable.
+**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; nodes inherit neither ambient context nor authority; process exit cannot self-certify completion; review follows ADRs 0006 and 0008, always runs fresh, and treats provider/model independence as best-effort; rate-limit, supersession, notification, and crash recovery are durable.
 
 ## Stage 12 — Diagnostics, evaluations, and hardening
 
 - [ ] P12.1–P12.8 — Add safe OpenTelemetry traces/metrics, structured logs, and allowlisted `forge doctor --bundle`; omit source/diffs, prompts, provider output, raw commands, credentials, full environments, and unredacted personal paths.
 - [ ] P12.9–P12.15 — Add updater/provider/bootstrap/workflow evaluations and model-policy gates that run through existing commands; keep evaluation orchestration out of presentation code.
-- [ ] P12.16–P12.28 — Test release trust, injection, IPC identity, protocol confusion, environment leakage, stdin/output denial of service, orphan processes, notification disclosure, permissions, dependencies, licenses, accessibility, localization, parity, migration, routing fold, review convergence, and supersession.
+- [ ] P12.16–P12.32 — Test release trust, injection, IPC identity, protocol confusion, environment leakage, stdin/output denial of service, orphan processes, notification disclosure, permissions, dependencies, licenses, accessibility, localization, parity, migration, routing fold, provider selection, cached conditional updates, authentication gates, disabled-provider isolation, review convergence, same-lineage review fallback, and supersession.
 
 **Gate:** no critical finding remains; diagnostic negative tests pass; safety, parity, accessibility, localization, compatibility, observability, and release-trust thresholds pass.
 
 ## Stage 13 — MVP release and acceptance
 
-- [ ] P13.1–P13.10 — Produce reproducible Windows x64/Arm64 bundles containing neutral Host/CLI/presentation code and thin Windows adapters; publish matching version, checksums, SBOM, annotated tag, and release notes.
-- [ ] P13.11–P13.24 — Run clean-profile install/update/rollback and end-to-end workflow acceptance: providers, project init, concurrent sprints, fallback, client restart/update, single writer, snapshot/events, human gates, supervised execution, deferral, supersession, review convergence, notifications, diagnostics, localization, and release/development isolation.
+- [ ] P13.1–P13.10 — Produce reproducible Windows x64/Arm64 bundles containing neutral Host/CLI/presentation code and provider-owned thin Windows adapters; publish matching version, checksums, SBOM, annotated tag, and release notes.
+- [ ] P13.11–P13.24 — Run clean-profile install/update/rollback and end-to-end workflow acceptance: provider enablement, conditional updates, authentication, project init, concurrent sprints, fallback, client restart/update, single writer, snapshot/events, human gates, supervised execution, best-effort lineage review, deferral, supersession, review convergence, notifications, diagnostics, localization, and release/development isolation.
 
 **Final gate:** every stage is complete, the signed Windows MVP is reproducible, architecture matches implementation, CI is green, and no blocking/high finding remains.
 
@@ -149,8 +155,8 @@
 | 5 | ADR 0002; `src/Forge.Runtime/Providers/`; provider tests; PR #18 |
 | 6 | ADR 0003; sprint journal/scheduler tests; PRs #19–20 |
 | 7 | ADR 0004; Git/routing tests; PR #21 |
-| 8 architecture | ADRs 0005 and 0007; project snapshot capability; Stage 8 gate above |
-| 11 architecture | ADR 0006; supervised execution/review gate above |
+| 8 architecture | ADRs 0005, 0007, and 0008; project snapshot capability; Stage 8 gate above |
+| 11 architecture | ADRs 0006 and 0008; supervised execution/review gate above |
 
 ## Resolved decisions
 
@@ -160,3 +166,4 @@
 | D-006 | Host, local protocol, read-back, and process ownership | ADR 0005 |
 | D-007 | Provider supervision and review convergence | ADR 0006 |
 | D-008 | Cross-platform core and minimal OS adapters | ADR 0007 |
+| D-009 | Modular provider ownership, runtime selection, maintenance, authentication, and review lineage fallback | ADR 0008 |

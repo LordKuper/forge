@@ -19,6 +19,7 @@ public sealed record ControlPlaneOptions(string ProjectRoot, string InstanceId);
 public sealed class ControlPlaneHostedService(
     ControlPlaneOptions options,
     IConfigurationRegistry registry,
+    ForgeApplication application,
     IHostApplicationLifetime lifetime,
     ILogger<ControlPlaneHostedService> logger) : BackgroundService
 {
@@ -176,7 +177,7 @@ public sealed class ControlPlaneHostedService(
                     return;
                 }
 
-                ControlResponse response = Dispatch(request);
+                ControlResponse response = await DispatchAsync(request, cancellationToken).ConfigureAwait(false);
                 byte[] responseBytes = JsonSerializer.SerializeToUtf8Bytes(response, ControlProtocol.JsonOptions);
                 await scoped.SendAsync(responseBytes, TimeSpan.FromSeconds(30), cancellationToken)
                     .ConfigureAwait(false);
@@ -222,12 +223,85 @@ public sealed class ControlPlaneHostedService(
         return diagnostic.Code == ControlDiagnosticCode.None;
     }
 
-    private static ControlResponse Dispatch(ControlRequest request) =>
-        request.Kind switch
+    private async Task<ControlResponse> DispatchAsync(ControlRequest request, CancellationToken cancellationToken)
+    {
+        try
         {
-            ControlProtocol.PingKind => new ControlResponse(request.CorrelationId, ControlDiagnostic.None),
-            _ => new ControlResponse(
+            return request.Kind switch
+            {
+                ControlProtocol.PingKind => new ControlResponse(request.CorrelationId, ControlDiagnostic.None),
+                ControlProtocol.GetProjectSnapshotKind =>
+                    await DispatchGetProjectSnapshotAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.ReadControlEventsKind =>
+                    await DispatchReadControlEventsAsync(request, cancellationToken).ConfigureAwait(false),
+                _ => new ControlResponse(
+                    request.CorrelationId,
+                    new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
+            };
+        }
+        catch (Exception exception) when (exception is JsonException or FormatException or InvalidDataException)
+        {
+            // A malformed request payload (bad JSON shape, unparsable sprint id) is a client error,
+            // never a reason to tear down the connection or crash the Host.
+            return new ControlResponse(
                 request.CorrelationId,
-                new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
-        };
+                new ControlDiagnostic(ControlDiagnosticCode.Malformed, exception.Message));
+        }
+    }
+
+    private async Task<ControlResponse> DispatchGetProjectSnapshotAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SnapshotDetail detail = SnapshotDetail.Summary;
+        Guid? sprintId = null;
+        if (request.Payload is { ValueKind: JsonValueKind.Object } payload)
+        {
+            if (payload.TryGetProperty("detail", out JsonElement detailElement) &&
+                detailElement.ValueKind == JsonValueKind.String)
+            {
+                detail = detailElement.GetString() switch
+                {
+                    "full" => SnapshotDetail.Full,
+                    "summary" or null => SnapshotDetail.Summary,
+                    string other => throw new InvalidDataException($"Unknown snapshot detail '{other}'."),
+                };
+            }
+
+            if (payload.TryGetProperty("sprint_id", out JsonElement sprintIdElement) &&
+                sprintIdElement.ValueKind == JsonValueKind.String)
+            {
+                sprintId = sprintIdElement.GetGuid();
+            }
+        }
+
+        ProjectSnapshot snapshot = await application
+            .GetProjectSnapshotAsync(options.ProjectRoot, detail, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(snapshot, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchReadControlEventsAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        string? cursor = null;
+        if (request.Payload is { ValueKind: JsonValueKind.Object } payload &&
+            payload.TryGetProperty("cursor", out JsonElement cursorElement) &&
+            cursorElement.ValueKind == JsonValueKind.String)
+        {
+            cursor = cursorElement.GetString();
+        }
+
+        ControlEventsPage page = await application
+            .ReadControlEventsAsync(options.ProjectRoot, cursor, cancellationToken)
+            .ConfigureAwait(false);
+        // A stale cursor is a business-level outcome the page's own `diagnostic_code` already
+        // carries (matching how a blocked/failed startup travels inside ProjectSnapshot rather than
+        // as a protocol diagnostic) — the request itself was well-formed and got a well-formed
+        // response, so the transport-level diagnostic here stays None.
+        JsonElement responsePayload = JsonDocument.Parse(ControlEventsJson.Serialize(page)).RootElement.Clone();
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
 }

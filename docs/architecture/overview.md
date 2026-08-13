@@ -1,7 +1,7 @@
 # Forge architecture overview
 
 **Status:** target MVP architecture
-**Updated:** 2026-08-12
+**Updated:** 2026-08-13
 
 This concise English overview is the canonical architecture summary. The
 [research summary](ai-agentic-software-development-workflow.md) captures the
@@ -16,9 +16,11 @@ permissions, validation, and release gates.
 Normative architecture decisions and machine contracts live in:
 
 - [`decisions/0001-stage-0-foundation.md`](decisions/0001-stage-0-foundation.md)
+- [`decisions/0002-provider-toolchain.md`](decisions/0002-provider-toolchain.md)
 - [`decisions/0005-local-host-and-control-plane.md`](decisions/0005-local-host-and-control-plane.md)
 - [`decisions/0006-supervised-execution-and-review-convergence.md`](decisions/0006-supervised-execution-and-review-convergence.md)
 - [`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md)
+- [`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md)
 - [`../contracts/v1/`](../contracts/v1/)
 - [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
@@ -54,7 +56,7 @@ OS UI host ─ Cross-platform UI model ──┘                                
                                            ├─ Status advisor/projections
                                            ├─ Configuration/localization
                                            └─ Interfaces
-                                               ├─ Provider adapters
+                                               ├─ Registered provider adapters
                                                ├─ Git/worktrees
                                                ├─ Sprint journal/artifacts
                                                ├─ Files/process/network
@@ -71,18 +73,19 @@ CLI, or Desktop instances from concurrently mutating one `.forge/` tree.
 ## Platform boundary
 
 Cross-platform is the default for every Forge project, including Host, CLI/TUI,
-application, domain, contracts, protocols, persistence, provider/Git adapters,
-update policy, and reusable Desktop presentation. These projects use portable
-.NET TFMs and the same behavior on Windows, Linux, and macOS. Portable runtime
-detection may report capabilities or select an adapter; it may not perform the
-native operation inline.
+application, domain, contracts, protocols, persistence, provider contracts and
+lifecycle policy, Git adapters, update policy, and reusable Desktop presentation.
+These projects use portable .NET TFMs and the same behavior on Windows, Linux,
+and macOS. Portable runtime detection may report capabilities or select an
+adapter; it may not perform the native operation inline.
 
 Code that must call an OS API lives in a dedicated, marked leaf adapter. An
 adapter translates a neutral port to one native operation and normalizes the
-result. Installer activation, PATH/shortcut integration, native Desktop hosting,
-OS notifications, secret storage, and a proven BCL process/file-durability gap
-are valid adapter boundaries. Workflow, policy, retries, persistence,
-protocols, and presentation state are not. See
+result. Provider-owned paths, scripts, commands and environment behavior,
+installer activation, PATH/shortcut integration, native Desktop hosting, OS
+notifications, secret storage, and a proven BCL process/file-durability gap are
+valid adapter boundaries. Workflow, policy, retries, persistence, protocols,
+and presentation state are not. See
 [`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md).
 
 ## Local control plane
@@ -118,15 +121,17 @@ Every public surface uses the same ordered bootstrap:
 5. verify the latest stable Forge release;
 6. stage, verify, activate, restart, and roll back when required;
 7. connect to or start a compatible Forge Host and complete its handshake;
-8. discover, update, and recheck provider CLIs;
+8. resolve enabled providers, probe local versions, conditionally update under
+   the release cache, recheck, and verify authentication readiness;
 9. verify an explicit project root;
 10. load or explicitly initialize `.forge/`;
 11. validate and synchronize project configuration;
 12. build the versioned project snapshot;
 13. rank safe next actions and open the requested surface.
 
-Update or provider uncertainty is fail-closed for project and sprint work.
-Recovery diagnostics remain available.
+An unusable or unauthenticated enabled provider is fail-closed for project and
+sprint work. Release-check failure does not block an otherwise usable installed
+provider. Recovery diagnostics remain available.
 
 ## Self-update
 
@@ -172,6 +177,7 @@ User scope owns:
 - `language.ui`;
 - `language.interaction`;
 - `language.llm`;
+- ordered `providers.enabled` selection and fallback priority;
 - interaction and recent-project preferences.
 
 Project scope owns:
@@ -229,10 +235,33 @@ the same recorded base. It never edits the frozen plan or continues partial edit
 
 ## Provider execution and fallback
 
-Forge installs and updates Codex CLI and Claude Code CLI through each
-vendor's own recommended native Windows mechanism, at the fixed path the
-vendor documents (see
+The core owns only `ILlmProvider`, provider-neutral lifecycle contracts, and
+generic selection, maintenance, and routing policy. Explicit Windows composition
+registers `Forge.Providers.Codex.Windows` and
+`Forge.Providers.Claude.Windows`; each library exclusively owns its vendor's
+paths, scripts, commands, authentication, environment, and output normalization.
+The provider projects do not reference each other, and there is no shared
+`Forge.Providers.Windows` library. Forge uses no reflection or dynamic provider
+plugin loader for the MVP.
+
+User configuration selects an exact ordered provider set. Omission enables all
+registered built-ins in composition order; `[]` leaves diagnostics available but
+blocks model work. A project profile may narrow and reorder this set but cannot
+enable a provider the user disabled. Disabled providers are never probed,
+installed, updated, authenticated, or executed. The resolved ordered intersection
+is frozen into each sprint. See
+[`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md).
+
+Enabled adapters install and update official CLIs through each vendor's native
+Windows mechanism (see
 [`decisions/0002-provider-toolchain.md`](decisions/0002-provider-toolchain.md)).
+Startup always performs a bounded local version probe, but checks remote update
+availability at most once per 24 hours and invokes the vendor updater only when
+a newer version exists. Failed checks and updates retry after one hour;
+`forge models --refresh` bypasses the cache but not the availability check.
+After maintenance, Forge explicitly checks authentication for every enabled
+provider and retains only normalized readiness and stable diagnostics.
+
 Provider adapters execute official CLIs without shell-string concatenation,
 consume versioned JSON/JSONL, validate schema-constrained output, and normalize
 quota, rate-limit, authentication, policy, transient, and malformed-output
@@ -259,17 +288,21 @@ A retryable rate limit records `resume_not_before`, releases the executor slot,
 and is re-enqueued durably by Forge Host; no worker sleeps through the delay.
 Planning, implementation, and review use three provider/model/effort/sandbox/
 deadline profiles frozen into the sprint. Internal and external review share the
-review profile with different lineage and inputs; finalization is deterministic.
+review profile with fresh attempts and bounded inputs; finalization is deterministic.
 See
 [`decisions/0006-supervised-execution-and-review-convergence.md`](decisions/0006-supervised-execution-and-review-convergence.md).
 
 ## Review convergence
 
 One review engine accepts a scope and rubric for design or implementation.
-Reviewers start with fresh context. A reviewer sharing the implementation's
-provider/model lineage may report advisory findings but cannot satisfy the
-independent-review gate. Every internal verdict proves scoped file and rubric
-coverage; incomplete coverage is re-dispatched once in the same iteration.
+Reviewers start with fresh context and attempt identity. Forge first selects an
+available reviewer with provider/model lineage different from implementation.
+If none exists, it uses the first available reviewer in normal configured
+priority, including the same provider or model family. The verdict records the
+achieved separation; reduced provider/model independence is diagnostic, not a
+human gate. No available review model still blocks review. Every internal verdict
+proves scoped file and rubric coverage; incomplete coverage is re-dispatched once
+in the same iteration.
 
 Design and implementation review counters are independent. Default consecutive
 severity budgets are low `1`, medium `1`, high `2`, and critical `10`: the floor
@@ -409,8 +442,8 @@ The release gate requires:
   capability boundaries, and explicit schema-valid terminal results;
 - stdin-only prompts, minimal provider environments, bounded streaming, dual
   watchdogs, process-tree cleanup, durable rate-limit resumption, operator
-  supersession, independent-lineage review, ASD convergence, and notification
-  deduplication;
+  supersession, fresh review with best-effort provider/model lineage separation,
+  ASD convergence, and notification deduplication;
 - English/Russian localization completeness;
 - scoped-configuration and artifact-language acceptance;
 - updater, provider, workflow, fallback, recovery, and security suites;

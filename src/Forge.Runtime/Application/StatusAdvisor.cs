@@ -2,33 +2,99 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Forge.Domain;
 
 namespace Forge.Application;
 
 /// <summary>
-/// Produces the immutable versioned status snapshot and the deterministic recommendation list.
-/// Only safe recovery and initialization actions exist before the workflow engine lands.
+/// Produces the immutable versioned project snapshot — the single authoritative read model ADR
+/// 0005 assigns to `GetProjectSnapshot(detail, sprint_id?)` — and the deterministic recommendation
+/// list. Every sprint/node/attempt/finding fact is folded fresh from the durable journal on every
+/// call, matching <see cref="FileSprintEventLog"/>'s own "no snapshot cache" stance: at MVP sprint
+/// scale, re-folding is cheaper than a second cache-invalidation surface.
 /// </summary>
-public sealed class StatusAdvisor(IClock clock)
+public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
     public const string ContractVersion = "1.0.0";
     private const int MaximumResults = 5;
 
-    public ProjectSnapshot CreateSnapshot(StartupStatus startup)
+    /// <summary>Sprint work is fail-closed while the project is not initialized, so an
+    /// uninitialized project reports no sprints rather than probing a `.forge/sprints/` directory
+    /// that cannot exist yet.</summary>
+    public async Task<ProjectSnapshot> CreateSnapshotAsync(
+        StartupStatus startup,
+        SnapshotDetail detail,
+        Guid? sprintId,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(startup);
         long stateVersion = StateVersion(startup.Project);
+        if (!startup.Project.Initialized)
+        {
+            return new(
+                ContractVersion,
+                stateVersion,
+                clock.UtcNow,
+                new(startup.Project.Root, startup.Project.Initialized),
+                startup.State,
+                null,
+                [],
+                [],
+                Recommend(startup, stateVersion),
+                detail);
+        }
+
+        IReadOnlyList<SprintJournalEntry> journal =
+            await SprintJournal.LoadAllAsync(store, startup.Project.Root, cancellationToken).ConfigureAwait(false);
+        List<SprintStatus> sprints = new(journal.Count);
+        Dictionary<Guid, SprintWorkflowState> states = new();
+        Dictionary<Guid, SprintDefinition> definitions = new();
+        for (int index = 0; index < journal.Count; index++)
+        {
+            SprintJournalEntry entry = journal[index];
+            SprintWorkflowState state = entry.Fold();
+            SprintDefinition? definition = await store
+                .LoadDefinitionAsync(startup.Project.Root, entry.Id, cancellationToken)
+                .ConfigureAwait(false);
+            if (definition is null)
+            {
+                // A journal with events but no definition file is not a state this store's own
+                // write path can produce (SaveDefinitionAsync always lands before any transition
+                // is appended) — skip defensively rather than fail the whole snapshot for it.
+                continue;
+            }
+
+            states[entry.Id.Value] = state;
+            definitions[entry.Id.Value] = definition;
+            sprints.Add(new(entry.Id.Value, index + 1, state.Sprint.State, definition.Workflow, definition.BaseCommit));
+        }
+
+        Guid? activeSprintId = DetermineActiveSprint(sprints);
+        IReadOnlyList<Guid> attention = [.. sprints.Where(NeedsAttention).Select(sprint => sprint.Id)];
+        Guid? detailTarget = sprintId ?? (detail == SnapshotDetail.Full ? activeSprintId : null);
+        SprintDetails? details = detailTarget is { } target && states.TryGetValue(target, out SprintWorkflowState? targetState)
+            ? await BuildDetailsAsync(startup.Project.Root, target, targetState, definitions[target], cancellationToken)
+                .ConfigureAwait(false)
+            : null;
+
         return new(
             ContractVersion,
             stateVersion,
             clock.UtcNow,
             new(startup.Project.Root, startup.Project.Initialized),
             startup.State,
-            null,
-            [],
-            [],
-            Recommend(startup, stateVersion));
+            activeSprintId,
+            sprints,
+            attention,
+            Recommend(startup, stateVersion),
+            detail,
+            details);
     }
+
+    /// <summary>Backward-compatible entry point for callers that only need the startup-derived
+    /// view (e.g. before a project root is even confirmed) without sprint detail.</summary>
+    public Task<ProjectSnapshot> CreateSnapshotAsync(StartupStatus startup, CancellationToken cancellationToken) =>
+        CreateSnapshotAsync(startup, SnapshotDetail.Summary, null, cancellationToken);
 
     /// <summary>
     /// The state version advances with every durable project mutation. Initialization is the only
@@ -38,6 +104,70 @@ public sealed class StatusAdvisor(IClock clock)
     {
         ArgumentNullException.ThrowIfNull(project);
         return project.Initialized ? 1 : 0;
+    }
+
+    /// <summary>ADR 0005: "the active sprint is an explicit selection or the only non-terminal
+    /// sprint; Forge never silently chooses among multiple candidates." No explicit-selection
+    /// command exists yet (deferred), so this only ever resolves the second case.</summary>
+    private static Guid? DetermineActiveSprint(IReadOnlyList<SprintStatus> sprints)
+    {
+        List<Guid> nonTerminal = [.. sprints
+            .Where(sprint => sprint.State is not (SprintState.Completed or SprintState.Cancelled))
+            .Select(sprint => sprint.Id)];
+        return nonTerminal.Count == 1 ? nonTerminal[0] : null;
+    }
+
+    /// <summary>Matches the overview's attention priorities (`awaiting_human`, `blocked`, `failed`,
+    /// `ready_to_finalize`). `completed` is deliberately excluded: nothing yet records whether
+    /// completed work has been acknowledged, and including it here would mean a completed sprint
+    /// can never leave attention. Revisit once acknowledgment tracking exists.</summary>
+    private static bool NeedsAttention(SprintStatus sprint) =>
+        sprint.State is SprintState.AwaitingHuman or SprintState.Blocked or SprintState.Failed
+            or SprintState.ReadyToFinalize;
+
+    private async Task<SprintDetails> BuildDetailsAsync(
+        string projectRoot,
+        Guid sprintId,
+        SprintWorkflowState state,
+        SprintDefinition definition,
+        CancellationToken cancellationToken)
+    {
+        Dictionary<string, NodeKind> nodeKinds = definition.Graph.ToDictionary(
+            node => node.Id,
+            node => node.Kind,
+            StringComparer.Ordinal);
+        List<EntityStatus> nodes = [.. state.Nodes.Values
+            .OrderBy(node => node.Id.Value, StringComparer.Ordinal)
+            .Select(node => new EntityStatus(
+                node.Id.Value,
+                WorkflowStateNames.ToSnakeCase(node.State),
+                Kind: nodeKinds.TryGetValue(node.Id.Value, out NodeKind kind)
+                    ? WorkflowStateNames.ToSnakeCase(kind)
+                    : null,
+                UpdatedAt: node.UpdatedAt))];
+        List<EntityStatus> attempts = [.. state.Attempts.Values
+            .OrderBy(attempt => attempt.Id.Value)
+            .Select(attempt => new EntityStatus(
+                attempt.Id.Value.ToString("D", CultureInfo.InvariantCulture),
+                WorkflowStateNames.ToSnakeCase(attempt.State),
+                OwnerId: attempt.NodeId,
+                Kind: attempt.TargetOutcome,
+                UpdatedAt: attempt.UpdatedAt))];
+        IReadOnlyList<Finding> findings = await store
+            .GetFindingsAsync(projectRoot, new(sprintId), cancellationToken)
+            .ConfigureAwait(false);
+        List<EntityStatus> findingRows = [.. findings.Select(finding => new EntityStatus(
+            finding.FindingId.ToString("D", CultureInfo.InvariantCulture),
+            WorkflowStateNames.ToSnakeCase(finding.Status),
+            Severity: WorkflowStateNames.ToSnakeCase(finding.Severity)))];
+        RetryBudgetRecord budget = await routingLedger
+            .GetRetryBudgetAsync(projectRoot, new(sprintId), cancellationToken)
+            .ConfigureAwait(false);
+
+        // Gates and artifacts stay empty until Stage 11 introduces human gates and an addressable
+        // artifact store; resume_not_before stays null until P8.42-P8.47 adds durable rate-limit
+        // scheduling. The schema permits both as always-valid empty/absent values.
+        return new(sprintId, nodes, attempts, findingRows, [], [], new(budget.Remaining, null));
     }
 
     private static IReadOnlyList<SuggestedAction> Recommend(StartupStatus startup, long stateVersion)

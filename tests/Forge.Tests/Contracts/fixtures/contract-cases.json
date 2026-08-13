@@ -479,6 +479,61 @@
         "capabilities": ["ui"],
         "messages": {}
       }
+    },
+    {
+      "name": "control event page accepts a bounded read with one merged event",
+      "schema": "control-event-page",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "events": [{
+          "sprint_id": "44444444-4444-4444-8444-444444444444",
+          "event": {
+            "schema_version": "1.0.0",
+            "event_id": "66666666-6666-4666-8666-666666666666",
+            "sequence": 0,
+            "occurred_at": "2026-08-12T12:00:00Z",
+            "type": "SprintTransitioned",
+            "aggregate": {"kind": "sprint", "id": "44444444-4444-4444-8444-444444444444", "version": 1},
+            "message_key": "sprint.transitioned",
+            "arguments": {"to_state": "draft"}
+          }
+        }],
+        "cursor": "eyJ2ZXJzaW9uIjoiMS4wLjAifQ==",
+        "diagnostic_code": "none"
+      }
+    },
+    {
+      "name": "control event page rejects an event missing its owning sprint id",
+      "schema": "control-event-page",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "events": [{
+          "event": {
+            "schema_version": "1.0.0",
+            "event_id": "66666666-6666-4666-8666-666666666666",
+            "sequence": 0,
+            "occurred_at": "2026-08-12T12:00:00Z",
+            "type": "SprintTransitioned",
+            "aggregate": {"kind": "sprint", "id": "44444444-4444-4444-8444-444444444444", "version": 1},
+            "message_key": "sprint.transitioned",
+            "arguments": {"to_state": "draft"}
+          }
+        }],
+        "cursor": "eyJ2ZXJzaW9uIjoiMS4wLjAifQ==",
+        "diagnostic_code": "none"
+      }
+    },
+    {
+      "name": "control event page rejects a missing cursor",
+      "schema": "control-event-page",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "events": [],
+        "diagnostic_code": "none"
+      }
     }
   ]
 }

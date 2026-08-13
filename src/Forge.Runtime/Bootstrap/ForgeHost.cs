@@ -61,6 +61,7 @@ public static class ForgeHost
         services.AddSingleton<SprintOrchestrator>();
         services.AddSingleton<SprintGitIsolation>();
         services.AddSingleton<RoutingLedger>();
+        services.AddSingleton<ControlEventsReader>();
         services.AddSingleton<StartupRecovery>();
         services.AddSingleton<StartupPipeline>();
         services.AddSingleton<StatusAdvisor>();

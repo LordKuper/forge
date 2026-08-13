@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Cli;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Tests.Support;
 using Forge.UnitTests;
@@ -108,6 +109,29 @@ public sealed class StartupCliTests
         {
             AssertValid("suggested-action", action.GetRawText());
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task MachineEventsMatchTheVersionedContract()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment, output, ["events", "--project-root", environment.ProjectRoot, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        AssertValid("control-event-page", output.ToString());
+        using JsonDocument page = JsonDocument.Parse(output.ToString());
+        Assert.True(page.RootElement.GetProperty("events").GetArrayLength() > 0);
     }
 
     [Fact]

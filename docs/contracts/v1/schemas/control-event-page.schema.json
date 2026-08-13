@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/control-event-page.schema.json",
+  "title": "ControlEventPage v1",
+  "description": "One bounded ReadControlEvents read: newly visible sprint journal records plus the opaque cursor that resumes exactly where this page stopped.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "events", "cursor", "diagnostic_code"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "events": {"type": "array", "items": {"$ref": "#/$defs/entry"}},
+    "cursor": {"type": "string"},
+    "diagnostic_code": {"type": "string", "minLength": 1}
+  },
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sprint_id", "event"],
+      "properties": {
+        "sprint_id": {"type": "string", "format": "uuid"},
+        "event": {"$ref": "event.schema.json"}
+      }
+    }
+  }
+}

@@ -2,6 +2,26 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.14.0
+
+### Added
+
+- Forge Host now serves the authoritative project read model over the local
+  control-plane protocol: `GetProjectSnapshot(detail, sprint_id?)` reports
+  every known sprint (creation order, state, base commit), the active sprint
+  (only when exactly one is non-terminal), sprints needing attention, and,
+  at `full` detail or for an explicitly named sprint, that sprint's
+  nodes, attempts, findings, and retry budget. `ReadControlEvents` reads the
+  same durable per-sprint journals incrementally through an opaque cursor
+  that discovers new sprints and never silently rebaselines on a stale or
+  malformed cursor.
+- `forge status` gained `--detail <summary|full>` and `--sprint <id>` and now
+  prints the sprint list and (when requested) sprint detail alongside the
+  existing startup and recommendation output; both the human and `--json`
+  output are pure projections of the one snapshot.
+- Added `forge events [--after <cursor>] [--follow] [--json]` to read
+  incremental workflow events, with bounded short polling in follow mode.
+
 ## v0.13.1
 
 ### Changed

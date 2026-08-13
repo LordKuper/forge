@@ -28,6 +28,7 @@ public static class CliApplication
         root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateEventsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application));
         if (install is not null)
@@ -147,13 +148,30 @@ public static class CliApplication
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> json = CreateJsonOption();
+        Option<string?> detail = new("--detail")
+        {
+            Description = "Snapshot detail: summary (default) or full.",
+        };
+        Option<string?> sprint = new("--sprint")
+        {
+            Description = "Sprint id whose node/attempt/finding/routing detail to include (implies full detail).",
+        };
         Command command = new("status", text.Resolve(MessageKeys.StatusDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(json);
+        command.Options.Add(detail);
+        command.Options.Add(sprint);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            SnapshotDetail requestedDetail = string.Equals(
+                parseResult.GetValue(detail), "full", StringComparison.OrdinalIgnoreCase)
+                ? SnapshotDetail.Full
+                : SnapshotDetail.Summary;
+            Guid? sprintId = Guid.TryParse(parseResult.GetValue(sprint), out Guid parsedSprintId)
+                ? parsedSprintId
+                : null;
             ProjectOverview overview = await application
-                .GetOverviewAsync(parseResult.GetValue(projectRoot), cancellationToken)
+                .GetOverviewAsync(parseResult.GetValue(projectRoot), requestedDetail, sprintId, cancellationToken)
                 .ConfigureAwait(false);
             if (parseResult.GetValue(json))
             {
@@ -163,9 +181,68 @@ public static class CliApplication
 
             output.WriteLine(text.Resolve(SurfaceFormatting.StartupMessageKey(overview.Snapshot.Startup)));
             WriteProject(text, output, overview.Startup.Project);
+            WriteSprints(text, output, overview.Snapshot.Sprints, overview.Snapshot.ActiveSprintId);
+            if (overview.Snapshot.Details is { } sprintDetails)
+            {
+                WriteSprintDetails(text, output, sprintDetails);
+            }
+
             WriteActions(text, output, overview.Snapshot.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    private static Command CreateEventsCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string?> after = new("--after") { Description = "Resume from a previously returned cursor." };
+        Option<bool> follow = new("--follow") { Description = "Keep polling for new events until canceled." };
+        Option<bool> json = CreateJsonOption();
+        Command command = new("events", text.Resolve(MessageKeys.EventsDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(after);
+        command.Options.Add(follow);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            bool jsonOutput = parseResult.GetValue(json);
+            bool followMode = parseResult.GetValue(follow);
+            string? cursor = parseResult.GetValue(after);
+            while (true)
+            {
+                ControlEventsPage page = await application
+                    .ReadControlEventsAsync(root, cursor, cancellationToken)
+                    .ConfigureAwait(false);
+                cursor = page.Cursor;
+                if (jsonOutput)
+                {
+                    output.WriteLine(ControlEventsJson.Serialize(page));
+                }
+                else
+                {
+                    WriteEvents(text, output, page);
+                }
+
+                if (page.DiagnosticCode != DiagnosticCodes.None)
+                {
+                    return Report(diagnostics, page.DiagnosticCode);
+                }
+
+                if (!followMode || cancellationToken.IsCancellationRequested)
+                {
+                    return ExitCodes.Ok;
+                }
+
+                // Bounded short polling (ADR 0005): no subscriber registry, no streaming socket.
+                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
+            }
         });
         return command;
     }
@@ -390,6 +467,69 @@ public static class CliApplication
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"  {action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"));
+        }
+    }
+
+    private static void WriteSprints(
+        SurfaceText text,
+        TextWriter output,
+        IReadOnlyList<SprintStatus> sprints,
+        Guid? activeSprintId)
+    {
+        output.WriteLine(text.Resolve(MessageKeys.SprintsTitle));
+        if (sprints.Count == 0)
+        {
+            output.WriteLine(text.Resolve(MessageKeys.NoSprints));
+            return;
+        }
+
+        foreach (SprintStatus sprint in sprints)
+        {
+            string marker = sprint.Id == activeSprintId ? "*" : " ";
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {marker} {sprint.CreationSequence}. {sprint.Id} {SurfaceFormatting.Machine(sprint.State)}"));
+        }
+    }
+
+    private static void WriteSprintDetails(SurfaceText text, TextWriter output, SprintDetails details)
+    {
+        output.WriteLine(text.Resolve(MessageKeys.SprintDetailsTitle));
+        WriteEntities(text, output, MessageKeys.NodesLabel, details.Nodes);
+        WriteEntities(text, output, MessageKeys.AttemptsLabel, details.Attempts);
+        WriteEntities(text, output, MessageKeys.FindingsLabel, details.Findings);
+        output.WriteLine(string.Create(
+            CultureInfo.InvariantCulture,
+            $"  {text.Resolve(MessageKeys.RoutingLabel)} retry_remaining={details.Routing.RetryRemaining}"));
+    }
+
+    private static void WriteEntities(
+        SurfaceText text,
+        TextWriter output,
+        string titleKey,
+        IReadOnlyList<EntityStatus> entities)
+    {
+        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  {text.Resolve(titleKey)}"));
+        foreach (EntityStatus entity in entities)
+        {
+            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    {entity.Id} {entity.State}"));
+        }
+    }
+
+    private static void WriteEvents(SurfaceText text, TextWriter output, ControlEventsPage page)
+    {
+        output.WriteLine(text.Resolve(MessageKeys.EventsTitle));
+        if (page.Events.Count == 0)
+        {
+            output.WriteLine(text.Resolve(MessageKeys.NoEvents));
+            return;
+        }
+
+        foreach (ControlEventRecord record in page.Events)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {record.SprintId} {record.Event.Type} {SurfaceFormatting.Machine(record.Event.Aggregate.Kind)}:{record.Event.Aggregate.Id} {record.Event.MessageKey}"));
         }
     }
 

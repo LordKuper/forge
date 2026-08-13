@@ -39,7 +39,8 @@ public sealed class ForgeApplication(
     StatusAdvisor advisor,
     IConfigurationRegistry registry,
     ScopedConfigurationService configuration,
-    IProviderToolchainManager providerToolchain)
+    IProviderToolchainManager providerToolchain,
+    ControlEventsReader eventsReader)
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -61,17 +62,51 @@ public sealed class ForgeApplication(
     /// <summary>Runs the startup sequence once and derives the status snapshot from it.</summary>
     public async Task<ProjectOverview> GetOverviewAsync(
         string? projectRoot,
+        CancellationToken cancellationToken) =>
+        await GetOverviewAsync(projectRoot, SnapshotDetail.Summary, null, cancellationToken).ConfigureAwait(false);
+
+    /// <summary>Same as <see cref="GetOverviewAsync(string?,CancellationToken)"/>, additionally
+    /// requesting the named or (with <see cref="SnapshotDetail.Full"/>) active sprint's detail
+    /// section — the read model behind `GetProjectSnapshot(detail, sprint_id?)`.</summary>
+    public async Task<ProjectOverview> GetOverviewAsync(
+        string? projectRoot,
+        SnapshotDetail detail,
+        Guid? sprintId,
         CancellationToken cancellationToken)
     {
         StartupStatus startup =
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
-        return new(startup, advisor.CreateSnapshot(startup));
+        return new(startup, await advisor.CreateSnapshotAsync(startup, detail, sprintId, cancellationToken)
+            .ConfigureAwait(false));
     }
 
     public async Task<ProjectSnapshot> GetProjectSnapshotAsync(
         string? projectRoot,
         CancellationToken cancellationToken) =>
         (await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Snapshot;
+
+    public async Task<ProjectSnapshot> GetProjectSnapshotAsync(
+        string? projectRoot,
+        SnapshotDetail detail,
+        Guid? sprintId,
+        CancellationToken cancellationToken) =>
+        (await GetOverviewAsync(projectRoot, detail, sprintId, cancellationToken).ConfigureAwait(false)).Snapshot;
+
+    /// <summary>The bounded, cursor-driven incremental read behind `ReadControlEvents`. See
+    /// <see cref="ControlEventsReader"/> for the merge/cursor contract. An uninitialized or
+    /// unresolvable project root reports no events rather than probing a `.forge/sprints/`
+    /// directory that cannot exist yet — matching <see cref="StatusAdvisor.CreateSnapshotAsync(StartupStatus,SnapshotDetail,Guid?,CancellationToken)"/>.</summary>
+    public async Task<ControlEventsPage> ReadControlEventsAsync(
+        string? projectRoot,
+        string? cursor,
+        CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        return status.Initialized
+            ? await eventsReader.ReadAsync(status.Root, cursor, cancellationToken).ConfigureAwait(false)
+            : ControlEventsPage.Empty(cursor);
+    }
 
     /// <summary>
     /// Read-only discovery, matching the `provider.health` capability's declared `query`/`read`

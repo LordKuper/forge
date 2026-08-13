@@ -248,6 +248,20 @@ public interface ISprintStore
         string projectRoot,
         SprintId sprintId,
         CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Every durable transition and routing record for one sprint, in append order, including the
+    /// records <see cref="LoadAsync"/> folds away — the raw stream a read model needs to derive
+    /// creation order (its first record's <see cref="WorkflowEvent.OccurredAt"/>) and incremental
+    /// cursors (its own <see cref="WorkflowEvent.Sequence"/> numbers) without a second store
+    /// abstraction. Matches every other read here: it re-reads the whole journal rather than
+    /// maintaining a partial-read index, which is fine at MVP sprint scale (see
+    /// <see cref="FileSprintEventLog"/>'s own remarks).
+    /// </summary>
+    Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
 }
 
 public interface IArtifactStore;

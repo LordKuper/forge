@@ -53,6 +53,16 @@ public static class ControlProtocol
 
     public const string PingKind = "ping";
 
+    /// <summary>`GetProjectSnapshot(detail, sprint_id?)` — ADR 0005's authoritative read model.
+    /// Request payload: <c>{"detail"?: "summary"|"full", "sprint_id"?: uuid}</c>. Response payload:
+    /// a `project-snapshot.schema.json` instance.</summary>
+    public const string GetProjectSnapshotKind = "get_project_snapshot";
+
+    /// <summary>`ReadControlEvents` — one bounded incremental read from the durable per-sprint
+    /// journals. Request payload: <c>{"cursor"?: string}</c>. Response payload: a
+    /// `control-event-page.schema.json` instance.</summary>
+    public const string ReadControlEventsKind = "read_control_events";
+
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is
     // deliberately a leaf with no ProjectReference, since CLI/Desktop composition roots pull it in without

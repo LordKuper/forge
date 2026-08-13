@@ -356,6 +356,35 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            try
+            {
+                List<WorkflowEvent> events =
+                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken).ConfigureAwait(false)];
+                ValidateJournal(events);
+                await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
+                return events;
+            }
+            catch (JsonException error)
+            {
+                throw new InvalidDataException($"The sprint journal for '{sprintId.Value}' is corrupt.", error);
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken)
     {
         string root = SprintsRoot(projectRoot);

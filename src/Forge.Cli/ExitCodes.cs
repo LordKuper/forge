@@ -31,7 +31,7 @@ public static class ExitCodes
         DiagnosticCodes.UpdateCheckDeferred => Update,
         DiagnosticCodes.ProviderPreflightPending or DiagnosticCodes.ProviderUpdateFailed => Provider,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
-        DiagnosticCodes.SuggestionStale => Concurrency,
+        DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
         _ => Internal,
     };
 }

@@ -1,6 +1,8 @@
 using System.CommandLine;
 using System.Globalization;
+using Forge.Application;
 using Forge.Cli;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Tests.Support;
@@ -228,6 +230,57 @@ public sealed class CliTests
         {
             CultureInfo.CurrentUICulture = original;
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task StatusCommandWithFullDetailPrintsTheSprintAndItsNode()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["status", "--project-root", environment.ProjectRoot, "--detail", "full"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        Assert.Contains(sprintId.Value.ToString(), text, StringComparison.Ordinal);
+        Assert.Contains("draft", text, StringComparison.Ordinal);
+        Assert.Contains("a ready", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task EventsCommandReportsTheSprintCreationEventAndAReusableCursor()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["events", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(sprintId.Value.ToString(), output.ToString(), StringComparison.Ordinal);
     }
 
     private static SurfaceText Text(ILocalizationCatalog catalog) =>
