@@ -32,7 +32,7 @@ public sealed class MutexProjectLease : IProjectLease
 {
     private readonly Thread thread;
     private readonly ManualResetEventSlim releaseSignal;
-    private bool disposed;
+    private int disposed;
 
     private MutexProjectLease(Thread thread, ManualResetEventSlim releaseSignal, bool wasAbandoned)
     {
@@ -127,12 +127,11 @@ public sealed class MutexProjectLease : IProjectLease
 
     public void Dispose()
     {
-        if (disposed)
+        if (Interlocked.Exchange(ref disposed, 1) != 0)
         {
             return;
         }
 
-        disposed = true;
         releaseSignal.Set();
         thread.Join();
         releaseSignal.Dispose();

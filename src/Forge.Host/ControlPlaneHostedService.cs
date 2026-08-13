@@ -5,6 +5,7 @@ using Forge.Configuration;
 using Forge.Host.Client;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using YamlDotNet.Core;
 
 namespace Forge.Host;
 
@@ -64,12 +65,15 @@ public sealed class ControlPlaneHostedService(
             projectId = await ProjectIdentity.ReadProjectIdAsync(options.ProjectRoot, registry, stoppingToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        catch (Exception exception) when (exception is YamlException or InvalidDataException or FormatException
+            or ConfigurationScopeException or IOException or UnauthorizedAccessException
+            or InvalidOperationException)
         {
-            // Any failure to read the manifest — missing, corrupted with no recoverable backup, denied by an
-            // ACL — means the same thing here: this project cannot be served. Report it the same way instead of
-            // letting an exception type this handler didn't anticipate crash the process via the generic
-            // unhandled-BackgroundService-exception path.
+            // Matches ProjectRootResolver's manifest-read failure filter, plus InvalidOperationException: that's
+            // what ProjectIdentity.ReadProjectIdAsync itself throws for an initialized project missing a project
+            // ID. Every case here means the same thing: this project cannot be served. Report it the same way
+            // instead of letting an exception type this handler didn't anticipate crash the process via the
+            // generic unhandled-BackgroundService-exception path.
             LogNotInitialized(logger, exception);
             lifetime.StopApplication();
             return;
