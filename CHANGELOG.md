@@ -2,6 +2,29 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.13.0
+
+### Added
+
+- Added the portable Forge Host (`Forge.Host`) and its client SDK
+  (`Forge.Host.Client`): a per-user, headless process that will become the
+  only workflow writer. The local control-plane protocol is a versioned,
+  length-prefixed JSON envelope over one asynchronous `System.IO.Pipes`
+  transport (Windows named pipes, Unix-domain sockets on Linux/macOS), gated
+  by a version/capability handshake, bounded message size and deadlines, and
+  correlation ids. A named `Mutex` project lease, keyed by the project's
+  stable id, prevents a second Host from mutating the same project, and
+  surfaces an abandoned prior owner instead of hiding it. The client SDK
+  covers discovery, starting the Host process, and reconnecting after a
+  drop, all with stable diagnostic codes instead of raw exceptions.
+
+### Changed
+
+- Fixed a thread-affinity hazard in the project lease: a named `Mutex`'s
+  ownership is tracked per OS thread, which async/await code cannot
+  guarantee across an `await`. The lease now runs its acquire/release pair
+  on one dedicated thread for its whole held lifetime.
+
 ## v0.12.0
 
 ### Changed

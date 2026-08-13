@@ -61,8 +61,8 @@
 **Depends on:** Stages 4–7.
 
 - [x] P8.1–P8.8 — Enforce ADR 0007: mark OS adapters; make CLI/shared tests portable; move Windows composition and directory-flush interop to minimal adapters; split reusable Desktop state from WinUI; audit the Windows updater adapter.
-- [ ] P8.9–P8.17 — Add portable `Forge.Host` and client SDK as the only workflow writer; implement discovery, start, reconnect, message limits, deadlines, correlation, version/capability handshake, and stable diagnostics.
-- [ ] P8.18–P8.24 — Use one asynchronous `System.IO.Pipes` transport and one named `Mutex` project lease through cross-platform BCL APIs; add no OS branch, TCP fallback, or transport package.
+- [x] P8.9–P8.17 — Add portable `Forge.Host` and client SDK as the only workflow writer; implement discovery, start, reconnect, message limits, deadlines, correlation, version/capability handshake, and stable diagnostics.
+- [x] P8.18–P8.24 — Use one asynchronous `System.IO.Pipes` transport and one named `Mutex` project lease through cross-platform BCL APIs; add no OS branch, TCP fallback, or transport package.
 - [ ] P8.25–P8.33 — Implement `GetProjectSnapshot(detail, sprint_id?)` and `ReadControlEvents`. Project summary, next action, tree, sprint inspection, provider/integration status, CLI output, and Desktop views must be local projections of the snapshot.
 - [ ] P8.34–P8.41 — Isolate release, Debug, and tests by instance id; test same-user enforcement, hostile clients, crashes, abandoned leases, stale clients, recovery, and three-OS behavior.
 - [ ] P8.42–P8.47 — Add Host-owned `resume_not_before` scheduling, safe activity updates, notification projection, and idempotent timer recovery without sleeping executor slots.

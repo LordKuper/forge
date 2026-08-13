@@ -1,0 +1,218 @@
+using System.Collections.Concurrent;
+using System.Text.Json;
+using Forge.Application;
+using Forge.Configuration;
+using Forge.Host.Client;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace Forge.Host;
+
+public sealed record ControlPlaneOptions(string ProjectRoot, string InstanceId);
+
+/// <summary>
+/// The Host's control plane: acquires the project lease, listens for connections, and serves the handshake plus
+/// (for this stage) a minimal <c>ping</c> request. Command/query dispatch onto <see cref="ForgeApplication"/>
+/// lands with the snapshot/events work later in Stage 8; this proves the transport, lease, and protocol end to end.
+/// </summary>
+public sealed class ControlPlaneHostedService(
+    ControlPlaneOptions options,
+    IConfigurationRegistry registry,
+    IHostApplicationLifetime lifetime,
+    ILogger<ControlPlaneHostedService> logger) : BackgroundService
+{
+    private static readonly Action<ILogger, Exception> LogNotInitialized = LoggerMessage.Define(
+        LogLevel.Error,
+        new EventId(2000, "ControlPlaneNotInitialized"),
+        "Cannot start the control plane: the project is not initialized.");
+
+    private static readonly Action<ILogger, Guid, Exception?> LogProjectInUse = LoggerMessage.Define<Guid>(
+        LogLevel.Error,
+        new EventId(2001, "ControlPlaneProjectInUse"),
+        "Another Host already owns project {ProjectId}.");
+
+    private static readonly Action<ILogger, Guid, Exception?> LogLeaseAbandoned = LoggerMessage.Define<Guid>(
+        LogLevel.Warning,
+        new EventId(2002, "ControlPlaneLeaseAbandoned"),
+        "Recovered an abandoned project lease for {ProjectId}; durable state will be re-validated.");
+
+    private static readonly Action<ILogger, Guid, string, Exception?> LogListening =
+        LoggerMessage.Define<Guid, string>(
+            LogLevel.Information,
+            new EventId(2003, "ControlPlaneListening"),
+            "Forge Host listening for project {ProjectId} on instance {InstanceId}.");
+
+    private static readonly Action<ILogger, Exception> LogHandshakeIncomplete = LoggerMessage.Define(
+        LogLevel.Debug,
+        new EventId(2004, "ControlPlaneHandshakeIncomplete"),
+        "The handshake did not complete.");
+
+    private static readonly Action<ILogger, Exception> LogConnectionEnded = LoggerMessage.Define(
+        LogLevel.Debug,
+        new EventId(2005, "ControlPlaneConnectionEnded"),
+        "A control connection ended.");
+
+    private readonly ConcurrentDictionary<Task, byte> activeConnections = new();
+    private MutexProjectLease? lease;
+    private ILocalControlListener? listener;
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        Guid projectId;
+        try
+        {
+            projectId = await ProjectIdentity.ReadProjectIdAsync(options.ProjectRoot, registry, stoppingToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        {
+            LogNotInitialized(logger, exception);
+            lifetime.StopApplication();
+            return;
+        }
+
+        string leaseName = InstanceIdentity.ComputeLeaseName(options.InstanceId, projectId);
+        lease = MutexProjectLease.TryAcquire(leaseName, TimeSpan.FromSeconds(2));
+        if (lease is null)
+        {
+            LogProjectInUse(logger, projectId, null);
+            lifetime.StopApplication();
+            return;
+        }
+
+        if (lease.WasAbandoned)
+        {
+            LogLeaseAbandoned(logger, projectId, null);
+        }
+
+        string pipeName = InstanceIdentity.ComputePipeName(options.InstanceId, projectId);
+        NamedPipeControlTransport transport = new();
+        listener = transport.CreateListener(pipeName);
+        LogListening(logger, projectId, options.InstanceId, null);
+
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                ILocalControlConnection connection;
+                try
+                {
+                    connection = await listener.AcceptAsync(stoppingToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+
+                Task serving = ServeConnectionAsync(connection, stoppingToken);
+                activeConnections[serving] = 0;
+                _ = serving.ContinueWith(
+                    completed => activeConnections.TryRemove(completed, out _),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+        finally
+        {
+            await listener.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken).ConfigureAwait(false);
+        if (listener is not null)
+        {
+            await listener.DisposeAsync().ConfigureAwait(false);
+        }
+
+        try
+        {
+            await Task.WhenAll(activeConnections.Keys).WaitAsync(TimeSpan.FromSeconds(5), CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is TimeoutException or OperationCanceledException)
+        {
+            // Best-effort drain; a client mid-request during shutdown reconnects and retries.
+        }
+
+        lease?.Dispose();
+    }
+
+    private async Task ServeConnectionAsync(ILocalControlConnection connection, CancellationToken cancellationToken)
+    {
+        await using ILocalControlConnection scoped = connection;
+        try
+        {
+            if (!await HandshakeAsync(scoped, cancellationToken).ConfigureAwait(false))
+            {
+                return;
+            }
+
+            while (!cancellationToken.IsCancellationRequested)
+            {
+                byte[] requestBytes = await scoped.ReceiveAsync(TimeSpan.FromMinutes(5), cancellationToken)
+                    .ConfigureAwait(false);
+                ControlRequest? request =
+                    JsonSerializer.Deserialize<ControlRequest>(requestBytes, ControlProtocol.JsonOptions);
+                if (request is null)
+                {
+                    return;
+                }
+
+                ControlResponse response = Dispatch(request);
+                byte[] responseBytes = JsonSerializer.SerializeToUtf8Bytes(response, ControlProtocol.JsonOptions);
+                await scoped.SendAsync(responseBytes, TimeSpan.FromSeconds(30), cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        catch (ControlProtocolException exception)
+        {
+            LogConnectionEnded(logger, exception);
+        }
+    }
+
+    private async Task<bool> HandshakeAsync(ILocalControlConnection connection, CancellationToken cancellationToken)
+    {
+        ControlHandshakeRequest? request;
+        try
+        {
+            byte[] requestBytes = await connection.ReceiveAsync(TimeSpan.FromSeconds(10), cancellationToken)
+                .ConfigureAwait(false);
+            request = JsonSerializer.Deserialize<ControlHandshakeRequest>(requestBytes, ControlProtocol.JsonOptions);
+        }
+        catch (ControlProtocolException exception)
+        {
+            LogHandshakeIncomplete(logger, exception);
+            return false;
+        }
+
+        ControlDiagnostic diagnostic = request is null
+            ? new(ControlDiagnosticCode.Malformed, "The handshake request could not be parsed.")
+            : ControlProtocol.IsCompatible(request.ProtocolVersion, ControlProtocol.Version)
+                ? ControlDiagnostic.None
+                : new(
+                    ControlDiagnosticCode.VersionIncompatible,
+                    $"This Host supports protocol {ControlProtocol.Version}.");
+
+        ControlHandshakeResponse response = new(
+            ControlProtocol.Version,
+            typeof(ControlPlaneHostedService).Assembly.GetName().Version!.ToString(3),
+            [],
+            diagnostic,
+            request?.CorrelationId ?? Guid.Empty);
+        byte[] responseBytes = JsonSerializer.SerializeToUtf8Bytes(response, ControlProtocol.JsonOptions);
+        await connection.SendAsync(responseBytes, TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+        return diagnostic.Code == ControlDiagnosticCode.None;
+    }
+
+    private static ControlResponse Dispatch(ControlRequest request) =>
+        request.Kind switch
+        {
+            ControlProtocol.PingKind => new ControlResponse(request.CorrelationId, ControlDiagnostic.None),
+            _ => new ControlResponse(
+                request.CorrelationId,
+                new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
+        };
+}

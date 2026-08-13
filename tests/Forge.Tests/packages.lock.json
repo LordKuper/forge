@@ -458,6 +458,16 @@
           "Forge.Runtime": "[0.12.0, )"
         }
       },
+      "forge.host": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Host.Client": "[0.12.0, )",
+          "Forge.Runtime": "[0.12.0, )"
+        }
+      },
+      "forge.host.client": {
+        "type": "Project"
+      },
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
@@ -465,9 +475,6 @@
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
         }
-      },
-      "forge.runtime.windows": {
-        "type": "Project"
       },
       "forge.updater": {
         "type": "Project"
@@ -998,6 +1005,16 @@
         "dependencies": {
           "Forge.Runtime": "[0.12.0, )"
         }
+      },
+      "forge.host": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Host.Client": "[0.12.0, )",
+          "Forge.Runtime": "[0.12.0, )"
+        }
+      },
+      "forge.host.client": {
+        "type": "Project"
       },
       "forge.runtime": {
         "type": "Project",

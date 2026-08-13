@@ -7,12 +7,14 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
-# Forge.Cli and Forge.Desktop.Presentation each transitively reference every other neutral project (Forge.Runtime,
-# Forge.Updater), so building these two standalone is enough to prove the whole neutral graph restores and builds
-# independently of the test project; Forge.Tests below then builds (and tests) that same graph again regardless.
+# Forge.Cli, Forge.Desktop.Presentation, and Forge.Host together transitively reference every other neutral
+# project (Forge.Runtime, Forge.Updater, Forge.Host.Client), so building these standalone is enough to prove the
+# whole neutral graph restores and builds independently of the test project; Forge.Tests below then builds (and
+# tests) that same graph again regardless.
 $leafProjects = @(
     'src/Forge.Cli/Forge.Cli.csproj',
-    'src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj'
+    'src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj',
+    'src/Forge.Host/Forge.Host.csproj'
 )
 
 foreach ($project in $leafProjects) {

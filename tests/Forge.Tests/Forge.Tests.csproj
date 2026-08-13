@@ -17,6 +17,8 @@
     <Compile Remove="Installer/**/*.cs" />
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />
     <ProjectReference Include="..\..\src\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Host\Forge.Host.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Host.Client\Forge.Host.Client.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
