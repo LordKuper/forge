@@ -47,4 +47,14 @@
   <data name="RecoveryFailed" xml:space="preserve"><value>Startup recovery is unavailable for this failure.</value></data>
   <data name="DiagnosticsTitle" xml:space="preserve"><value>Diagnostics:</value></data>
   <data name="RecoveryNotNeeded" xml:space="preserve"><value>Startup has no failed check to recover.</value></data>
+  <data name="SprintsTitle" xml:space="preserve"><value>Sprints:</value></data>
+  <data name="NoSprints" xml:space="preserve"><value>No sprints yet.</value></data>
+  <data name="SprintDetailsTitle" xml:space="preserve"><value>Sprint detail:</value></data>
+  <data name="NodesLabel" xml:space="preserve"><value>Nodes:</value></data>
+  <data name="AttemptsLabel" xml:space="preserve"><value>Attempts:</value></data>
+  <data name="FindingsLabel" xml:space="preserve"><value>Findings:</value></data>
+  <data name="RoutingLabel" xml:space="preserve"><value>Routing:</value></data>
+  <data name="EventsDescription" xml:space="preserve"><value>Read incremental workflow events.</value></data>
+  <data name="EventsTitle" xml:space="preserve"><value>Events:</value></data>
+  <data name="NoEvents" xml:space="preserve"><value>No new events.</value></data>
 </root>

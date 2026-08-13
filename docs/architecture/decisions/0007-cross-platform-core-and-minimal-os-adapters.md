@@ -1,8 +1,8 @@
 # ADR 0007: Cross-platform core and minimal OS adapters
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-13)
 - Date: 2026-08-12
-- Contract version: 1.1.0
+- Contract version: 1.2.0
 
 ## Context
 
@@ -30,8 +30,10 @@ convention, conditional-compilation branch, or platform-only package.
 Forge uses a cross-platform BCL API when it provides the required semantics.
 Portable OS/architecture detection is allowed only to report capabilities or
 select a registered adapter. It cannot hide OS behavior inside a neutral project.
-Vendor-specific provider and Git adapters remain neutral when their process and
-data contracts work unchanged on all supported operating systems.
+Provider contracts and lifecycle policy remain neutral. Vendor integrations that
+own OS-specific paths, scripts, commands, or environment behavior are explicitly
+named provider-owned OS adapters. Git adapters remain neutral when their process
+and data contracts work unchanged on all supported operating systems.
 
 ### OS adapters are explicit leaf modules
 
@@ -54,7 +56,7 @@ The target split is:
 |---|---|
 | Domain, application, contracts, Host, local protocol, client SDK | Native executable/UI bootstrap |
 | CLI/TUI commands and Desktop presentation model | WinUI/AppKit/native UI host |
-| Workflow, review, routing, persistence, Git and provider protocols | Installer activation, PATH, shortcuts, service/autostart |
+| Workflow, review, routing, persistence, provider lifecycle contracts and Git protocols | Provider-owned native paths/scripts/commands, installer activation, PATH, shortcuts, service/autostart |
 | Update policy, verification, staging and rollback orchestration | OS activation primitive and restart handoff |
 | Notification policy and durable attention events | OS notification delivery |
 | BCL process supervision and file durability | Native containment or durability call only if BCL tests fail |
@@ -88,6 +90,10 @@ embedding OS assumptions in the core.
   project; the current WinUI executable becomes a Windows adapter.
 - `Forge.Updater.Windows` remains an OS adapter but is audited so update policy
   and orchestration stay in `Forge.Updater`.
+- Concrete provider behavior leaves `Forge.Runtime`. Windows integrations live
+  in `Forge.Providers.Codex.Windows` and `Forge.Providers.Claude.Windows`; there
+  is no shared `Forge.Providers.Windows` adapter. Provider-neutral selection,
+  maintenance policy, routing, and contracts remain inward.
 - Shared tests are separated from Windows adapter tests and join the three-OS CI
   matrix.
 
@@ -101,4 +107,6 @@ No new platform coupling may be added while this debt is being removed.
   forking workflows or application logic.
 - Platform behavior becomes explicit and testable; adapter size and dependencies
   are visible during review.
+- Each provider owns its platform details without teaching the core or a shared
+  Windows library about that vendor.
 - Forge adds no portability framework or dependency.

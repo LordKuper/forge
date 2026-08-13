@@ -1,7 +1,7 @@
 # AI-assisted software delivery research
 
 **Status:** research summary  
-**Updated:** 2026-08-12
+**Updated:** 2026-08-13
 
 This document preserves the research conclusions that inform Forge. It is not a
 second architecture specification: the [architecture overview](overview.md),
@@ -81,16 +81,19 @@ provider output never write project knowledge directly. Optional personal
 memory is separate, hard-capped, frozen per attempt, and limited to preferences
 and verified environment facts.
 
-### Make reviews independent and convergent
+### Prefer independent and require convergent reviews
 
 A reviewer needs a clean task context and must inspect the change rather than
 the implementer's hidden reasoning. Findings are resolved through bounded
 iterations; later passes focus on critical regressions. A review that finds no
 issues must say so explicitly.
 
-Forge uses one scope/rubric-driven review engine: reviewer lineage must differ
-from implementation lineage to satisfy the independent gate; design and
-implementation each own a durable counter; fresh reviewers prove file and rubric coverage; and cumulative low/medium/high/
+Forge uses one scope/rubric-driven review engine. It first tries configured
+reviewers whose provider/model lineage differs from implementation, then falls
+back in normal priority order when full separation is unavailable. Provider/model
+independence is recorded and best-effort; a new attempt, clean context, file and
+rubric coverage, deterministic gates, and review itself remain mandatory. Design
+and implementation each own a durable counter, and cumulative low/medium/high/
 critical budgets raise the severity floor. Identical normalized external finding
 sets or the cumulative iteration limit create an explicit human
 continue/accept-or-override/abort gate. Git or diff inactivity is not treated as
@@ -115,8 +118,8 @@ proof of convergence.
   limits.
 - Which optional semantic index has measurable retrieval value for Forge users.
 - Whether organization-scale artifact distribution should use OCI bundles.
-- Which provider capabilities are sufficiently stable for automatic toolchain
-  update and verification.
+- Which additional provider and platform adapters justify expanding the explicit
+  built-in composition beyond the Windows MVP.
 - Whether approved knowledge proposals and hard-capped personal memory improve
   measured task quality enough to justify their post-MVP lifecycle and security
   cost.

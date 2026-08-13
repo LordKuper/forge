@@ -1,8 +1,8 @@
 # ADR 0006: Supervised execution and bounded review convergence
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-13)
 - Date: 2026-08-12
-- Contract version: 1.1.0
+- Contract version: 1.2.0
 
 ## Context
 
@@ -91,8 +91,8 @@ Agents and generated integrations cannot invoke this human-only command.
 ### Three execution profiles are frozen
 
 The sprint snapshot resolves one profile for planning, implementation, and
-review. Internal and external review use the same review profile with distinct
-lineage and inputs. Finalization is deterministic code, not a model phase. Each profile records
+review. Internal and external review use the same review profile with fresh
+attempts and bounded inputs. Finalization is deterministic code, not a model phase. Each profile records
 provider, model, effort, sandbox/permission policy, capability allowlist, session
 deadline, and idle deadline. Missing values inherit from the project model policy
 before the sprint starts; running sprints never follow later configuration
@@ -100,11 +100,14 @@ changes. A node receives only its frozen context manifest and profile
 capabilities; it inherits no parent transcript and cannot grant itself or a child
 additional tools or human-only commands.
 
-An independent-review gate requires a reviewer execution lineage distinct from
-the implementation lineage. Lineage includes provider family, model family, and
-attempt identity. Same-lineage self-review may contribute advisory findings but
-cannot satisfy the independent gate. If no eligible reviewer is available, Forge
-blocks or asks for an explicit human override; it never silently weakens the gate.
+Reviewer provider/model independence is best-effort. Forge scans the configured
+priority order first for an available reviewer whose provider and model lineage
+differ from the implementation lineage. If none is available, it uses the first
+available reviewer in the normal priority order, including the same provider or
+model family. Every review still uses a new attempt identity, clean context, and
+the complete review contract. Forge records whether provider/model separation
+was achieved; reduced separation is diagnostic metadata, not a human gate. No
+available review model still blocks review. ADR 0008 defines the selection rule.
 
 ### One review engine follows the ASD severity-floor policy
 
@@ -158,6 +161,8 @@ scripts, and notification-held secrets remain deferred.
   model nodes cannot widen their context or capabilities.
 - Review cost narrows deterministically while critical findings remain undroppable
   until a recorded human decision.
+- A single-provider configuration can complete review while Forge still prefers
+  a distinct provider/model lineage whenever one is available.
 - Forge adds no provider wrapper, notification broker, review database, or process
   supervision dependency.
 

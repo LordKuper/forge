@@ -1,6 +1,8 @@
 using System.CommandLine;
 using System.Globalization;
+using Forge.Application;
 using Forge.Cli;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Tests.Support;
@@ -228,6 +230,150 @@ public sealed class CliTests
         {
             CultureInfo.CurrentUICulture = original;
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task StatusCommandWithFullDetailPrintsTheSprintAndItsNode()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["status", "--project-root", environment.ProjectRoot, "--detail", "full"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        Assert.Contains(sprintId.Value.ToString(), text, StringComparison.Ordinal);
+        Assert.Contains("draft", text, StringComparison.Ordinal);
+        Assert.Contains("a ready", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task EventsCommandReportsTheSprintCreationEventAndAReusableCursor()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["events", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains(sprintId.Value.ToString(), output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task StatusCommandReportsSprintNotFoundForAMalformedSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["status", "--project-root", environment.ProjectRoot, "--sprint", "not-a-guid"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task StatusCommandReportsSprintNotFoundForAnUnknownSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["status", "--project-root", environment.ProjectRoot, "--sprint", Guid.NewGuid().ToString(), "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+        // The machine contract itself still comes back well-formed (no details section) rather than
+        // being replaced by an error payload.
+        Assert.DoesNotContain("\"details\"", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task EventsCommandReportsProjectNotInitializedInsteadOfLookingCaughtUp()
+    {
+        using TestEnvironment environment = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["events", "--project-root", environment.ProjectRoot, "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Project, exitCode);
+        Assert.Equal($"{DiagnosticCodes.ProjectNotInitialized}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task EventsCommandFollowStopsOnCancellationAfterAtLeastOnePoll()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        // Captured explicitly (not read again after InvokeAsync) so this assertion can never race a
+        // different, parallel test's ambient CultureInfo.CurrentUICulture mutation.
+        CultureInfo culture = CultureInfo.CurrentUICulture;
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(catalog, culture), output, environment.Application);
+        using CancellationTokenSource cancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        cancellation.CancelAfter(TimeSpan.FromMilliseconds(1500));
+
+        // System.CommandLine surfaces a canceled invocation as a non-zero exit rather than throwing
+        // out of InvokeAsync; the behavior under test is that the loop polled at least once and
+        // stopped cleanly on cancellation instead of hanging or crashing.
+        await root
+            .Parse(["events", "--project-root", environment.ProjectRoot, "--follow"])
+            .InvokeAsync(new InvocationConfiguration(), cancellation.Token);
+
+        // At least the first (immediate, pre-delay) poll ran and printed its "no events yet" output.
+        Assert.Contains(catalog.Resolve(MessageKeys.NoEvents, culture), output.ToString(), StringComparison.Ordinal);
     }
 
     private static SurfaceText Text(ILocalizationCatalog catalog) =>

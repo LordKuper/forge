@@ -1,8 +1,8 @@
 # ADR 0002: Provider toolchain management
 
-- Status: Accepted (revised 2026-08-12)
+- Status: Accepted (revised 2026-08-13)
 - Date: 2026-08-04
-- Contract version: 1.1.0
+- Contract version: 1.2.0
 
 ## Context
 
@@ -49,6 +49,8 @@ than maintaining a parallel provider distribution channel.
 
 ADR 0006 refines provider execution for unattended workflow attempts. It does
 not change discovery, installation, update, or version verification.
+ADR 0008 supersedes this ADR where provider ownership, enablement, conditional
+startup maintenance, and authentication readiness are concerned.
 
 ## Decision
 
@@ -59,7 +61,7 @@ never re-implements release verification itself:
   (`%USERPROFILE%\.local\bin\claude.exe` for Claude Code,
   `%LOCALAPPDATA%\Programs\OpenAI\Codex\bin\codex.exe` for Codex) and runs
   `--version`, bounded by a 15-second timeout so a hung probe cannot block
-  every startup pass. It never touches the network.
+  every startup pass. The local probe never touches the network.
 - Installing a missing provider runs the fully-qualified in-box Windows
   PowerShell (`%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe`,
   never a bare `powershell.exe` — a bare name is resolved through
@@ -84,16 +86,15 @@ never re-implements release verification itself:
   injection as prompt concerns.
 - Project configuration cannot override provider location or version; only
   the fixed vendor-documented path is consulted.
-- The `Providers` startup check performs discovery only; it never mutates
-  state or calls the network, so every startup pass (`doctor`, `status`,
-  `next`, `config show`, ...) stays fast and offline-safe. `GetProviderHealth`
-  (`forge models`) is read-only for the same reason, matching its declared
-  `query`/`read` capability contract (`docs/contracts/v1/capabilities.json`).
-  Installing or updating is the separate, explicit `forge models --refresh`
-  action (`RefreshProviderHealthAsync`) — the same query-plus-explicit-mutation
-  shape `forge doctor --recover` already uses. Installing a well-known
-  developer CLI is not a project or user-data mutation, so `--refresh` does
-  not require confirmation, matching Forge's own self-update.
+- The `Providers` startup check considers only enabled providers. It always
+  performs a local probe, conditionally checks vendor release metadata under
+  the cache policy in ADR 0008, runs the vendor updater only when an update is
+  available, rechecks the executable, and then checks authentication readiness.
+  A missing or unusable executable is an install/repair case. `forge models`
+  remains a read-only projection; `forge models --refresh` bypasses the release
+  cache but still checks availability before invoking an updater. Installing a
+  well-known developer CLI is not a project or user-data mutation, so refresh
+  does not require confirmation, matching Forge's own self-update.
 
 ## Execution and output normalization
 
@@ -132,7 +133,9 @@ version-retention logic, and stays aligned with the update cadence and trust
 model each vendor already recommends to every other user of their CLI.
 Recovery is vendor-owned: a failed install/update leaves whatever the vendor
 script left behind and reports `provider_update_failed`; sprint work stays
-blocked until both providers reach `ready`.
+blocked until at least one configured route is usable and every enabled
+provider has a normalized authentication result. A release-check failure does
+not block an otherwise usable installed version.
 
 ## Open decisions
 

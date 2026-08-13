@@ -2,6 +2,41 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.14.0
+
+### Added
+
+- Forge Host now serves the authoritative project read model over the local
+  control-plane protocol: `GetProjectSnapshot(detail, sprint_id?)` reports
+  every known sprint (creation order, state, base commit), the active sprint
+  (only when exactly one is non-terminal), sprints needing attention, and,
+  at `full` detail or for an explicitly named sprint, that sprint's
+  nodes, attempts, findings, and retry budget. `ReadControlEvents` reads the
+  same durable per-sprint journals incrementally through an opaque cursor
+  that discovers new sprints and never silently rebaselines on a stale or
+  malformed cursor.
+- `forge status` gained `--detail <summary|full>` and `--sprint <id>` and now
+  prints the sprint list and (when requested) sprint detail alongside the
+  existing startup and recommendation output; both the human and `--json`
+  output are pure projections of the one snapshot.
+- Added `forge events [--after <cursor>] [--follow] [--json]` to read
+  incremental workflow events, with bounded short polling in follow mode.
+
+### Fixed
+
+- `forge status --sprint <id>` now reports a diagnostic and a non-zero exit
+  code for a malformed or unknown sprint id instead of silently behaving like
+  no sprint was requested.
+- `forge events` against a project that has never been initialized now
+  reports that explicitly instead of looking identical to "caught up, no new
+  events."
+- A `ReadControlEvents` cursor is never silently treated as "no cursor
+  supplied" when the request itself is malformed, and its watermark can no
+  longer skip an event under a non-monotonic system clock.
+- Forge Host no longer drops a client connection silently when a snapshot or
+  events request hits an unreadable journal file; it now reports a safe
+  diagnostic and keeps the connection usable.
+
 ## v0.13.1
 
 ### Changed

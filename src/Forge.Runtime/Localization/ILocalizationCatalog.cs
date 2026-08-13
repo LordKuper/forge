@@ -81,4 +81,14 @@ public static class MessageKeys
     public const string DiagnosticsTitle = "DiagnosticsTitle";
     public const string RecoverStartupRationale = "next.recover_startup.rationale";
     public const string InitializeProjectRationale = "next.initialize_project.rationale";
+    public const string SprintsTitle = "SprintsTitle";
+    public const string NoSprints = "NoSprints";
+    public const string SprintDetailsTitle = "SprintDetailsTitle";
+    public const string NodesLabel = "NodesLabel";
+    public const string AttemptsLabel = "AttemptsLabel";
+    public const string FindingsLabel = "FindingsLabel";
+    public const string RoutingLabel = "RoutingLabel";
+    public const string EventsDescription = "EventsDescription";
+    public const string EventsTitle = "EventsTitle";
+    public const string NoEvents = "NoEvents";
 }
