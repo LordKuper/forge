@@ -4,9 +4,11 @@ using System.Text;
 namespace Forge.Host.Client;
 
 /// <summary>
-/// Namespaces IPC endpoints and the project lease by instance so release, Debug, and test processes never collide.
-/// Release uses <see cref="Release"/>, Debug defaults to <see cref="Debug"/>, and automated tests use
-/// <see cref="CreateEphemeral"/>.
+/// Namespaces IPC endpoints and each instance's own state root (user configuration, worktrees) by
+/// instance, so release, Debug, and test processes never collide on those — but never the shared
+/// project write lease, which every instance of one project contends for together; see
+/// <see cref="ComputeLeaseName"/>. Release uses <see cref="Release"/>, Debug defaults to
+/// <see cref="Debug"/>, and automated tests use <see cref="CreateEphemeral"/>.
 /// </summary>
 public static class InstanceIdentity
 {

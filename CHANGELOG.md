@@ -14,10 +14,23 @@ User-facing Forge changes are listed by release, newest first.
   the IPC pipe name stays instance-scoped.
 - User configuration and sprint worktrees are now isolated per instance id
   (release, Debug, and each ephemeral test instance), so they no longer
-  collide on one shared `%LOCALAPPDATA%\Forge\config.json`/worktree tree.
+  collide on one shared `%LOCALAPPDATA%\Forge\config.json`/worktree tree. An
+  existing user configuration file from before this change is migrated
+  automatically (copied, not moved) into its new instance-scoped location the
+  first time an instance starts.
 - Forge Host no longer lets an unparseable (non-JSON) request payload escape
-  unhandled: the offending connection is closed cleanly with a logged
-  diagnostic instead of hanging silently.
+  unhandled, including as the very first (handshake) message: the offending
+  connection is closed cleanly with a logged diagnostic instead of hanging
+  silently.
+
+### Changed
+
+- Sprint worktrees created before this release live under the old, unscoped
+  `%LOCALAPPDATA%\Forge\wt\` path and are not automatically migrated or
+  cleaned up (unlike user configuration, above). If you ran a sprint before
+  upgrading to this version, confirm no attempts are in progress, then remove
+  that directory manually and run `git worktree prune` in your project to
+  reclaim the old worktree registrations.
 
 ### Added
 

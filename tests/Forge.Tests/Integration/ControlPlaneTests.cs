@@ -366,6 +366,45 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task AGarbageFirstMessageInsteadOfAHandshakeEndsOnlyThatConnectionWithoutAffectingTheHost()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        string endpointName = InstanceIdentity.ComputePipeName(instanceId, projectId);
+        NamedPipeControlTransport transport = new();
+
+        await using (ILocalControlConnection connection = await transport
+            .ConnectAsync(endpointName, TimeSpan.FromSeconds(5), cancellationToken))
+        {
+            // A well-formed frame whose payload is not JSON at all, sent as the very first message
+            // instead of a real ControlHandshakeRequest.
+            await connection.SendAsync(
+                Encoding.UTF8.GetBytes("this is not json"),
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+
+            // The Host closes this connection instead of hanging or letting the JsonException
+            // escape HandshakeAsync unobserved.
+            await Assert.ThrowsAsync<ControlProtocolException>(
+                () => connection.ReceiveAsync(TimeSpan.FromSeconds(5), cancellationToken));
+        }
+
+        // The Host itself is unaffected: a fresh, well-behaved client is still served normally.
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task AClientThatNeverHandshakesIsDroppedAfterItsDeadlineAndTheHostKeepsServing()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;

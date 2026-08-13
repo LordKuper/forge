@@ -233,8 +233,11 @@ public sealed class ControlPlaneHostedService(
                 .ConfigureAwait(false);
             request = JsonSerializer.Deserialize<ControlHandshakeRequest>(requestBytes, ControlProtocol.JsonOptions);
         }
-        catch (ControlProtocolException exception)
+        catch (Exception exception) when (exception is ControlProtocolException or JsonException)
         {
+            // A garbage (non-JSON) first message gets the same fail-closed outcome as an
+            // incomplete/timed-out handshake — never an unobserved exception on the fire-and-forget
+            // serving task (see DispatchAsync's and the request loop's identical widening above).
             LogHandshakeIncomplete(logger, exception);
             return false;
         }

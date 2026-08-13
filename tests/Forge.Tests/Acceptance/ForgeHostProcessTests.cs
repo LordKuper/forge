@@ -152,24 +152,8 @@ public sealed class ForgeHostProcessTests
         }
         finally
         {
-            foreach (int processId in new[] { firstProcessId, secondProcessId })
-            {
-                if (processId <= 0)
-                {
-                    continue;
-                }
-
-                try
-                {
-                    using Process process = Process.GetProcessById(processId);
-                    process.Kill(true);
-                    process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
-                }
-                catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
-                {
-                    // The process already exited between GetProcessById and Kill/WaitForExit.
-                }
-            }
+            TryKillProcess(firstProcessId);
+            TryKillProcess(secondProcessId);
         }
     }
 
@@ -227,6 +211,25 @@ public sealed class ForgeHostProcessTests
                     // The process already exited between GetProcessById and Kill/WaitForExit.
                 }
             }
+        }
+    }
+
+    private static void TryKillProcess(int processId)
+    {
+        if (processId <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using Process process = Process.GetProcessById(processId);
+            process.Kill(true);
+            process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
+        }
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+        {
+            // The process already exited between GetProcessById and Kill/WaitForExit.
         }
     }
 }

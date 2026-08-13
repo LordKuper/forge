@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Forge.Application;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Forge.Infrastructure;
 
@@ -122,6 +123,13 @@ public sealed class SystemEnvironmentPaths(string? instanceId = null) : IEnviron
     private const string ReleaseInstanceId = "forge";
     private const string DebugInstanceId = "forge-dev";
 
+    private static readonly string DefaultInstanceId =
+#if DEBUG
+        DebugInstanceId;
+#else
+        ReleaseInstanceId;
+#endif
+
     public string LocalApplicationData { get; } =
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
@@ -129,12 +137,9 @@ public sealed class SystemEnvironmentPaths(string? instanceId = null) : IEnviron
 
     public string CurrentDirectory => Environment.CurrentDirectory;
 
-    public string InstanceId { get; } = instanceId ??
-#if DEBUG
-        DebugInstanceId;
-#else
-        ReleaseInstanceId;
-#endif
+    // Whitespace-only is treated the same as omitted: a blank --instance-id must never silently
+    // collapse Path.Combine's instance segment back to the unscoped path this type exists to avoid.
+    public string InstanceId { get; } = string.IsNullOrWhiteSpace(instanceId) ? DefaultInstanceId : instanceId;
 }
 
 public static class InfrastructureServices
@@ -152,7 +157,12 @@ public static class InfrastructureServices
         // and would abort a slow-connection download mid-stream.
         services.AddSingleton(new HttpClient { Timeout = TimeSpan.FromMinutes(10) });
         services.AddSingleton<INetworkClient, NetworkClient>();
-        services.AddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
+        // TryAdd, matching IPlatformPreflight's convention (ForgeHost.cs): signals this is an
+        // intended override point. Forge.Host's composition root always overrides this with an
+        // instance-scoped SystemEnvironmentPaths afterward via a plain AddSingleton, which still
+        // wins for singular resolution regardless of Try here — this only makes that override
+        // relationship explicit instead of an accident of registration order.
+        services.TryAddSingleton<IEnvironmentPaths, SystemEnvironmentPaths>();
         services.AddSingleton<ISafeLogger, SafeLogger>();
         return services;
     }
