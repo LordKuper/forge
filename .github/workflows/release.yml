@@ -50,7 +50,9 @@ jobs:
           ./.github/scripts/assert-no-vulnerable-packages.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-x64 -OutputDirectory $output -SkipRestore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./build/Publish-WindowsBundle.ps1 -RuntimeIdentifier win-arm64 -OutputDirectory $output -SkipRestore
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $bundles = @(Get-ChildItem -LiteralPath $output -Filter '*.zip' | Sort-Object Name)
           $checksums = foreach ($bundle in $bundles) {
             $hash = Get-FileHash -LiteralPath $bundle.FullName -Algorithm SHA256

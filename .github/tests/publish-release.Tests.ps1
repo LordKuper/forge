@@ -167,6 +167,20 @@ try {
         }
     }
 
+    Test-Case "Release workflow checks the exit code of every bundle publish" {
+        $releaseWorkflow = (Resolve-Path "$PSScriptRoot/../workflows/release.yml").Path
+        $lines = Get-Content $releaseWorkflow
+        $skipRestoreIndexes = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match 'Publish-WindowsBundle\.ps1.*-SkipRestore' })
+        if ($skipRestoreIndexes.Count -ne 2) {
+            throw "Expected two -SkipRestore Windows bundle publish invocations in release.yml, found $($skipRestoreIndexes.Count)."
+        }
+        foreach ($index in $skipRestoreIndexes) {
+            if ($lines[$index + 1] -notmatch '\$LASTEXITCODE -ne 0.*exit \$LASTEXITCODE') {
+                throw "Line $($index + 1) (`"$($lines[$index].Trim())`") must be immediately followed by an exit-code check, otherwise a failing publish is silently ignored."
+            }
+        }
+    }
+
     Test-Case "initial release" {
         $repository = New-TestRepository
         $base = Save-Commit $repository "chore: initialize"
