@@ -142,6 +142,45 @@ try {
         }
     }
 
+    Test-Case "Windows bundle restore is conditional on -SkipRestore" {
+        $content = Get-Content $bundlePublisher -Raw
+        if ($content -notmatch '(?ms)if\s*\(\s*-not\s*\$SkipRestore\s*\)\s*\{[^}]*dotnet restore') {
+            throw "Publish-WindowsBundle.ps1 must restore by default and only skip it when -SkipRestore is passed."
+        }
+    }
+
+    Test-Case "Release workflow restores once before both -SkipRestore publishes" {
+        $releaseWorkflow = (Resolve-Path "$PSScriptRoot/../workflows/release.yml").Path
+        $lines = Get-Content $releaseWorkflow
+        $restoreLines = @($lines | Where-Object { $_ -match 'dotnet restore Forge\.slnx --locked-mode' })
+        if ($restoreLines.Count -ne 1) {
+            throw "Expected exactly one solution restore in release.yml, found $($restoreLines.Count)."
+        }
+        $skipRestoreLines = @($lines | Where-Object { $_ -match 'Publish-WindowsBundle\.ps1.*-SkipRestore' })
+        if ($skipRestoreLines.Count -ne 2) {
+            throw "Expected two -SkipRestore Windows bundle publish invocations in release.yml, found $($skipRestoreLines.Count)."
+        }
+        $restoreIndex = [array]::IndexOf($lines, $restoreLines[0])
+        $skipRestoreIndexes = @($skipRestoreLines | ForEach-Object { [array]::IndexOf($lines, $_) })
+        if (@($skipRestoreIndexes | Where-Object { $_ -lt $restoreIndex }).Count -gt 0) {
+            throw "The solution restore must precede both -SkipRestore Windows bundle publish invocations."
+        }
+    }
+
+    Test-Case "Release workflow checks the exit code of every bundle publish" {
+        $releaseWorkflow = (Resolve-Path "$PSScriptRoot/../workflows/release.yml").Path
+        $lines = Get-Content $releaseWorkflow
+        $skipRestoreIndexes = @(0..($lines.Count - 1) | Where-Object { $lines[$_] -match 'Publish-WindowsBundle\.ps1.*-SkipRestore' })
+        if ($skipRestoreIndexes.Count -ne 2) {
+            throw "Expected two -SkipRestore Windows bundle publish invocations in release.yml, found $($skipRestoreIndexes.Count)."
+        }
+        foreach ($index in $skipRestoreIndexes) {
+            if ($lines[$index + 1] -notmatch '\$LASTEXITCODE -ne 0.*exit \$LASTEXITCODE') {
+                throw "Line $($index + 1) (`"$($lines[$index].Trim())`") must be immediately followed by an exit-code check, otherwise a failing publish is silently ignored."
+            }
+        }
+    }
+
     Test-Case "initial release" {
         $repository = New-TestRepository
         $base = Save-Commit $repository "chore: initialize"

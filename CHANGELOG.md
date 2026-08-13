@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.13.1
+
+### Changed
+
+- Contributors now get PR feedback and releases significantly faster: pull
+  request checks no longer re-run in full on an edited title or description,
+  superseded runs cancel instead of queuing, and a release publishes right
+  after merge instead of re-validating already-passed checks. No functional
+  behavior changed for Forge itself.
+
 ## v0.13.0
 
 ### Added

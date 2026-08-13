@@ -64,6 +64,7 @@
 ## Code Review Rules
 
 - After opening a PR, create a dedicated review agent (Sol-class, Fable-class or Opus-class) that is independent from the implementation work. It MUST inspect the PR and publish either actionable PR comments or one PR comment stating that it found no issues. Do not report publication complete before that comment exists.
+- Post every finding as its own inline review comment on the exact file/line, one finding per thread; never bundle multiple findings into a single comment or thread. Each thread MUST be resolvable independently of the others, so fixing and resolving one finding never depends on or blocks any other.
 - Complete the independent review loop autonomously: address every actionable finding, run the required checks, push fixes, reply to and resolve addressed threads, create another independent review agent, and repeat until the review gate passes without human participation. The first three iterations must identify all findings; later iterations must identify only critical findings.
 - The independent review gate passes only when the latest review agent posts a no-findings comment without opening threads, or every thread opened by review agents is resolved. If neither condition holds, wait for the review result and check again.
 - Run at most three full-scope independent review iterations per PR, including the initial review; subsequent iterations are limited to critical findings.
