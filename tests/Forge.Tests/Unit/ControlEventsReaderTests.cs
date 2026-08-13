@@ -103,6 +103,64 @@ public sealed class ControlEventsReaderTests
         Assert.Empty(anchor.Watermarks);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AdvanceWatermarksNeverSkipsAGapEvenWhenAHigherSequenceArrivesFirst()
+    {
+        Guid sprintId = Guid.NewGuid();
+
+        // A page that returned sequence 1 but not sequence 0 for the same sprint — exactly what a
+        // merge-and-cut can produce when a non-monotonic clock sorts a later append earlier.
+        Dictionary<string, long> afterGap = ControlEventsReader.AdvanceWatermarks(
+            new Dictionary<string, long>(),
+            [(sprintId, FakeEvent(sprintId, sequence: 1))]);
+
+        Assert.Equal(-1, afterGap[sprintId.ToString("D")]);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AdvanceWatermarksCatchesUpOnceTheMissingSequenceArrives()
+    {
+        Guid sprintId = Guid.NewGuid();
+        Dictionary<string, long> afterGap = ControlEventsReader.AdvanceWatermarks(
+            new Dictionary<string, long>(),
+            [(sprintId, FakeEvent(sprintId, sequence: 1))]);
+
+        Dictionary<string, long> afterCatchUp = ControlEventsReader.AdvanceWatermarks(
+            afterGap,
+            [(sprintId, FakeEvent(sprintId, sequence: 0)), (sprintId, FakeEvent(sprintId, sequence: 1))]);
+
+        Assert.Equal(1, afterCatchUp[sprintId.ToString("D")]);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AdvanceWatermarksAdvancesNormallyWithNoGap()
+    {
+        Guid sprintId = Guid.NewGuid();
+
+        Dictionary<string, long> watermarks = ControlEventsReader.AdvanceWatermarks(
+            new Dictionary<string, long>(),
+            [
+                (sprintId, FakeEvent(sprintId, sequence: 0)),
+                (sprintId, FakeEvent(sprintId, sequence: 1)),
+                (sprintId, FakeEvent(sprintId, sequence: 2)),
+            ]);
+
+        Assert.Equal(2, watermarks[sprintId.ToString("D")]);
+    }
+
+    private static WorkflowEvent FakeEvent(Guid sprintId, long sequence) =>
+        new(
+            Guid.NewGuid(),
+            sequence,
+            DateTimeOffset.UtcNow,
+            "SprintTransitioned",
+            new(AggregateKind.Sprint, sprintId.ToString("D"), sequence + 1),
+            "sprint.transitioned",
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.ToStateArgument] = "draft" });
+
     private static async Task<TestEnvironment> InitializedAsync()
     {
         TestEnvironment environment = new();

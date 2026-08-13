@@ -96,6 +96,33 @@ public sealed class StartupCliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task MachineStatusWithFullSprintDetailMatchesTheVersionedContract()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment,
+            output,
+            ["status", "--project-root", environment.ProjectRoot, "--detail", "full", "--json"]);
+
+        Assert.Equal(0, exitCode);
+        using JsonDocument snapshot = JsonDocument.Parse(output.ToString());
+        // The non-null `details` path (the one AGENTS.md-required schema conformance test above
+        // never exercises, since that project has no sprints) is what actually needs coverage here.
+        Assert.True(snapshot.RootElement.TryGetProperty("details", out _));
+        AssertValid("project-snapshot", output.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task MachineRecommendationsMatchTheVersionedContract()
     {
         using TestEnvironment environment = new();

@@ -54,6 +54,11 @@ public sealed class ControlPlaneHostedService(
         new EventId(2005, "ControlPlaneConnectionEnded"),
         "A control connection ended.");
 
+    private static readonly Action<ILogger, string, Exception> LogDispatchFailed = LoggerMessage.Define<string>(
+        LogLevel.Error,
+        new EventId(2006, "ControlPlaneDispatchFailed"),
+        "Serving a '{Kind}' request failed.");
+
     private readonly ConcurrentDictionary<Task, byte> activeConnections = new();
     private MutexProjectLease? lease;
     private ILocalControlListener? listener;
@@ -247,6 +252,17 @@ public sealed class ControlPlaneHostedService(
                 request.CorrelationId,
                 new ControlDiagnostic(ControlDiagnosticCode.Malformed, exception.Message));
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Unlike the client-caused branch above, this means the Host itself failed to read its
+            // own durable state (a locked or unreadable sprint journal) — never the client's fault.
+            // The detail stays generic rather than echoing exception.Message: that message can
+            // contain a local filesystem path, which the client-caused branch's messages never do.
+            LogDispatchFailed(logger, request.Kind, exception);
+            return new ControlResponse(
+                request.CorrelationId,
+                new ControlDiagnostic(ControlDiagnosticCode.InternalError, "The Host could not complete this request."));
+        }
     }
 
     private async Task<ControlResponse> DispatchGetProjectSnapshotAsync(
@@ -289,9 +305,16 @@ public sealed class ControlPlaneHostedService(
         string? cursor = null;
         if (request.Payload is { ValueKind: JsonValueKind.Object } payload &&
             payload.TryGetProperty("cursor", out JsonElement cursorElement) &&
-            cursorElement.ValueKind == JsonValueKind.String)
+            cursorElement.ValueKind != JsonValueKind.Null)
         {
-            cursor = cursorElement.GetString();
+            // A `cursor` field present with a non-string value (a number, an object, ...) is a
+            // malformed request, not "no cursor supplied" — silently falling back to the latter
+            // would make the Host quietly replay every event from the beginning instead of
+            // reporting the request as invalid. The outer catch in DispatchAsync turns this into a
+            // Malformed response.
+            cursor = cursorElement.ValueKind == JsonValueKind.String
+                ? cursorElement.GetString()
+                : throw new InvalidDataException("The 'cursor' field must be a string.");
         }
 
         ControlEventsPage page = await application
@@ -301,7 +324,7 @@ public sealed class ControlPlaneHostedService(
         // carries (matching how a blocked/failed startup travels inside ProjectSnapshot rather than
         // as a protocol diagnostic) — the request itself was well-formed and got a well-formed
         // response, so the transport-level diagnostic here stays None.
-        JsonElement responsePayload = JsonDocument.Parse(ControlEventsJson.Serialize(page)).RootElement.Clone();
-        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+        using JsonDocument document = JsonDocument.Parse(ControlEventsJson.Serialize(page));
+        return new(request.CorrelationId, ControlDiagnostic.None, document.RootElement.Clone());
     }
 }

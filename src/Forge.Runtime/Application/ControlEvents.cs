@@ -107,7 +107,7 @@ public sealed class ControlEventsReader(ISprintStore store)
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         if (!ControlEventsCursorCodec.TryDecode(cursorToken, out ControlEventsCursor cursor))
         {
-            return new([], ControlEventsCursorCodec.Encode(ControlEventsCursor.Empty), DiagnosticCodes.ControlCursorStale);
+            return ControlEventsPage.Empty(cursorToken);
         }
 
         IReadOnlyList<SprintJournalEntry> journal =
@@ -136,21 +136,49 @@ public sealed class ControlEventsReader(ISprintStore store)
                 .Take(MaxEventsPerRead),
         ];
 
-        Dictionary<string, long> watermarks = new(cursor.Watermarks, StringComparer.Ordinal);
-        foreach ((Guid sprintId, WorkflowEvent item, _) in page)
-        {
-            string key = sprintId.ToString("D", CultureInfo.InvariantCulture);
-            if (!watermarks.TryGetValue(key, out long current) || item.Sequence > current)
-            {
-                watermarks[key] = item.Sequence;
-            }
-        }
-
+        Dictionary<string, long> watermarks =
+            AdvanceWatermarks(cursor.Watermarks, page.Select(item => (item.SprintId, item.Event)));
         string nextCursor = ControlEventsCursorCodec.Encode(new(ControlEventsCursor.CurrentVersion, watermarks));
         return new(
             [.. page.Select(item => new ControlEventRecord(item.SprintId, item.Event))],
             nextCursor,
             DiagnosticCodes.None);
+    }
+
+    /// <summary>
+    /// Advances each sprint's watermark only through a gap-free run starting right after its
+    /// previous value — never to the bare maximum returned sequence. A sprint's events past its old
+    /// watermark are always contiguous in append (sequence) order; the only way a lower sequence
+    /// could be excluded from <paramref name="page"/> while a higher one for the same sprint is
+    /// included is a merge-and-cut that placed them out of relative order — e.g. because a
+    /// non-monotonic system clock (see <see cref="WorkflowEvent.OccurredAt"/>) sorted the higher
+    /// sequence earlier. A <c>max(sequence)</c> watermark would then mark the excluded lower
+    /// sequence as already seen, permanently skipping it on every future read — the "never silently
+    /// rebaseline" cursor invariant this type's own doc comment promises. Advancing only through the
+    /// contiguous run makes that impossible: the sprint simply doesn't advance past the gap until a
+    /// later page returns it. Exposed as a pure static method so this exact invariant is
+    /// unit-testable without a real store or a page large enough to trigger
+    /// <see cref="MaxEventsPerRead"/>'s cut.
+    /// </summary>
+    public static Dictionary<string, long> AdvanceWatermarks(
+        IReadOnlyDictionary<string, long> currentWatermarks,
+        IEnumerable<(Guid SprintId, WorkflowEvent Event)> page)
+    {
+        Dictionary<string, long> watermarks = new(currentWatermarks, StringComparer.Ordinal);
+        foreach (IGrouping<Guid, WorkflowEvent> group in page.GroupBy(item => item.SprintId, item => item.Event))
+        {
+            string key = group.Key.ToString("D", CultureInfo.InvariantCulture);
+            HashSet<long> included = [.. group.Select(item => item.Sequence)];
+            long newWatermark = watermarks.GetValueOrDefault(key, -1);
+            while (included.Contains(newWatermark + 1))
+            {
+                newWatermark++;
+            }
+
+            watermarks[key] = newWatermark;
+        }
+
+        return watermarks;
     }
 }
 

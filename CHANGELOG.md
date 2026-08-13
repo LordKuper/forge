@@ -22,6 +22,21 @@ User-facing Forge changes are listed by release, newest first.
 - Added `forge events [--after <cursor>] [--follow] [--json]` to read
   incremental workflow events, with bounded short polling in follow mode.
 
+### Fixed
+
+- `forge status --sprint <id>` now reports a diagnostic and a non-zero exit
+  code for a malformed or unknown sprint id instead of silently behaving like
+  no sprint was requested.
+- `forge events` against a project that has never been initialized now
+  reports that explicitly instead of looking identical to "caught up, no new
+  events."
+- A `ReadControlEvents` cursor is never silently treated as "no cursor
+  supplied" when the request itself is malformed, and its watermark can no
+  longer skip an event under a non-monotonic system clock.
+- Forge Host no longer drops a client connection silently when a snapshot or
+  events request hits an unreadable journal file; it now reports a safe
+  diagnostic and keeps the connection usable.
+
 ## v0.13.1
 
 ### Changed

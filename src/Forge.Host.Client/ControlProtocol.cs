@@ -16,6 +16,11 @@ public enum ControlDiagnosticCode
     ProjectInUse,
     ConnectionClosed,
     Canceled,
+
+    /// <summary>A well-formed request the Host could not complete because of a server-side failure
+    /// (e.g. an unreadable journal file) that was never the client's fault — distinct from
+    /// <see cref="Malformed"/>, which always means the request itself was invalid.</summary>
+    InternalError,
 }
 
 public sealed record ControlDiagnostic(ControlDiagnosticCode Code, string Detail)

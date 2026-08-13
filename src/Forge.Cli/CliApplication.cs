@@ -163,20 +163,27 @@ public static class CliApplication
         command.Options.Add(sprint);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            string? rawSprint = parseResult.GetValue(sprint);
+            bool sprintRequested = !string.IsNullOrWhiteSpace(rawSprint);
+            Guid? sprintId = sprintRequested && Guid.TryParse(rawSprint, out Guid parsedSprintId)
+                ? parsedSprintId
+                : null;
             SnapshotDetail requestedDetail = string.Equals(
                 parseResult.GetValue(detail), "full", StringComparison.OrdinalIgnoreCase)
                 ? SnapshotDetail.Full
                 : SnapshotDetail.Summary;
-            Guid? sprintId = Guid.TryParse(parseResult.GetValue(sprint), out Guid parsedSprintId)
-                ? parsedSprintId
-                : null;
             ProjectOverview overview = await application
                 .GetOverviewAsync(parseResult.GetValue(projectRoot), requestedDetail, sprintId, cancellationToken)
                 .ConfigureAwait(false);
+            // A malformed --sprint value never parses to a Guid, and a well-formed but unknown one
+            // never resolves a Details section — both must be reported rather than silently treated
+            // as "no sprint requested". This leaves every other exit-code case exactly as before
+            // (the project startup diagnostic stays informational-only on this read command).
+            bool sprintNotFound = sprintRequested && overview.Snapshot.Details is null;
             if (parseResult.GetValue(json))
             {
                 output.WriteLine(StatusJson.Serialize(overview.Snapshot));
-                return ExitCodes.Ok;
+                return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
             }
 
             output.WriteLine(text.Resolve(SurfaceFormatting.StartupMessageKey(overview.Snapshot.Startup)));
@@ -189,7 +196,7 @@ public static class CliApplication
 
             WriteActions(text, output, overview.Snapshot.SuggestedActions);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
-            return ExitCodes.Ok;
+            return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
         });
         return command;
     }

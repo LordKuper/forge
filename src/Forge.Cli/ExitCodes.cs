@@ -22,7 +22,8 @@ public static class ExitCodes
     public static int For(string diagnosticCode) => diagnosticCode switch
     {
         DiagnosticCodes.None or DiagnosticCodes.ProjectAlreadyInitialized => Ok,
-        DiagnosticCodes.ConfigurationKeyUnknown or DiagnosticCodes.ProjectRootNotAbsolute => Usage,
+        DiagnosticCodes.ConfigurationKeyUnknown or DiagnosticCodes.ProjectRootNotAbsolute or
+            DiagnosticCodes.SprintNotFound => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or

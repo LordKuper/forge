@@ -103,9 +103,19 @@ public sealed class ForgeApplication(
     {
         ProjectRootStatus status =
             await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
-        return status.Initialized
-            ? await eventsReader.ReadAsync(status.Root, cursor, cancellationToken).ConfigureAwait(false)
-            : ControlEventsPage.Empty(cursor);
+        if (status.Initialized)
+        {
+            return await eventsReader.ReadAsync(status.Root, cursor, cancellationToken).ConfigureAwait(false);
+        }
+
+        // An uninitialized project has no journal to poll, but that is a distinct outcome from a
+        // genuine "caught up, nothing new" read of an initialized project — both must not collapse
+        // to the same DiagnosticCodes.None a caller could otherwise mistake for real progress. A
+        // cursor that was itself already stale/malformed still reports that, unmasked.
+        ControlEventsPage empty = ControlEventsPage.Empty(cursor);
+        return empty.DiagnosticCode == DiagnosticCodes.None
+            ? empty with { DiagnosticCode = DiagnosticCodes.ProjectNotInitialized }
+            : empty;
     }
 
     /// <summary>

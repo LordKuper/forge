@@ -1,6 +1,8 @@
+using System.Text.Json;
 using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Host;
 using Forge.Host.Client;
 using Forge.Tests.Support;
@@ -168,6 +170,110 @@ public sealed class ControlPlaneTests
             cancellationToken);
 
         Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ANonStringCursorValueIsRejectedAsMalformedInsteadOfSilentlyReplayingFromScratch()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            instanceId,
+            cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        ControlResponse response = await client.SendAsync(
+            ControlProtocol.ReadControlEventsKind,
+            JsonSerializer.SerializeToElement(new { cursor = 123 }),
+            cancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.Malformed, response.Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ANullCursorValueStillMeansNoCursorSupplied()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            instanceId,
+            cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        ControlResponse response = await client.SendAsync(
+            ControlProtocol.ReadControlEventsKind,
+            JsonSerializer.SerializeToElement(new { cursor = (string?)null }),
+            cancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.None, response.Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AJournalReadFailureReportsAnInternalErrorInsteadOfHangingTheConnection()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // FileShare.None sharing-violation enforcement (this test's fault-injection mechanism) is
+            // reliably a hard failure only on Windows; .NET's FileStream does not emulate it on Unix.
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        string eventsPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "events.jsonl");
+        await using FileStream exclusiveLock =
+            new(eventsPath, FileMode.Open, FileAccess.Read, FileShare.None);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            instanceId,
+            cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        ControlResponse response = await client.SendAsync(
+            ControlProtocol.GetProjectSnapshotKind,
+            JsonSerializer.SerializeToElement(new { detail = "full", sprint_id = sprintId.Value }),
+            cancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.InternalError, response.Diagnostic.Code);
+
+        // The connection itself must still be usable afterward — a locked file must not have killed
+        // the connection or the Host.
         Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
     }
 }
