@@ -51,32 +51,55 @@ public sealed class MutexProjectLease : IProjectLease
         ManualResetEventSlim releaseSignal = new(false);
         bool acquired = false;
         bool wasAbandoned = false;
+        Exception? failure = null;
 
         Thread thread = new(() =>
         {
-            using Mutex mutex = new(
-                initiallyOwned: false,
-                leaseName,
-                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
-                out _);
+            Mutex? mutex = null;
             try
             {
-                acquired = mutex.WaitOne(timeout);
+                mutex = new Mutex(
+                    initiallyOwned: false,
+                    leaseName,
+                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
+                    out _);
+                try
+                {
+                    acquired = mutex.WaitOne(timeout);
+                }
+                catch (AbandonedMutexException)
+                {
+                    acquired = true;
+                    wasAbandoned = true;
+                }
             }
-            catch (AbandonedMutexException)
+            catch (Exception exception)
             {
-                acquired = true;
-                wasAbandoned = true;
+                failure = exception;
+            }
+            finally
+            {
+                // Must fire the instant the acquire outcome (or a construction failure) is known — never
+                // deferred until the lease is later released, or the calling thread's acquireSignal.Wait()
+                // below deadlocks forever waiting for a Dispose() call it cannot make until TryAcquire returns.
+                acquireSignal.Set();
             }
 
-            acquireSignal.Set();
-            if (!acquired)
+            if (failure is not null || !acquired || mutex is null)
             {
+                mutex?.Dispose();
                 return;
             }
 
-            releaseSignal.Wait();
-            mutex.ReleaseMutex();
+            try
+            {
+                releaseSignal.Wait();
+                mutex.ReleaseMutex();
+            }
+            finally
+            {
+                mutex.Dispose();
+            }
         })
         {
             IsBackground = true,
@@ -84,6 +107,13 @@ public sealed class MutexProjectLease : IProjectLease
         };
         thread.Start();
         acquireSignal.Wait();
+
+        if (failure is not null)
+        {
+            thread.Join();
+            releaseSignal.Dispose();
+            throw new InvalidOperationException($"Could not acquire the project lease '{leaseName}'.", failure);
+        }
 
         if (!acquired)
         {

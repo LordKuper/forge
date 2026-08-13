@@ -53,6 +53,10 @@ public static class ControlProtocol
 
     public const string PingKind = "ping";
 
+    // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
+    // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is
+    // deliberately a leaf with no ProjectReference, since CLI/Desktop composition roots pull it in without
+    // needing the whole workflow engine.
     public static JsonSerializerOptions JsonOptions { get; } = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,

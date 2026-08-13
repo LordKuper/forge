@@ -20,12 +20,13 @@ public delegate Task StartHostAsync(CancellationToken cancellationToken);
 /// running" supplies <see cref="StartHostAsync"/> to <see cref="EnsureConnectedAsync"/>. A dropped connection is
 /// never retried silently — the next <see cref="EnsureConnectedAsync"/> call reconnects explicitly.
 /// </summary>
-public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostClientOptions options)
-    : IAsyncDisposable
+public sealed class ForgeHostClient : IAsyncDisposable
 {
-    private readonly ILocalControlTransport transport = transport ?? throw new ArgumentNullException(nameof(transport));
-    private readonly ForgeHostClientOptions options = options ?? throw new ArgumentNullException(nameof(options));
-    private readonly string endpointName = InstanceIdentity.ComputePipeName(options.InstanceId, options.ProjectId);
+    // A listening pipe accepts near-instantly; only "nothing is listening" makes ConnectAsync wait out its
+    // deadline. Discovery/backoff probes use this short timeout instead of options.ConnectTimeout so a cold
+    // start (no Host yet) fails fast into the start-and-poll path rather than blocking for seconds per attempt.
+    private static readonly TimeSpan DiscoveryProbeTimeout = TimeSpan.FromMilliseconds(300);
+
     private static readonly TimeSpan[] StartBackoff =
     [
         TimeSpan.FromMilliseconds(100),
@@ -35,7 +36,17 @@ public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostC
         TimeSpan.FromSeconds(2),
     ];
 
+    private readonly ILocalControlTransport transport;
+    private readonly ForgeHostClientOptions options;
+    private readonly string endpointName;
     private ILocalControlConnection? connection;
+
+    public ForgeHostClient(ILocalControlTransport transport, ForgeHostClientOptions options)
+    {
+        this.transport = transport ?? throw new ArgumentNullException(nameof(transport));
+        this.options = options ?? throw new ArgumentNullException(nameof(options));
+        endpointName = InstanceIdentity.ComputePipeName(this.options.InstanceId, this.options.ProjectId);
+    }
 
     public bool IsConnected => connection is not null;
 
@@ -48,7 +59,12 @@ public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostC
             return ControlDiagnostic.None;
         }
 
-        ControlDiagnostic diagnostic = await TryHandshakeAsync(cancellationToken).ConfigureAwait(false);
+        // Without a launcher there is nothing to poll for; give this single attempt the caller's full timeout.
+        TimeSpan firstAttemptTimeout = startHost is null
+            ? options.ConnectTimeout ?? TimeSpan.FromSeconds(5)
+            : DiscoveryProbeTimeout;
+        ControlDiagnostic diagnostic = await TryHandshakeAsync(firstAttemptTimeout, cancellationToken)
+            .ConfigureAwait(false);
         if (diagnostic.Code != ControlDiagnosticCode.Unavailable || startHost is null)
         {
             return diagnostic;
@@ -61,7 +77,7 @@ public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostC
         foreach (TimeSpan delay in StartBackoff)
         {
             await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-            diagnostic = await TryHandshakeAsync(cancellationToken).ConfigureAwait(false);
+            diagnostic = await TryHandshakeAsync(DiscoveryProbeTimeout, cancellationToken).ConfigureAwait(false);
             if (diagnostic.Code != ControlDiagnosticCode.Unavailable)
             {
                 break;
@@ -105,9 +121,8 @@ public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostC
 
     public async ValueTask DisposeAsync() => await DropConnectionAsync().ConfigureAwait(false);
 
-    private async Task<ControlDiagnostic> TryHandshakeAsync(CancellationToken cancellationToken)
+    private async Task<ControlDiagnostic> TryHandshakeAsync(TimeSpan connectTimeout, CancellationToken cancellationToken)
     {
-        TimeSpan connectTimeout = options.ConnectTimeout ?? TimeSpan.FromSeconds(5);
         TimeSpan handshakeTimeout = options.HandshakeTimeout ?? TimeSpan.FromSeconds(5);
         ILocalControlConnection candidate;
         try
@@ -154,6 +169,12 @@ public sealed class ForgeHostClient(ILocalControlTransport transport, ForgeHostC
         {
             await candidate.DisposeAsync().ConfigureAwait(false);
             return new ControlDiagnostic(ControlDiagnosticCode.Malformed, exception.Message);
+        }
+        catch
+        {
+            // A cancellation (or anything else unanticipated) mid-handshake must not leak the connection.
+            await candidate.DisposeAsync().ConfigureAwait(false);
+            throw;
         }
     }
 

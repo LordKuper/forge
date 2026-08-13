@@ -64,13 +64,24 @@ public sealed class ControlPlaneHostedService(
             projectId = await ProjectIdentity.ReadProjectIdAsync(options.ProjectRoot, registry, stoppingToken)
                 .ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is InvalidOperationException or IOException)
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
+            // Any failure to read the manifest — missing, corrupted with no recoverable backup, denied by an
+            // ACL — means the same thing here: this project cannot be served. Report it the same way instead of
+            // letting an exception type this handler didn't anticipate crash the process via the generic
+            // unhandled-BackgroundService-exception path.
             LogNotInitialized(logger, exception);
             lifetime.StopApplication();
             return;
         }
 
+        // ADR 0005 says a second Host "may read but returns project_in_use for mutation." This stage's Host
+        // dispatches no mutating command yet (see Dispatch below), and a losing Host cannot safely become a
+        // second listener on the same pipe name without risking a client's connection landing on either
+        // process nondeterministically — so for now the losing Host exits without listening at all, rather
+        // than half-implementing the read path. Serving reads from a lease-less Host is deferred to the
+        // multi-host isolation slice (P8.34-P8.41), which is where that behavior gets real test coverage
+        // (hostile clients, stale clients, crash recovery) instead of being bolted on here.
         string leaseName = InstanceIdentity.ComputeLeaseName(options.InstanceId, projectId);
         lease = MutexProjectLease.TryAcquire(leaseName, TimeSpan.FromSeconds(2));
         if (lease is null)

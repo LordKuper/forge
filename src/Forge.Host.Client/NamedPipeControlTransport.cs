@@ -29,7 +29,9 @@ public sealed class NamedPipeControlTransport : ILocalControlTransport
             {
                 await pipe.ConnectAsync(linked.Token).ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            // Checking which token actually fired (not the caller's live state, which the caller could flip on
+            // another thread in the same instant) avoids misattributing a genuine cancellation as "unavailable".
+            catch (OperationCanceledException) when (deadlineSource.IsCancellationRequested)
             {
                 throw new ControlProtocolException(
                     ControlDiagnosticCode.Unavailable,
@@ -72,6 +74,9 @@ internal sealed class NamedPipeControlListener(string endpointName) : ILocalCont
         }
     }
 
+    // Intentionally a no-op: this listener holds no state of its own between AcceptAsync calls (each call owns
+    // its own NamedPipeServerStream, disposed on its own connection or on failure above). The accept loop's own
+    // cancellation token — not this Dispose — is what stops AcceptAsync from waiting for a new connection.
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }
 
@@ -86,7 +91,7 @@ internal sealed class PipeControlConnection(PipeStream pipe) : ILocalControlConn
         {
             await ControlMessageFraming.WriteMessageAsync(pipe, message, linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (deadlineSource.IsCancellationRequested)
         {
             throw new ControlProtocolException(ControlDiagnosticCode.Timeout, "Writing the message exceeded its deadline.");
         }
@@ -105,7 +110,7 @@ internal sealed class PipeControlConnection(PipeStream pipe) : ILocalControlConn
         {
             return await ControlMessageFraming.ReadMessageAsync(pipe, linked.Token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (deadlineSource.IsCancellationRequested)
         {
             throw new ControlProtocolException(ControlDiagnosticCode.Timeout, "Reading the message exceeded its deadline.");
         }

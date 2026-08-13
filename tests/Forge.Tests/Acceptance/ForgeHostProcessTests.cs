@@ -55,10 +55,11 @@ public sealed class ForgeHostProcessTests
                 {
                     using Process process = Process.GetProcessById(hostProcessId);
                     process.Kill(true);
+                    process.WaitForExit((int)TimeSpan.FromSeconds(5).TotalMilliseconds);
                 }
-                catch (ArgumentException)
+                catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
                 {
-                    // The process already exited.
+                    // The process already exited between GetProcessById and Kill/WaitForExit.
                 }
             }
         }

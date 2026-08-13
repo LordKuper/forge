@@ -13,8 +13,9 @@ User-facing Forge changes are listed by release, newest first.
   transport (Windows named pipes, Unix-domain sockets on Linux/macOS), gated
   by a version/capability handshake, bounded message size and deadlines, and
   correlation ids. A named `Mutex` project lease, keyed by the project's
-  stable id, prevents a second Host from mutating the same project, and
-  surfaces an abandoned prior owner instead of hiding it. The client SDK
+  stable id, ensures only one Host owns a project at a time: a second Host
+  started against the same project exits instead of mutating or serving it,
+  and surfaces an abandoned prior owner instead of hiding it. The client SDK
   covers discovery, starting the Host process, and reconnecting after a
   drop, all with stable diagnostic codes instead of raw exceptions.
 
