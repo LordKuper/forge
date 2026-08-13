@@ -139,8 +139,20 @@ public sealed class ControlEventsReader(ISprintStore store)
         Dictionary<string, long> watermarks =
             AdvanceWatermarks(cursor.Watermarks, page.Select(item => (item.SprintId, item.Event)));
         string nextCursor = ControlEventsCursorCodec.Encode(new(ControlEventsCursor.CurrentVersion, watermarks));
+
+        // Deliver only the events each sprint's watermark actually advanced through. Without this,
+        // an event stranded past a gap (Sequence <= a later item that made the page, but excluded by
+        // this same cut) would still be handed to the caller now — and, since the watermark cannot
+        // advance past it either, handed to the caller *again* once the gap-filling predecessor
+        // arrives on a later read. Withholding it here instead means it is delivered exactly once,
+        // in order, once its predecessor closes the gap.
+        List<(Guid SprintId, WorkflowEvent Event, int CreationRank)> deliverable =
+        [
+            .. page.Where(item => item.Event.Sequence <=
+                watermarks[item.SprintId.ToString("D", CultureInfo.InvariantCulture)]),
+        ];
         return new(
-            [.. page.Select(item => new ControlEventRecord(item.SprintId, item.Event))],
+            [.. deliverable.Select(item => new ControlEventRecord(item.SprintId, item.Event))],
             nextCursor,
             DiagnosticCodes.None);
     }

@@ -151,6 +151,114 @@ public sealed class ControlEventsReaderTests
         Assert.Equal(2, watermarks[sprintId.ToString("D")]);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnEventStrandedPastAGapByAPageCutIsNeverDeliveredBeforeItsPredecessorAndNeverRedelivered()
+    {
+        // Sprint A appends sequence 0 with a *later* OccurredAt than sequence 1 (a non-monotonic
+        // clock). Sprint B contributes enough filler events, all timestamped strictly between
+        // sequence 1's and sequence 0's OccurredAt, that a single MaxEventsPerRead-bounded read sorts
+        // sequence 1 in, sorts every filler in, and cuts off exactly before sequence 0.
+        Guid sprintA = Guid.NewGuid();
+        Guid sprintB = Guid.NewGuid();
+        DateTimeOffset early = DateTimeOffset.UtcNow;
+        DateTimeOffset late = early.AddMinutes(10);
+        List<WorkflowEvent> sprintAEvents =
+        [
+            FakeEvent(sprintA, sequence: 0, occurredAt: late),
+            FakeEvent(sprintA, sequence: 1, occurredAt: early),
+        ];
+        List<WorkflowEvent> sprintBEvents = [.. Enumerable.Range(0, ControlEventsReader.MaxEventsPerRead)
+            .Select(index => FakeEvent(sprintB, index, early.AddSeconds(index + 1)))];
+        FakeSprintStore store = new(new Dictionary<Guid, List<WorkflowEvent>>
+        {
+            [sprintA] = sprintAEvents,
+            [sprintB] = sprintBEvents,
+        });
+        ControlEventsReader reader = new(store);
+
+        ControlEventsPage first = await reader.ReadAsync(
+            "unused-project-root", null, TestContext.Current.CancellationToken);
+
+        // Sequence 1 was cut off from sequence 0 by the page limit — it must not be delivered ahead
+        // of its predecessor.
+        Assert.DoesNotContain(first.Events, record => record.SprintId == sprintA && record.Event.Sequence == 1);
+
+        // A second read with an unrelated, far-future cursor state for sprint B (simulating "sprint B
+        // fully drained") still must not conjure sequence 1 out of order, and once sequence 0 finally
+        // fits, both arrive exactly once — never sequence 1 twice.
+        ControlEventsPage second = await reader.ReadAsync(
+            "unused-project-root", first.Cursor, TestContext.Current.CancellationToken);
+        List<ControlEventRecord> sprintARecords = [.. second.Events.Where(record => record.SprintId == sprintA)];
+        Assert.Equal([0L, 1L], sprintARecords.Select(record => record.Event.Sequence).Order());
+    }
+
+    private sealed class FakeSprintStore(IReadOnlyDictionary<Guid, List<WorkflowEvent>> events) : ISprintStore
+    {
+        public Task<IReadOnlyList<SprintId>> ListAsync(string projectRoot, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<SprintId>>([.. events.Keys.Select(id => new SprintId(id))]);
+
+        public Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<WorkflowEvent>>(events[sprintId.Value]);
+
+        public Task<SprintWorkflowState?> LoadAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkSprintCreatedAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<AppendOutcome> AppendTransitionAsync(
+            string projectRoot, SprintId sprintId, AggregateKind aggregateKind, string aggregateId, string type,
+            string messageKey, string toState, long expectedAggregateVersion, Guid idempotencyKey,
+            CancellationToken cancellationToken, IReadOnlyDictionary<string, string?>? extraArguments = null) =>
+            throw new NotSupportedException();
+
+        public Task SaveDefinitionAsync(string projectRoot, SprintDefinition definition, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<SprintDefinition?> LoadDefinitionAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SaveNodeResultAsync(string projectRoot, NodeResult result, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<NodeResult>> GetNodeResultsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SaveFindingAsync(string projectRoot, Finding finding, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<Finding>> GetFindingsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SaveHandoffAsync(string projectRoot, Handoff handoff, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<Handoff>> GetHandoffsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+    }
+
+    private static WorkflowEvent FakeEvent(Guid sprintId, long sequence, DateTimeOffset occurredAt) =>
+        new(
+            Guid.NewGuid(),
+            sequence,
+            occurredAt,
+            "SprintTransitioned",
+            new(AggregateKind.Sprint, sprintId.ToString("D"), sequence + 1),
+            "sprint.transitioned",
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.ToStateArgument] = "draft" });
+
     private static WorkflowEvent FakeEvent(Guid sprintId, long sequence) =>
         new(
             Guid.NewGuid(),
