@@ -51,18 +51,19 @@ dotnet workload install maui-windows --skip-manifest-update
 ## Build and test
 
 Restore uses committed NuGet lock files. Run both validation scripts before
-creating a pull request:
+creating a pull request, `lint.ps1` first so the formatting it applies is
+the code `test-stage1.ps1` then builds and tests:
 
 ```powershell
-pwsh ./.github/scripts/test-stage1.ps1
 pwsh ./.github/scripts/lint.ps1
+pwsh ./.github/scripts/test-stage1.ps1
 ```
 
-`test-stage1.ps1` builds and tests the solution. `lint.ps1` applies .NET
-formatting and checks dependencies for known vulnerabilities; locally it
-fixes formatting in place, while CI (`$env:CI = 'true'`) verifies that
-formatting made no changes and fails instead. Run `dotnet format Forge.slnx`
-directly to fix formatting without the rest of `lint.ps1`.
+`lint.ps1` applies .NET formatting and checks dependencies for known
+vulnerabilities; locally it fixes formatting in place, while CI
+(`$env:CI = 'true'`) verifies that formatting made no changes and fails
+instead. Run `dotnet format Forge.slnx` directly to fix formatting without
+the rest of `lint.ps1`. `test-stage1.ps1` builds and tests the solution.
 
 Validate only the Stage 0 contract gate with:
 
