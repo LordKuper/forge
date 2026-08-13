@@ -338,6 +338,130 @@ public sealed class RoutingLedgerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ADeferredKeyStaysUnroutableUntilItsResumeTimeElapsesThenRoutesAgain()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        RouteDecision routed = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        DateTimeOffset resumeAt = clock.UtcNow + TimeSpan.FromMinutes(1);
+
+        await ledger.RecordDeferralAsync(root.Path, sprintId, routed, resumeAt, cancellationToken);
+        RouteDecision stillWaiting =
+            await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Deferred, stillWaiting.Outcome);
+        Assert.Equal(resumeAt, stillWaiting.ResumeNotBefore);
+
+        clock.UtcNow = resumeAt;
+        RouteDecision resumed = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Routed, resumed.Outcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADeferralConsumesTheSharedBudgetLikeAnyOtherFailureAndNeverTripsTheBreaker()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        RouteDecision routed = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+
+        await ledger.RecordDeferralAsync(
+            root.Path, sprintId, routed, clock.UtcNow + TimeSpan.FromMinutes(1), cancellationToken);
+
+        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(RoutingLedger.DefaultRetryBudget - 1, budget.Remaining);
+        CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
+        Assert.Null(breaker);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetResumeNotBeforeReturnsTheSoonestPendingDeferralAcrossKeysAndNullOnceAllElapse()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
+        SprintId sprintId = SprintId.New();
+        HealthKey otherKey = new("codex", "gpt", "sprint");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        RouteDecision first = await ledger.DecideAsync(
+            root.Path, sprintId, "a", AttemptId.New(), Key, cancellationToken);
+        RouteDecision second = await ledger.DecideAsync(
+            root.Path, sprintId, "b", AttemptId.New(), otherKey, cancellationToken);
+        DateTimeOffset soonest = clock.UtcNow + TimeSpan.FromMinutes(1);
+        DateTimeOffset later = clock.UtcNow + TimeSpan.FromMinutes(5);
+        await ledger.RecordDeferralAsync(root.Path, sprintId, first, soonest, cancellationToken);
+        await ledger.RecordDeferralAsync(root.Path, sprintId, second, later, cancellationToken);
+
+        Assert.Equal(soonest, await ledger.GetResumeNotBeforeAsync(root.Path, sprintId, cancellationToken));
+
+        clock.UtcNow = later;
+        Assert.Null(await ledger.GetResumeNotBeforeAsync(root.Path, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AFreshRoutingLedgerInstanceRecoversAPendingDeferralIdempotentlyAfterARestart()
+    {
+        // Simulates a Host restart: no in-memory timer exists to lose, so a brand-new ledger over
+        // the same durable store must derive the exact same wait purely from history plus the clock.
+        using TestRoot root = new();
+        FakeClock clock = new();
+        FileSprintEventLog store = new(clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        RouteDecision routed = await new RoutingLedger(store, clock)
+            .DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        DateTimeOffset resumeAt = clock.UtcNow + TimeSpan.FromMinutes(1);
+        await new RoutingLedger(store, clock)
+            .RecordDeferralAsync(root.Path, sprintId, routed, resumeAt, cancellationToken);
+
+        RoutingLedger recovered = new(store, clock);
+        RouteDecision stillWaiting =
+            await recovered.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Deferred, stillWaiting.Outcome);
+
+        clock.UtcNow = resumeAt;
+        RoutingLedger recoveredAgain = new(store, clock);
+        RouteDecision resumed =
+            await recoveredAgain.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.Routed, resumed.Outcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordingADeferralForADecisionThatWasNotRoutedIsANoOp()
+    {
+        using TestRoot root = new();
+        FakeClock clock = new();
+        RoutingLedger ledger = new(new FileSprintEventLog(clock), clock);
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        for (int i = 0; i < RoutingLedger.DefaultRetryBudget; i++)
+        {
+            await ledger.DecideAsync(root.Path, sprintId, "a", AttemptId.New(), Key, cancellationToken);
+        }
+
+        RouteDecision exhausted = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
+        Assert.Equal(RouteOutcome.BudgetExhausted, exhausted.Outcome);
+
+        await ledger.RecordDeferralAsync(
+            root.Path, sprintId, exhausted, clock.UtcNow + TimeSpan.FromMinutes(1), cancellationToken);
+
+        Assert.Null(await ledger.GetResumeNotBeforeAsync(root.Path, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RouteDecisionsAreDurablyRecordedInOrder()
     {
         using TestRoot root = new();

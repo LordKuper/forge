@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Forge.Configuration;
@@ -317,6 +318,41 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             await MigrateLegacyRoutingAsync(directory, decision.SprintId, events, cancellationToken)
                 .ConfigureAwait(false);
             await AppendRoutingEventAsync(eventsPath, decision, events, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendAttemptActivityAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent activity = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptActivityRecordedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_activity",
+                new Dictionary<string, string?>(StringComparer.Ordinal));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(activity), cancellationToken)
+                .ConfigureAwait(false);
+            events.Add(activity);
         }
         finally
         {
@@ -712,7 +748,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 item.Arguments.GetValueOrDefault("failure_class") is { } failure
                     ? WorkflowStateNames.Parse<FailureClass>(failure)
                     : null,
-                item.OccurredAt);
+                item.OccurredAt,
+                item.Arguments.GetValueOrDefault("resume_not_before") is { } resumeNotBefore
+                    ? DateTimeOffset.Parse(resumeNotBefore, CultureInfo.InvariantCulture)
+                    : null);
         }
         catch (FormatException error)
         {
@@ -742,6 +781,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ["failure_class"] = decision.FailureClass is { } failure
                 ? WorkflowStateNames.ToSnakeCase(failure)
                 : null,
+            ["resume_not_before"] = decision.ResumeNotBefore?.ToString("O", CultureInfo.InvariantCulture),
         };
         long sprintVersion = CurrentVersion(
             events,

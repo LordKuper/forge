@@ -308,6 +308,81 @@ public sealed class SprintSchedulerTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task RecordingActivityOnARunningAttemptBumpsItsLastActivityTimeWithoutChangingItsState()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        AttemptSnapshot beforeActivity =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+                .Attempts[started.AttemptId!.Value.ToString("D")];
+        Assert.Null(beforeActivity.LastActivityAt);
+
+        RecordActivityResult recorded = await scheduler.RecordAttemptActivityAsync(
+            environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
+
+        Assert.True(recorded.Succeeded);
+        Assert.NotNull(recorded.Attempt!.LastActivityAt);
+        Assert.Equal(AttemptState.Created, recorded.Attempt.State);
+        // Repeats freely: not gated by the attempt's transition version.
+        RecordActivityResult recordedAgain = await scheduler.RecordAttemptActivityAsync(
+            environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
+        Assert.True(recordedAgain.Succeeded);
+        Assert.True(recordedAgain.Attempt!.LastActivityAt >= recorded.Attempt.LastActivityAt);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ActivityIsRejectedOnceTheAttemptReachesATerminalState()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, true, SampleDigest, [], [],
+            cancellationToken);
+
+        RecordActivityResult recorded = await scheduler.RecordAttemptActivityAsync(
+            environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
+
+        Assert.False(recorded.Succeeded);
+        Assert.Equal(DiagnosticCodes.AttemptTransitionInvalid, recorded.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ActivityForAnUnknownAttemptIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        RecordActivityResult recorded = await scheduler.RecordAttemptActivityAsync(
+            environment.ProjectRoot, sprintId, AttemptId.New(), cancellationToken);
+
+        Assert.False(recorded.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowEventConflict, recorded.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task FindingsCanBeRecordedAndResolved()
     {
         using TestEnvironment environment = await InitializedAsync();

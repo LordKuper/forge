@@ -90,6 +90,10 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetRouteDecisionsAsync(projectRoot, sprintId, cancellationToken);
 
+    public Task AppendAttemptActivityAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
+        inner.AppendAttemptActivityAsync(projectRoot, sprintId, attemptId, cancellationToken);
+
     public Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetEventsAsync(projectRoot, sprintId, cancellationToken);

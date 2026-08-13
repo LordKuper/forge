@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
@@ -77,6 +78,34 @@ public sealed class StatusAdvisorTests
         Assert.Equal(1, after.StateVersion);
         Assert.True(after.Project.Initialized);
         Assert.Empty(after.SuggestedActions);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADeferredRouteDecisionSurfacesAsTheSprintsResumeNotBeforeInTheSnapshot()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        RoutingLedger routingLedger = environment.Resolve<RoutingLedger>();
+        IClock clock = environment.Resolve<IClock>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        HealthKey key = new("claude_code", "sonnet", "sprint");
+        RouteDecision routed = await routingLedger.DecideAsync(
+            environment.ProjectRoot, sprintId, "a", AttemptId.New(), key, cancellationToken);
+        DateTimeOffset resumeAt = clock.UtcNow + TimeSpan.FromMinutes(5);
+        await routingLedger.RecordDeferralAsync(
+            environment.ProjectRoot, sprintId, routed, resumeAt, cancellationToken);
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            null, SnapshotDetail.Summary, sprintId.Value, cancellationToken);
+
+        Assert.Equal(resumeAt, snapshot.Details!.Routing.ResumeNotBefore);
     }
 
     [Fact]
