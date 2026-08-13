@@ -45,6 +45,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
 
     public string CurrentDirectory => ProjectRoot;
 
+    public string InstanceId => "forge-test";
+
     public ForgeApplication Application => provider.GetRequiredService<ForgeApplication>();
 
     public T Resolve<T>()

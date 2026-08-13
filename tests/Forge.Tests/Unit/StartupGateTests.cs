@@ -315,7 +315,7 @@ public sealed class StartupGateTests
             "language.ui",
             "ru",
             TestContext.Current.CancellationToken);
-        string path = ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+        string path = ConfigurationStoreFactory.UserPath(environment);
         string before = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
 
         RecoverStartupResult result = await environment.Application.RecoverStartupAsync(
@@ -368,7 +368,7 @@ public sealed class StartupGateTests
 
     private static async Task<string> WriteCorruptUserConfigurationAsync(TestEnvironment environment)
     {
-        string path = ConfigurationStoreFactory.UserPath(environment.LocalApplicationData);
+        string path = ConfigurationStoreFactory.UserPath(environment);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
         return path;

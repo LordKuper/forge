@@ -21,7 +21,8 @@ public static class WorktreeLayout
 
     public static string SprintRoot(IEnvironmentPaths paths, Guid projectId, SprintId sprintId) =>
         Path.Combine(
-            paths.LocalApplicationData, "Forge", "wt", ShortId(projectId), ShortId(sprintId.Value));
+            paths.LocalApplicationData, "Forge", paths.InstanceId, "wt", ShortId(projectId),
+            ShortId(sprintId.Value));
 
     public static string IntegrationPath(IEnvironmentPaths paths, Guid projectId, SprintId sprintId) =>
         Path.Combine(SprintRoot(paths, projectId, sprintId), "i");

@@ -41,6 +41,17 @@ public interface IEnvironmentPaths
     string UserProfile { get; }
 
     string CurrentDirectory { get; }
+
+    /// <summary>
+    /// Namespaces every Forge-owned path under <see cref="LocalApplicationData"/> (user
+    /// configuration, worktrees, and — once they exist — logs/caches) so release, Debug, and test
+    /// processes never collide on the same files (ADR 0005: "Instance identity namespaces IPC
+    /// endpoints, user configuration, logs, caches, and worktrees"). The project lease
+    /// deliberately stays outside this namespace (see <c>InstanceIdentity.ComputeLeaseName</c> in
+    /// <c>Forge.Host.Client</c>) so it still prevents two instances from mutating the same project
+    /// concurrently.
+    /// </summary>
+    string InstanceId { get; }
 }
 
 public interface IRepository

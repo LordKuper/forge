@@ -94,7 +94,7 @@ public sealed class StartupTests
     public async Task MalformedUserConfigurationFailsStartupWithoutOverwritingIt()
     {
         using TestEnvironment environment = new();
-        string path = Path.Combine(environment.LocalApplicationData, "Forge", "config.json");
+        string path = ConfigurationStoreFactory.UserPath(environment);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "{broken", TestContext.Current.CancellationToken);
 

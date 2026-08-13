@@ -107,14 +107,34 @@ public sealed class NetworkClient(HttpClient client) : INetworkClient
         client.GetStreamAsync(uri, cancellationToken);
 }
 
-public sealed class SystemEnvironmentPaths : IEnvironmentPaths
+/// <summary>
+/// The real, OS-backed <see cref="IEnvironmentPaths"/>. <see cref="InstanceId"/> defaults to the
+/// build configuration's release/Debug split — matching <c>Forge.Host.Client.InstanceIdentity</c>'s
+/// <c>Release</c>/<c>Debug</c> constants, duplicated rather than referenced because
+/// <c>Forge.Host.Client</c> is a leaf transport/protocol project and this neutral engine project
+/// takes no dependency on it (see <c>ControlProtocol.JsonOptions</c>'s doc comment for the same
+/// pattern). A composition root that already knows a more specific instance id (e.g. Forge.Host's
+/// own <c>--instance-id</c>, including the unique ephemeral id automated tests spawn a real Host
+/// process with) supplies it explicitly instead.
+/// </summary>
+public sealed class SystemEnvironmentPaths(string? instanceId = null) : IEnvironmentPaths
 {
+    private const string ReleaseInstanceId = "forge";
+    private const string DebugInstanceId = "forge-dev";
+
     public string LocalApplicationData { get; } =
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
 
     public string UserProfile { get; } = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     public string CurrentDirectory => Environment.CurrentDirectory;
+
+    public string InstanceId { get; } = instanceId ??
+#if DEBUG
+        DebugInstanceId;
+#else
+        ReleaseInstanceId;
+#endif
 }
 
 public static class InfrastructureServices

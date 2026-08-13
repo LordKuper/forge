@@ -1,6 +1,8 @@
+using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Host;
 using Forge.Host.Client;
+using Forge.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -29,6 +31,11 @@ using IHost host = ForgeHost.CreateBuilder()
     .ConfigureServices(services =>
     {
         services.AddSingleton(options);
+        // Overrides AddForgeCore's default (compiled-in release/Debug) IEnvironmentPaths with this
+        // Host's actual resolved instance id, which for a test-spawned Host is a unique ephemeral id
+        // — without this, every ephemeral test instance would collide on the same Debug-build user
+        // configuration and worktree paths under the real developer's %LOCALAPPDATA%.
+        services.AddSingleton<IEnvironmentPaths>(new SystemEnvironmentPaths(options.InstanceId));
         services.AddHostedService<ControlPlaneHostedService>();
     })
     .Build();

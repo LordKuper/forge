@@ -225,6 +225,8 @@ public sealed class ProviderExecutionTests
 
         public string CurrentDirectory => Root;
 
+        public string InstanceId => "forge-test";
+
         public void Dispose()
         {
             if (Directory.Exists(Root))

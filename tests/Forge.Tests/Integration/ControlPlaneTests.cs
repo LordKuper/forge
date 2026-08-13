@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Bootstrap;
@@ -5,6 +6,7 @@ using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host;
 using Forge.Host.Client;
+using Forge.Infrastructure;
 using Forge.Tests.Support;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -131,6 +133,44 @@ public sealed class ControlPlaneTests
         Assert.False(first.IsStopping);
 
         // The first Host is still the sole listener and keeps serving.
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASecondHostForTheSameProjectUnderADifferentInstanceIdStillExitsInsteadOfCompeting()
+    {
+        // ADR 0005: "Release, development, test, CLI, and Desktop instances use the same lease
+        // namespace, so distinct instance data roots cannot become concurrent writers of one
+        // `.forge/` tree." Unlike ASecondHostForTheSameProjectExitsInsteadOfCompetingForTheListener
+        // (which reuses one instance id for both Hosts), this proves the lease itself spans two
+        // *different* instance ids for the same project — each with its own distinct pipe name, so
+        // this is specifically testing the lease, not an incidental pipe-name collision.
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string firstInstanceId = InstanceIdentity.CreateEphemeral();
+        string secondInstanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost first = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            firstInstanceId,
+            cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, firstInstanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.False(first.IsStopping);
+
+        await using ControlPlaneHost second = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            secondInstanceId,
+            cancellationToken);
+
+        Assert.True(await second.WaitForStoppingAsync(TimeSpan.FromSeconds(10), cancellationToken));
+        Assert.False(first.IsStopping);
         Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
     }
 
@@ -276,6 +316,117 @@ public sealed class ControlPlaneTests
         // the connection or the Host.
         Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AGarbagePayloadAfterAValidHandshakeEndsOnlyThatConnectionWithoutAffectingTheHost()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        string endpointName = InstanceIdentity.ComputePipeName(instanceId, projectId);
+        NamedPipeControlTransport transport = new();
+
+        await using (ILocalControlConnection connection = await transport
+            .ConnectAsync(endpointName, TimeSpan.FromSeconds(5), cancellationToken))
+        {
+            ControlHandshakeRequest handshake =
+                new(ControlProtocol.Version, "1.0.0-test", instanceId, [], Guid.NewGuid());
+            await connection.SendAsync(
+                JsonSerializer.SerializeToUtf8Bytes(handshake, ControlProtocol.JsonOptions),
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+            await connection.ReceiveAsync(TimeSpan.FromSeconds(5), cancellationToken);
+
+            // A well-formed frame whose payload is not JSON at all — not even a malformed request
+            // envelope, just garbage bytes.
+            await connection.SendAsync(
+                Encoding.UTF8.GetBytes("this is not json"),
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+
+            // The Host closes this one connection (no CorrelationId to reply to) instead of hanging
+            // or letting the JsonException escape unobserved.
+            await Assert.ThrowsAsync<ControlProtocolException>(
+                () => connection.ReceiveAsync(TimeSpan.FromSeconds(5), cancellationToken));
+        }
+
+        // The Host itself is unaffected: a fresh, well-behaved client is still served normally.
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AClientThatNeverHandshakesIsDroppedAfterItsDeadlineAndTheHostKeepsServing()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            new ControlPlaneOptions(environment.ProjectRoot, instanceId, HandshakeTimeout: TimeSpan.FromMilliseconds(300)),
+            cancellationToken);
+        string endpointName = InstanceIdentity.ComputePipeName(instanceId, projectId);
+        NamedPipeControlTransport transport = new();
+
+        await using (ILocalControlConnection silent = await transport
+            .ConnectAsync(endpointName, TimeSpan.FromSeconds(5), cancellationToken))
+        {
+            // Never sends a handshake. The Host's own receive deadline (300ms) fires and it closes
+            // this connection server-side rather than holding it open indefinitely; that closure is
+            // what unblocks this pending client-side receive.
+            await Assert.ThrowsAsync<ControlProtocolException>(
+                () => silent.ReceiveAsync(TimeSpan.FromSeconds(5), cancellationToken));
+        }
+
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AClientThatDisconnectsWhileIdleDoesNotAffectOtherConnections()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClientOptions clientOptions = new(projectId, instanceId, "1.0.0-test");
+
+        await using (ForgeHostClient doomed = new(new NamedPipeControlTransport(), clientOptions))
+        {
+            Assert.Equal(
+                ControlDiagnosticCode.None,
+                (await doomed.EnsureConnectedAsync(null, cancellationToken)).Code);
+            Assert.Equal(ControlDiagnosticCode.None, (await doomed.PingAsync(cancellationToken)).Diagnostic.Code);
+        }
+
+        // "doomed" disposed abruptly (simulating a crashed client) while the Host was idly waiting
+        // for its next request; the Host must notice the closed connection and move on rather than
+        // leaking a stuck serving task or affecting anyone else.
+        await using ForgeHostClient client = new(new NamedPipeControlTransport(), clientOptions);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
+        Assert.False(host.IsStopping);
+    }
 }
 
 /// <summary>Runs <see cref="ControlPlaneHostedService"/> in-process against a real project directory for tests.</summary>
@@ -310,15 +461,24 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
         }
     }
 
-    public static async Task<ControlPlaneHost> StartAsync(
+    public static Task<ControlPlaneHost> StartAsync(
         string projectRoot,
         string instanceId,
+        CancellationToken cancellationToken) =>
+        StartAsync(new ControlPlaneOptions(projectRoot, instanceId), cancellationToken);
+
+    public static async Task<ControlPlaneHost> StartAsync(
+        ControlPlaneOptions options,
         CancellationToken cancellationToken)
     {
         IHost host = ForgeHost.CreateBuilder()
             .ConfigureServices(services =>
             {
-                services.AddSingleton(new ControlPlaneOptions(projectRoot, instanceId));
+                services.AddSingleton(options);
+                // Matches Forge.Host/Program.cs: without this override, every in-process test Host
+                // would share one Debug-build IEnvironmentPaths instead of this test's own ephemeral
+                // instance id, writing into the real developer machine's %LOCALAPPDATA%.
+                services.AddSingleton<IEnvironmentPaths>(new SystemEnvironmentPaths(options.InstanceId));
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();
