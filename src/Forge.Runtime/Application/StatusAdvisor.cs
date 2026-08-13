@@ -163,11 +163,13 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
         RetryBudgetRecord budget = await routingLedger
             .GetRetryBudgetAsync(projectRoot, new(sprintId), cancellationToken)
             .ConfigureAwait(false);
+        DateTimeOffset? resumeNotBefore = await routingLedger
+            .GetResumeNotBeforeAsync(projectRoot, new(sprintId), cancellationToken)
+            .ConfigureAwait(false);
 
         // Gates and artifacts stay empty until Stage 11 introduces human gates and an addressable
-        // artifact store; resume_not_before stays null until P8.42-P8.47 adds durable rate-limit
-        // scheduling. The schema permits both as always-valid empty/absent values.
-        return new(sprintId, nodes, attempts, findingRows, [], [], new(budget.Remaining, null));
+        // artifact store. The schema permits both as always-valid empty values.
+        return new(sprintId, nodes, attempts, findingRows, [], [], new(budget.Remaining, resumeNotBefore));
     }
 
     private static IReadOnlyList<SuggestedAction> Recommend(StartupStatus startup, long stateVersion)

@@ -15,6 +15,8 @@ public sealed record RecordFindingResult(bool Succeeded, Finding? Finding, strin
 
 public sealed record RecordHandoffResult(bool Succeeded, Handoff? Handoff, string DiagnosticCode);
 
+public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attempt, string DiagnosticCode);
+
 /// <summary>
 /// Drives a sprint's frozen node graph: dependency-based readiness, bounded automatic retries,
 /// human gates, findings, handoffs, node results, and the sprint-level completion gate. This is
@@ -418,6 +420,39 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         SprintWorkflowState final = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         return new(true, final.Nodes[nodeId], DiagnosticCodes.None);
+    }
+
+    /// <summary>
+    /// Safely bumps an in-flight attempt's last-activity time — ADR 0006's "safe, throttled activity
+    /// events" that reset the idle deadline without persisting any provider content. Never touches
+    /// the attempt's state, node state, or version-gated transition history; a caller repeats this
+    /// as often as it likes while the attempt is owned. Rejected once the attempt has reached a
+    /// terminal state, so a heartbeat racing a real completion never resurrects a settled attempt.
+    /// </summary>
+    public async Task<RecordActivityResult> RecordAttemptActivityAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        string attemptKey = attemptId.Value.ToString("D");
+        if (!state.Attempts.TryGetValue(attemptKey, out AttemptSnapshot? attempt))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        if (WorkflowStateMachines.IsTerminal(attempt.State))
+        {
+            return new(false, attempt, DiagnosticCodes.AttemptTerminal);
+        }
+
+        await store.AppendAttemptActivityAsync(projectRoot, sprintId, attemptId, cancellationToken)
+            .ConfigureAwait(false);
+        SprintWorkflowState updated = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, updated.Attempts[attemptKey], DiagnosticCodes.None);
     }
 
     /// <summary>Manually re-arms a node whose automatic retries were exhausted (matches `RetryNode`).</summary>

@@ -32,6 +32,12 @@ public sealed record WorkflowEvent(
     public const string ToStateArgument = "to_state";
     public const string RouteDecisionRecordedType = "RouteDecisionRecorded";
 
+    /// <summary>An attempt heartbeat: ADR 0006's "safe, throttled activity events" that bump
+    /// <see cref="AttemptSnapshot.LastActivityAt"/> without persisting provider content or moving
+    /// the attempt through its state machine. Carries no arguments; <see cref="OccurredAt"/> is
+    /// itself the activity timestamp.</summary>
+    public const string AttemptActivityRecordedType = "AttemptActivityRecorded";
+
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
 
@@ -98,6 +104,24 @@ public static class WorkflowFold
         Dictionary<string, AttemptSnapshot> attempts = new(StringComparer.Ordinal);
         foreach (WorkflowEvent current in events)
         {
+            if (current.Type == WorkflowEvent.AttemptActivityRecordedType)
+            {
+                // Validated like every other envelope (throws loudly on corruption) but never a
+                // transition: it must never gate on or advance a state-machine version. Applied only
+                // while the attempt is still non-terminal — the authoritative, race-free half of
+                // "never resurrects a settled attempt": a heartbeat that lands after a concurrent
+                // completion (append-time only checks the attempt was non-terminal at read time) is
+                // silently dropped here on replay instead of leaving a stray post-terminal timestamp.
+                _ = IsTransitionRecord(current);
+                if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? activeAttempt) &&
+                    !WorkflowStateMachines.IsTerminal(activeAttempt.State))
+                {
+                    attempts[current.Aggregate.Id] = activeAttempt with { LastActivityAt = current.OccurredAt };
+                }
+
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -155,7 +179,8 @@ public static class WorkflowFold
                         current.Aggregate.Version,
                         current.OccurredAt,
                         nodeId,
-                        targetOutcome);
+                        targetOutcome,
+                        previousAttempt?.LastActivityAt);
                     break;
                 default:
                     throw new InvalidDataException(
@@ -174,6 +199,13 @@ public static class WorkflowFold
     {
         bool hasState = current.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) &&
             toState is not null;
+        if (current.Type == WorkflowEvent.AttemptActivityRecordedType)
+        {
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt
+                ? throw new InvalidDataException($"Activity event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
         if (current.Type != WorkflowEvent.RouteDecisionRecordedType)
         {
             return hasState

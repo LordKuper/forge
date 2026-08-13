@@ -73,4 +73,5 @@ public sealed record AttemptSnapshot(
     long Version,
     DateTimeOffset UpdatedAt,
     string? NodeId = null,
-    string? TargetOutcome = null);
+    string? TargetOutcome = null,
+    DateTimeOffset? LastActivityAt = null);

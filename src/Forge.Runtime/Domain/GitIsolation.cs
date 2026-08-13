@@ -61,10 +61,15 @@ public enum RouteOutcome
     CircuitOpen,
     BudgetExhausted,
     Excluded,
+    Deferred,
 }
 
 /// <summary>An immutable record of one routing decision — reproducible, so a fallback sequence can
-/// be explained after the fact from durable state alone rather than trusted from memory.</summary>
+/// be explained after the fact from durable state alone rather than trusted from memory.
+/// <paramref name="ResumeNotBefore"/> is set only on a <see cref="RouteOutcome.Deferred"/> decision
+/// (ADR 0006's durable rate-limit wait): the attempt that hit the limit is abandoned and the key
+/// stays unroutable until this time elapses, re-derived fresh from this history on every later
+/// <c>DecideAsync</c> call rather than tracked by a live timer.</summary>
 public sealed record RouteDecision(
     Guid DecisionId,
     SprintId SprintId,
@@ -73,4 +78,5 @@ public sealed record RouteDecision(
     HealthKey Key,
     RouteOutcome Outcome,
     FailureClass? FailureClass,
-    DateTimeOffset DecidedAt);
+    DateTimeOffset DecidedAt,
+    DateTimeOffset? ResumeNotBefore = null);

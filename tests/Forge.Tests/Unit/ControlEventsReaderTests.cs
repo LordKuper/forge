@@ -247,6 +247,10 @@ public sealed class ControlEventsReaderTests
         public Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
             string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task AppendAttemptActivityAsync(
+            string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private static WorkflowEvent FakeEvent(Guid sprintId, long sequence, DateTimeOffset occurredAt) =>

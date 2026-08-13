@@ -290,8 +290,7 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         {
             foreach (AttemptSnapshot attempt in state.Attempts.Values)
             {
-                if (attempt.State is not
-                    (AttemptState.Succeeded or AttemptState.Failed or AttemptState.Cancelled))
+                if (!WorkflowStateMachines.IsTerminal(attempt.State))
                 {
                     liveShortIds.Add(WorktreeLayout.ShortId(attempt.Id.Value));
                 }

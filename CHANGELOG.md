@@ -2,6 +2,23 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.16.0
+
+### Added
+
+- The project snapshot's routing status now reports `resume_not_before` when
+  a sprint has hit a provider rate limit: the wait is derived fresh from the
+  durable routing history on every read, so it survives a Forge Host restart
+  exactly (no in-memory timer to lose or double-fire), and the same key keeps
+  being preferred once the wait elapses rather than falling back to another
+  provider.
+- Added a durable, throttle-friendly way for a running attempt to report
+  activity (a heartbeat) without persisting any provider content — the
+  future basis for resetting an attempt's idle deadline while it works.
+- Added `NotificationProjector`, mapping durable sprint events to the four
+  attention kinds (`awaiting_human`, `blocked`, `failed`, `completed`)
+  Desktop/OS notifications will surface, deduplicated by event id.
+
 ## v0.15.0
 
 ### Fixed

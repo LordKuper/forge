@@ -260,6 +260,16 @@ public interface ISprintStore
         SprintId sprintId,
         CancellationToken cancellationToken);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptActivityRecordedType"/> heartbeat for
+    /// <paramref name="attemptId"/>. Not gated by <see cref="AppendTransitionAsync"/>'s optimistic
+    /// concurrency or state-machine legality — a caller repeats this freely while the attempt runs;
+    /// it never competes with or blocks a real transition.</summary>
+    Task AppendAttemptActivityAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken);
+
     /// <summary>
     /// Every durable transition and routing record for one sprint, in append order, including the
     /// records <see cref="LoadAsync"/> folds away — the raw stream a read model needs to derive
