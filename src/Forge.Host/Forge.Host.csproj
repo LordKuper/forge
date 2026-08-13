@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>Forge.Host</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Forge.Host.Client\Forge.Host.Client.csproj" />
+    <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
+  </ItemGroup>
+</Project>

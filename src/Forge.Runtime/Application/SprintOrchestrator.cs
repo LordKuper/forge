@@ -102,7 +102,8 @@ public sealed class SprintOrchestrator(
         // The manifest's own `ProjectId` — not the root path string — anchors sprint identity: a
         // relocated project directory or a differently cased Windows path must still resolve to the
         // exact same sprint for the same idempotency key, since both name the same project.
-        Guid projectId = await ReadProjectIdAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        Guid projectId = await ProjectIdentity.ReadProjectIdAsync(status.Root, registry, cancellationToken)
+            .ConfigureAwait(false);
         SprintId sprintId = DeriveSprintId(projectId, command.IdempotencyKey);
         IReadOnlyList<SprintId> existingSprints =
             await store.ListAsync(status.Root, cancellationToken).ConfigureAwait(false);
@@ -386,20 +387,6 @@ public sealed class SprintOrchestrator(
     {
         byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes($"sprint|{projectId:D}|{idempotencyKey:D}"));
         return new(new Guid(hash.AsSpan(0, 16)));
-    }
-
-    /// <summary>
-    /// The manifest's own `ProjectId`, not the resolved root path string: a project can move on
-    /// disk, and Windows paths can differ only in case for the same physical directory, but its
-    /// identity — and therefore every sprint id derived from it — must not.
-    /// </summary>
-    private async Task<Guid> ReadProjectIdAsync(string root, CancellationToken cancellationToken)
-    {
-        YamlConfigurationStore manifestStore =
-            new(ProjectRootResolver.ManifestPath(root), ConfigurationScope.Project, registry);
-        ConfigurationDocument document = await manifestStore.ReadAsync(cancellationToken).ConfigureAwait(false);
-        return document.ProjectId ??
-            throw new InvalidOperationException("An initialized project must have a project ID.");
     }
 
     private async Task<IReadOnlyDictionary<string, string>> ConfigurationSnapshotAsync(
