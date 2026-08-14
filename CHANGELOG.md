@@ -6,20 +6,12 @@ User-facing Forge changes are listed by release, newest first.
 
 ### Changed
 
-- Migrated the ADR 0008 modular provider boundary: the core now depends only on
-  `ILlmProvider` and `ProviderId`, with no concrete provider identifier,
-  install path, vendor command, or event shape. Codex and Claude Code details
-  moved to two new leaf Windows adapters, `Forge.Providers.Codex.Windows` and
-  `Forge.Providers.Claude.Windows`, each registered explicitly by a Windows
-  composition root.
-- Split `Forge.Host` into a platform-neutral `Forge.Host.Runtime` (protocol,
-  lifecycle, control plane), a Windows composition root
-  `Forge.Host.Windows` that wires the real provider adapters and ships as
-  `Forge.Host.exe`, and a neutral `Forge.Host.TestHost` used only so the
-  process/lease/protocol acceptance suite runs on Windows, Linux, and macOS.
-  ADR 0005 is updated accordingly: the Host runtime and control plane are
-  platform-neutral, while the distributable executable is a thin OS
-  composition root. Behavior and the shipped `Forge.Host.exe` are unchanged.
+- Continued the ADR 0007/0008 portability migration: the Codex and Claude
+  Code integrations and the Forge Host now live behind clearly separated
+  Windows adapters, and the Host's process/lease/protocol behavior is
+  verified on Windows, Linux, and macOS in CI (previously Windows-only).
+  `forge models`, `forge doctor`, and the shipped `Forge.Host.exe` behave
+  the same as before.
 
 ## v0.17.0
 

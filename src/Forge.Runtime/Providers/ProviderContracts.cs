@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Forge.Application;
 
 namespace Forge.Providers;
@@ -5,7 +7,20 @@ namespace Forge.Providers;
 /// <summary>A provider-neutral identifier (ADR 0008: "the core contains no provider enum, [or]
 /// concrete provider identifier"). Each adapter owns its own id value (e.g. "codex",
 /// "claude_code"); the core never hardcodes one.</summary>
+[JsonConverter(typeof(ProviderIdJsonConverter))]
 public sealed record ProviderId(string Value);
+
+/// <summary>Serializes/deserializes <see cref="ProviderId"/> as a plain JSON string (its
+/// <see cref="ProviderId.Value"/>), matching the flat `id` shape every other provider-facing
+/// contract (e.g. <c>ProviderHealthEntry.Id</c>) already uses instead of a nested object.</summary>
+public sealed class ProviderIdJsonConverter : JsonConverter<ProviderId>
+{
+    public override ProviderId Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options) =>
+        new(reader.GetString() ?? throw new JsonException("A provider id must be a non-null string."));
+
+    public override void Write(Utf8JsonWriter writer, ProviderId value, JsonSerializerOptions options) =>
+        writer.WriteStringValue(value.Value);
+}
 
 /// <summary>
 /// Declares the same states as the `provider_toolchain` state machine in

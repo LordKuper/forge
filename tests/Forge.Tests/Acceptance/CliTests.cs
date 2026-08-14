@@ -66,6 +66,9 @@ public sealed class CliTests
 
         Assert.Equal(ExitCodes.Provider, exitCode);
         Assert.Contains("\"missing\"", output.ToString(), StringComparison.Ordinal);
+        // The provider id must serialize as a plain string (matching every other provider-facing
+        // contract), never as a nested object.
+        Assert.Contains("\"id\": \"codex\"", output.ToString(), StringComparison.Ordinal);
         Assert.Equal($"provider_preflight_pending{Environment.NewLine}", diagnostics.ToString());
     }
 

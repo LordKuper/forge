@@ -15,6 +15,11 @@ public sealed class CodexLlmProvider(
 {
     public static readonly ProviderId Codex = new("codex");
 
+    /// <summary>
+    /// The fully-qualified in-box Windows PowerShell path, never a bare `powershell.exe` (ADR
+    /// 0002): a bare name is resolved through `CreateProcess`'s search order, which checks the
+    /// calling image's own directory and the current directory before `System32`.
+    /// </summary>
     private static readonly string PowerShellExecutable = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.System),
         "WindowsPowerShell",
