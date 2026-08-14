@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Forge.Domain;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -15,7 +16,12 @@ namespace Forge.Application;
 /// </summary>
 public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
-    public const string ContractVersion = "1.0.0";
+    public const string ContractVersion = "1.1.0";
+
+    /// <summary>Kept separate from <see cref="ContractVersion"/>: `suggested-action.schema.json`
+    /// did not change when the snapshot's own contract gained provider/startup-check fields, so
+    /// its `schema_version` must not follow the snapshot's version.</summary>
+    private const string SuggestedActionContractVersion = "1.0.0";
     private const int MaximumResults = 5;
 
     /// <summary>Sprint work is fail-closed while the project is not initialized, so an
@@ -23,11 +29,13 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
     /// that cannot exist yet.</summary>
     public async Task<ProjectSnapshot> CreateSnapshotAsync(
         StartupStatus startup,
+        ProviderToolchainStatus providers,
         SnapshotDetail detail,
         Guid? sprintId,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(startup);
+        ArgumentNullException.ThrowIfNull(providers);
         long stateVersion = StateVersion(startup.Project);
         if (!startup.Project.Initialized)
         {
@@ -41,6 +49,8 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
                 [],
                 [],
                 Recommend(startup, stateVersion),
+                startup.Checks,
+                ProviderHealthProjector.Project(providers),
                 detail);
         }
 
@@ -87,14 +97,11 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
             sprints,
             attention,
             Recommend(startup, stateVersion),
+            startup.Checks,
+            ProviderHealthProjector.Project(providers),
             detail,
             details);
     }
-
-    /// <summary>Backward-compatible entry point for callers that only need the startup-derived
-    /// view (e.g. before a project root is even confirmed) without sprint detail.</summary>
-    public Task<ProjectSnapshot> CreateSnapshotAsync(StartupStatus startup, CancellationToken cancellationToken) =>
-        CreateSnapshotAsync(startup, SnapshotDetail.Summary, null, cancellationToken);
 
     /// <summary>
     /// The state version advances with every durable project mutation. Initialization is the only
@@ -232,7 +239,7 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
     {
         public SuggestedAction ToAction(int rank, long stateVersion) =>
             new(
-                ContractVersion,
+                SuggestedActionContractVersion,
                 ActionId,
                 rank,
                 string.Create(CultureInfo.InvariantCulture, $"next.{ActionId}.rationale"),

@@ -31,6 +31,16 @@ public static class ProviderDiagnosticCodes
     public const string Missing = "provider_missing";
     public const string VersionUnsupported = "provider_version_unsupported";
     public const string UpdateFailed = "provider_update_failed";
+
+    /// <summary>Reserved for the P8.72-82 authentication check ADR 0008 describes: "Missing
+    /// authentication blocks model work with `provider_authentication_required`." Not produced by
+    /// any code yet — only the versioned contract (<see cref="ProviderHealthAuthentication"/>)
+    /// names it ahead of that stage.</summary>
+    public const string AuthenticationRequired = "provider_authentication_required";
+
+    /// <summary>Reserved for the P8.72-82 authentication check: "a probe failure uses
+    /// `provider_authentication_check_failed`." See <see cref="AuthenticationRequired"/>.</summary>
+    public const string AuthenticationCheckFailed = "provider_authentication_check_failed";
 }
 
 public sealed record ProviderStatus(ProviderKind Kind, ProviderState State, string? Version, string DiagnosticCode)

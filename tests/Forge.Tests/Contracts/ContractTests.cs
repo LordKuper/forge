@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Forge.Tests.Support;
 using Json.Schema;
 
 namespace Forge.Tests.Contracts;
@@ -9,21 +10,14 @@ public sealed class ContractTests
     [Trait("Category", "Contracts")]
     public void Draft202012SchemasMatchCompatibilityFixtures()
     {
-        string root = FindRepositoryRoot();
-        string schemaRoot = Path.Combine(root, "docs", "contracts", "v1", "schemas");
+        string root = Forge.UnitTests.RepositoryRoot.Find();
         string fixturePath = Path.Combine(root, "tests", "Forge.Tests", "Contracts", "fixtures", "contract-cases.json");
         var buildOptions = new BuildOptions
         {
             Dialect = Dialect.Draft202012,
             SchemaRegistry = new SchemaRegistry()
         };
-
-        var schemas = Directory.GetFiles(schemaRoot, "*.schema.json")
-            .Order()
-            .ToDictionary(
-                path => Path.GetFileName(path).Replace(".schema.json", "", StringComparison.Ordinal),
-                path => JsonSchema.FromFile(path, buildOptions),
-                StringComparer.Ordinal);
+        var schemas = ContractSchemas.LoadAll();
         using var fixtureDocument = JsonDocument.Parse(File.ReadAllText(fixturePath));
         var failures = new List<string>();
         var options = new EvaluationOptions
@@ -59,17 +53,5 @@ public sealed class ContractTests
         }
 
         Assert.Empty(failures);
-    }
-
-    private static string FindRepositoryRoot()
-    {
-        DirectoryInfo? directory = new(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Forge.slnx")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName ??
-            throw new DirectoryNotFoundException("Could not locate the Forge repository root.");
     }
 }

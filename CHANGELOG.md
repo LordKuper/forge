@@ -2,6 +2,36 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.17.0
+
+### Added
+
+- User configuration accepts an ordered `providers.enabled` list, ahead of
+  the upcoming explicit provider registration/enablement work: omitting it
+  keeps today's behavior (every registered provider runs), and an empty list
+  is preserved distinctly (blocks model work) rather than being treated the
+  same as "not configured."
+- The project snapshot now always reports `startup_checks` (the same checks
+  `forge doctor --startup` prints) and `providers` (each provider's
+  registered/enabled/state/version), so a client no longer needs a separate
+  call to see them.
+- Added the versioned `provider-health`, `startup-check`, `diagnostic-bundle`,
+  and `execution-profile` JSON schemas (`docs/contracts/v1/schemas/`), ahead
+  of the stages that will populate the latter two (provider update/
+  authentication detection and `forge doctor --bundle` collection; frozen
+  sprint execution profiles).
+- Reserved the `provider_authentication_required` and
+  `provider_authentication_check_failed` diagnostic codes for the upcoming
+  provider authentication check.
+
+### Fixed
+
+- Configuration files written by a prior Forge version (with no
+  `providers` section) now explicitly validate against the current schema
+  instead of relying on undocumented tolerance; the contract's stated
+  "producers write the latest, consumers accept a compatible older minor"
+  policy is enforced for the first time rather than only described.
+
 ## v0.16.0
 
 ### Added

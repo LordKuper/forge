@@ -43,6 +43,8 @@ gate on workstations and CI.
 | 7 | provider | `provider_update_failed` | Provider install/update/recheck failed |
 | 7 | provider | `provider_idle_timeout` | Provider attempt exceeded its no-activity deadline |
 | 7 | provider | `provider_session_timeout` | Provider attempt exceeded its absolute deadline |
+| 7 | provider | `provider_authentication_required` | Enabled provider has no local authentication |
+| 7 | provider | `provider_authentication_check_failed` | Provider authentication probe itself failed |
 | 8 | authorization | `permission_denied` | Policy denied the command |
 | 9 | confirmation | `confirmation_required` | Required human confirmation absent |
 | 10 | concurrency | `suggestion_stale` | Expected state version no longer matches |

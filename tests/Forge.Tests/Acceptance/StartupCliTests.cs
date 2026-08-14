@@ -6,7 +6,6 @@ using Forge.Cli;
 using Forge.Domain;
 using Forge.Localization;
 using Forge.Tests.Support;
-using Forge.UnitTests;
 using Json.Schema;
 
 namespace Forge.AcceptanceTests;
@@ -208,25 +207,8 @@ public sealed class StartupCliTests
 
     private static void AssertValid(string schemaName, string json)
     {
-        string schemaRoot = Path.Combine(
-            RepositoryRoot.Find(),
-            "docs",
-            "contracts",
-            "v1",
-            "schemas");
-        BuildOptions buildOptions = new()
-        {
-            Dialect = Dialect.Draft202012,
-            SchemaRegistry = new SchemaRegistry(),
-        };
-        Dictionary<string, JsonSchema> schemas = Directory
-            .GetFiles(schemaRoot, "*.schema.json")
-            .ToDictionary(
-                path => Path.GetFileName(path).Replace(".schema.json", string.Empty, StringComparison.Ordinal),
-                path => JsonSchema.FromFile(path, buildOptions),
-                StringComparer.Ordinal);
         using JsonDocument instance = JsonDocument.Parse(json);
-        EvaluationResults result = schemas[schemaName].Evaluate(
+        EvaluationResults result = ContractSchemas.Load(schemaName).Evaluate(
             instance.RootElement,
             new EvaluationOptions
             {

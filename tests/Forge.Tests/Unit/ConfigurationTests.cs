@@ -161,7 +161,7 @@ public sealed class ConfigurationTests
 
             using JsonDocument json = JsonDocument.Parse(
                 await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-            Assert.Equal("1.0.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.1.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal(
                 "ru",
                 json.RootElement.GetProperty("language").GetProperty("ui").GetString());
@@ -171,6 +171,107 @@ public sealed class ConfigurationTests
                     .GetProperty("confirm_destructive")
                     .GetBoolean());
             Assert.False(json.RootElement.TryGetProperty("values", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnOrderedProviderEnablementListRoundTripsThroughTheStore()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store = new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            List<string> enabled = ["claude_code", "codex"];
+            await store.WriteAsync(
+                new(
+                    1,
+                    new Dictionary<string, JsonElement>
+                    {
+                        ["providers.enabled"] = JsonSerializer.SerializeToElement(enabled),
+                    }),
+                TestContext.Current.CancellationToken);
+
+            ConfigurationDocument reloaded = await store.ReadAsync(TestContext.Current.CancellationToken);
+
+            Assert.Equal(
+                enabled,
+                reloaded.Values["providers.enabled"].EnumerateArray().Select(item => item.GetString()));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitEmptyProviderListIsPreservedDistinctFromOmission()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store = new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            await store.WriteAsync(
+                new(
+                    1,
+                    new Dictionary<string, JsonElement>
+                    {
+                        ["providers.enabled"] = JsonSerializer.SerializeToElement(Array.Empty<string>()),
+                    }),
+                TestContext.Current.CancellationToken);
+
+            ConfigurationDocument reloaded = await store.ReadAsync(TestContext.Current.CancellationToken);
+
+            Assert.True(reloaded.Values.ContainsKey("providers.enabled"));
+            Assert.Empty(reloaded.Values["providers.enabled"].EnumerateArray());
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task APreExistingConfigurationFileWithoutProvidersStillLoadsAndUpgradesOnNextSave()
+    {
+        // Simulates a file written by a Forge version before providers.enabled existed: literal
+        // schema_version "1.0.0", no "providers" key at all. user-config.schema.json's tolerant
+        // schema_version enum must still accept it.
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        Directory.CreateDirectory(directory);
+        try
+        {
+            await File.WriteAllTextAsync(
+                path,
+                """{"schema_version":"1.0.0","language":{"ui":"en"},"interaction":{}}""",
+                TestContext.Current.CancellationToken);
+            JsonConfigurationStore store = new(path, ConfigurationScope.User, new ConfigurationRegistry());
+
+            ConfigurationDocument reloaded = await store.ReadAsync(TestContext.Current.CancellationToken);
+            Assert.False(reloaded.Values.ContainsKey("providers.enabled"));
+
+            await store.WriteAsync(reloaded, TestContext.Current.CancellationToken);
+            using JsonDocument upgraded = JsonDocument.Parse(
+                await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            Assert.Equal("1.1.0", upgraded.RootElement.GetProperty("schema_version").GetString());
         }
         finally
         {

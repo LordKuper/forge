@@ -3,6 +3,7 @@ using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
@@ -31,6 +32,24 @@ public sealed class StatusAdvisorTests
         Assert.Equal(
             first.SuggestedActions.Select(item => item.Command.IdempotencyKey),
             second.SuggestedActions.Select(item => item.Command.IdempotencyKey));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ASuggestedActionsSchemaVersionNeverFollowsTheSnapshotsOwnSchemaVersion()
+    {
+        // Regression test: ProjectSnapshot.SchemaVersion and SuggestedAction.SchemaVersion are
+        // versioned independently (suggested-action.schema.json did not change when the snapshot
+        // gained provider/startup-check fields). They previously shared one constant, so bumping
+        // the snapshot's version accidentally bumped every suggested action's version with it.
+        using TestEnvironment environment = new();
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            null, TestContext.Current.CancellationToken);
+
+        SuggestedAction action = Assert.Single(snapshot.SuggestedActions);
+        Assert.NotEqual(snapshot.SchemaVersion, action.SchemaVersion);
+        Assert.Equal("1.0.0", action.SchemaVersion);
     }
 
     [Fact]
@@ -110,6 +129,24 @@ public sealed class StatusAdvisorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task TheSnapshotCarriesTheSameStartupChecksAndProviderHealthTheStartupPassAlreadyComputed()
+    {
+        using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(
+            FakeProviderToolchainManager.Ready));
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(8, snapshot.StartupChecks.Count);
+        Assert.Contains(snapshot.StartupChecks, check => check.Id == StartupCheckId.Providers);
+        ProviderHealthEntry codex = Assert.Single(snapshot.Providers, entry => entry.Id == "codex");
+        Assert.Equal(ProviderState.Ready, codex.State);
+        Assert.True(codex.Registered);
+        Assert.True(codex.Enabled);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task MachineSnapshotStaysCultureInvariant()
     {
         CultureInfo originalCulture = CultureInfo.CurrentCulture;
@@ -131,7 +168,7 @@ public sealed class StatusAdvisorTests
                 TestContext.Current.CancellationToken);
             using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));
 
-            Assert.Equal("1.0.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.1.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal("blocked", json.RootElement.GetProperty("startup").GetString());
             Assert.Equal(
                 "initialize_project",

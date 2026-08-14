@@ -96,8 +96,13 @@ public sealed record StartupStatus(
     StartupState State,
     IReadOnlyList<StartupCheck> Checks,
     LanguageSelection Language,
-    ProjectRootStatus Project)
+    ProjectRootStatus Project,
+    string SchemaVersion)
 {
+    /// <summary>The versioned `startup-check.schema.json` contract this record's JSON
+    /// serialization (<see cref="StatusJson"/>) satisfies.</summary>
+    public const string ContractVersion = "1.0.0";
+
     /// <summary>Sprint work is fail-closed while any startup check is unresolved.</summary>
     public bool AllowsSprintWork => State == StartupState.Ready;
 

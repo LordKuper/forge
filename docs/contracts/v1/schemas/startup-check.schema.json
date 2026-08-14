@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/startup-check.schema.json",
+  "title": "StartupStatus v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "state", "checks", "language", "project",
+    "allows_sprint_work", "allows_project_mutation", "first_failure"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "state": {"enum": ["ready", "blocked", "failed"]},
+    "checks": {"type": "array", "items": {"$ref": "#/$defs/check"}},
+    "allows_sprint_work": {"type": "boolean"},
+    "allows_project_mutation": {"type": "boolean"},
+    "first_failure": {"anyOf": [{"$ref": "#/$defs/check"}, {"type": "null"}]},
+    "language": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ui", "interaction", "llm"],
+      "properties": {
+        "ui": {"type": "string", "minLength": 1},
+        "interaction": {"type": "string", "minLength": 1},
+        "llm": {"type": "string", "minLength": 1}
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["root", "exists", "initialized", "unknown", "diagnostic_code"],
+      "properties": {
+        "root": {"type": "string"},
+        "exists": {"type": "boolean"},
+        "initialized": {"type": "boolean"},
+        "unknown": {"type": "boolean"},
+        "diagnostic_code": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "$defs": {
+    "check": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "diagnostic_code"],
+      "properties": {
+        "id": {
+          "enum": [
+            "user_configuration",
+            "language",
+            "platform",
+            "update_strategy",
+            "release",
+            "providers",
+            "project_root",
+            "project_configuration"
+          ]
+        },
+        "state": {"enum": ["passed", "skipped", "blocked", "failed"]},
+        "diagnostic_code": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

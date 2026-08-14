@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/execution-profile.schema.json",
+  "title": "ExecutionProfile v1",
+  "description": "One frozen planning/implementation/review execution profile (ADR 0006), including the reviewer lineage evidence ADR 0008 assigns to the review profile's verdict.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "phase", "provider", "model", "effort", "sandbox_policy",
+    "permission_policy", "capability_allowlist", "session_deadline_seconds", "idle_deadline_seconds"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "phase": {"enum": ["planning", "implementation", "review"]},
+    "provider": {"type": "string", "minLength": 1},
+    "model": {"type": "string", "minLength": 1},
+    "effort": {"type": "string", "minLength": 1},
+    "sandbox_policy": {"type": "string", "minLength": 1},
+    "permission_policy": {"type": "string", "minLength": 1},
+    "capability_allowlist": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "session_deadline_seconds": {"type": "integer", "minimum": 1},
+    "idle_deadline_seconds": {"type": "integer", "minimum": 1},
+    "lineage": {"$ref": "#/$defs/lineage"}
+  },
+  "$defs": {
+    "lineage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["implementation_provider", "implementation_model", "achieved_independence"],
+      "properties": {
+        "implementation_provider": {"type": "string", "minLength": 1},
+        "implementation_model": {"type": "string", "minLength": 1},
+        "achieved_independence": {"type": "boolean"}
+      }
+    }
+  }
+}

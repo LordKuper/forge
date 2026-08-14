@@ -30,7 +30,11 @@ $requiredSchemas = @(
     'project-snapshot',
     'suggested-action',
     'user-config',
-    'language-pack'
+    'language-pack',
+    'provider-health',
+    'startup-check',
+    'diagnostic-bundle',
+    'execution-profile'
 )
 $schemas = @{}
 foreach ($name in $requiredSchemas) {
@@ -97,7 +101,8 @@ $configurationKeys = @($configuration.keys | ForEach-Object { $_.key })
 Assert-True (($configurationKeys | Sort-Object -Unique).Count -eq $configurationKeys.Count) 'Configuration keys must have one owner.'
 foreach ($key in $configuration.keys) {
     Assert-True (@('user', 'project') -contains $key.scope) "Configuration key '$($key.key)' has an invalid scope."
-    Assert-True ($null -ne $key.default -or $null -ne $key.inherits) "Configuration key '$($key.key)' needs a default or inheritance source."
+    $hasDynamicDefault = [bool]$key.PSObject.Properties['default_is_dynamic']
+    Assert-True ($null -ne $key.default -or $null -ne $key.inherits -or $hasDynamicDefault) "Configuration key '$($key.key)' needs a default, an inheritance source, or an explicit default_is_dynamic note."
     if ($key.session_override) {
         Assert-True ($key.scope -eq 'user') "Project key '$($key.key)' cannot have a session override."
     }
