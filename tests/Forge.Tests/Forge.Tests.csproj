@@ -15,19 +15,27 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Remove="Installer/**/*.cs" />
+    <!-- Provider adapters are Windows-only (ADR 0008); their tests exercise the real Codex/Claude
+         adapters and only compile in the Windows TFM group below. -->
+    <Compile Remove="ProviderAdapters/**/*.cs" />
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />
     <ProjectReference Include="..\..\src\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
-    <ProjectReference Include="..\..\src\Forge.Host\Forge.Host.csproj" />
     <ProjectReference Include="..\..\src\Forge.Host.Client\Forge.Host.Client.csproj" />
+    <!-- The neutral stand-in composition root (ADR 0005), so the process/lease/protocol acceptance
+         tests below run on Windows, Linux, and macOS without a real, Windows-only provider adapter. -->
+    <ProjectReference Include="..\..\src\Forge.Host.TestHost\Forge.Host.TestHost.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />
+    <Compile Include="ProviderAdapters/**/*.cs" />
     <!-- The real Windows durability adapter, installed by Installer/WindowsDurabilityAssemblyInitializer.cs,
          supersedes the portable fallback below; excluded here so the two module initializers never race. -->
     <Compile Remove="Support/PortableDurabilityFallback.cs" />
     <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Providers.Codex.Windows\Forge.Providers.Codex.Windows.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Providers.Claude.Windows\Forge.Providers.Claude.Windows.csproj" />
   </ItemGroup>
 </Project>

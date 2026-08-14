@@ -1,5 +1,3 @@
-using Forge.Domain;
-
 namespace Forge.Providers;
 
 /// <summary>Local authentication readiness for one provider's final executable — ADR 0008's
@@ -46,7 +44,7 @@ public static class ProviderHealthProjector
         return
         [
             .. status.Providers.Select(provider => new ProviderHealthEntry(
-                WorkflowStateNames.ToSnakeCase(provider.Kind),
+                provider.Id.Value,
                 true,
                 true,
                 provider.State,

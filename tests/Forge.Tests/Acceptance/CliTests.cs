@@ -66,6 +66,9 @@ public sealed class CliTests
 
         Assert.Equal(ExitCodes.Provider, exitCode);
         Assert.Contains("\"missing\"", output.ToString(), StringComparison.Ordinal);
+        // The provider id must serialize as a plain string (matching every other provider-facing
+        // contract), never as a nested object.
+        Assert.Contains("\"id\": \"codex\"", output.ToString(), StringComparison.Ordinal);
         Assert.Equal($"provider_preflight_pending{Environment.NewLine}", diagnostics.ToString());
     }
 
@@ -74,8 +77,8 @@ public sealed class CliTests
     public async Task ModelsCommandRefreshReportsUpdateFailedWhenRepairIsNeeded()
     {
         ProviderToolchainStatus failed = new([
-            new(ProviderKind.Codex, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed),
-            ProviderStatus.Ready(ProviderKind.ClaudeCode, "2.1.221"),
+            new(new ProviderId("codex"), ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed),
+            ProviderStatus.Ready(new ProviderId("claude_code"), "2.1.221"),
         ]);
         using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(failed));
         StringWriter output = new(CultureInfo.InvariantCulture);

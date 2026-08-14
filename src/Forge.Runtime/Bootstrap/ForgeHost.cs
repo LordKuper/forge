@@ -39,21 +39,10 @@ public static class ForgeHost
         services.AddSingleton<ScopedConfigurationService>();
         // A platform composition may register before or after the core defaults.
         services.TryAddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
-        // Adapters need their own concrete strategy, not "any" IProviderStrategy, so each
-        // strategy is resolvable both by its concrete type and through the shared collection.
-        services.TryAddSingleton<CodexProviderStrategy>();
-        services.TryAddSingleton<ClaudeCodeProviderStrategy>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderStrategy, CodexProviderStrategy>(
-            sp => sp.GetRequiredService<CodexProviderStrategy>()));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderStrategy, ClaudeCodeProviderStrategy>(
-            sp => sp.GetRequiredService<ClaudeCodeProviderStrategy>()));
+        // No ILlmProvider is registered here (ADR 0008: the core owns no concrete provider
+        // registration) — a Windows composition root adds them via AddCodexProvider()/
+        // AddClaudeProvider() (P8.64-71). IEnumerable<ILlmProvider> resolves empty until then.
         services.TryAddSingleton<IProviderToolchainManager, ProviderToolchainManager>();
-        services.TryAddSingleton<CodexProviderAdapter>();
-        services.TryAddSingleton<ClaudeCodeProviderAdapter>();
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderAdapter, CodexProviderAdapter>(
-            sp => sp.GetRequiredService<CodexProviderAdapter>()));
-        services.TryAddEnumerable(ServiceDescriptor.Singleton<IProviderAdapter, ClaudeCodeProviderAdapter>(
-            sp => sp.GetRequiredService<ClaudeCodeProviderAdapter>()));
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();
         services.AddSingleton<ISprintStore, FileSprintEventLog>();

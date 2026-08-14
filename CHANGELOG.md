@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.18.0
+
+### Changed
+
+- Continued the ADR 0007/0008 portability migration: the Codex and Claude
+  Code integrations and the Forge Host now live behind clearly separated
+  Windows adapters, and the Host's process/lease/protocol behavior is
+  verified on Windows, Linux, and macOS in CI (previously Windows-only).
+  `forge models`, `forge doctor`, and the shipped `Forge.Host.exe` behave
+  the same as before.
+
 ## v0.17.0
 
 ### Added

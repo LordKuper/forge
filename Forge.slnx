@@ -3,8 +3,12 @@
   <Project Path="src/Forge.Cli.Windows/Forge.Cli.Windows.csproj" />
   <Project Path="src/Forge.Desktop/Forge.Desktop.csproj" />
   <Project Path="src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj" />
-  <Project Path="src/Forge.Host/Forge.Host.csproj" />
   <Project Path="src/Forge.Host.Client/Forge.Host.Client.csproj" />
+  <Project Path="src/Forge.Host.Runtime/Forge.Host.Runtime.csproj" />
+  <Project Path="src/Forge.Host.TestHost/Forge.Host.TestHost.csproj" />
+  <Project Path="src/Forge.Host.Windows/Forge.Host.Windows.csproj" />
+  <Project Path="src/Forge.Providers.Claude.Windows/Forge.Providers.Claude.Windows.csproj" />
+  <Project Path="src/Forge.Providers.Codex.Windows/Forge.Providers.Codex.Windows.csproj" />
   <Project Path="src/Forge.Runtime/Forge.Runtime.csproj" />
   <Project Path="src/Forge.Runtime.Windows/Forge.Runtime.Windows.csproj" />
   <Project Path="src/Forge.Updater.Windows/Forge.Updater.Windows.csproj" />

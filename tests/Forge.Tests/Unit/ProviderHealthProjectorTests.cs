@@ -14,8 +14,8 @@ public sealed class ProviderHealthProjectorTests
     {
         ProviderToolchainStatus status = new(
         [
-            ProviderStatus.Ready(ProviderKind.Codex, "0.146.0"),
-            new(ProviderKind.ClaudeCode, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0"),
+            new(new ProviderId("claude_code"), ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
         ]);
 
         IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
@@ -40,8 +40,8 @@ public sealed class ProviderHealthProjectorTests
     {
         ProviderToolchainStatus status = new(
         [
-            ProviderStatus.Ready(ProviderKind.Codex, "0.146.0"),
-            new(ProviderKind.ClaudeCode, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0"),
+            new(new ProviderId("claude_code"), ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
         ]);
         IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
         string json = StatusJson.Serialize(entries);

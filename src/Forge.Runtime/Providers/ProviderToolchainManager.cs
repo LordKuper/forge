@@ -1,17 +1,17 @@
 namespace Forge.Providers;
 
-/// <summary>Aggregates every registered provider strategy into one toolchain-wide status.</summary>
-public sealed class ProviderToolchainManager(IEnumerable<IProviderStrategy> strategies) : IProviderToolchainManager
+/// <summary>Aggregates every registered provider into one toolchain-wide status.</summary>
+public sealed class ProviderToolchainManager(IEnumerable<ILlmProvider> providers) : IProviderToolchainManager
 {
-    private readonly IReadOnlyList<IProviderStrategy> strategies =
-        strategies?.ToArray() ?? throw new ArgumentNullException(nameof(strategies));
+    private readonly IReadOnlyList<ILlmProvider> providers =
+        providers?.ToArray() ?? throw new ArgumentNullException(nameof(providers));
 
     public async Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken)
     {
         List<ProviderStatus> statuses = [];
-        foreach (IProviderStrategy strategy in strategies)
+        foreach (ILlmProvider provider in providers)
         {
-            statuses.Add(await strategy.DiscoverAsync(cancellationToken).ConfigureAwait(false));
+            statuses.Add(await provider.DiscoverAsync(cancellationToken).ConfigureAwait(false));
         }
 
         return new(statuses);
@@ -20,12 +20,12 @@ public sealed class ProviderToolchainManager(IEnumerable<IProviderStrategy> stra
     public async Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken)
     {
         List<ProviderStatus> statuses = [];
-        foreach (IProviderStrategy strategy in strategies)
+        foreach (ILlmProvider provider in providers)
         {
-            ProviderStatus status = await strategy.DiscoverAsync(cancellationToken).ConfigureAwait(false);
+            ProviderStatus status = await provider.DiscoverAsync(cancellationToken).ConfigureAwait(false);
             if (status.State != ProviderState.Ready)
             {
-                status = await strategy.InstallOrUpdateAsync(cancellationToken).ConfigureAwait(false);
+                status = await provider.InstallOrUpdateAsync(cancellationToken).ConfigureAwait(false);
             }
 
             statuses.Add(status);
