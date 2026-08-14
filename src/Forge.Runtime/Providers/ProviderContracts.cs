@@ -112,7 +112,9 @@ public interface ILlmProvider
     Task<ProviderRunResult> RunAsync(string prompt, string workingDirectory, CancellationToken cancellationToken);
 }
 
-/// <summary>Aggregates every registered provider into one toolchain-wide status.</summary>
+/// <summary>Aggregates every enabled provider into one toolchain-wide status (ADR 0008: a
+/// disabled-but-registered provider is excluded before any probe, never merely left un-updated —
+/// see <see cref="ProviderToolchainManager"/>).</summary>
 public interface IProviderToolchainManager
 {
     /// <summary>Cheap, read-only, offline. Safe to call on every startup pass.</summary>

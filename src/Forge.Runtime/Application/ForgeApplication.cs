@@ -341,10 +341,15 @@ public sealed class ForgeApplication(
 
         foreach (JsonElement item in value.EnumerateArray())
         {
-            if (item.ValueKind == JsonValueKind.String &&
-                !providerCatalog.Contains(new ProviderId(item.GetString() ?? string.Empty)))
+            if (item.ValueKind != JsonValueKind.String)
             {
-                throw new InvalidDataException($"Unknown provider id '{item.GetString()}'.");
+                continue;
+            }
+
+            string id = item.GetString() ?? string.Empty;
+            if (!providerCatalog.Contains(new ProviderId(id)))
+            {
+                throw new InvalidDataException($"Unknown provider id '{id}'.");
             }
         }
     }

@@ -122,6 +122,29 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void EveryUserFacingWindowsCompositionRootReferencesBothBuiltInProviders()
+    {
+        // ADR 0008: registration ("AddCodexProvider()"/"AddClaudeProvider()") is how a
+        // composition root's ProviderCatalog learns which providers exist. A composition root
+        // that forgets one reference ships with a catalog that silently rejects every
+        // `providers.enabled` write for a provider Forge actually ships.
+        string[] userFacingCompositionRoots = ["Forge.Cli.Windows", "Forge.Desktop", "Forge.Host.Windows"];
+        foreach (SourceProject project in SourceProjects().Where(
+            project => userFacingCompositionRoots.Contains(project.Name)))
+        {
+            Assert.True(
+                project.References.Any(
+                    reference => reference.Contains("Forge.Providers.Codex.Windows", StringComparison.Ordinal)),
+                $"{project.Name} must reference Forge.Providers.Codex.Windows.");
+            Assert.True(
+                project.References.Any(
+                    reference => reference.Contains("Forge.Providers.Claude.Windows", StringComparison.Ordinal)),
+                $"{project.Name} must reference Forge.Providers.Claude.Windows.");
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void ArtifactVersionMatchesCanonicalVersion()
     {
         string expected = $"{File.ReadAllText(Path.Combine(RepositoryRoot.Find(), "VERSION")).Trim()}.0";

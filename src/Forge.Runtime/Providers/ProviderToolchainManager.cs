@@ -10,6 +10,10 @@ namespace Forge.Providers;
 public sealed class ProviderToolchainManager(ProviderCatalog catalog, IProviderEnablementSource enablement)
     : IProviderToolchainManager
 {
+    private readonly ProviderCatalog catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+    private readonly IProviderEnablementSource enablement =
+        enablement ?? throw new ArgumentNullException(nameof(enablement));
+
     public async Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken)
     {
         IReadOnlyList<ILlmProvider> enabled = await ResolveEnabledAsync(cancellationToken).ConfigureAwait(false);

@@ -34,6 +34,7 @@ public static class ConfigurationValueParser
 /// <summary>Owns the location of the user and project configuration stores.</summary>
 public sealed class ScopedConfigurationStores(
     ConfigurationStoreFactory factory,
+    ConfigurationMigrator migrator,
     IEnvironmentPaths environment)
 {
     public const int SchemaVersion = 1;
@@ -42,6 +43,29 @@ public sealed class ScopedConfigurationStores(
         factory.CreateUserStore(environment);
 
     public IConfigurationStore Project(string projectRoot) => factory.CreateProjectStore(projectRoot);
+
+    /// <summary>
+    /// Reads and migrates the user document, or <see langword="null"/> if it cannot be read.
+    /// Every caller degrades to defaults on a malformed or unreadable user configuration file
+    /// instead of crashing; this is the one place that recoverable-exception set is enumerated,
+    /// so every caller degrades identically instead of hand-copying (and risking desyncing) it.
+    /// </summary>
+    public async Task<ConfigurationDocument?> TryReadMigratedUserDocumentAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            return migrator.Migrate(
+                await User.ReadAsync(cancellationToken).ConfigureAwait(false),
+                ConfigurationScope.User,
+                SchemaVersion);
+        }
+        catch (Exception error) when (
+            error is JsonException or InvalidDataException or ConfigurationMigrationException or
+                ConfigurationScopeException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>
@@ -132,31 +156,19 @@ public sealed class ScopedConfigurationService(
 /// rather than through <see cref="ScopedConfigurationService.GetUserAsync"/>, which resolves
 /// every user key (including the <c>language.*</c> inheritance chain) on every call.
 /// </summary>
-public sealed class ScopedConfigurationProviderEnablementSource(
-    ConfigurationMigrator migrator,
-    ScopedConfigurationStores stores) : IProviderEnablementSource
+public sealed class ScopedConfigurationProviderEnablementSource(ScopedConfigurationStores stores)
+    : IProviderEnablementSource
 {
     public async Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken)
     {
-        ConfigurationDocument document;
-        try
-        {
-            document = migrator.Migrate(
-                await stores.User.ReadAsync(cancellationToken).ConfigureAwait(false),
-                ConfigurationScope.User,
-                ScopedConfigurationStores.SchemaVersion);
-        }
-        catch (Exception error) when (
-            error is JsonException or InvalidDataException or ConfigurationMigrationException or
-                ConfigurationScopeException or IOException or UnauthorizedAccessException)
-        {
-            // Matches StartupPipeline.LoadUserConfigurationAsync's fallback: an unreadable user
-            // configuration degrades to every key's default instead of crashing the caller. For
-            // providers.enabled the default is "omitted" — every registered provider enabled.
-            return null;
-        }
-
-        return document.Values.TryGetValue(ConfigurationKeys.ProvidersEnabled, out JsonElement value) &&
+        // An unreadable document degrades to "omitted" — every key's default, matching how
+        // StartupPipeline.LoadUserConfigurationAsync already degrades every other key on a
+        // malformed or unreadable user configuration file. providers.enabled's default is every
+        // registered provider enabled.
+        ConfigurationDocument? document =
+            await stores.TryReadMigratedUserDocumentAsync(cancellationToken).ConfigureAwait(false);
+        return document is not null &&
+            document.Values.TryGetValue(ConfigurationKeys.ProvidersEnabled, out JsonElement value) &&
             value.ValueKind == JsonValueKind.Array
                 ? [.. value.EnumerateArray().Select(item => item.GetString()!)]
                 : null;

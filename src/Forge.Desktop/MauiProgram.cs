@@ -1,4 +1,6 @@
 using Forge.Bootstrap;
+using Forge.Providers.Claude;
+using Forge.Providers.Codex;
 using Forge.Runtime.Windows;
 using Forge.Updater.Windows;
 #if DEBUG
@@ -16,6 +18,8 @@ public static class MauiProgram
             .UseMauiApp<App>();
         builder.Services.AddForgeCore();
         builder.Services.AddForgeWindowsUpdater();
+        builder.Services.AddCodexProvider();
+        builder.Services.AddClaudeProvider();
 #if DEBUG
         builder.Logging.AddDebug();
 #endif

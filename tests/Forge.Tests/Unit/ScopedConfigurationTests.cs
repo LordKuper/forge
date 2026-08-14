@@ -18,7 +18,7 @@ public sealed class ScopedConfigurationTests
         ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User,
             null,
-            "providers.enabled",
+            ConfigurationKeys.ProvidersEnabled,
             JsonSerializer.SerializeToElement<string[]>(["codex"]),
             TestContext.Current.CancellationToken);
 
@@ -35,7 +35,7 @@ public sealed class ScopedConfigurationTests
         ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User,
             null,
-            "providers.enabled",
+            ConfigurationKeys.ProvidersEnabled,
             JsonSerializer.SerializeToElement<string[]>(["codex", "no-such-provider"]),
             TestContext.Current.CancellationToken);
 
@@ -52,8 +52,9 @@ public sealed class ScopedConfigurationTests
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "not json", TestContext.Current.CancellationToken);
         ConfigurationRegistry registry = new();
-        ScopedConfigurationStores stores = new(new ConfigurationStoreFactory(registry), environment);
-        ScopedConfigurationProviderEnablementSource source = new(new ConfigurationMigrator([]), stores);
+        ScopedConfigurationStores stores =
+            new(new ConfigurationStoreFactory(registry), new ConfigurationMigrator([]), environment);
+        ScopedConfigurationProviderEnablementSource source = new(stores);
 
         IReadOnlyList<string>? enabledIds =
             await source.GetEnabledIdsAsync(TestContext.Current.CancellationToken);
