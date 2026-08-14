@@ -8,6 +8,13 @@ public enum ConfigurationScope
     Project,
 }
 
+/// <summary>Configuration key names referenced by more than one class, kept in one place so a
+/// rename cannot silently desync a reader from a writer.</summary>
+public static class ConfigurationKeys
+{
+    public const string ProvidersEnabled = "providers.enabled";
+}
+
 public enum ConfigurationProvenance
 {
     Session,

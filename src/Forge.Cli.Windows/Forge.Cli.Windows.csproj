@@ -8,6 +8,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Forge.Cli\Forge.Cli.csproj" />
+    <ProjectReference Include="..\Forge.Providers.Claude.Windows\Forge.Providers.Claude.Windows.csproj" />
+    <ProjectReference Include="..\Forge.Providers.Codex.Windows\Forge.Providers.Codex.Windows.csproj" />
     <ProjectReference Include="..\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>

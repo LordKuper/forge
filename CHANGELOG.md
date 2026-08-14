@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.19.0
+
+### Added
+
+- The `providers.enabled` user setting now actually controls which providers
+  are probed, installed, or updated — previously it was accepted and stored
+  but had no effect. Omitting it still enables every built-in provider;
+  setting it to an empty list disables all of them (blocking model work
+  until at least one is enabled); listing specific providers enables only
+  those, in the given order, and disabled providers are never touched.
+- Setting `providers.enabled` to an id Forge does not recognize is now
+  rejected with the same diagnostic as other invalid configuration, instead
+  of being silently accepted.
+
 ## v0.18.0
 
 ### Changed

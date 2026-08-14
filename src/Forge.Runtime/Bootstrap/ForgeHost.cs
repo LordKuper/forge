@@ -41,7 +41,10 @@ public static class ForgeHost
         services.TryAddSingleton<IPlatformPreflight, UnsupportedPlatformPreflight>();
         // No ILlmProvider is registered here (ADR 0008: the core owns no concrete provider
         // registration) — a Windows composition root adds them via AddCodexProvider()/
-        // AddClaudeProvider() (P8.64-71). IEnumerable<ILlmProvider> resolves empty until then.
+        // AddClaudeProvider(). IEnumerable<ILlmProvider> resolves empty until then, and
+        // ProviderCatalog's uniqueness check simply has nothing to reject.
+        services.TryAddSingleton<ProviderCatalog>();
+        services.TryAddSingleton<IProviderEnablementSource, ScopedConfigurationProviderEnablementSource>();
         services.TryAddSingleton<IProviderToolchainManager, ProviderToolchainManager>();
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();

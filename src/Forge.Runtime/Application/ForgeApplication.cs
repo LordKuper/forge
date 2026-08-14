@@ -40,6 +40,7 @@ public sealed class ForgeApplication(
     IConfigurationRegistry registry,
     ScopedConfigurationService configuration,
     IProviderToolchainManager providerToolchain,
+    ProviderCatalog providerCatalog,
     ControlEventsReader eventsReader)
 {
     public const string InitializeProjectAction = "initialize_project";
@@ -288,6 +289,7 @@ public sealed class ForgeApplication(
         {
             if (scope == ConfigurationScope.User)
             {
+                RequireRegisteredProviders(key, value);
                 await configuration.SetUserAsync(key, value, cancellationToken).ConfigureAwait(false);
                 return ConfigurationWriteResult.Success;
             }
@@ -323,4 +325,32 @@ public sealed class ForgeApplication(
         error is JsonException or YamlException or InvalidDataException or FormatException or
             ConfigurationMigrationException or ConfigurationScopeException or IOException or
             UnauthorizedAccessException;
+
+    /// <summary>
+    /// ADR 0008: "duplicates or an identifier with no registration invalidate configuration."
+    /// Duplicate rejection is already enforced by user-config.schema.json's `uniqueItems`; an
+    /// unregistered id can only be caught here, against the actual composed provider catalog,
+    /// since the schema has no knowledge of which providers this Forge build ships.
+    /// </summary>
+    private void RequireRegisteredProviders(string key, JsonElement value)
+    {
+        if (key != ConfigurationKeys.ProvidersEnabled || value.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        foreach (JsonElement item in value.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.String)
+            {
+                continue;
+            }
+
+            string id = item.GetString() ?? string.Empty;
+            if (!providerCatalog.Contains(new ProviderId(id)))
+            {
+                throw new InvalidDataException($"Unknown provider id '{id}'.");
+            }
+        }
+    }
 }

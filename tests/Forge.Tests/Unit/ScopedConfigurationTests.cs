@@ -1,12 +1,67 @@
 using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
 
 public sealed class ScopedConfigurationTests
 {
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task EnablingARegisteredProviderIdSucceeds()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")]);
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ProvidersEnabled,
+            JsonSerializer.SerializeToElement<string[]>(["codex"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task EnablingAnUnregisteredProviderIdIsRejected()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")]);
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ProvidersEnabled,
+            JsonSerializer.SerializeToElement<string[]>(["codex", "no-such-provider"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AMalformedUserConfigurationFileDegradesToOmittedInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "not json", TestContext.Current.CancellationToken);
+        ConfigurationRegistry registry = new();
+        ScopedConfigurationStores stores =
+            new(new ConfigurationStoreFactory(registry), new ConfigurationMigrator([]), environment);
+        ScopedConfigurationProviderEnablementSource source = new(stores);
+
+        IReadOnlyList<string>? enabledIds =
+            await source.GetEnabledIdsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(enabledIds);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task UserValuesExposeProvenance()

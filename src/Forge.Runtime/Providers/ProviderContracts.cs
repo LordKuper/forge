@@ -112,7 +112,9 @@ public interface ILlmProvider
     Task<ProviderRunResult> RunAsync(string prompt, string workingDirectory, CancellationToken cancellationToken);
 }
 
-/// <summary>Aggregates every registered provider into one toolchain-wide status.</summary>
+/// <summary>Aggregates every enabled provider into one toolchain-wide status (ADR 0008: a
+/// disabled-but-registered provider is excluded before any probe, never merely left un-updated —
+/// see <see cref="ProviderToolchainManager"/>).</summary>
 public interface IProviderToolchainManager
 {
     /// <summary>Cheap, read-only, offline. Safe to call on every startup pass.</summary>
@@ -120,4 +122,16 @@ public interface IProviderToolchainManager
 
     /// <summary>Installs or updates any provider that is not ready, then rechecks all of them.</summary>
     Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// The user's ordered `providers.enabled` selection (ADR 0008), read fresh on every call so a
+/// runtime configuration change takes effect on the next probe. Narrow by design:
+/// <see cref="ProviderToolchainManager"/> depends on exactly this one value, not the whole
+/// configuration surface. <see langword="null"/> means the key was omitted (selects every
+/// registered provider); a non-null, possibly-empty list is the user's exact enabled set.
+/// </summary>
+public interface IProviderEnablementSource
+{
+    Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken);
 }

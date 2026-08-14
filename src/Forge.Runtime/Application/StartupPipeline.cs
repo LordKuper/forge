@@ -68,25 +68,13 @@ public sealed class StartupPipeline(
     private async Task<(ConfigurationDocument Document, StartupCheck Check)> LoadUserConfigurationAsync(
         CancellationToken cancellationToken)
     {
-        try
-        {
-            ConfigurationDocument document =
-                await stores.User.ReadAsync(cancellationToken).ConfigureAwait(false);
-            return (
-                migrator.Migrate(document, ConfigurationScope.User, ScopedConfigurationStores.SchemaVersion),
-                StartupCheck.Passed(StartupCheckId.UserConfiguration));
-        }
-        catch (Exception error) when (
-            error is JsonException or InvalidDataException or ConfigurationMigrationException or
-                ConfigurationScopeException or IOException or UnauthorizedAccessException)
-        {
-            return (
+        ConfigurationDocument? document =
+            await stores.TryReadMigratedUserDocumentAsync(cancellationToken).ConfigureAwait(false);
+        return document is not null
+            ? (document, StartupCheck.Passed(StartupCheckId.UserConfiguration))
+            : (
                 ConfigurationDocument.Empty,
-                new(
-                    StartupCheckId.UserConfiguration,
-                    StartupCheckState.Failed,
-                    DiagnosticCodes.ConfigurationInvalid));
-        }
+                new(StartupCheckId.UserConfiguration, StartupCheckState.Failed, DiagnosticCodes.ConfigurationInvalid));
     }
 
     private LanguageSelection ResolveLanguage(ConfigurationDocument user, List<StartupCheck> checks)

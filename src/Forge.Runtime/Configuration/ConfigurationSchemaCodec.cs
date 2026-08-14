@@ -43,7 +43,7 @@ internal static class ConfigurationSchemaCodec
             // Omitted (null) means "no explicit selection" — ADR 0008's "omission selects all
             // registered built-in providers"; a present-but-empty list is the deliberate opposite
             // (blocks model work), so the distinction must survive this round trip.
-            Providers = GetOptionalStringArray(document, "providers.enabled") is { } enabled
+            Providers = GetOptionalStringArray(document, ConfigurationKeys.ProvidersEnabled) is { } enabled
                 ? new() { Enabled = enabled }
                 : null,
         };
@@ -61,7 +61,7 @@ internal static class ConfigurationSchemaCodec
         Add(values, "language.interaction", persisted.Language.Interaction);
         Add(values, "language.llm", persisted.Language.Llm);
         Add(values, "interaction.confirm_destructive", persisted.Interaction.ConfirmDestructive);
-        Add(values, "providers.enabled", persisted.Providers?.Enabled);
+        Add(values, ConfigurationKeys.ProvidersEnabled, persisted.Providers?.Enabled);
         return new(1, values);
     }
 

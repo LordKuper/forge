@@ -53,7 +53,7 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             null,
             false);
         yield return Create(
-            "providers.enabled",
+            ConfigurationKeys.ProvidersEnabled,
             ConfigurationScope.User,
             "null",
             null,

@@ -13,7 +13,7 @@ public sealed class ProviderToolchainTests
     {
         FakeLlmProvider ready = new(new ProviderId("ready-provider"), ProviderState.Ready, "1.0.0");
         FakeLlmProvider missing = new(new ProviderId("missing-provider"), ProviderState.Missing, null);
-        ProviderToolchainManager manager = new([ready, missing]);
+        ProviderToolchainManager manager = CreateManager([ready, missing]);
 
         ProviderToolchainStatus status = await manager.EnsureReadyAsync(TestContext.Current.CancellationToken);
 
@@ -27,12 +27,69 @@ public sealed class ProviderToolchainTests
     public async Task CheckNeverInstallsOrUpdates()
     {
         FakeLlmProvider missing = new(new ProviderId("missing-provider"), ProviderState.Missing, null);
-        ProviderToolchainManager manager = new([missing]);
+        ProviderToolchainManager manager = CreateManager([missing]);
 
         ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(0, missing.InstallCalls);
         Assert.False(status.Ready);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task OmittedEnablementSelectsEveryRegisteredProviderInCompositionOrder()
+    {
+        FakeLlmProvider first = new(new ProviderId("first"), ProviderState.Ready, "1.0.0");
+        FakeLlmProvider second = new(new ProviderId("second"), ProviderState.Ready, "1.0.0");
+        ProviderToolchainManager manager = CreateManager([first, second], enabledIds: null);
+
+        ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["first", "second"], status.Providers.Select(provider => provider.Id.Value));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitEmptyEnablementBlocksEveryProviderWithoutProbingAny()
+    {
+        FakeLlmProvider provider = new(new ProviderId("codex"), ProviderState.Ready, "1.0.0");
+        ProviderToolchainManager manager = CreateManager([provider], enabledIds: []);
+
+        ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(status.Providers);
+        Assert.False(status.Ready);
+        Assert.Equal(0, provider.DiscoverCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitEnablementOrdersCandidatesByTheUsersFallbackPriorityNotCompositionOrder()
+    {
+        FakeLlmProvider codex = new(new ProviderId("codex"), ProviderState.Ready, "1.0.0");
+        FakeLlmProvider claude = new(new ProviderId("claude_code"), ProviderState.Ready, "1.0.0");
+        ProviderToolchainManager manager = CreateManager([codex, claude], enabledIds: ["claude_code", "codex"]);
+
+        ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["claude_code", "codex"], status.Providers.Select(provider => provider.Id.Value));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADisabledProviderIsNeverDiscoveredOrInstalled()
+    {
+        FakeLlmProvider enabled = new(new ProviderId("codex"), ProviderState.Missing, null);
+        FakeLlmProvider disabled = new(new ProviderId("claude_code"), ProviderState.Missing, null);
+        ProviderToolchainManager manager = CreateManager([enabled, disabled], enabledIds: ["codex"]);
+
+        ProviderToolchainStatus status =
+            await manager.EnsureReadyAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["codex"], status.Providers.Select(provider => provider.Id.Value));
+        Assert.Equal(0, disabled.DiscoverCalls);
+        Assert.Equal(0, disabled.InstallCalls);
+        Assert.Equal(1, enabled.DiscoverCalls);
     }
 
     [Theory]
@@ -79,28 +136,8 @@ public sealed class ProviderToolchainTests
         Assert.Equal(ExitCodes.Provider, ExitCodes.For(DiagnosticCodes.ProviderUpdateFailed));
     }
 
-    private sealed class FakeLlmProvider(ProviderId id, ProviderState state, string? version) : ILlmProvider
-    {
-        public int InstallCalls { get; private set; }
-
-        public ProviderId Id => id;
-
-        public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(new ProviderStatus(id, state, version, ProviderDiagnosticCodes.None));
-
-        public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken)
-        {
-            InstallCalls++;
-            return Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
-        }
-
-        public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
-            Task.FromResult<string?>(null);
-
-        public Task<ProviderRunResult> RunAsync(
-            string prompt,
-            string workingDirectory,
-            CancellationToken cancellationToken) =>
-            throw new NotSupportedException("This fake only exercises discovery/install orchestration.");
-    }
+    private static ProviderToolchainManager CreateManager(
+        IEnumerable<ILlmProvider> providers,
+        IReadOnlyList<string>? enabledIds = null) =>
+        new(new ProviderCatalog(providers), new FakeProviderEnablementSource(enabledIds));
 }
