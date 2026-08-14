@@ -134,8 +134,8 @@ New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
     Test-Case "Windows bundle disables unavailable ReadyToRun" {
         $publishLines = @(Get-Content $bundlePublisher | Where-Object { $_ -match '^\s*dotnet publish ' })
-        if ($publishLines.Count -ne 2) {
-            throw "Expected two Windows bundle publish commands."
+        if ($publishLines.Count -ne 3) {
+            throw "Expected three Windows bundle publish commands."
         }
         if (@($publishLines | Where-Object { $_ -notmatch '--property:PublishReadyToRun=false' }).Count -ne 0) {
             throw "Every Windows bundle publish command must disable ReadyToRun."
