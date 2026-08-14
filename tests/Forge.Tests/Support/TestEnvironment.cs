@@ -14,7 +14,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
     public TestEnvironment(
         IPlatformPreflight? platform = null,
         IProviderToolchainManager? providers = null,
-        IRepository? repository = null)
+        IRepository? repository = null,
+        IEnumerable<ILlmProvider>? llmProviders = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -24,6 +25,13 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         services.AddForgeCore();
         services.AddSingleton<IEnvironmentPaths>(this);
         services.AddSingleton(preflight);
+        // Registered so ProviderCatalog (resolved by ForgeApplication for write-time validation)
+        // reflects a known set even though `providers` below overrides the actual toolchain manager.
+        foreach (ILlmProvider llmProvider in llmProviders ?? [])
+        {
+            services.AddSingleton(llmProvider);
+        }
+
         // Tests never touch the network or the real provider installation; a real toolchain
         // manager stays offline-safe by construction (it only discovers), but callers that need
         // a `ready` or `failed` toolchain override it explicitly.
@@ -165,4 +173,44 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
 
     public Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken) =>
         Task.FromResult(status);
+}
+
+/// <summary>A minimal, in-memory provider: reports a fixed state and counts install calls,
+/// without ever touching the network or spawning a process.</summary>
+internal sealed class FakeLlmProvider(ProviderId id, ProviderState state, string? version) : ILlmProvider
+{
+    public int InstallCalls { get; private set; }
+
+    public int DiscoverCalls { get; private set; }
+
+    public ProviderId Id => id;
+
+    public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken)
+    {
+        DiscoverCalls++;
+        return Task.FromResult(new ProviderStatus(id, state, version, ProviderDiagnosticCodes.None));
+    }
+
+    public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken)
+    {
+        InstallCalls++;
+        return Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
+    }
+
+    public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(null);
+
+    public Task<ProviderRunResult> RunAsync(
+        string prompt,
+        string workingDirectory,
+        CancellationToken cancellationToken) =>
+        throw new NotSupportedException("This fake only exercises discovery/install orchestration.");
+}
+
+/// <summary>A fixed, ordered `providers.enabled` selection — bypasses the real configuration
+/// store so <see cref="ProviderToolchainManager"/> tests can control enablement directly.</summary>
+internal sealed class FakeProviderEnablementSource(IReadOnlyList<string>? enabledIds) : IProviderEnablementSource
+{
+    public Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(enabledIds);
 }

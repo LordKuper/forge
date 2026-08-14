@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Configuration;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -123,4 +124,24 @@ public sealed class ScopedConfigurationService(
         {
             [key] = value,
         };
+}
+
+/// <summary>Adapts <see cref="ScopedConfigurationService"/> to <see cref="IProviderEnablementSource"/>
+/// so the provider toolchain depends on exactly the one configuration value it needs, not the
+/// whole configuration surface.</summary>
+public sealed class ScopedConfigurationProviderEnablementSource(ScopedConfigurationService configuration)
+    : IProviderEnablementSource
+{
+    private const string ProvidersEnabledKey = "providers.enabled";
+
+    public async Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<EffectiveConfigurationValue> values = await configuration
+            .GetUserAsync(null, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement value = values.Single(item => item.Key == ProvidersEnabledKey).Value;
+        return value.ValueKind == JsonValueKind.Array
+            ? [.. value.EnumerateArray().Select(item => item.GetString()!)]
+            : null;
+    }
 }

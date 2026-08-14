@@ -121,3 +121,15 @@ public interface IProviderToolchainManager
     /// <summary>Installs or updates any provider that is not ready, then rechecks all of them.</summary>
     Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken);
 }
+
+/// <summary>
+/// The user's ordered `providers.enabled` selection (ADR 0008), read fresh on every call so a
+/// runtime configuration change takes effect on the next probe. Narrow by design:
+/// <see cref="ProviderToolchainManager"/> depends on exactly this one value, not the whole
+/// configuration surface. <see langword="null"/> means the key was omitted (selects every
+/// registered provider); a non-null, possibly-empty list is the user's exact enabled set.
+/// </summary>
+public interface IProviderEnablementSource
+{
+    Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken);
+}
