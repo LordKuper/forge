@@ -664,7 +664,7 @@
       }
     },
     {
-      "name": "startup check accepts a ready status with a mixed check list",
+      "name": "startup check accepts a blocked status with a mixed check list",
       "schema": "startup-check",
       "valid": true,
       "instance": {
