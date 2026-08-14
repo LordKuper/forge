@@ -43,8 +43,6 @@ public sealed class ForgeApplication(
     ProviderCatalog providerCatalog,
     ControlEventsReader eventsReader)
 {
-    private const string ProvidersEnabledKey = "providers.enabled";
-
     public const string InitializeProjectAction = "initialize_project";
 
     /// <summary>The key any surface must present to initialize the observed project state.</summary>
@@ -336,7 +334,7 @@ public sealed class ForgeApplication(
     /// </summary>
     private void RequireRegisteredProviders(string key, JsonElement value)
     {
-        if (key != ProvidersEnabledKey || value.ValueKind != JsonValueKind.Array)
+        if (key != ConfigurationKeys.ProvidersEnabled || value.ValueKind != JsonValueKind.Array)
         {
             return;
         }

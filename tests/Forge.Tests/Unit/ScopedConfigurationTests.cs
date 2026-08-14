@@ -42,6 +42,25 @@ public sealed class ScopedConfigurationTests
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AMalformedUserConfigurationFileDegradesToOmittedInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "not json", TestContext.Current.CancellationToken);
+        ConfigurationRegistry registry = new();
+        ScopedConfigurationStores stores = new(new ConfigurationStoreFactory(registry), environment);
+        ScopedConfigurationProviderEnablementSource source = new(new ConfigurationMigrator([]), stores);
+
+        IReadOnlyList<string>? enabledIds =
+            await source.GetEnabledIdsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(enabledIds);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task UserValuesExposeProvenance()

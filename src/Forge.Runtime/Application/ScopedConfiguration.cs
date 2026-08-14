@@ -126,22 +126,39 @@ public sealed class ScopedConfigurationService(
         };
 }
 
-/// <summary>Adapts <see cref="ScopedConfigurationService"/> to <see cref="IProviderEnablementSource"/>
-/// so the provider toolchain depends on exactly the one configuration value it needs, not the
-/// whole configuration surface.</summary>
-public sealed class ScopedConfigurationProviderEnablementSource(ScopedConfigurationService configuration)
-    : IProviderEnablementSource
+/// <summary>
+/// Adapts the configuration store to <see cref="IProviderEnablementSource"/> so the provider
+/// toolchain depends on exactly the one value it needs — reading the raw document directly
+/// rather than through <see cref="ScopedConfigurationService.GetUserAsync"/>, which resolves
+/// every user key (including the <c>language.*</c> inheritance chain) on every call.
+/// </summary>
+public sealed class ScopedConfigurationProviderEnablementSource(
+    ConfigurationMigrator migrator,
+    ScopedConfigurationStores stores) : IProviderEnablementSource
 {
-    private const string ProvidersEnabledKey = "providers.enabled";
-
     public async Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken)
     {
-        IReadOnlyList<EffectiveConfigurationValue> values = await configuration
-            .GetUserAsync(null, cancellationToken)
-            .ConfigureAwait(false);
-        JsonElement value = values.Single(item => item.Key == ProvidersEnabledKey).Value;
-        return value.ValueKind == JsonValueKind.Array
-            ? [.. value.EnumerateArray().Select(item => item.GetString()!)]
-            : null;
+        ConfigurationDocument document;
+        try
+        {
+            document = migrator.Migrate(
+                await stores.User.ReadAsync(cancellationToken).ConfigureAwait(false),
+                ConfigurationScope.User,
+                ScopedConfigurationStores.SchemaVersion);
+        }
+        catch (Exception error) when (
+            error is JsonException or InvalidDataException or ConfigurationMigrationException or
+                ConfigurationScopeException or IOException or UnauthorizedAccessException)
+        {
+            // Matches StartupPipeline.LoadUserConfigurationAsync's fallback: an unreadable user
+            // configuration degrades to every key's default instead of crashing the caller. For
+            // providers.enabled the default is "omitted" — every registered provider enabled.
+            return null;
+        }
+
+        return document.Values.TryGetValue(ConfigurationKeys.ProvidersEnabled, out JsonElement value) &&
+            value.ValueKind == JsonValueKind.Array
+                ? [.. value.EnumerateArray().Select(item => item.GetString()!)]
+                : null;
     }
 }
