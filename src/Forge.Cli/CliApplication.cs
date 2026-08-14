@@ -314,7 +314,7 @@ public static class CliApplication
             {
                 output.WriteLine(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"  {SurfaceFormatting.Machine(provider.Kind)} {SurfaceFormatting.Machine(provider.State)} {provider.Version ?? "-"}"));
+                    $"  {provider.Id.Value} {SurfaceFormatting.Machine(provider.State)} {provider.Version ?? "-"}"));
             }
 
             return Report(diagnostics, diagnosticCode);

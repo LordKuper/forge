@@ -10,16 +10,17 @@ namespace Forge.AcceptanceTests;
 
 public sealed class ForgeHostProcessTests
 {
+    // ADR 0005: the process/lease/protocol contract is platform-neutral, proven here against
+    // Forge.Host.TestHost — the same Forge.Host.Runtime with no real (Windows-only) ILlmProvider
+    // wired in. A real provider's end-to-end behavior is exercised separately, Windows-only,
+    // against Forge.Host.Windows.
+    private static readonly string ExecutableName =
+        "Forge.Host.TestHost" + (OperatingSystem.IsWindows() ? ".exe" : string.Empty);
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task ClientReadsTheProjectSnapshotAndControlEventsFromARealHostProcess()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // Same Windows-only process-spawn scope as ClientDiscoversStartsAndPingsARealHostProcess.
-            return;
-        }
-
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
         InitializeProjectResult initialized = await environment
@@ -33,7 +34,7 @@ public sealed class ForgeHostProcessTests
         string instanceId = InstanceIdentity.CreateEphemeral();
         Guid projectId = await ProjectIdentity
             .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
-        string executablePath = Path.Combine(AppContext.BaseDirectory, "Forge.Host.exe");
+        string executablePath = Path.Combine(AppContext.BaseDirectory, ExecutableName);
         Assert.True(File.Exists(executablePath), $"'{executablePath}' must ship next to the test binaries.");
 
         int hostProcessId = -1;
@@ -91,12 +92,6 @@ public sealed class ForgeHostProcessTests
     [Trait("Category", "Acceptance")]
     public async Task ASuccessorHostRecoversTheProjectLeaseAfterTheFirstHostCrashes()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // Same Windows-only process-spawn scope as ClientDiscoversStartsAndPingsARealHostProcess.
-            return;
-        }
-
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
         InitializeProjectResult initialized = await environment
@@ -104,7 +99,7 @@ public sealed class ForgeHostProcessTests
         Assert.True(initialized.Succeeded);
         Guid projectId = await ProjectIdentity
             .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
-        string executablePath = Path.Combine(AppContext.BaseDirectory, "Forge.Host.exe");
+        string executablePath = Path.Combine(AppContext.BaseDirectory, ExecutableName);
         Assert.True(File.Exists(executablePath), $"'{executablePath}' must ship next to the test binaries.");
 
         // Two different instance ids for the same project — proving both that the project lease is
@@ -161,14 +156,6 @@ public sealed class ForgeHostProcessTests
     [Trait("Category", "Acceptance")]
     public async Task ClientDiscoversStartsAndPingsARealHostProcess()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            // The published Windows bundle ships Forge.Host.exe next to forge.exe; the client-launcher contract
-            // this proves end to end is Windows-only for the MVP, matching every other process-spawn acceptance
-            // test in this suite.
-            return;
-        }
-
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
         InitializeProjectResult initialized = await environment
@@ -177,7 +164,7 @@ public sealed class ForgeHostProcessTests
         string instanceId = InstanceIdentity.CreateEphemeral();
         Guid projectId = await ProjectIdentity
             .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
-        string executablePath = Path.Combine(AppContext.BaseDirectory, "Forge.Host.exe");
+        string executablePath = Path.Combine(AppContext.BaseDirectory, ExecutableName);
         Assert.True(File.Exists(executablePath), $"'{executablePath}' must ship next to the test binaries.");
 
         int hostProcessId = -1;

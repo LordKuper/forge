@@ -2,19 +2,20 @@
 param()
 
 # Proves the ADR 0007 neutral projects build and test on this OS via the portable net10.0 TFM. Windows-only
-# projects (Forge.Cli.Windows, Forge.Desktop, Forge.Runtime.Windows, Forge.Updater.Windows) are intentionally
-# excluded; they build only on Windows.
+# projects (Forge.Cli.Windows, Forge.Desktop, Forge.Host.Windows, Forge.Providers.Codex.Windows,
+# Forge.Providers.Claude.Windows, Forge.Runtime.Windows, Forge.Updater.Windows) are intentionally excluded; they
+# build only on Windows.
 
 $ErrorActionPreference = 'Stop'
 
-# Forge.Cli, Forge.Desktop.Presentation, and Forge.Host together transitively reference every other neutral
-# project (Forge.Runtime, Forge.Updater, Forge.Host.Client), so building these standalone is enough to prove the
-# whole neutral graph restores and builds independently of the test project; Forge.Tests below then builds (and
-# tests) that same graph again regardless.
+# Forge.Cli, Forge.Desktop.Presentation, and Forge.Host.TestHost together transitively reference every other
+# neutral project (Forge.Runtime, Forge.Updater, Forge.Host.Client, Forge.Host.Runtime), so building these
+# standalone is enough to prove the whole neutral graph restores and builds independently of the test project;
+# Forge.Tests below then builds (and tests) that same graph again regardless.
 $leafProjects = @(
     'src/Forge.Cli/Forge.Cli.csproj',
     'src/Forge.Desktop.Presentation/Forge.Desktop.Presentation.csproj',
-    'src/Forge.Host/Forge.Host.csproj'
+    'src/Forge.Host.TestHost/Forge.Host.TestHost.csproj'
 )
 
 foreach ($project in $leafProjects) {

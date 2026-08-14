@@ -46,23 +46,16 @@ public sealed record ProviderRunResult(
         new(false, [], failure, SecretRedactor.Redact(detail));
 }
 
-/// <summary>Runs an installed, Forge-verified provider CLI non-interactively.</summary>
-public interface IProviderAdapter
-{
-    ProviderKind Kind { get; }
-
-    Task<ProviderRunResult> RunAsync(string prompt, string workingDirectory, CancellationToken cancellationToken);
-}
-
 /// <summary>
-/// Shared execution and JSONL parsing. Every argument reaches the resolved, Forge-owned
-/// executable directly through `ArgumentList` — never through a shell — so prompt text can never
-/// be reinterpreted as a shell operator.
+/// Shared execution and JSONL parsing every <see cref="ILlmProvider"/> adapter reuses — generic
+/// execution policy the core owns per ADR 0008, independent of which vendor CLI is being run.
+/// Every argument reaches the resolved, Forge-owned executable directly through `ArgumentList` —
+/// never through a shell — so prompt text can never be reinterpreted as a shell operator.
 /// </summary>
-internal static class ProviderExecution
+public static class ProviderExecution
 {
     public static async Task<ProviderRunResult> RunAsync(
-        IProviderStrategy strategy,
+        string? executablePath,
         IProcessRunner processRunner,
         IReadOnlyList<string> arguments,
         string workingDirectory,
@@ -70,14 +63,14 @@ internal static class ProviderExecution
         Func<JsonElement, string?> extractText,
         CancellationToken cancellationToken)
     {
-        string? executable = await strategy.ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
-        if (executable is null)
+        ArgumentNullException.ThrowIfNull(processRunner);
+        if (executablePath is null)
         {
             return ProviderRunResult.Failed(ProviderFailureKind.NotReady, "The provider is not ready.");
         }
 
         ProcessResult result = await processRunner
-            .RunAsync(new(executable, arguments, workingDirectory), cancellationToken)
+            .RunAsync(new(executablePath, arguments, workingDirectory), cancellationToken)
             .ConfigureAwait(false);
         if (result.ExitCode != 0)
         {
@@ -157,114 +150,4 @@ internal static class ProviderExecution
 
     private static bool ContainsAny(string haystack, params string[] needles) =>
         needles.Any(needle => haystack.Contains(needle, StringComparison.Ordinal));
-}
-
-/// <summary>
-/// Event shape per `developers.openai.com/codex` (`type`: `thread.started`, `turn.started`,
-/// `turn.completed`, `turn.failed`, `item.*`). Item subtypes are documented only in prose, so
-/// text extraction stays conservative rather than guessing field names.
-/// </summary>
-public sealed class CodexProviderAdapter(CodexProviderStrategy strategy, IProcessRunner processRunner) : IProviderAdapter
-{
-    public ProviderKind Kind => ProviderKind.Codex;
-
-    public Task<ProviderRunResult> RunAsync(
-        string prompt,
-        string workingDirectory,
-        CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(prompt);
-        // `--` marks the end of options so a prompt starting with `-` (or `--`) can never be
-        // parsed as a flag by the vendor CLI.
-        return ProviderExecution.RunAsync(
-            strategy,
-            processRunner,
-            ["exec", "--json", "--", prompt],
-            workingDirectory,
-            Classify,
-            _ => null,
-            cancellationToken);
-    }
-
-    private static ProviderEventKind Classify(JsonElement root)
-    {
-        string type = TypeOf(root);
-        if (type.StartsWith("turn.", StringComparison.Ordinal))
-        {
-            return ProviderEventKind.Result;
-        }
-
-        return type.StartsWith("item.", StringComparison.Ordinal)
-            ? ProviderEventKind.ToolUse
-            : ProviderEventKind.Unknown;
-    }
-
-    private static string TypeOf(JsonElement root) =>
-        root.TryGetProperty("type", out JsonElement type) && type.ValueKind == JsonValueKind.String
-            ? type.GetString() ?? string.Empty
-            : string.Empty;
-}
-
-/// <summary>
-/// Event shape per Claude Code's `--output-format stream-json` (`claude -p ... --verbose`):
-/// top-level `type` is `system`, `assistant`, `user`, or `result` — there is no top-level
-/// `tool_use` type. `assistant` events wrap an Anthropic Messages API message object, whose
-/// `content` array can mix text blocks with `tool_use` content blocks; text is read from the
-/// `text`-typed blocks in `message.content[]`.
-/// </summary>
-public sealed class ClaudeCodeProviderAdapter(ClaudeCodeProviderStrategy strategy, IProcessRunner processRunner)
-    : IProviderAdapter
-{
-    public ProviderKind Kind => ProviderKind.ClaudeCode;
-
-    public Task<ProviderRunResult> RunAsync(
-        string prompt,
-        string workingDirectory,
-        CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(prompt);
-        // `--verbose` is required by `claude -p` whenever `--output-format stream-json` is used.
-        // `--` marks the end of options so a prompt starting with `-` can never be parsed as a
-        // flag (for example a prompt beginning with `--dangerously-skip-permissions`).
-        return ProviderExecution.RunAsync(
-            strategy,
-            processRunner,
-            ["-p", "--output-format", "stream-json", "--verbose", "--", prompt],
-            workingDirectory,
-            Classify,
-            ExtractText,
-            cancellationToken);
-    }
-
-    private static ProviderEventKind Classify(JsonElement root) => TypeOf(root) switch
-    {
-        "assistant" => ProviderEventKind.Message,
-        "result" => ProviderEventKind.Result,
-        _ => ProviderEventKind.Unknown,
-    };
-
-    private static string? ExtractText(JsonElement root)
-    {
-        if (!root.TryGetProperty("message", out JsonElement message) ||
-            !message.TryGetProperty("content", out JsonElement content) ||
-            content.ValueKind != JsonValueKind.Array)
-        {
-            return null;
-        }
-
-        IEnumerable<string> blocks = content
-            .EnumerateArray()
-            .Where(block => block.TryGetProperty("type", out JsonElement blockType) &&
-                blockType.ValueKind == JsonValueKind.String &&
-                blockType.GetString() == "text" &&
-                block.TryGetProperty("text", out JsonElement _))
-            .Select(block => block.GetProperty("text").GetString() ?? string.Empty);
-        string joined = string.Join(string.Empty, blocks);
-        return joined.Length > 0 ? joined : null;
-    }
-
-    private static string TypeOf(JsonElement root) =>
-        root.TryGetProperty("type", out JsonElement type) && type.ValueKind == JsonValueKind.String
-            ? type.GetString() ?? string.Empty
-            : string.Empty;
 }

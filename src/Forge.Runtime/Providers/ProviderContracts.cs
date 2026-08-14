@@ -2,11 +2,10 @@ using Forge.Application;
 
 namespace Forge.Providers;
 
-public enum ProviderKind
-{
-    Codex,
-    ClaudeCode,
-}
+/// <summary>A provider-neutral identifier (ADR 0008: "the core contains no provider enum, [or]
+/// concrete provider identifier"). Each adapter owns its own id value (e.g. "codex",
+/// "claude_code"); the core never hardcodes one.</summary>
+public sealed record ProviderId(string Value);
 
 /// <summary>
 /// Declares the same states as the `provider_toolchain` state machine in
@@ -43,10 +42,10 @@ public static class ProviderDiagnosticCodes
     public const string AuthenticationCheckFailed = "provider_authentication_check_failed";
 }
 
-public sealed record ProviderStatus(ProviderKind Kind, ProviderState State, string? Version, string DiagnosticCode)
+public sealed record ProviderStatus(ProviderId Id, ProviderState State, string? Version, string DiagnosticCode)
 {
-    public static ProviderStatus Ready(ProviderKind kind, string version) =>
-        new(kind, ProviderState.Ready, version, ProviderDiagnosticCodes.None);
+    public static ProviderStatus Ready(ProviderId id, string version) =>
+        new(id, ProviderState.Ready, version, ProviderDiagnosticCodes.None);
 }
 
 public sealed record ProviderToolchainStatus(IReadOnlyList<ProviderStatus> Providers)
@@ -76,12 +75,14 @@ public sealed record ProviderToolchainStatus(IReadOnlyList<ProviderStatus> Provi
 }
 
 /// <summary>
-/// One official provider CLI's toolchain lifecycle. Implementations never read project
-/// configuration: provider location, version, and executable path are user/Forge-owned only.
+/// One complete provider integration (ADR 0008): local discovery, install/update, and bounded
+/// execution. Implementations never read project configuration — provider location, version, and
+/// executable path are user/Forge-owned only — and never leak vendor identity beyond
+/// <see cref="Id"/>.
 /// </summary>
-public interface IProviderStrategy
+public interface ILlmProvider
 {
-    ProviderKind Kind { get; }
+    ProviderId Id { get; }
 
     /// <summary>Reads the fixed, vendor-owned install path and runs `--version`. Never touches the network.</summary>
     Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken);
@@ -91,9 +92,12 @@ public interface IProviderStrategy
 
     /// <summary>The absolute path to the vendor-installed executable, or null when not installed.</summary>
     Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken);
+
+    /// <summary>Runs one bounded, non-interactive prompt and returns its parsed, redacted result.</summary>
+    Task<ProviderRunResult> RunAsync(string prompt, string workingDirectory, CancellationToken cancellationToken);
 }
 
-/// <summary>Aggregates every registered provider strategy behind the startup gate and `forge models`.</summary>
+/// <summary>Aggregates every registered provider into one toolchain-wide status.</summary>
 public interface IProviderToolchainManager
 {
     /// <summary>Cheap, read-only, offline. Safe to call on every startup pass.</summary>

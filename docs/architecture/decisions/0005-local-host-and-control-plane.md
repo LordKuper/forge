@@ -23,15 +23,25 @@ or another workflow state store.
 
 ### A cross-platform headless Forge Host owns mutable runtime state
 
-`Forge.Host` is a platform-neutral .NET executable and the per-user, headless
-owner of workflow execution, provider processes, worktrees, routing state, and
-every mutation of `.forge/`. Its domain, application, protocol, framing,
-connection lifecycle, projections, event cursors, and client SDK contain no
-Windows dependency. CLI/TUI and Desktop are clients. Closing, restarting,
-crashing, or updating a client does not stop an active attempt; reconnecting
-clients rebuild their views from durable state. A client may execute the minimal
-bootstrap, host-start, update recovery, and self-test paths needed before a host
-is available, but it never runs workflow business logic locally once connected.
+The Forge Host runtime and control plane are platform-neutral; a distributable
+Host executable is a thin OS composition root over that runtime (ADR 0007,
+ADR 0008). `Forge.Host.Runtime` is the per-user, headless owner of workflow
+execution, provider processes, worktrees, routing state, and every mutation of
+`.forge/`. Its domain, application, protocol, framing, connection lifecycle,
+projections, event cursors, and client SDK contain no Windows dependency and no
+concrete provider identifier. `Forge.Host.Windows` is the shipped composition
+root: it installs the Windows runtime adapter and registers the concrete
+provider adapters (`Forge.Providers.Codex.Windows`,
+`Forge.Providers.Claude.Windows`), then calls into the neutral runtime.
+`Forge.Host.TestHost` is a minimal neutral composition root with no real
+provider registered, used only so the process/lease/protocol acceptance suite
+runs on Windows, Linux, and macOS; provider end-to-end behavior stays
+Windows-only against `Forge.Host.Windows`. CLI/TUI and Desktop are clients.
+Closing, restarting, crashing, or updating a client does not stop an active
+attempt; reconnecting clients rebuild their views from durable state. A client
+may execute the minimal bootstrap, host-start, update recovery, and self-test
+paths needed before a host is available, but it never runs workflow business
+logic locally once connected.
 
 The host acquires a cross-process project lease keyed by the manifest's stable
 project id before mutation. `IProjectLease` has one platform-neutral BCL
@@ -181,8 +191,9 @@ named-mutex semantics pass the full Windows/Linux/macOS process test matrix.
 - Durable work survives client restarts and safe updates.
 - Provider deadlines, deferrals, review gates, attempt supersession, and local
   notifications reuse the same durable state and read contracts; see ADR 0006.
-- Host/protocol/lease tests run on Windows, Linux, and macOS even though the MVP
-  Desktop, installer, updater strategy, and end-to-end release remain Windows-only.
+- Host/protocol/lease tests run on Windows, Linux, and macOS against
+  `Forge.Host.TestHost`, even though the MVP Desktop, installer, updater
+  strategy, real provider adapters, and end-to-end release remain Windows-only.
 - Forge owns no OS-specific Host transport, lease, endpoint, or path adapter; the
   pinned .NET runtime owns those platform details.
 - ADR 0007 reinforces the BCL-first rule across Forge. The Stage 8 Host remains

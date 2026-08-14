@@ -145,14 +145,17 @@ internal sealed class UnavailableRepository : IRepository
 internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? status = null)
     : IProviderToolchainManager
 {
+    private static readonly ProviderId Codex = new("codex");
+    private static readonly ProviderId ClaudeCode = new("claude_code");
+
     public static ProviderToolchainStatus NotReady { get; } = new([
-        new(ProviderKind.Codex, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
-        new(ProviderKind.ClaudeCode, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+        new(Codex, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
+        new(ClaudeCode, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
     ]);
 
     public static ProviderToolchainStatus Ready { get; } = new([
-        ProviderStatus.Ready(ProviderKind.Codex, "0.146.0"),
-        ProviderStatus.Ready(ProviderKind.ClaudeCode, "2.1.221"),
+        ProviderStatus.Ready(Codex, "0.146.0"),
+        ProviderStatus.Ready(ClaudeCode, "2.1.221"),
     ]);
 
     private readonly ProviderToolchainStatus status = status ?? NotReady;
