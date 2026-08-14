@@ -6,7 +6,11 @@ namespace Forge.Configuration;
 
 internal static class ConfigurationSchemaCodec
 {
-    private const string ContractVersion = "1.0.0";
+    /// <summary>Every new write stamps the latest minor version; an older document (missing
+    /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
+    /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
+    private const string UserContractVersion = "1.1.0";
+    private const string ProjectContractVersion = "1.0.0";
     private const string WorkflowName = "implementation-critical";
     private static readonly JsonSchema UserSchema = LoadSchema("user-config");
     private static readonly JsonSchema ProjectSchema = LoadSchema("project-manifest");
@@ -36,6 +40,12 @@ internal static class ConfigurationSchemaCodec
                     document,
                     "interaction.confirm_destructive"),
             },
+            // Omitted (null) means "no explicit selection" — ADR 0008's "omission selects all
+            // registered built-in providers"; a present-but-empty list is the deliberate opposite
+            // (blocks model work), so the distinction must survive this round trip.
+            Providers = GetOptionalStringArray(document, "providers.enabled") is { } enabled
+                ? new() { Enabled = enabled }
+                : null,
         };
         Validate(JsonSerializer.SerializeToElement(persisted, JsonOptions), UserSchema, "user");
         return persisted;
@@ -51,6 +61,7 @@ internal static class ConfigurationSchemaCodec
         Add(values, "language.interaction", persisted.Language.Interaction);
         Add(values, "language.llm", persisted.Language.Llm);
         Add(values, "interaction.confirm_destructive", persisted.Interaction.ConfirmDestructive);
+        Add(values, "providers.enabled", persisted.Providers?.Enabled);
         return new(1, values);
     }
 
@@ -140,6 +151,23 @@ internal static class ConfigurationSchemaCodec
             : throw InvalidType(key, "boolean");
     }
 
+    private static List<string>? GetOptionalStringArray(ConfigurationDocument document, string key)
+    {
+        if (!document.Values.TryGetValue(key, out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Array)
+        {
+            throw InvalidType(key, "array");
+        }
+
+        return [.. value.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String
+            ? item.GetString()!
+            : throw InvalidType(key, "array of strings"))];
+    }
+
     private static InvalidDataException InvalidType(string key, string expected) =>
         new($"Configuration key '{key}' must be a {expected}.");
 
@@ -162,6 +190,17 @@ internal static class ConfigurationSchemaCodec
         if (value.HasValue)
         {
             values.Add(key, JsonSerializer.SerializeToElement(value.Value));
+        }
+    }
+
+    private static void Add(
+        Dictionary<string, JsonElement> values,
+        string key,
+        IReadOnlyList<string>? value)
+    {
+        if (value is not null)
+        {
+            values.Add(key, JsonSerializer.SerializeToElement(value));
         }
     }
 
@@ -192,11 +231,13 @@ internal static class ConfigurationSchemaCodec
 
     internal sealed class UserConfiguration
     {
-        public string SchemaVersion { get; set; } = ContractVersion;
+        public string SchemaVersion { get; set; } = UserContractVersion;
 
         public UserLanguage Language { get; set; } = new();
 
         public UserInteraction Interaction { get; set; } = new();
+
+        public UserProviders? Providers { get; set; }
     }
 
     internal sealed class UserLanguage
@@ -213,9 +254,14 @@ internal static class ConfigurationSchemaCodec
         public bool? ConfirmDestructive { get; set; }
     }
 
+    internal sealed class UserProviders
+    {
+        public List<string>? Enabled { get; set; }
+    }
+
     internal sealed class ProjectConfiguration
     {
-        public string SchemaVersion { get; set; } = ContractVersion;
+        public string SchemaVersion { get; set; } = ProjectContractVersion;
 
         public string ProjectId { get; set; } = string.Empty;
 

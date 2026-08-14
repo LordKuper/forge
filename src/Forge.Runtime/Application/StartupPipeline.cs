@@ -32,7 +32,9 @@ public sealed class StartupPipeline(
         // The release check runs on demand through the update capability; Stage 2 owns its lifecycle.
         checks.Add(new(StartupCheckId.Release, StartupCheckState.Skipped, DiagnosticCodes.UpdateCheckDeferred));
 
-        checks.Add(await CheckProvidersAsync(cancellationToken).ConfigureAwait(false));
+        (StartupCheck providersCheck, ProviderToolchainStatus providersStatus) =
+            await CheckProvidersAsync(cancellationToken).ConfigureAwait(false);
+        checks.Add(providersCheck);
 
         ProjectRootStatus project =
             await rootResolver.ResolveAsync(requestedRoot, cancellationToken).ConfigureAwait(false);
@@ -42,7 +44,8 @@ public sealed class StartupPipeline(
             project.DiagnosticCode));
         checks.Add(await CheckProjectConfigurationAsync(project, cancellationToken).ConfigureAwait(false));
 
-        return new(Aggregate(checks), checks, language, project);
+        return new(
+            Aggregate(checks), checks, language, project, StartupStatus.ContractVersion, providersStatus);
     }
 
     private static StartupState Aggregate(IReadOnlyList<StartupCheck> checks)
@@ -112,13 +115,17 @@ public sealed class StartupPipeline(
         }
     }
 
-    /// <summary>Read-only discovery only; installing/updating happens through `forge models`.</summary>
-    private async Task<StartupCheck> CheckProvidersAsync(CancellationToken cancellationToken)
+    /// <summary>Read-only discovery only; installing/updating happens through `forge models`. Returns
+    /// the raw status alongside the folded check so callers building the project snapshot's
+    /// provider-health projection never need a second probe.</summary>
+    private async Task<(StartupCheck Check, ProviderToolchainStatus Status)> CheckProvidersAsync(
+        CancellationToken cancellationToken)
     {
         ProviderToolchainStatus status = await providers.CheckAsync(cancellationToken).ConfigureAwait(false);
-        return status.Ready
+        StartupCheck check = status.Ready
             ? StartupCheck.Passed(StartupCheckId.Providers)
             : new(StartupCheckId.Providers, StartupCheckState.Blocked, status.SharedDiagnosticCode);
+        return (check, status);
     }
 
     private IEnumerable<StartupCheck> CheckPlatform()

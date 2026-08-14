@@ -1,4 +1,5 @@
 using Forge.Domain;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -103,6 +104,11 @@ public sealed record ProjectSnapshot(
     IReadOnlyList<SprintStatus> Sprints,
     IReadOnlyList<Guid> Attention,
     IReadOnlyList<SuggestedAction> SuggestedActions,
+    // ADR 0005's "startup/provider... status... attached to their owners": both are always
+    // present (never detail-gated) since StatusAdvisor already has them from the same startup
+    // pass every snapshot request runs.
+    IReadOnlyList<StartupCheck> StartupChecks,
+    IReadOnlyList<ProviderHealthEntry> Providers,
     SnapshotDetail Detail = SnapshotDetail.Summary,
     // Unlike ActiveSprintId (which the schema declares nullable), `details` has no `null` variant —
     // only absent or a full object — so this one property must be omitted rather than written as

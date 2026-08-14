@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Forge.Domain;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -15,7 +16,12 @@ namespace Forge.Application;
 /// </summary>
 public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
-    public const string ContractVersion = "1.0.0";
+    public const string ContractVersion = "1.1.0";
+
+    /// <summary>Kept separate from <see cref="ContractVersion"/>: `suggested-action.schema.json`
+    /// did not change when the snapshot's own contract gained provider/startup-check fields, so
+    /// its `schema_version` must not follow the snapshot's version.</summary>
+    private const string SuggestedActionContractVersion = "1.0.0";
     private const int MaximumResults = 5;
 
     /// <summary>Sprint work is fail-closed while the project is not initialized, so an
@@ -41,6 +47,8 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
                 [],
                 [],
                 Recommend(startup, stateVersion),
+                startup.Checks,
+                ProviderHealthProjector.Project(startup.Providers),
                 detail);
         }
 
@@ -87,6 +95,8 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
             sprints,
             attention,
             Recommend(startup, stateVersion),
+            startup.Checks,
+            ProviderHealthProjector.Project(startup.Providers),
             detail,
             details);
     }
@@ -232,7 +242,7 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
     {
         public SuggestedAction ToAction(int rank, long stateVersion) =>
             new(
-                ContractVersion,
+                SuggestedActionContractVersion,
                 ActionId,
                 rank,
                 string.Create(CultureInfo.InvariantCulture, $"next.{ActionId}.rationale"),

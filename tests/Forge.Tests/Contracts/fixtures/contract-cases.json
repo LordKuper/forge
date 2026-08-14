@@ -278,13 +278,15 @@
       "schema": "project-snapshot",
       "valid": true,
       "instance": {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "state_version": 3,
         "generated_at": "2026-07-27T12:00:00Z",
         "project": {"root": "C:/src/forge", "initialized": true},
         "startup": "ready",
         "sprints": [],
         "attention": [],
+        "startup_checks": [],
+        "providers": [],
         "suggested_actions": [{
           "schema_version": "1.0.0",
           "action_id": "create_sprint",
@@ -305,7 +307,7 @@
       "schema": "project-snapshot",
       "valid": true,
       "instance": {
-        "schema_version": "1.0.0",
+        "schema_version": "1.1.0",
         "state_version": 4,
         "generated_at": "2026-08-12T12:00:00Z",
         "project": {"root": "C:/src/forge", "initialized": true},
@@ -321,6 +323,15 @@
         }],
         "attention": [],
         "suggested_actions": [],
+        "startup_checks": [{"id": "providers", "state": "passed", "diagnostic_code": "none"}],
+        "providers": [{
+          "id": "codex",
+          "registered": true,
+          "enabled": true,
+          "state": "ready",
+          "version": "0.146.0",
+          "diagnostic_code": "none"
+        }],
         "details": {
           "sprint_id": "44444444-4444-4444-8444-444444444444",
           "nodes": [{"id": "implementation", "state": "running", "kind": "work"}],
@@ -345,6 +356,22 @@
         "sprints": [],
         "attention": [],
         "suggested_actions": [1, 2, 3, 4, 5, 6]
+      }
+    },
+    {
+      "name": "project snapshot rejects a missing providers array",
+      "schema": "project-snapshot",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.1.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [],
+        "attention": [],
+        "suggested_actions": [],
+        "startup_checks": []
       }
     },
     {
@@ -387,6 +414,49 @@
         "language": {"ui": "en"},
         "interaction": {},
         "artifacts": {"language": {"user_facing": "ru"}}
+      }
+    },
+    {
+      "name": "user config accepts an ordered provider enablement list",
+      "schema": "user-config",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.1.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "providers": {"enabled": ["claude_code", "codex"]}
+      }
+    },
+    {
+      "name": "user config accepts an explicit empty provider list",
+      "schema": "user-config",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.1.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "providers": {"enabled": []}
+      }
+    },
+    {
+      "name": "user config rejects a duplicate enabled provider",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.1.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "providers": {"enabled": ["codex", "codex"]}
+      }
+    },
+    {
+      "name": "user config rejects an unknown major schema version",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "language": {"ui": "en"},
+        "interaction": {}
       }
     },
     {
@@ -533,6 +603,259 @@
         "schema_version": "1.0.0",
         "events": [],
         "diagnostic_code": "none"
+      }
+    },
+    {
+      "name": "provider health accepts a fully determined entry",
+      "schema": "provider-health",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "providers": [{
+          "id": "codex",
+          "registered": true,
+          "enabled": true,
+          "state": "ready",
+          "version": "0.146.0",
+          "update_available": false,
+          "authentication": "ready",
+          "diagnostic_code": "none"
+        }]
+      }
+    },
+    {
+      "name": "provider health accepts an undetermined entry",
+      "schema": "provider-health",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "providers": [{
+          "id": "claude_code",
+          "registered": true,
+          "enabled": true,
+          "state": "missing",
+          "version": null,
+          "diagnostic_code": "provider_missing"
+        }]
+      }
+    },
+    {
+      "name": "provider health rejects an entry missing its diagnostic code",
+      "schema": "provider-health",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "providers": [{"id": "codex", "registered": true, "enabled": true, "state": "ready"}]
+      }
+    },
+    {
+      "name": "provider health rejects an unknown state",
+      "schema": "provider-health",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "providers": [{
+          "id": "codex",
+          "registered": true,
+          "enabled": true,
+          "state": "current",
+          "diagnostic_code": "none"
+        }]
+      }
+    },
+    {
+      "name": "startup check accepts a ready status with a mixed check list",
+      "schema": "startup-check",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state": "blocked",
+        "checks": [
+          {"id": "user_configuration", "state": "passed", "diagnostic_code": "none"},
+          {"id": "providers", "state": "blocked", "diagnostic_code": "provider_preflight_pending"}
+        ],
+        "language": {"ui": "en", "interaction": "en", "llm": "en"},
+        "project": {
+          "root": "C:/src/forge",
+          "exists": true,
+          "initialized": false,
+          "unknown": false,
+          "diagnostic_code": "project_not_initialized"
+        },
+        "allows_sprint_work": false,
+        "allows_project_mutation": true,
+        "first_failure": null
+      }
+    },
+    {
+      "name": "startup check accepts a failed status naming its first failure",
+      "schema": "startup-check",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state": "failed",
+        "checks": [
+          {"id": "user_configuration", "state": "failed", "diagnostic_code": "configuration_invalid"}
+        ],
+        "language": {"ui": "en", "interaction": "en", "llm": "en"},
+        "project": {
+          "root": "C:/src/forge",
+          "exists": true,
+          "initialized": false,
+          "unknown": false,
+          "diagnostic_code": "project_not_initialized"
+        },
+        "allows_sprint_work": false,
+        "allows_project_mutation": false,
+        "first_failure": {"id": "user_configuration", "state": "failed", "diagnostic_code": "configuration_invalid"}
+      }
+    },
+    {
+      "name": "startup check rejects an unknown check id",
+      "schema": "startup-check",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state": "ready",
+        "checks": [{"id": "network", "state": "passed", "diagnostic_code": "none"}],
+        "language": {"ui": "en", "interaction": "en", "llm": "en"},
+        "project": {
+          "root": "C:/src/forge",
+          "exists": true,
+          "initialized": true,
+          "unknown": false,
+          "diagnostic_code": "none"
+        },
+        "allows_sprint_work": true,
+        "allows_project_mutation": true,
+        "first_failure": null
+      }
+    },
+    {
+      "name": "startup check rejects a missing project block",
+      "schema": "startup-check",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "state": "ready",
+        "checks": [],
+        "language": {"ui": "en", "interaction": "en", "llm": "en"},
+        "allows_sprint_work": true,
+        "allows_project_mutation": true,
+        "first_failure": null
+      }
+    },
+    {
+      "name": "provider health rejects an unknown authentication value",
+      "schema": "provider-health",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "providers": [{
+          "id": "codex",
+          "registered": true,
+          "enabled": true,
+          "state": "ready",
+          "authentication": "unknown",
+          "diagnostic_code": "none"
+        }]
+      }
+    },
+    {
+      "name": "diagnostic bundle accepts a fully allowlisted sample",
+      "schema": "diagnostic-bundle",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "generated_at": "2026-08-14T00:00:00Z",
+        "forge_version": "0.16.0",
+        "protocol_version": "1.0.0",
+        "providers": [{"id": "codex", "version": "0.146.0"}, {"id": "claude_code", "version": null}],
+        "startup_checks": [{"id": "providers", "state": "passed", "diagnostic_code": "none"}],
+        "project": {"initialized": true, "sprint_count": 2},
+        "event_log_integrity": {"valid": true, "diagnostic_code": "none"},
+        "worktree_registrations": {"count": 3, "orphaned_count": 0},
+        "circuit_breakers": [{"key": "claude_code|sonnet|sprint", "state": "closed"}],
+        "retry_budget": {"total": 10, "remaining": 7},
+        "writable_probes": [{"label": "project_root", "writable": true}],
+        "omissions": []
+      }
+    },
+    {
+      "name": "diagnostic bundle rejects a raw command line field",
+      "schema": "diagnostic-bundle",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "generated_at": "2026-08-14T00:00:00Z",
+        "forge_version": "0.16.0",
+        "protocol_version": "1.0.0",
+        "providers": [],
+        "startup_checks": [],
+        "project": {"initialized": true, "sprint_count": 0},
+        "event_log_integrity": {"valid": true, "diagnostic_code": "none"},
+        "worktree_registrations": {"count": 0, "orphaned_count": 0},
+        "circuit_breakers": [],
+        "retry_budget": {"total": 10, "remaining": 10},
+        "writable_probes": [],
+        "omissions": [],
+        "raw_command_line": "codex exec --json"
+      }
+    },
+    {
+      "name": "execution profile accepts a review phase with achieved lineage independence",
+      "schema": "execution-profile",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "phase": "review",
+        "provider": "codex",
+        "model": "gpt-5",
+        "effort": "high",
+        "sandbox_policy": "workspace-write",
+        "permission_policy": "never",
+        "capability_allowlist": ["read_file", "grep"],
+        "session_deadline_seconds": 3600,
+        "idle_deadline_seconds": 300,
+        "lineage": {
+          "implementation_provider": "claude_code",
+          "implementation_model": "sonnet",
+          "achieved_independence": true
+        }
+      }
+    },
+    {
+      "name": "execution profile omits lineage for a planning phase",
+      "schema": "execution-profile",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "phase": "planning",
+        "provider": "claude_code",
+        "model": "sonnet",
+        "effort": "medium",
+        "sandbox_policy": "workspace-write",
+        "permission_policy": "never",
+        "capability_allowlist": [],
+        "session_deadline_seconds": 1800,
+        "idle_deadline_seconds": 180
+      }
+    },
+    {
+      "name": "execution profile rejects an unknown phase",
+      "schema": "execution-profile",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "phase": "finalization",
+        "provider": "claude_code",
+        "model": "sonnet",
+        "effort": "medium",
+        "sandbox_policy": "workspace-write",
+        "permission_policy": "never",
+        "capability_allowlist": [],
+        "session_deadline_seconds": 1800,
+        "idle_deadline_seconds": 180
       }
     }
   ]

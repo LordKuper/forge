@@ -53,6 +53,12 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             null,
             false);
         yield return Create(
+            "providers.enabled",
+            ConfigurationScope.User,
+            "null",
+            null,
+            false);
+        yield return Create(
             "artifacts.language.user_facing",
             ConfigurationScope.Project,
             "\"en\"",

@@ -18,6 +18,18 @@ public static class StatusJson
     public static string Serialize(ProviderToolchainStatus status) =>
         JsonSerializer.Serialize(status, Options);
 
+    public static string Serialize(IReadOnlyList<ProviderHealthEntry> providers) =>
+        JsonSerializer.Serialize(providers, Options);
+
+    public static string Serialize(StartupStatus status) =>
+        JsonSerializer.Serialize(status, Options);
+
+    public static string Serialize(DiagnosticBundle bundle) =>
+        JsonSerializer.Serialize(bundle, Options);
+
+    public static string Serialize(ExecutionProfile profile) =>
+        JsonSerializer.Serialize(profile, Options);
+
     private static JsonSerializerOptions Create()
     {
         JsonSerializerOptions options = new()

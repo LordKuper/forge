@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/diagnostic-bundle.schema.json",
+  "title": "DiagnosticBundle v1",
+  "description": "forge doctor --bundle (ADR 0005): allowlisted, redacted operational evidence only. Excludes prompts, provider output, diffs, source contents, raw command lines, credentials, full environment dumps, and unredacted personal paths.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "generated_at", "forge_version", "protocol_version", "providers",
+    "startup_checks", "project", "event_log_integrity", "worktree_registrations",
+    "circuit_breakers", "retry_budget", "writable_probes", "omissions"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "forge_version": {"type": "string", "minLength": 1},
+    "protocol_version": {"type": "string", "minLength": 1},
+    "providers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "version"],
+        "properties": {"id": {"type": "string", "minLength": 1}, "version": {"type": ["string", "null"]}}
+      }
+    },
+    "startup_checks": {"type": "array", "items": {"$ref": "startup-check.schema.json#/$defs/check"}},
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["initialized", "sprint_count"],
+      "properties": {
+        "initialized": {"type": "boolean"},
+        "sprint_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "event_log_integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["valid", "diagnostic_code"],
+      "properties": {
+        "valid": {"type": "boolean"},
+        "diagnostic_code": {"type": "string", "minLength": 1}
+      }
+    },
+    "worktree_registrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "orphaned_count"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 0},
+        "orphaned_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "circuit_breakers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["key", "state"],
+        "properties": {
+          "key": {"type": "string", "minLength": 1},
+          "state": {"enum": ["closed", "open", "half_open"]}
+        }
+      }
+    },
+    "retry_budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "remaining"],
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "remaining": {"type": "integer", "minimum": 0}
+      }
+    },
+    "writable_probes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label", "writable"],
+        "properties": {
+          "label": {"type": "string", "minLength": 1},
+          "writable": {"type": "boolean"}
+        }
+      }
+    },
+    "omissions": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1}
+    }
+  }
+}
