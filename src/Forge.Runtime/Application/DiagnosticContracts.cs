@@ -1,3 +1,5 @@
+using Forge.Domain;
+
 namespace Forge.Application;
 
 /// <summary>
@@ -33,14 +35,9 @@ public sealed record DiagnosticEventLogIntegrity(bool Valid, string DiagnosticCo
 
 public sealed record DiagnosticWorktreeRegistrations(int Count, int OrphanedCount);
 
-public enum DiagnosticCircuitState
-{
-    Closed,
-    Open,
-    HalfOpen,
-}
-
-public sealed record DiagnosticCircuitBreaker(string Key, DiagnosticCircuitState State);
+/// <summary>Reuses the domain's own <see cref="CircuitState"/> rather than a parallel copy, so a
+/// future state added to the real breaker machine can never silently drift out of sync here.</summary>
+public sealed record DiagnosticCircuitBreaker(string Key, CircuitState State);
 
 public sealed record DiagnosticRetryBudget(int Total, int Remaining);
 

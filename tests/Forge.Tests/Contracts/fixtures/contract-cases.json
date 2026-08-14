@@ -672,6 +672,7 @@
         "state": "blocked",
         "checks": [
           {"id": "user_configuration", "state": "passed", "diagnostic_code": "none"},
+          {"id": "release", "state": "skipped", "diagnostic_code": "update_check_deferred"},
           {"id": "providers", "state": "blocked", "diagnostic_code": "provider_preflight_pending"}
         ],
         "language": {"ui": "en", "interaction": "en", "llm": "en"},

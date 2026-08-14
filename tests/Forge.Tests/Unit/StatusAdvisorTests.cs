@@ -36,6 +36,24 @@ public sealed class StatusAdvisorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ASuggestedActionsSchemaVersionNeverFollowsTheSnapshotsOwnSchemaVersion()
+    {
+        // Regression test: ProjectSnapshot.SchemaVersion and SuggestedAction.SchemaVersion are
+        // versioned independently (suggested-action.schema.json did not change when the snapshot
+        // gained provider/startup-check fields). They previously shared one constant, so bumping
+        // the snapshot's version accidentally bumped every suggested action's version with it.
+        using TestEnvironment environment = new();
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            null, TestContext.Current.CancellationToken);
+
+        SuggestedAction action = Assert.Single(snapshot.SuggestedActions);
+        Assert.NotEqual(snapshot.SchemaVersion, action.SchemaVersion);
+        Assert.Equal("1.0.0", action.SchemaVersion);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task FailedStartupRanksRecoveryWithTheFailingCheck()
     {
         using TestEnvironment environment = new();

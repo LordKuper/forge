@@ -54,10 +54,10 @@ public sealed class ForgeApplication(
             snapshot.StateVersion);
     }
 
-    public Task<StartupStatus> GetStartupStatusAsync(
+    public async Task<StartupStatus> GetStartupStatusAsync(
         string? projectRoot,
         CancellationToken cancellationToken) =>
-        pipeline.RunAsync(projectRoot, cancellationToken);
+        (await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
 
     /// <summary>Runs the startup sequence once and derives the status snapshot from it.</summary>
     public async Task<ProjectOverview> GetOverviewAsync(
@@ -74,10 +74,12 @@ public sealed class ForgeApplication(
         Guid? sprintId,
         CancellationToken cancellationToken)
     {
-        StartupStatus startup =
+        (StartupStatus startup, ProviderToolchainStatus providers) =
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
-        return new(startup, await advisor.CreateSnapshotAsync(startup, detail, sprintId, cancellationToken)
-            .ConfigureAwait(false));
+        return new(
+            startup,
+            await advisor.CreateSnapshotAsync(startup, providers, detail, sprintId, cancellationToken)
+                .ConfigureAwait(false));
     }
 
     public async Task<ProjectSnapshot> GetProjectSnapshotAsync(
@@ -95,7 +97,7 @@ public sealed class ForgeApplication(
     /// <summary>The bounded, cursor-driven incremental read behind `ReadControlEvents`. See
     /// <see cref="ControlEventsReader"/> for the merge/cursor contract. An uninitialized or
     /// unresolvable project root reports no events rather than probing a `.forge/sprints/`
-    /// directory that cannot exist yet — matching <see cref="StatusAdvisor.CreateSnapshotAsync(StartupStatus,SnapshotDetail,Guid?,CancellationToken)"/>.</summary>
+    /// directory that cannot exist yet — matching <see cref="StatusAdvisor.CreateSnapshotAsync(StartupStatus,ProviderToolchainStatus,SnapshotDetail,Guid?,CancellationToken)"/>.</summary>
     public async Task<ControlEventsPage> ReadControlEventsAsync(
         string? projectRoot,
         string? cursor,
@@ -136,7 +138,7 @@ public sealed class ForgeApplication(
         CancellationToken cancellationToken)
     {
         StartupStatus startup =
-            await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+            (await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
         if (startup.FirstFailure is not { } failure)
         {
             return new(true, null, DiagnosticCodes.None);
@@ -156,7 +158,7 @@ public sealed class ForgeApplication(
 
         // Success means the startup sequence no longer fails, not merely that a file moved.
         StartupStatus repaired =
-            await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+            (await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false)).Status;
         return repaired.FirstFailure is { } remaining
             ? new(false, remaining.Id, remaining.DiagnosticCode)
             : result;
@@ -168,7 +170,7 @@ public sealed class ForgeApplication(
     {
         ArgumentNullException.ThrowIfNull(command);
         StartupStatus startup =
-            await pipeline.RunAsync(command.Root, cancellationToken).ConfigureAwait(false);
+            (await pipeline.RunAsync(command.Root, cancellationToken).ConfigureAwait(false)).Status;
         ProjectRootStatus status = startup.Project;
         if (startup.FirstFailure is { } failure)
         {

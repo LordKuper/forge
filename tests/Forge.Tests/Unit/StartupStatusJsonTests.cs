@@ -18,10 +18,9 @@ public sealed class StartupStatusJsonTests
             null, TestContext.Current.CancellationToken);
 
         string json = StatusJson.Serialize(status);
-        JsonSchema schema = JsonSchema.FromFile(SchemaPath());
         using JsonDocument instance = JsonDocument.Parse(json);
 
-        EvaluationResults result = schema.Evaluate(
+        EvaluationResults result = ContractSchemas.Load("startup-check").Evaluate(
             instance.RootElement,
             new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
         Assert.True(result.IsValid, json);
@@ -55,6 +54,4 @@ public sealed class StartupStatusJsonTests
         }
     }
 
-    private static string SchemaPath() =>
-        Path.Combine(RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "startup-check.schema.json");
 }

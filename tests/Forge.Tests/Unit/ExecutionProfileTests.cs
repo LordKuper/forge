@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Application;
+using Forge.Tests.Support;
 using Json.Schema;
 
 namespace Forge.UnitTests;
@@ -50,16 +51,9 @@ public sealed class ExecutionProfileTests
         string json = StatusJson.Serialize(profile);
         using JsonDocument instance = JsonDocument.Parse(json);
 
-        EvaluationResults result = LoadSchema().Evaluate(
+        EvaluationResults result = ContractSchemas.Load("execution-profile").Evaluate(
             instance.RootElement,
             new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
         Assert.True(result.IsValid, json);
     }
-
-    /// <summary>A fresh registry per call: JsonSchema.Net rejects re-registering the same `$id`
-    /// across test methods within one process.</summary>
-    private static JsonSchema LoadSchema() =>
-        JsonSchema.FromFile(
-            Path.Combine(RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "execution-profile.schema.json"),
-            new BuildOptions { Dialect = Dialect.Draft202012, SchemaRegistry = new SchemaRegistry() });
 }

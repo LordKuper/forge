@@ -17,7 +17,11 @@ public sealed class StartupPipeline(
     IPlatformPreflight platformPreflight,
     IProviderToolchainManager providers)
 {
-    public async Task<StartupStatus> RunAsync(
+    /// <summary>Returns the versioned <see cref="StartupStatus"/> contract alongside the raw
+    /// <see cref="ProviderToolchainStatus"/> its one provider probe already computed — internal
+    /// plumbing for <see cref="StatusAdvisor"/>'s snapshot projection, kept out of the
+    /// startup-check contract itself rather than bolted onto <see cref="StartupStatus"/>.</summary>
+    public async Task<(StartupStatus Status, ProviderToolchainStatus Providers)> RunAsync(
         string? requestedRoot,
         CancellationToken cancellationToken)
     {
@@ -44,8 +48,9 @@ public sealed class StartupPipeline(
             project.DiagnosticCode));
         checks.Add(await CheckProjectConfigurationAsync(project, cancellationToken).ConfigureAwait(false));
 
-        return new(
-            Aggregate(checks), checks, language, project, StartupStatus.ContractVersion, providersStatus);
+        StartupStatus status = new(
+            Aggregate(checks), checks, language, project, StartupStatus.ContractVersion);
+        return (status, providersStatus);
     }
 
     private static StartupState Aggregate(IReadOnlyList<StartupCheck> checks)

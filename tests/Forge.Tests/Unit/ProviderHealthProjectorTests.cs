@@ -1,6 +1,7 @@
 using System.Text.Json;
 using Forge.Application;
 using Forge.Providers;
+using Forge.Tests.Support;
 using Json.Schema;
 
 namespace Forge.UnitTests;
@@ -44,17 +45,13 @@ public sealed class ProviderHealthProjectorTests
         ]);
         IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
         string json = StatusJson.Serialize(entries);
-        JsonSchema schema = JsonSchema.FromFile(SchemaPath());
         using JsonDocument instance = JsonDocument.Parse(
             $$"""{"schema_version":"1.0.0","providers":{{json}}}""");
 
-        EvaluationResults result = schema.Evaluate(
+        EvaluationResults result = ContractSchemas.Load("provider-health").Evaluate(
             instance.RootElement,
             new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
 
         Assert.True(result.IsValid, JsonSerializer.Serialize(result));
     }
-
-    private static string SchemaPath() =>
-        Path.Combine(RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "provider-health.schema.json");
 }

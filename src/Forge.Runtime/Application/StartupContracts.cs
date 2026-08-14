@@ -1,6 +1,3 @@
-using System.Text.Json.Serialization;
-using Forge.Providers;
-
 namespace Forge.Application;
 
 /// <summary>Stable machine-readable diagnostic codes shared by both surfaces.</summary>
@@ -100,8 +97,7 @@ public sealed record StartupStatus(
     IReadOnlyList<StartupCheck> Checks,
     LanguageSelection Language,
     ProjectRootStatus Project,
-    string SchemaVersion,
-    [property: JsonIgnore] ProviderToolchainStatus Providers)
+    string SchemaVersion)
 {
     /// <summary>The versioned `startup-check.schema.json` contract this record's JSON
     /// serialization (<see cref="StatusJson"/>) satisfies.</summary>
