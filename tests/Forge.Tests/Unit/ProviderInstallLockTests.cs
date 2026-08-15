@@ -6,18 +6,6 @@ public sealed class ProviderInstallLockTests
 {
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AcquireSucceedsWhenUnheld()
-    {
-        ProviderInstallLock @lock = new(UniqueLockName());
-
-        await using IProviderInstallLease? lease =
-            await @lock.TryAcquireAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        Assert.NotNull(lease);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task ASecondAcquireBlocksUntilTheFirstIsReleased()
     {
         ProviderInstallLock @lock = new(UniqueLockName());

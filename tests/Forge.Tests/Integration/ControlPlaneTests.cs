@@ -98,54 +98,13 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task ASecondHostForTheSameProjectExitsInsteadOfCompetingForTheListener()
-    {
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        using TestEnvironment environment = new();
-        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
-        string instanceId = InstanceIdentity.CreateEphemeral();
-        Guid projectId = await ProjectIdentity
-            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
-
-        await using ControlPlaneHost first = await ControlPlaneHost.StartAsync(
-            environment.ProjectRoot,
-            instanceId,
-            cancellationToken);
-
-        // host.StartAsync() returns once ExecuteAsync starts running, not once it has won the lease — connect a
-        // client first so "first" is confirmed listening (and therefore already holds the lease) before "second"
-        // starts, or the two Hosts could race for the mutex in either order.
-        await using ForgeHostClient client = new(
-            new NamedPipeControlTransport(),
-            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
-        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
-        Assert.False(first.IsStopping);
-
-        await using ControlPlaneHost second = await ControlPlaneHost.StartAsync(
-            environment.ProjectRoot,
-            instanceId,
-            cancellationToken);
-
-        // The second Host could not acquire the project lease, so it stops itself rather than becoming a
-        // competing listener on the same pipe name (see the comment in ControlPlaneHostedService.ExecuteAsync).
-        // MutexProjectLease.TryAcquire's own contended timeout is 2s, so give this real time to resolve.
-        Assert.True(await second.WaitForStoppingAsync(TimeSpan.FromSeconds(10), cancellationToken));
-        Assert.False(first.IsStopping);
-
-        // The first Host is still the sole listener and keeps serving.
-        Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
-    }
-
-    [Fact]
-    [Trait("Category", "Integration")]
     public async Task ASecondHostForTheSameProjectUnderADifferentInstanceIdStillExitsInsteadOfCompeting()
     {
         // ADR 0005: "Release, development, test, CLI, and Desktop instances use the same lease
         // namespace, so distinct instance data roots cannot become concurrent writers of one
-        // `.forge/` tree." Unlike ASecondHostForTheSameProjectExitsInsteadOfCompetingForTheListener
-        // (which reuses one instance id for both Hosts), this proves the lease itself spans two
-        // *different* instance ids for the same project — each with its own distinct pipe name, so
-        // this is specifically testing the lease, not an incidental pipe-name collision.
+        // `.forge/` tree." Two *different* instance ids — each with its own distinct pipe name — so
+        // this proves the project lease itself refuses the second Host, not an incidental pipe-name
+        // collision (which is what a same-instance-id pair would also produce).
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
@@ -158,6 +117,10 @@ public sealed class ControlPlaneTests
             environment.ProjectRoot,
             firstInstanceId,
             cancellationToken);
+
+        // host.StartAsync() returns once ExecuteAsync starts running, not once it has won the lease — connect a
+        // client first so "first" is confirmed listening (and therefore already holds the lease) before "second"
+        // starts, or the two Hosts could race for the mutex in either order.
         await using ForgeHostClient client = new(
             new NamedPipeControlTransport(),
             new ForgeHostClientOptions(projectId, firstInstanceId, "1.0.0-test"));

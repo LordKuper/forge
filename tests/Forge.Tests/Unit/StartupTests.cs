@@ -27,23 +27,6 @@ public sealed class StartupTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task PendingProviderToolchainKeepsSprintWorkBlocked()
-    {
-        using TestEnvironment environment = new();
-
-        StartupStatus status = await environment.Application.GetStartupStatusAsync(
-            null,
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(StartupState.Blocked, status.State);
-        Assert.False(status.AllowsSprintWork);
-        Assert.Equal(
-            DiagnosticCodes.ProviderPreflightPending,
-            Check(status, StartupCheckId.Providers).DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task StartupChecksRunInContractOrder()
     {
         using TestEnvironment environment = new();

@@ -79,9 +79,11 @@ public sealed class RoutingLedgerTests
         Assert.Equal(0, breaker.ConsecutiveFailures);
     }
 
-    [Fact]
+    [Theory]
     [Trait("Category", "Unit")]
-    public async Task AnAuthFailureIsExcludedAndNeverTripsTheBreaker()
+    [InlineData(FailureClass.Auth)]
+    [InlineData(FailureClass.Policy)]
+    public async Task AnExcludedFailureNeverTripsTheBreakerOrConsumesTheSharedBudget(FailureClass failureClass)
     {
         using TestRoot root = new();
         RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
@@ -89,11 +91,13 @@ public sealed class RoutingLedgerTests
         AttemptId attemptId = AttemptId.New();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
+        // More than the breaker's threshold: even a run of excluded failures long enough to trip it
+        // must leave no breaker record at all.
         for (int i = 0; i < RoutingLedger.DefaultFailureThreshold + 2; i++)
         {
             RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
             await ledger.RecordOutcomeAsync(
-                root.Path, sprintId, decision, false, FailureClass.Auth, cancellationToken);
+                root.Path, sprintId, decision, false, failureClass, cancellationToken);
         }
 
         CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
@@ -101,28 +105,6 @@ public sealed class RoutingLedgerTests
         IReadOnlyList<RouteDecision> decisions =
             await ledger.GetRouteDecisionsAsync(root.Path, sprintId, cancellationToken);
         Assert.All(decisions.Where(d => d.Outcome != RouteOutcome.Routed), d => Assert.Equal(RouteOutcome.Excluded, d.Outcome));
-        // An excluded failure must not count against the shared budget either — only the breaker
-        // half of that claim was covered before.
-        RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
-        Assert.Equal(RoutingLedger.DefaultRetryBudget, budget.Remaining);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task APolicyFailureIsExcludedAndNeverTripsTheBreaker()
-    {
-        using TestRoot root = new();
-        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
-        SprintId sprintId = SprintId.New();
-        AttemptId attemptId = AttemptId.New();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        RouteDecision decision = await ledger.DecideAsync(root.Path, sprintId, "a", attemptId, Key, cancellationToken);
-        await ledger.RecordOutcomeAsync(
-            root.Path, sprintId, decision, false, FailureClass.Policy, cancellationToken);
-
-        CircuitBreakerRecord? breaker = await ledger.GetCircuitBreakerAsync(root.Path, sprintId, Key, cancellationToken);
-        Assert.Null(breaker);
         RetryBudgetRecord budget = await ledger.GetRetryBudgetAsync(root.Path, sprintId, cancellationToken);
         Assert.Equal(RoutingLedger.DefaultRetryBudget, budget.Remaining);
     }

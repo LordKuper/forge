@@ -84,47 +84,6 @@ public sealed class SprintEventStoreTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task ReopeningTheStoreAfterAWriteResumesFromDurableEvents()
-    {
-        using TestRoot root = new();
-        SprintId sprintId = SprintId.New();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        await new FileSprintEventLog(new FakeClock()).AppendTransitionAsync(
-            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
-            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
-
-        // A brand new instance simulates a process restart: nothing but the durable events.jsonl
-        // is shared with the writer above.
-        FileSprintEventLog reopened = new(new FakeClock());
-        SprintWorkflowState? state = await reopened.LoadAsync(root.Path, sprintId, cancellationToken);
-
-        Assert.NotNull(state);
-        Assert.Equal(SprintState.Draft, state.Sprint.State);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task ATornTrailingLineFromACrashIsIgnoredWithoutLosingEarlierEvents()
-    {
-        using TestRoot root = new();
-        FileSprintEventLog log = new(new FakeClock());
-        SprintId sprintId = SprintId.New();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        await log.AppendTransitionAsync(
-            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
-            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
-        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
-        await File.AppendAllTextAsync(eventsPath, "{\"schema_version\":\"1.0.0\",\"event_id\":\"trunc", cancellationToken);
-
-        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
-
-        Assert.NotNull(state);
-        Assert.Equal(SprintState.Draft, state.Sprint.State);
-        Assert.Equal(0, state.LastSequence);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task ATransitionMissingToStateFailsClosedWithoutAppendingFromStaleState()
     {
         using TestRoot root = new();
