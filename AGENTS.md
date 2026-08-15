@@ -41,7 +41,12 @@
 
 ## Quality
 
-- Add automated tests for new behavior and a regression test for every fix.
+- These rules govern both Forge repository changes and the built-in `implementation-critical` workflow that Forge applies to managed projects. Forge MUST enforce the phase order in its control plane and reproduce it in every generated provider integration. Project rules MAY add stricter quality gates but MUST NOT select or author new scope tests before implementation confirmation.
+- Implement the scoped feature, sprint, or fix before selecting or authoring new tests for it. First confirm through inspection, execution, and relevant existing checks that the implementation meets its agreed definition of done and user expectations.
+- After that confirmation, identify the smallest risk-based set of new tests that protects the scope. Prefer static or architecture checks when they fully cover the risk, focused unit or property tests for logic, component or contract tests for boundaries, and only essential end-to-end journeys. A no-new-test decision is allowed only when the change adds no behavior or existing checks cover every material risk; justify it in the task or PR.
+- Add tests only for meaningful behavior, contracts, boundaries, failure modes, compatibility, or previously observed defects. Do not test trivial delegation, private structure, framework behavior, or mocks that merely repeat their setup. Coverage identifies untested code; it is not a quality target or quota.
+- Every fix MUST leave a regression test written after the corrected behavior is confirmed. Prove that it detects the prior defect by running it against the pre-fix behavior or an equivalent targeted mutation.
+- Derive expected results from the agreed behavior, not from the completed implementation. Do not weaken an existing test unless the accepted contract changed, and record that contract change in the task or PR.
 - Before PR review, pass all repository build, test, formatting, lint, static-analysis, and security checks.
 - Update user and technical documentation with changes to public behavior, configuration, CLI, API, or data formats.
 - Keep dependency changes minimal and justified; update lock files and reject dependencies with known critical vulnerabilities.

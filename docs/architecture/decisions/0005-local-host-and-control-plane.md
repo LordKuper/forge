@@ -155,11 +155,13 @@ custom scripts remain outside the MVP.
 
 Stage 9 generates the Claude Code and Codex skill/plugin views from one canonical
 Forge integration source. It documents the project snapshot, events, commands,
-addressing, status reporting, and recovery, while omitting human-only authority.
-Generated files carry source hashes, generator/protocol versions, ownership
-markers, and minimum Forge versions. Generation and optional installation are
-idempotent; unknown user-owned files are never overwritten, and duplicate
-installations are detected rather than left ambiguous.
+addressing, status reporting, recovery, and built-in workflow invariants,
+including implementation confirmation before new test selection or authoring,
+while omitting human-only authority. Generated files carry source hashes,
+generator/protocol versions, ownership markers, and minimum Forge versions.
+They communicate the invariant; Forge Host enforces it. Generation and optional
+installation are idempotent; unknown user-owned files are never overwritten,
+and duplicate installations are detected rather than left ambiguous.
 
 ### Diagnostics are allowlisted and development is isolated
 

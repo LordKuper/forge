@@ -402,20 +402,20 @@
       "forge.desktop.presentation": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.19.0, )"
+          "Forge.Runtime": "[0.19.1, )"
         }
       },
       "forge.providers.claude.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.19.0, )",
+          "Forge.Runtime": "[0.19.1, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
       "forge.providers.codex.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.19.0, )",
+          "Forge.Runtime": "[0.19.1, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
@@ -430,7 +430,7 @@
       "forge.runtime.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.19.0, )"
+          "Forge.Runtime": "[0.19.1, )"
         }
       },
       "forge.updater": {
@@ -439,8 +439,8 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.19.0, )",
-          "Forge.Updater": "[0.19.0, )",
+          "Forge.Runtime": "[0.19.1, )",
+          "Forge.Updater": "[0.19.1, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },

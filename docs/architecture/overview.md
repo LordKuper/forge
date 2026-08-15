@@ -229,6 +229,23 @@ share one append-only, localization-safe journal under `.forge/sprints/{id}/`.
 Workflow state, retry balance, and circuit breakers are folded on every read (see
 [`decisions/0003-durable-sprint-persistence.md`](decisions/0003-durable-sprint-persistence.md)).
 
+The `implementation-critical` workflow implements the accepted scope before it
+selects or authors new tests. It first confirms the implementation against the
+frozen definition of done or explicit user expectations using inspection,
+execution, and relevant existing checks. It then assesses the actual change's
+residual risks, adds the smallest useful set of tests, and runs final
+deterministic gates. Expected results come from the accepted behavior rather than
+the implementation; every fix retains a regression test proven against pre-fix
+behavior or an equivalent targeted mutation.
+
+This is one built-in workflow invariant in both delivery scopes. Forge
+contributors follow it through `AGENTS.md`; every managed project receives it
+through Host-enforced transitions and the generated provider integration.
+Project policy may add stricter gates but cannot permit new scope-test selection
+or authoring before implementation confirmation. The Host schedules separate
+implementation, confirmation, and test-work nodes; test work is not eligible
+until a valid confirmation artifact exists.
+
 An explicit operator supersession cancels a non-terminal attempt, discards its
 worktree, records a bounded instruction artifact, and starts a fresh attempt from
 the same recorded base. It never edits the frozen plan or continues partial edits.
@@ -377,9 +394,11 @@ notification scripts are deferred.
 
 The `.forge/` compiler generates Claude Code and Codex skill/plugin views from one
 canonical integration source. Outputs contain source hashes, ownership markers,
-minimum Forge/protocol versions, and no human-only authority. Generation and
-optional installation are idempotent and never overwrite unknown user-owned
-files.
+minimum Forge/protocol versions, the built-in workflow invariants including the
+implementation-first testing order, and no human-only authority. Generated
+instructions describe that order, while Forge Host owns its enforcement.
+Generation and optional installation are idempotent and never overwrite unknown
+user-owned files.
 
 Release, Debug, and tests use `forge`, `forge-dev`, and unique ephemeral instance
 ids respectively. They have distinct IPC endpoints, configuration, logs, caches,
