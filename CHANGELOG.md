@@ -7,10 +7,11 @@ User-facing Forge changes are listed by release, newest first.
 ### Changed
 
 - Forge's own test suite now follows the implementation-first, risk-based test
-  strategy: duplicate, tautological, and source-text-grepping tests were removed
-  and near-identical cases were merged into data-driven theories. No shipped
-  behavior, contract, or configuration changes; every risk the removed tests
-  touched stays covered by a stronger existing test.
+  strategy: duplicate, tautological, and implementation-coupled tests were
+  removed and near-identical cases were merged into data-driven theories. No
+  shipped behavior, contract, or configuration changes; every risk the removed
+  tests touched stays covered by a stronger existing test, and the Windows
+  bundle publisher's reproducibility contract is now asserted explicitly.
 
 ## v0.21.0
 

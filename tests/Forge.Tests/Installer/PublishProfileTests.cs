@@ -32,17 +32,24 @@ public sealed class PublishProfileTests
         Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
     }
 
-    /// <summary>The bundle asset name is a release contract: <c>ReleaseAssetVerifier</c> resolves the
-    /// asset it downloads by exactly this name, so a publisher that renames it breaks every update.</summary>
+    /// <summary>Two release contracts nothing else guards, since no test executes the publisher and the
+    /// release workflow only hashes whatever bundle it produces. The asset name is how
+    /// <c>ReleaseAssetVerifier</c> resolves the asset it downloads, so renaming it breaks every update;
+    /// the fixed entry timestamp over sorted entries is what makes the archive byte-for-byte
+    /// reproducible from a clean checkout (AGENTS.md, "Quality"), so its published checksum stays
+    /// verifiable.</summary>
     [Fact]
     [Trait("Category", "Installer")]
-    public void BundlePublisherProducesTheContractedArchiveName()
+    public void BundlePublisherProducesTheContractedReproducibleArchive()
     {
         string script = File.ReadAllText(Path.Combine(FindRoot(), "build", "Publish-WindowsBundle.ps1"));
 
         Assert.Contains("Forge.Cli.Windows\\Forge.Cli.Windows.csproj", script, StringComparison.Ordinal);
         Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
         Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
+        Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
+        Assert.Contains("Sort-Object", script, StringComparison.Ordinal);
+        Assert.Contains("$entry.LastWriteTime = $timestamp", script, StringComparison.Ordinal);
     }
 
     private static string FindRoot()
