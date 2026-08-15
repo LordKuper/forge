@@ -103,6 +103,11 @@ public sealed record ProviderToolchainStatus(IReadOnlyList<ProviderStatus> Provi
 
     public string DiagnosticCode =>
         Providers.FirstOrDefault(provider => provider.State != ProviderState.Ready)?.DiagnosticCode ??
+            Providers.FirstOrDefault(provider =>
+                provider.State == ProviderState.Ready &&
+                provider.Authentication?.State is
+                    ProviderHealthAuthentication.Required or ProviderHealthAuthentication.CheckFailed)
+                ?.Authentication?.DiagnosticCode ??
             ProviderDiagnosticCodes.None;
 
     /// <summary>Maps to the shared <see cref="DiagnosticCodes"/> used by startup checks and CLI reporting.</summary>

@@ -141,16 +141,16 @@ public sealed class ClaudeLlmProviderTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task InstallOrUpdateNeverDisablesTheBackgroundAutoUpdater()
+    public async Task InstallOrUpdateDisablesTheAutoUpdaterForProbesButNeverForTheUpdateCommandItself()
     {
         using TestPaths paths = new();
         string executable = WriteClaudeExecutable(paths);
-        List<IReadOnlyDictionary<string, string>?> capturedEnvironments = [];
+        List<(IReadOnlyList<string> Arguments, IReadOnlyDictionary<string, string>? Environment)> calls = [];
         ClaudeLlmProvider provider = CreateProvider(
             paths,
             request =>
             {
-                capturedEnvironments.Add(request.EnvironmentVariables);
+                calls.Add((request.Arguments, request.EnvironmentVariables));
                 return request.Arguments is ["--version"]
                     ? new(0, "2.1.221 (Claude Code)", string.Empty)
                     : new(0, string.Empty, string.Empty);
@@ -159,7 +159,22 @@ public sealed class ClaudeLlmProviderTests
 
         await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
 
-        Assert.All(capturedEnvironments, environment => Assert.Null(environment));
+        // Every local `--version` probe disables the vendor's own background updater (it can
+        // otherwise fire on any invocation); the actual `update` command never does — ADR 0008:
+        // "the variable is not set for an explicit update."
+        foreach ((IReadOnlyList<string> arguments, IReadOnlyDictionary<string, string>? environment) in calls)
+        {
+            if (arguments is ["--version"])
+            {
+                Assert.Equal("1", environment?["DISABLE_AUTOUPDATER"]);
+            }
+            else
+            {
+                Assert.Null(environment);
+            }
+        }
+
+        Assert.Contains(calls, call => call.Arguments is ["update"]);
     }
 
     [Fact]

@@ -21,9 +21,12 @@ public sealed class ClaudeLlmProvider(
 {
     public static readonly ProviderId ClaudeCode = new("claude_code");
 
-    /// <summary>Normal execution only (ADR 0008): "Normal Claude Code execution sets
-    /// DISABLE_AUTOUPDATER=1 so Forge owns cadence; the variable is not set for an explicit
-    /// update." Forge does not set DISABLE_UPDATES.</summary>
+    /// <summary>Every invocation except an explicit install/update (ADR 0008): "Normal Claude
+    /// Code execution sets DISABLE_AUTOUPDATER=1 so Forge owns cadence; the variable is not set
+    /// for an explicit update." Applied to prompt execution and to every local probe (`--version`,
+    /// `auth status`) — any of those can otherwise trigger the vendor's own background update
+    /// check — but never to the install/update command itself. Forge does not set
+    /// DISABLE_UPDATES.</summary>
     private static readonly IReadOnlyDictionary<string, string> ExecutionEnvironmentVariables =
         new Dictionary<string, string> { ["DISABLE_AUTOUPDATER"] = "1" };
 
@@ -68,7 +71,8 @@ public sealed class ClaudeLlmProvider(
             clock,
             bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
-            cancellationToken);
+            cancellationToken,
+            ExecutionEnvironmentVariables);
 
     public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken) =>
         ProviderInstallation.InstallOrUpdateAsync(
@@ -82,7 +86,8 @@ public sealed class ClaudeLlmProvider(
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
             installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,
-            cancellationToken);
+            cancellationToken,
+            ExecutionEnvironmentVariables);
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);
@@ -114,7 +119,8 @@ public sealed class ClaudeLlmProvider(
             probeDirectory,
             authenticationProbeTimeout ?? ProviderInstallation.DefaultAuthenticationProbeTimeout,
             ParseAuthenticationStatus,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            ExecutionEnvironmentVariables).ConfigureAwait(false);
     }
 
     /// <summary>

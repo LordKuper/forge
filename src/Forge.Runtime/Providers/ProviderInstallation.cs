@@ -59,14 +59,16 @@ public static partial class ProviderInstallation
         IClock clock,
         bool bypassReleaseCache,
         TimeSpan versionProbeTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         (ProviderStatus local, Version? localVersion) = await DiscoverLocalAsync(
             id,
             spec,
             processRunner,
             versionProbeTimeout,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
         if (local.State != ProviderState.Ready || localVersion is null)
         {
             return local;
@@ -101,15 +103,20 @@ public static partial class ProviderInstallation
         TimeSpan versionProbeTimeout,
         TimeSpan installTimeout,
         TimeSpan installLockTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         (ProviderStatus local, Version? localVersion) = await DiscoverLocalAsync(
             id,
             spec,
             processRunner,
             versionProbeTimeout,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
         // DiscoverLocalAsync only ever returns Ready alongside a successfully parsed version.
+        // targetVersion is not null exactly when this is a legitimate update of an already-Ready
+        // install; null covers install/repair (missing, corrupt, or below the minimum version),
+        // which skips the release comparison entirely (ADR 0008).
         Version? targetVersion = null;
         if (local.State == ProviderState.Ready && localVersion is { } version)
         {
@@ -142,25 +149,27 @@ public static partial class ProviderInstallation
             return local.State == ProviderState.Ready ? local with { UpdateAvailable = true } : local;
         }
 
-        if (targetVersion is not null)
+        // Another process may have already finished installing, repairing, or updating while we
+        // waited on the lock — re-read local state once (no second network check for the update
+        // case; the already-fetched targetVersion is still the comparison target) and skip a now-
+        // redundant mutation for either the update path or the install/repair path.
+        (ProviderStatus underLock, Version? lockedVersion) = await DiscoverLocalAsync(
+            id,
+            spec,
+            processRunner,
+            versionProbeTimeout,
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
+        if (underLock.State == ProviderState.Ready &&
+            (targetVersion is null || (lockedVersion is { } current && targetVersion <= current)))
         {
-            // Another process may have applied this exact update while we waited on the lock —
-            // re-read local state once (no second network check; the already-fetched
-            // targetVersion is still the comparison target) and skip a now-redundant mutation.
-            (ProviderStatus underLock, Version? lockedVersion) = await DiscoverLocalAsync(
-                id,
-                spec,
-                processRunner,
-                versionProbeTimeout,
-                cancellationToken).ConfigureAwait(false);
-            if (underLock.State == ProviderState.Ready && lockedVersion is { } current && targetVersion <= current)
-            {
-                return underLock with { UpdateAvailable = false };
-            }
+            return underLock with { UpdateAvailable = false };
         }
 
-        bool alreadyInstalled = File.Exists(spec.ExecutablePath);
-        ProcessRequest request = alreadyInstalled && spec.UpdateArguments is { } updateArguments
+        // Only a genuine update of an already-Ready install uses the vendor's lighter `update`
+        // command; install/repair (targetVersion is null) always reruns the full installer, even
+        // if a corrupt or unsupported executable happens to already exist at the target path.
+        ProcessRequest request = targetVersion is not null && spec.UpdateArguments is { } updateArguments
             ? new(spec.ExecutablePath, updateArguments, Path.GetDirectoryName(spec.ExecutablePath)!)
             : new(spec.InstallExecutable, spec.InstallArguments, Path.GetTempPath());
         ProcessResult? result = await RunWithTimeoutAsync(processRunner, request, installTimeout, cancellationToken)
@@ -172,7 +181,8 @@ public static partial class ProviderInstallation
                 spec,
                 processRunner,
                 versionProbeTimeout,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                environmentVariables).ConfigureAwait(false);
             // ADR 0008: "An update failure blocks only when the installed provider is no longer
             // usable" — a still-usable prior install after a failed update/install attempt stays
             // reported as ready rather than failed.
@@ -186,7 +196,8 @@ public static partial class ProviderInstallation
             spec,
             processRunner,
             versionProbeTimeout,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
         return rechecked.State == ProviderState.Ready ? rechecked with { UpdateAvailable = false } : rechecked;
     }
 
@@ -204,7 +215,8 @@ public static partial class ProviderInstallation
         string probeDirectory,
         TimeSpan timeout,
         Func<ProcessResult, ProviderAuthenticationStatus> parseResult,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         if (executablePath is null)
         {
@@ -213,7 +225,7 @@ public static partial class ProviderInstallation
 
         ProcessResult? result = await RunWithTimeoutAsync(
             processRunner,
-            new(executablePath, arguments, probeDirectory),
+            new(executablePath, arguments, probeDirectory, environmentVariables),
             timeout,
             cancellationToken).ConfigureAwait(false);
         return result is null ? ProviderAuthenticationStatus.CheckFailed : parseResult(result);
@@ -271,7 +283,8 @@ public static partial class ProviderInstallation
         ProviderInstallSpec spec,
         IProcessRunner processRunner,
         TimeSpan versionProbeTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         ArgumentNullException.ThrowIfNull(spec);
         if (!File.Exists(spec.ExecutablePath))
@@ -281,7 +294,7 @@ public static partial class ProviderInstallation
 
         ProcessResult? result = await RunWithTimeoutAsync(
             processRunner,
-            new(spec.ExecutablePath, ["--version"], Path.GetDirectoryName(spec.ExecutablePath)!),
+            new(spec.ExecutablePath, ["--version"], Path.GetDirectoryName(spec.ExecutablePath)!, environmentVariables),
             versionProbeTimeout,
             cancellationToken).ConfigureAwait(false);
         if (result is not { ExitCode: 0 })

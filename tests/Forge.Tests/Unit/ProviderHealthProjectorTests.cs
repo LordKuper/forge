@@ -36,6 +36,26 @@ public sealed class ProviderHealthProjectorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void ProjectsUpdateAvailabilityAndAuthenticationStateWhenBothAreDetermined()
+    {
+        ProviderToolchainStatus status = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                UpdateAvailable = true,
+                Authentication = ProviderAuthenticationStatus.Required,
+            },
+        ]);
+
+        IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
+
+        ProviderHealthEntry codex = Assert.Single(entries);
+        Assert.True(codex.UpdateAvailable);
+        Assert.Equal(ProviderHealthAuthentication.Required, codex.Authentication);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void TheProjectedShapeSatisfiesTheVersionedProviderHealthContract()
     {
         ProviderToolchainStatus status = new(

@@ -283,7 +283,84 @@ public sealed class ProviderInstallationTests
         Assert.Equal(2, runner.CallCount); // no install/update process ever ran
     }
 
-    private static ProviderInstallSpec Spec(bool installed = true)
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateSkipsRepairWhenAnotherProcessAlreadyRepairedItWhileWaitingOnTheLock()
+    {
+        FakeClock clock = new();
+        FakeReleaseCache cache = new();
+        CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
+        FakeInstallLock installLock = new();
+        SequencedProcessRunner runner = new(
+            new ProcessResult(1, string.Empty, "broken"), // 1: initial local probe — broken install
+            new ProcessResult(0, "0.146.0", string.Empty)); // 2: re-probe under lock — already repaired
+
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
+            Id,
+            Spec(),
+            runner,
+            releaseSource,
+            cache,
+            installLock,
+            clock,
+            ProviderInstallation.DefaultVersionProbeTimeout,
+            ProviderInstallation.DefaultInstallTimeout,
+            ProviderInstallation.DefaultInstallLockTimeout,
+            TestContext.Current.CancellationToken);
+
+        // Regression: the post-lock re-probe used to be gated on "this is an update", so a
+        // concurrent install/repair of a missing-or-broken provider was never detected and the
+        // installer reran redundantly.
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Equal("0.146.0", status.Version);
+        Assert.Equal(0, releaseSource.CallCount); // repair skips the release comparison entirely
+        Assert.Equal(2, runner.CallCount); // no install process ever ran
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateRepairsACorruptInstallWithTheFullInstallerNotTheUpdateCommand()
+    {
+        FakeClock clock = new();
+        FakeReleaseCache cache = new();
+        CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
+        FakeInstallLock installLock = new();
+        List<ProcessRequest> requests = [];
+        int calls = 0;
+        RecordingProcessRunner runner = new(request =>
+        {
+            requests.Add(request);
+            calls++;
+            // 1: initial probe, 2: re-probe under lock — both see the same broken install.
+            // 3: the installer runs. 4: the post-install recheck reports the repaired version.
+            return calls <= 2
+                ? new ProcessResult(1, string.Empty, "broken")
+                : calls == 3
+                    ? new ProcessResult(0, string.Empty, string.Empty)
+                    : new ProcessResult(0, "1.0.0", string.Empty);
+        });
+
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
+            Id,
+            Spec(updateArguments: ["update"]), // the executable exists but --version fails
+            runner,
+            releaseSource,
+            cache,
+            installLock,
+            clock,
+            ProviderInstallation.DefaultVersionProbeTimeout,
+            ProviderInstallation.DefaultInstallTimeout,
+            ProviderInstallation.DefaultInstallLockTimeout,
+            TestContext.Current.CancellationToken);
+
+        // Regression: deciding the update-vs-install branch from File.Exists alone "repaired" a
+        // corrupt install by rerunning the same failing `update` command instead of the installer.
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Equal("install.exe", requests[2].FileName);
+        Assert.DoesNotContain(requests, request => request.Arguments is ["update"]);
+    }
+
+    private static ProviderInstallSpec Spec(bool installed = true, IReadOnlyList<string>? updateArguments = null)
     {
         string executablePath = Path.Combine(
             Path.GetTempPath(),
@@ -295,7 +372,7 @@ public sealed class ProviderInstallationTests
             File.WriteAllText(executablePath, "stub");
         }
 
-        return new(executablePath, InstallExecutable: "install.exe", InstallArguments: [], null, null);
+        return new(executablePath, InstallExecutable: "install.exe", InstallArguments: [], updateArguments, null);
     }
 
     /// <summary>Reports a fixed local `--version` result.</summary>
@@ -321,6 +398,12 @@ public sealed class ProviderInstallationTests
             index++;
             return Task.FromResult(responses[position]);
         }
+    }
+
+    private sealed class RecordingProcessRunner(Func<ProcessRequest, ProcessResult> respond) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+            Task.FromResult(respond(request));
     }
 
     private sealed class CountingReleaseSource(ProviderReleaseLookupResult result) : IProviderReleaseSource
