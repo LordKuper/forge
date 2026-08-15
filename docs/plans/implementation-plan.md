@@ -1,6 +1,6 @@
 # Forge MVP implementation plan
 
-**Updated:** 2026-08-13
+**Updated:** 2026-08-15
 **Status:** active
 
 ## Rules
@@ -10,6 +10,7 @@
 - Keep one command model, one project snapshot, one sprint journal, and one review engine.
 - Keep every project cross-platform unless it is a marked minimal leaf OS adapter under ADR 0007.
 - Keep provider-neutral policy in the core and every vendor/OS detail in its provider-owned adapter under ADR 0008.
+- Apply the implementation-first testing invariant to Forge development and every managed project; generated integrations communicate it and Host transitions enforce it.
 - Defer work that has no MVP acceptance case or measured need.
 
 ## Progress
@@ -79,9 +80,9 @@
 
 - [ ] P9.1–P9.8 — Parse manifest/YAML/Markdown/frontmatter into validated semantic input with safe paths, references, scopes, and context limits.
 - [ ] P9.9–P9.16 — Generate reproducible native outputs for configured providers with source hashes, generator versions, drift detection, validation, and artifact-language metadata.
-- [ ] P9.17–P9.24 — Generate, inspect, install, and remove one canonical Forge integration for each enabled provider; document snapshot/events/commands and recovery; exclude human authority; never overwrite unknown files.
+- [ ] P9.17–P9.24 — Generate, inspect, install, and remove one canonical Forge integration for each enabled provider; document snapshot/events/commands, recovery, and built-in workflow invariants, including implementation confirmation before new test selection or authoring; exclude human authority; never overwrite unknown files.
 
-**Gate:** `.forge/` remains canonical, generated files are reproducible and owned, and agents cannot invoke human-only commands.
+**Gate:** `.forge/` remains canonical; generated files are reproducible and owned; every provider view carries the same implementation-first testing order; agents cannot invoke human-only commands.
 
 ## Stage 10 — Reproducible context assembly
 
@@ -93,7 +94,7 @@
 
 ## Stage 11 — `implementation-critical` workflow and parity
 
-- [ ] P11.1–P11.12 — Implement intake, planning, threat/rule rubrics, task DAG, isolated implementation, deterministic tests, review, human approval, and finalization. Use behavior nodes and rubric data, not a seven-role catalog.
+- [ ] P11.1–P11.12 — Implement intake, planning, threat/rule rubrics, and a task DAG with separate isolated implementation, confirmation, and test-work nodes, followed by deterministic final gates, review, human approval, and finalization for every managed project. Confirmation evaluates the DoD or user expectations; only its valid artifact makes recorded risk-based test selection and authoring eligible. Host state transitions must reject premature test work. Existing checks may support confirmation. A no-new-test result requires evidence that the change adds no behavior or existing checks cover every material risk. Use behavior nodes and rubric data, not a seven-role catalog.
 - [ ] P11.13–P11.20 — Freeze only planning, implementation, and review execution profiles, including ordered provider candidates and capability allowlists. Every model node starts without a parent transcript and receives only its frozen context manifest and profile capabilities; a node cannot widen them or invoke human-only commands. Internal/external review share one engine and profile with fresh attempts and bounded inputs; finalization is deterministic.
 - [ ] P11.21–P11.31 — Implement the ASD review engine: separate design/implementation counters, fresh contexts, full-first/incremental-later scope, file/rubric coverage, same-iteration approval, severity floors, repeated normalized-finding detection, and human convergence gates. Select a different provider/model lineage first, then fall back in normal configured priority when none is available; record achieved separation without creating a human gate.
 - [ ] P11.32–P11.40 — Replace prompt arguments/buffered output with stdin, minimal child environments, bounded concurrent JSON/JSONL streams, safe tails, and typed activity. Require exactly one schema-valid terminal result for the owned attempt; zero exit without it, duplicates, and contradictions fail closed.
@@ -102,20 +103,20 @@
 - [ ] P11.56–P11.66 — Complete CLI/TUI and Desktop projections, commands, attention navigation, human gates, recovery, English/Russian localization, configuration editors, accessibility, and parity tests.
 - [ ] P11.67–P11.72 — Add best-effort local notifications for `awaiting_human`, `blocked`, `failed`, and `completed`, deduplicated from journal event ids and redacted.
 
-**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; nodes inherit neither ambient context nor authority; process exit cannot self-certify completion; review follows ADRs 0006 and 0008, always runs fresh, and treats provider/model independence as best-effort; rate-limit, supersession, notification, and crash recovery are durable.
+**Gate:** both surfaces expose equivalent commands and snapshot projections; prompts/environment/output/processes are bounded; nodes inherit neither ambient context nor authority; process exit cannot self-certify completion; implementation confirmation precedes new test selection and authoring, test expectations remain independent from implementation, and fixes retain proven regression tests; review follows ADRs 0006 and 0008, always runs fresh, and treats provider/model independence as best-effort; rate-limit, supersession, notification, and crash recovery are durable.
 
 ## Stage 12 — Diagnostics, evaluations, and hardening
 
 - [ ] P12.1–P12.8 — Add safe OpenTelemetry traces/metrics, structured logs, and allowlisted `forge doctor --bundle`; omit source/diffs, prompts, provider output, raw commands, credentials, full environments, and unredacted personal paths.
 - [ ] P12.9–P12.15 — Add updater/provider/bootstrap/workflow evaluations and model-policy gates that run through existing commands; keep evaluation orchestration out of presentation code.
-- [ ] P12.16–P12.32 — Test release trust, injection, IPC identity, protocol confusion, environment leakage, stdin/output denial of service, orphan processes, notification disclosure, permissions, dependencies, licenses, accessibility, localization, parity, migration, routing fold, provider selection, cached conditional updates, authentication gates, disabled-provider isolation, review convergence, same-lineage review fallback, and supersession.
+- [ ] P12.16–P12.32 — Test release trust, injection, IPC identity, protocol confusion, environment leakage, stdin/output denial of service, orphan processes, notification disclosure, permissions, dependencies, licenses, accessibility, localization, parity, migration, routing fold, provider selection, cached conditional updates, authentication gates, disabled-provider isolation, provider-view testing-order parity, Host rejection of premature test work, review convergence, same-lineage review fallback, and supersession.
 
 **Gate:** no critical finding remains; diagnostic negative tests pass; safety, parity, accessibility, localization, compatibility, observability, and release-trust thresholds pass.
 
 ## Stage 13 — MVP release and acceptance
 
 - [ ] P13.1–P13.10 — Produce reproducible Windows x64/Arm64 bundles containing neutral Host/CLI/presentation code and provider-owned thin Windows adapters; publish matching version, checksums, SBOM, annotated tag, and release notes.
-- [ ] P13.11–P13.24 — Run clean-profile install/update/rollback and end-to-end workflow acceptance: provider enablement, conditional updates, authentication, project init, concurrent sprints, fallback, client restart/update, single writer, snapshot/events, human gates, supervised execution, best-effort lineage review, deferral, supersession, review convergence, notifications, diagnostics, localization, and release/development isolation.
+- [ ] P13.11–P13.24 — Run clean-profile install/update/rollback and end-to-end workflow acceptance: provider enablement, conditional updates, authentication, project init, concurrent sprints, fallback, client restart/update, single writer, snapshot/events, human gates, supervised execution, implementation-first testing enforcement, best-effort lineage review, deferral, supersession, review convergence, notifications, diagnostics, localization, and release/development isolation.
 
 **Final gate:** every stage is complete, the signed Windows MVP is reproducible, architecture matches implementation, CI is green, and no blocking/high finding remains.
 

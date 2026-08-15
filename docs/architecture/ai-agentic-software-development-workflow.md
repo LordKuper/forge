@@ -1,7 +1,7 @@
 # AI-assisted software delivery research
 
 **Status:** research summary  
-**Updated:** 2026-08-13
+**Updated:** 2026-08-15
 
 This document preserves the research conclusions that inform Forge. It is not a
 second architecture specification: the [architecture overview](overview.md),
@@ -64,6 +64,39 @@ Process completion is not workflow completion. A worker must return one
 schema-valid terminal result for its attempt; normal exit without that result is
 a failure. Deterministic validation and gates, never provider wording or exit
 code alone, decide success.
+
+### Select tests after accepting the implementation
+
+This strategy applies in two scopes: contributors use it while developing Forge
+itself, and the `implementation-critical` workflow applies it to every managed
+project. The repository rules govern the first scope; deterministic Host
+transitions and generated provider integrations govern the second. Project
+policy may add stricter gates but cannot reorder these phases.
+
+The implementation worker completes the scoped feature, sprint, or fix first.
+Forge then confirms the result against the frozen definition of done or explicit
+user expectations through inspection, execution, and relevant existing checks.
+Only after that confirmation does the workflow assess residual risk, select the
+smallest useful test set, and author new tests. It may record a no-new-test
+decision only when the change adds no behavior or existing checks cover every
+material risk. Final deterministic gates run after this recorded decision and
+any selected tests exist.
+
+This order prevents speculative suites from constraining an unsettled solution
+and lets test selection use the actual change surface. It does not let an
+implementation self-certify: expected results come from the accepted behavior,
+not from the code, and review uses fresh context. Every fix still leaves a
+regression test that is proven against the pre-fix behavior or an equivalent
+targeted mutation.
+
+### Keep tests risk-based and change-scoped
+
+Use the cheapest reliable check for each material risk: static and architecture
+checks, focused unit or property tests for logic, component or contract tests for
+boundaries, and only essential end-to-end journeys. Coverage locates untested
+code but is not a quota. Avoid trivial, implementation-coupled, mock-confirming,
+redundant, or flaky tests. Run impacted fast checks during development and reserve
+the full reproducible suite for the final repository gate or a scheduled lane.
 
 ### Keep configuration and generated outputs scoped
 
