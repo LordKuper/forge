@@ -27,23 +27,6 @@ public sealed class StartupGateTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task RecoverableFailureOffersRecoveryOnly()
-    {
-        using TestEnvironment environment = new();
-        await WriteCorruptUserConfigurationAsync(environment);
-
-        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
-            null,
-            TestContext.Current.CancellationToken);
-
-        SuggestedAction action = Assert.Single(snapshot.SuggestedActions);
-        Assert.Equal("recover_startup", action.ActionId);
-        Assert.Equal(1, action.Rank);
-        Assert.Equal("user_configuration", action.Target.Id);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task ForeignIdempotencyKeyIsRejectedWithoutSideEffect()
     {
         using TestEnvironment environment = new();

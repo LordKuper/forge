@@ -32,30 +32,17 @@ public sealed class PublishProfileTests
         Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
     }
 
+    /// <summary>The bundle asset name is a release contract: <c>ReleaseAssetVerifier</c> resolves the
+    /// asset it downloads by exactly this name, so a publisher that renames it breaks every update.</summary>
     [Fact]
     [Trait("Category", "Installer")]
-    public void BundlePublisherProducesTheVerifiedArchiveLayout()
+    public void BundlePublisherProducesTheContractedArchiveName()
     {
         string script = File.ReadAllText(Path.Combine(FindRoot(), "build", "Publish-WindowsBundle.ps1"));
 
         Assert.Contains("Forge.Cli.Windows\\Forge.Cli.Windows.csproj", script, StringComparison.Ordinal);
         Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
         Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
-        Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
-        Assert.Contains("LastWriteTime", script, StringComparison.Ordinal);
-    }
-
-    [Fact]
-    [Trait("Category", "Installer")]
-    public void WindowsUpdateStrategyIsImplementedInTheApplication()
-    {
-        string root = FindRoot();
-        string strategy = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater.Windows", "WindowsUpdateStrategy.cs"));
-        string activation = File.ReadAllText(Path.Combine(root, "src", "Forge.Updater", "PortableBundleActivation.cs"));
-
-        Assert.False(File.Exists(Path.Combine(root, "install.ps1")));
-        Assert.Contains("DownloadAndVerifyAsync", strategy, StringComparison.Ordinal);
-        Assert.Contains("File.Replace", activation, StringComparison.Ordinal);
     }
 
     private static string FindRoot()

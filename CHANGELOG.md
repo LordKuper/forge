@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.21.1
+
+### Changed
+
+- Forge's own test suite now follows the implementation-first, risk-based test
+  strategy: duplicate, tautological, and source-text-grepping tests were removed
+  and near-identical cases were merged into data-driven theories. No shipped
+  behavior, contract, or configuration changes; every risk the removed tests
+  touched stays covered by a stronger existing test.
+
 ## v0.21.0
 
 ### Added

@@ -103,32 +103,6 @@ public sealed class SprintDefinitionTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AnArtifactDependencyOnANonTerminalSprintIsRejectedWithoutCreatingAnything()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        ISprintStore store = environment.Resolve<ISprintStore>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        SprintId upstream = (await orchestrator.CreateSprintAsync(
-            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
-
-        // Naming a source sprint is always rejected — fail-closed, since no publication record
-        // exists to verify against — regardless of whether that source sprint is even terminal yet.
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(
-                environment.ProjectRoot,
-                1,
-                Guid.NewGuid(),
-                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64), upstream)]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyNotPublished, result.DiagnosticCode);
-        Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task AnArtifactDependencyWithASourceSprintIsRejectedEvenOnceItIsCompleted()
     {
         using TestEnvironment environment = await InitializedAsync();
@@ -152,6 +126,8 @@ public sealed class SprintDefinitionTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.SprintDependencyNotPublished, result.DiagnosticCode);
+        // Only the upstream sprint exists: the rejected creation registered nothing.
+        Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 
     [Fact]
@@ -175,22 +151,6 @@ public sealed class SprintDefinitionTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AnArtifactDependencyWithAMalformedDigestIsRejected()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(environment.ProjectRoot, 1, Guid.NewGuid(), [new(SprintDependencyKind.Artifact, "sha256:abc")]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public async Task ACommitDependencyNeedsNoTerminalityCheck()
     {
         using TestEnvironment environment = await InitializedAsync();
@@ -208,98 +168,29 @@ public sealed class SprintDefinitionTests
         Assert.True(result.Succeeded);
     }
 
-    [Fact]
+    [Theory]
     [Trait("Category", "Unit")]
-    public async Task ACommitDependencyOnABranchNameIsRejected()
+    // A branch name is not an immutable id at all; an abbreviated or uppercase sha is not the
+    // canonical spelling; and .NET regex `$` matches immediately before a trailing '\n', so a
+    // canonical-looking id smuggling one in must still be rejected.
+    [InlineData(SprintDependencyKind.Commit, "main")]
+    [InlineData(SprintDependencyKind.Commit, "bbbbbbb")]
+    [InlineData(SprintDependencyKind.Commit, "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")]
+    [InlineData(SprintDependencyKind.Commit, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")]
+    [InlineData(SprintDependencyKind.Artifact, "sha256:abc")]
+    [InlineData(
+        SprintDependencyKind.Artifact,
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n")]
+    public async Task ADependencyIdThatIsNotItsCanonicalImmutableSpellingIsRejected(
+        SprintDependencyKind kind,
+        string id)
     {
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
 
         CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(environment.ProjectRoot, 1, Guid.NewGuid(), [new(SprintDependencyKind.Commit, "main")]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task ACommitDependencyWithAnAbbreviatedShaIsRejected()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(
-                environment.ProjectRoot,
-                1,
-                Guid.NewGuid(),
-                [new(SprintDependencyKind.Commit, new string('b', 7))]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task ACommitDependencyWithUppercaseHexIsRejected()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(
-                environment.ProjectRoot,
-                1,
-                Guid.NewGuid(),
-                [new(SprintDependencyKind.Commit, new string('B', 40))]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task ACommitDependencyWithATrailingNewlineIsRejected()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        // .NET regex `$` matches immediately before a trailing '\n', not just at the true end of the
-        // string — a canonical-looking id smuggling one in must still be rejected.
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(
-                environment.ProjectRoot,
-                1,
-                Guid.NewGuid(),
-                [new(SprintDependencyKind.Commit, new string('a', 40) + "\n")]),
-            cancellationToken);
-
-        Assert.False(result.Succeeded);
-        Assert.Equal(DiagnosticCodes.SprintDependencyInvalid, result.DiagnosticCode);
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
-    public async Task AnArtifactDependencyWithATrailingNewlineIsRejected()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-
-        CreateSprintResult result = await orchestrator.CreateSprintAsync(
-            new(
-                environment.ProjectRoot,
-                1,
-                Guid.NewGuid(),
-                [new(SprintDependencyKind.Artifact, "sha256:" + new string('a', 64) + "\n")]),
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), [new(kind, id)]),
             cancellationToken);
 
         Assert.False(result.Succeeded);
