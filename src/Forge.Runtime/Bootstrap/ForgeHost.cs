@@ -45,6 +45,8 @@ public static class ForgeHost
         // ProviderCatalog's uniqueness check simply has nothing to reject.
         services.TryAddSingleton<ProviderCatalog>();
         services.TryAddSingleton<IProviderEnablementSource, ScopedConfigurationProviderEnablementSource>();
+        services.TryAddSingleton<IProviderReleaseCache, FileProviderReleaseCache>();
+        services.TryAddSingleton<IProviderInstallLock, ProviderInstallLock>();
         services.TryAddSingleton<IProviderToolchainManager, ProviderToolchainManager>();
         services.AddSingleton<ProjectRootResolver>();
         services.AddSingleton<ProjectInitializer>();

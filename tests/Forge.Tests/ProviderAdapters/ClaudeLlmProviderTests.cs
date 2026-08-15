@@ -15,7 +15,7 @@ public sealed class ClaudeLlmProviderTests
         WriteClaudeExecutable(paths);
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, "1.9.0 (Claude Code)", string.Empty));
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.VersionUnsupported, status.DiagnosticCode);
@@ -23,30 +23,139 @@ public sealed class ClaudeLlmProviderTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task InstallOrUpdateRunsUpdateDirectlyWhenAlreadyInstalled()
+    public async Task InstallOrUpdateRunsUpdateDirectlyWhenANewerVersionIsAvailable()
     {
         using TestPaths paths = new();
         string executable = WriteClaudeExecutable(paths);
-        bool ranUpdate = false;
-        ClaudeLlmProvider provider = CreateProvider(paths, request =>
-        {
-            Assert.Equal(executable, request.FileName);
-            if (!ranUpdate)
+        int callCount = 0;
+        ClaudeLlmProvider provider = CreateProvider(
+            paths,
+            request =>
             {
-                Assert.Equal(["update"], request.Arguments);
-                ranUpdate = true;
-                return new(0, string.Empty, string.Empty);
-            }
-
-            Assert.Equal(["--version"], request.Arguments);
-            return new(0, "2.1.221 (Claude Code)", string.Empty);
-        });
+                callCount++;
+                return callCount switch
+                {
+                    // 1: the initial local probe establishes the current version to compare.
+                    1 => Probe("--version", request, () => new(0, "2.1.220 (Claude Code)", string.Empty)),
+                    // 2: a newer release is available, so the vendor's own update command runs.
+                    2 => Probe("update", request, () =>
+                    {
+                        Assert.Equal(executable, request.FileName);
+                        return new(0, string.Empty, string.Empty);
+                    }),
+                    // 3: the post-update recheck is local-only — never another network release check.
+                    _ => Probe("--version", request, () => new(0, "2.1.221 (Claude Code)", string.Empty)),
+                };
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 221))));
 
         ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
 
-        Assert.True(ranUpdate);
+        Assert.Equal(3, callCount);
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.Equal("2.1.221", status.Version);
+        Assert.False(status.UpdateAvailable);
+
+        static ProcessResult Probe(string expectedArgument, ProcessRequest request, Func<ProcessResult> respond)
+        {
+            Assert.Equal([expectedArgument], request.Arguments);
+            return respond();
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateSkipsWorkWhenAlreadyOnTheLatestVersion()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        int callCount = 0;
+        ClaudeLlmProvider provider = CreateProvider(
+            paths,
+            request =>
+            {
+                callCount++;
+                Assert.Equal(1, callCount);
+                return new(0, "2.1.221 (Claude Code)", string.Empty);
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 221))));
+
+        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, callCount);
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.False(status.UpdateAvailable);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("""{"authenticated": true}""", ProviderHealthAuthentication.Ready)]
+    [InlineData("""{"authenticated": false}""", ProviderHealthAuthentication.Required)]
+    [InlineData("""{"isAuthenticated": true}""", ProviderHealthAuthentication.Ready)]
+    [InlineData("""{"credentials": {"type": "oauth"}}""", ProviderHealthAuthentication.Ready)]
+    [InlineData("""{"credentials": null}""", ProviderHealthAuthentication.CheckFailed)]
+    [InlineData("""not json at all""", ProviderHealthAuthentication.CheckFailed)]
+    [InlineData("""{"unrecognized": "shape"}""", ProviderHealthAuthentication.CheckFailed)]
+    public async Task CheckAuthenticationParsesTheJsonBodyRatherThanTrustingExitCodeAlone(
+        string standardOutput,
+        ProviderHealthAuthentication expected)
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        ClaudeLlmProvider provider = CreateProvider(paths, request =>
+        {
+            Assert.Equal(["auth", "status", "--json"], request.Arguments);
+            // Exit code intentionally disagrees with the body in some cases: the body must decide.
+            return new(1, standardOutput, string.Empty);
+        });
+
+        ProviderAuthenticationStatus status =
+            await provider.CheckAuthenticationAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, status.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncDisablesTheBackgroundAutoUpdater()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        IReadOnlyDictionary<string, string>? capturedEnvironment = null;
+        ClaudeLlmProvider provider = CreateProvider(paths, request =>
+        {
+            capturedEnvironment = request.EnvironmentVariables;
+            return new(0, string.Empty, string.Empty);
+        });
+
+        await provider.RunAsync("say hi", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedEnvironment);
+        Assert.Equal("1", capturedEnvironment!["DISABLE_AUTOUPDATER"]);
+        Assert.False(capturedEnvironment.ContainsKey("DISABLE_UPDATES"));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateNeverDisablesTheBackgroundAutoUpdater()
+    {
+        using TestPaths paths = new();
+        string executable = WriteClaudeExecutable(paths);
+        List<IReadOnlyDictionary<string, string>?> capturedEnvironments = [];
+        ClaudeLlmProvider provider = CreateProvider(
+            paths,
+            request =>
+            {
+                capturedEnvironments.Add(request.EnvironmentVariables);
+                return request.Arguments is ["--version"]
+                    ? new(0, "2.1.221 (Claude Code)", string.Empty)
+                    : new(0, string.Empty, string.Empty);
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 222))));
+
+        await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.All(capturedEnvironments, environment => Assert.Null(environment));
     }
 
     [Fact]
@@ -100,8 +209,17 @@ public sealed class ClaudeLlmProviderTests
     private static string ReadFixture(string name) => File.ReadAllText(
         Path.Combine(RepositoryRoot.Find(), "tests", "Forge.Tests", "Unit", "fixtures", "providers", name));
 
-    private static ClaudeLlmProvider CreateProvider(TestPaths paths, Func<ProcessRequest, ProcessResult> respond) =>
-        new(paths, new StubProcessRunner(respond));
+    private static ClaudeLlmProvider CreateProvider(
+        TestPaths paths,
+        Func<ProcessRequest, ProcessResult> respond,
+        IProviderReleaseSource? releaseSource = null) =>
+        new(
+            paths,
+            new StubProcessRunner(respond),
+            releaseSource ?? new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
+            new FakeReleaseCache(),
+            new FakeInstallLock(),
+            new FakeClock());
 
     private static string WriteClaudeExecutable(TestPaths paths)
     {
@@ -146,5 +264,36 @@ public sealed class ClaudeLlmProviderTests
             cancellationToken.ThrowIfCancellationRequested();
             return Task.FromResult(respond(request));
         }
+    }
+
+    private sealed class FakeReleaseSource(ProviderReleaseLookupResult result) : IProviderReleaseSource
+    {
+        public Task<ProviderReleaseLookupResult> FetchLatestVersionAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(result);
+    }
+
+    private sealed class FakeReleaseCache : IProviderReleaseCache
+    {
+        public Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken) =>
+            Task.FromResult<ProviderReleaseCacheEntry?>(null);
+
+        public Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+    }
+
+    private sealed class FakeInstallLock : IProviderInstallLock
+    {
+        public Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
+            Task.FromResult<IProviderInstallLease?>(new NoOpLease());
+
+        private sealed class NoOpLease : IProviderInstallLease
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class FakeClock : IClock
+    {
+        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
     }
 }

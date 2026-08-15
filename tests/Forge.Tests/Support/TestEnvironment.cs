@@ -162,8 +162,8 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
     ]);
 
     public static ProviderToolchainStatus Ready { get; } = new([
-        ProviderStatus.Ready(Codex, "0.146.0"),
-        ProviderStatus.Ready(ClaudeCode, "2.1.221"),
+        ProviderStatus.Ready(Codex, "0.146.0") with { Authentication = ProviderAuthenticationStatus.Ready },
+        ProviderStatus.Ready(ClaudeCode, "2.1.221") with { Authentication = ProviderAuthenticationStatus.Ready },
     ]);
 
     private readonly ProviderToolchainStatus status = status ?? NotReady;
@@ -176,8 +176,14 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
 }
 
 /// <summary>A minimal, in-memory provider: reports a fixed state and counts install calls,
-/// without ever touching the network or spawning a process.</summary>
-internal sealed class FakeLlmProvider(ProviderId id, ProviderState state, string? version) : ILlmProvider
+/// without ever touching the network or spawning a process. Reports authentication as ready by
+/// default, since most callers only care about install/discovery orchestration; pass
+/// <paramref name="authentication"/> explicitly to exercise an authentication-gated scenario.</summary>
+internal sealed class FakeLlmProvider(
+    ProviderId id,
+    ProviderState state,
+    string? version,
+    ProviderAuthenticationStatus? authentication = null) : ILlmProvider
 {
     public int InstallCalls { get; private set; }
 
@@ -185,7 +191,7 @@ internal sealed class FakeLlmProvider(ProviderId id, ProviderState state, string
 
     public ProviderId Id => id;
 
-    public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken)
+    public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
         DiscoverCalls++;
         return Task.FromResult(new ProviderStatus(id, state, version, ProviderDiagnosticCodes.None));
@@ -193,12 +199,24 @@ internal sealed class FakeLlmProvider(ProviderId id, ProviderState state, string
 
     public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken)
     {
+        // Mirrors the real adapters: InstallOrUpdateAsync always probes first and only actually
+        // mutates anything when that probe found a reason to (ProviderInstallation's own
+        // conditional-update/install-repair policy).
+        DiscoverCalls++;
+        if (state == ProviderState.Ready)
+        {
+            return Task.FromResult(new ProviderStatus(id, state, version, ProviderDiagnosticCodes.None));
+        }
+
         InstallCalls++;
         return Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
     }
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult<string?>(null);
+
+    public Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(authentication ?? ProviderAuthenticationStatus.Ready);
 
     public Task<ProviderRunResult> RunAsync(
         string prompt,

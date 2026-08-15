@@ -20,7 +20,15 @@ public sealed class ProviderToolchainManager(ProviderCatalog catalog, IProviderE
         List<ProviderStatus> statuses = new(enabled.Count);
         foreach (ILlmProvider provider in enabled)
         {
-            statuses.Add(await provider.DiscoverAsync(cancellationToken).ConfigureAwait(false));
+            // Routine startup respects the release-availability cache (ADR 0008's 24h/1h windows)
+            // — it reports whether an update is available but never installs anything.
+            ProviderStatus status = await provider
+                .DiscoverAsync(bypassReleaseCache: false, cancellationToken)
+                .ConfigureAwait(false);
+            statuses.Add(status with
+            {
+                Authentication = await provider.CheckAuthenticationAsync(cancellationToken).ConfigureAwait(false),
+            });
         }
 
         return new(statuses);
@@ -32,13 +40,14 @@ public sealed class ProviderToolchainManager(ProviderCatalog catalog, IProviderE
         List<ProviderStatus> statuses = new(enabled.Count);
         foreach (ILlmProvider provider in enabled)
         {
-            ProviderStatus status = await provider.DiscoverAsync(cancellationToken).ConfigureAwait(false);
-            if (status.State != ProviderState.Ready)
+            // InstallOrUpdateAsync always re-checks itself (bypassing the cache, per ADR 0008's
+            // "forge models --refresh bypasses the time limit") and only actually installs/updates
+            // when its own fresh check finds a reason to.
+            ProviderStatus status = await provider.InstallOrUpdateAsync(cancellationToken).ConfigureAwait(false);
+            statuses.Add(status with
             {
-                status = await provider.InstallOrUpdateAsync(cancellationToken).ConfigureAwait(false);
-            }
-
-            statuses.Add(status);
+                Authentication = await provider.CheckAuthenticationAsync(cancellationToken).ConfigureAwait(false),
+            });
         }
 
         return new(statuses);

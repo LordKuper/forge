@@ -10,10 +10,21 @@ namespace Forge.Providers.Codex;
 public sealed class CodexLlmProvider(
     IEnvironmentPaths paths,
     IProcessRunner processRunner,
+    IProviderReleaseSource releaseSource,
+    IProviderReleaseCache releaseCache,
+    IProviderInstallLock installLock,
+    IClock clock,
     TimeSpan? versionProbeTimeout = null,
-    TimeSpan? installTimeout = null) : ILlmProvider
+    TimeSpan? installTimeout = null,
+    TimeSpan? installLockTimeout = null,
+    TimeSpan? authenticationProbeTimeout = null) : ILlmProvider
 {
     public static readonly ProviderId Codex = new("codex");
+
+    /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
+    /// vendor config file (ADR 0008: "from a Forge-owned probe directory") — the same directory
+    /// the release cache lives under.</summary>
+    private readonly string probeDirectory = Path.Combine(paths.LocalApplicationData, "Forge", paths.InstanceId, "providers");
 
     /// <summary>
     /// The fully-qualified in-box Windows PowerShell path, never a bare `powershell.exe` (ADR
@@ -47,11 +58,15 @@ public sealed class CodexLlmProvider(
 
     public ProviderId Id => Codex;
 
-    public Task<ProviderStatus> DiscoverAsync(CancellationToken cancellationToken) =>
+    public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.DiscoverAsync(
             Id,
             spec,
             processRunner,
+            releaseSource,
+            releaseCache,
+            clock,
+            bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             cancellationToken);
 
@@ -60,12 +75,33 @@ public sealed class CodexLlmProvider(
             Id,
             spec,
             processRunner,
+            releaseSource,
+            releaseCache,
+            installLock,
+            clock,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
+            installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,
             cancellationToken);
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);
+
+    /// <summary>`codex login status` is documented to be scriptable by exit code alone: 0 means
+    /// authenticated, 1 means not — no output parsing needed or attempted.</summary>
+    public async Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken)
+    {
+        Directory.CreateDirectory(probeDirectory);
+        string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
+        return await ProviderInstallation.CheckAuthenticationAsync(
+            executable,
+            processRunner,
+            ["login", "status"],
+            probeDirectory,
+            authenticationProbeTimeout ?? ProviderInstallation.DefaultAuthenticationProbeTimeout,
+            result => result.ExitCode == 0 ? ProviderAuthenticationStatus.Ready : ProviderAuthenticationStatus.Required,
+            cancellationToken).ConfigureAwait(false);
+    }
 
     /// <summary>
     /// Event shape per `developers.openai.com/codex` (`type`: `thread.started`, `turn.started`,
