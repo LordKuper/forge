@@ -22,9 +22,8 @@ public sealed class CodexLlmProvider(
     public static readonly ProviderId Codex = new("codex");
 
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
-    /// vendor config file (ADR 0008: "from a Forge-owned probe directory") — the same directory
-    /// the release cache lives under.</summary>
-    private readonly string probeDirectory = Path.Combine(paths.LocalApplicationData, "Forge", paths.InstanceId, "providers");
+    /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
+    private readonly string probeDirectory = FileProviderReleaseCache.ProviderStateDirectory(paths);
 
     /// <summary>
     /// The fully-qualified in-box Windows PowerShell path, never a bare `powershell.exe` (ADR
@@ -91,7 +90,15 @@ public sealed class CodexLlmProvider(
     /// authenticated, 1 means not — no output parsing needed or attempted.</summary>
     public async Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken)
     {
-        Directory.CreateDirectory(probeDirectory);
+        try
+        {
+            Directory.CreateDirectory(probeDirectory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return ProviderAuthenticationStatus.CheckFailed;
+        }
+
         string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
         return await ProviderInstallation.CheckAuthenticationAsync(
             executable,

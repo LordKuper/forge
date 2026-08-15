@@ -12,6 +12,11 @@ namespace Forge.Providers.Codex;
 public sealed class CodexReleaseSource(INetworkClient network) : IProviderReleaseSource
 {
     private const string TagPrefix = "rust-v";
+
+    /// <summary>Only <c>tag_name</c> is read from this response; a bound caps the memory an
+    /// unexpectedly large or malicious response can force on this unattended startup path.</summary>
+    private const int MaxResponseBytes = 64 * 1024;
+
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(10);
     private static readonly Uri LatestChannelUri = new("https://releases.openai.com/codex/channels/latest");
 
@@ -25,8 +30,22 @@ public sealed class CodexReleaseSource(INetworkClient network) : IProviderReleas
             await using Stream stream = await network
                 .GetStreamAsync(LatestChannelUri, linked.Token)
                 .ConfigureAwait(false);
+            using MemoryStream bounded = new();
+            byte[] chunk = new byte[4096];
+            int chunkRead;
+            while ((chunkRead = await stream.ReadAsync(chunk, linked.Token).ConfigureAwait(false)) > 0)
+            {
+                if (bounded.Length + chunkRead > MaxResponseBytes)
+                {
+                    return ProviderReleaseLookupResult.Failed;
+                }
+
+                bounded.Write(chunk, 0, chunkRead);
+            }
+
+            bounded.Position = 0;
             using JsonDocument document = await JsonDocument
-                .ParseAsync(stream, cancellationToken: linked.Token)
+                .ParseAsync(bounded, cancellationToken: linked.Token)
                 .ConfigureAwait(false);
             if (!document.RootElement.TryGetProperty("tag_name", out JsonElement tagElement) ||
                 tagElement.ValueKind != JsonValueKind.String)

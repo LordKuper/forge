@@ -8,7 +8,7 @@ public sealed class ProviderInstallLockTests
     [Trait("Category", "Unit")]
     public async Task AcquireSucceedsWhenUnheld()
     {
-        ProviderInstallLock @lock = new();
+        ProviderInstallLock @lock = new(UniqueLockName());
 
         await using IProviderInstallLease? lease =
             await @lock.TryAcquireAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -20,7 +20,7 @@ public sealed class ProviderInstallLockTests
     [Trait("Category", "Unit")]
     public async Task ASecondAcquireBlocksUntilTheFirstIsReleased()
     {
-        ProviderInstallLock @lock = new();
+        ProviderInstallLock @lock = new(UniqueLockName());
         IProviderInstallLease? first =
             await @lock.TryAcquireAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.NotNull(first);
@@ -41,7 +41,7 @@ public sealed class ProviderInstallLockTests
     [Trait("Category", "Unit")]
     public async Task DisposingTwiceIsSafe()
     {
-        ProviderInstallLock @lock = new();
+        ProviderInstallLock @lock = new(UniqueLockName());
         IProviderInstallLease? lease =
             await @lock.TryAcquireAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.NotNull(lease);
@@ -49,4 +49,8 @@ public sealed class ProviderInstallLockTests
         await lease!.DisposeAsync();
         await lease.DisposeAsync();
     }
+
+    // A unique name per test keeps these tests from contending with the real production lock
+    // (or each other) — see ProviderInstallLock.DefaultLockName's remarks.
+    private static string UniqueLockName() => $"forge-provider-install-lock-test-{Guid.NewGuid():N}";
 }

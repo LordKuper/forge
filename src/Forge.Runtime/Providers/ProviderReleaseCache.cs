@@ -16,6 +16,12 @@ public sealed class FileProviderReleaseCache(IEnvironmentPaths paths) : IProvide
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower };
 
+    /// <summary>The one canonical per-instance provider-state directory (release cache files and
+    /// adapter authentication-probe working directories both live here) — every caller must go
+    /// through this instead of re-spelling the path.</summary>
+    public static string ProviderStateDirectory(IEnvironmentPaths paths) =>
+        Path.Combine(paths.LocalApplicationData, "Forge", paths.InstanceId, "providers");
+
     public async Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken)
     {
         string path = CachePath(paths, id);
@@ -65,10 +71,6 @@ public sealed class FileProviderReleaseCache(IEnvironmentPaths paths) : IProvide
         }
     }
 
-    private static string CachePath(IEnvironmentPaths paths, ProviderId id) => Path.Combine(
-        paths.LocalApplicationData,
-        "Forge",
-        paths.InstanceId,
-        "providers",
-        $"release-cache-{id.Value}.json");
+    private static string CachePath(IEnvironmentPaths paths, ProviderId id) =>
+        Path.Combine(ProviderStateDirectory(paths), $"release-cache-{id.Value}.json");
 }

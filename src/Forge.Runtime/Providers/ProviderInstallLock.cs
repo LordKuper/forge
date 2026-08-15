@@ -16,9 +16,12 @@ namespace Forge.Providers;
 /// blocking wait itself runs on a pool thread via <see cref="Task.Run(Action)"/> so the caller's
 /// own thread is never pinned for the wait.
 /// </remarks>
-public sealed class ProviderInstallLock : IProviderInstallLock
+public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.DefaultLockName) : IProviderInstallLock
 {
-    private const string LockName = "forge-provider-install-lock";
+    /// <summary>The production per-user lock name — one lock shared by every Forge process for a
+    /// given user, matching the vendor executables it protects being a shared per-user resource.
+    /// Tests should pass a unique name instead so they never contend with a real install.</summary>
+    public const string DefaultLockName = "forge-provider-install-lock";
 
     /// <remarks>
     /// <paramref name="cancellationToken"/> only guards the moment before the wait starts (it
@@ -30,10 +33,10 @@ public sealed class ProviderInstallLock : IProviderInstallLock
     public async Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return await Task.Run(() => TryAcquireCore(timeout), cancellationToken).ConfigureAwait(false);
+        return await Task.Run(() => TryAcquireCore(lockName, timeout), cancellationToken).ConfigureAwait(false);
     }
 
-    private static Lease? TryAcquireCore(TimeSpan timeout)
+    private static Lease? TryAcquireCore(string lockName, TimeSpan timeout)
     {
         using ManualResetEventSlim acquireSignal = new(false);
         ManualResetEventSlim releaseSignal = new(false);
@@ -47,7 +50,7 @@ public sealed class ProviderInstallLock : IProviderInstallLock
             {
                 mutex = new Mutex(
                     initiallyOwned: false,
-                    LockName,
+                    lockName,
                     new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
                     out _);
                 try

@@ -1,7 +1,6 @@
-using System.Text;
-using Forge.Application;
 using Forge.Providers;
 using Forge.Providers.Claude;
+using Forge.Tests.Support;
 
 namespace Forge.ProviderAdapterTests;
 
@@ -59,15 +58,4 @@ public sealed class ClaudeReleaseSourceTests
         Assert.False(result.Succeeded);
     }
 
-    private sealed class FakeNetworkClient(string body) : INetworkClient
-    {
-        public Task<Stream> GetStreamAsync(Uri uri, CancellationToken cancellationToken) =>
-            Task.FromResult<Stream>(new MemoryStream(Encoding.UTF8.GetBytes(body)));
-    }
-
-    private sealed class ThrowingNetworkClient : INetworkClient
-    {
-        public Task<Stream> GetStreamAsync(Uri uri, CancellationToken cancellationToken) =>
-            throw new HttpRequestException("The endpoint is unreachable.");
-    }
 }

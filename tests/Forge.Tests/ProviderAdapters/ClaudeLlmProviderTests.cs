@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Providers;
 using Forge.Providers.Claude;
+using Forge.Tests.Support;
 using Forge.UnitTests;
 
 namespace Forge.ProviderAdapterTests;
@@ -37,13 +38,16 @@ public sealed class ClaudeLlmProviderTests
                 {
                     // 1: the initial local probe establishes the current version to compare.
                     1 => Probe("--version", request, () => new(0, "2.1.220 (Claude Code)", string.Empty)),
-                    // 2: a newer release is available, so the vendor's own update command runs.
-                    2 => Probe("update", request, () =>
+                    // 2: the re-probe taken right after the lock is acquired — still the old
+                    // version, since no concurrent process updated it first.
+                    2 => Probe("--version", request, () => new(0, "2.1.220 (Claude Code)", string.Empty)),
+                    // 3: a newer release is available, so the vendor's own update command runs.
+                    3 => Probe("update", request, () =>
                     {
                         Assert.Equal(executable, request.FileName);
                         return new(0, string.Empty, string.Empty);
                     }),
-                    // 3: the post-update recheck is local-only — never another network release check.
+                    // 4: the post-update recheck is local-only — never another network release check.
                     _ => Probe("--version", request, () => new(0, "2.1.221 (Claude Code)", string.Empty)),
                 };
             },
@@ -51,7 +55,7 @@ public sealed class ClaudeLlmProviderTests
 
         ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(3, callCount);
+        Assert.Equal(4, callCount);
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.Equal("2.1.221", status.Version);
         Assert.False(status.UpdateAvailable);
@@ -266,34 +270,4 @@ public sealed class ClaudeLlmProviderTests
         }
     }
 
-    private sealed class FakeReleaseSource(ProviderReleaseLookupResult result) : IProviderReleaseSource
-    {
-        public Task<ProviderReleaseLookupResult> FetchLatestVersionAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(result);
-    }
-
-    private sealed class FakeReleaseCache : IProviderReleaseCache
-    {
-        public Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken) =>
-            Task.FromResult<ProviderReleaseCacheEntry?>(null);
-
-        public Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class FakeInstallLock : IProviderInstallLock
-    {
-        public Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
-            Task.FromResult<IProviderInstallLease?>(new NoOpLease());
-
-        private sealed class NoOpLease : IProviderInstallLease
-        {
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class FakeClock : IClock
-    {
-        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
-    }
 }

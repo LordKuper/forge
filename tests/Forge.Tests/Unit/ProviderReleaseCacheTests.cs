@@ -60,10 +60,7 @@ public sealed class ProviderReleaseCacheTests
         using TestEnvironment environment = new();
         FileProviderReleaseCache cache = new(environment);
         string path = Path.Combine(
-            environment.LocalApplicationData,
-            "Forge",
-            environment.InstanceId,
-            "providers",
+            FileProviderReleaseCache.ProviderStateDirectory(environment),
             "release-cache-codex.json");
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "not json", TestContext.Current.CancellationToken);

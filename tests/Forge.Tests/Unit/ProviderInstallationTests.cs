@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Providers;
+using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
 
@@ -12,7 +13,7 @@ public sealed class ProviderInstallationTests
     public async Task ARecentSuccessfulCacheEntryIsReusedInsteadOfCheckingAgain()
     {
         FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         await cache.WriteAsync(
             Id,
             new(clock.UtcNow - TimeSpan.FromHours(1), true, "0.147.0"),
@@ -39,7 +40,7 @@ public sealed class ProviderInstallationTests
     public async Task ACacheEntryOlderThanTheSuccessWindowTriggersAFreshCheck()
     {
         FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         await cache.WriteAsync(
             Id,
             new(clock.UtcNow - ProviderInstallation.ReleaseCheckSuccessWindow, true, "0.147.0"),
@@ -66,7 +67,7 @@ public sealed class ProviderInstallationTests
     public async Task ARecentFailedCacheEntryIsNotRetriedWithinTheFailureWindow()
     {
         FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         await cache.WriteAsync(
             Id,
             new(clock.UtcNow - TimeSpan.FromMinutes(30), false, null),
@@ -93,7 +94,7 @@ public sealed class ProviderInstallationTests
     public async Task AFailedCacheEntryOlderThanTheFailureWindowTriggersAFreshCheck()
     {
         FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         await cache.WriteAsync(
             Id,
             new(clock.UtcNow - ProviderInstallation.ReleaseCheckFailureWindow, false, null),
@@ -120,7 +121,7 @@ public sealed class ProviderInstallationTests
     public async Task BypassingTheCacheAlwaysChecksEvenWithAFreshEntry()
     {
         FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         await cache.WriteAsync(
             Id,
             new(clock.UtcNow, true, "0.146.0"),
@@ -147,7 +148,7 @@ public sealed class ProviderInstallationTests
     public async Task ANeverCheckedProviderChecksImmediately()
     {
         FakeClock clock = new();
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
 
         ProviderStatus status = await ProviderInstallation.DiscoverAsync(
@@ -170,7 +171,7 @@ public sealed class ProviderInstallationTests
     public async Task ADiscoveryFailureNeverConsultsTheReleaseSourceAtAll()
     {
         FakeClock clock = new();
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
 
         ProviderStatus status = await ProviderInstallation.DiscoverAsync(
@@ -194,9 +195,9 @@ public sealed class ProviderInstallationTests
     public async Task InstallOrUpdateReportsTheRealDiagnosticWhenTheLockCannotBeAcquiredForAMissingProvider()
     {
         FakeClock clock = new();
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
-        NeverAcquiresLock installLock = new();
+        FakeInstallLock installLock = new(acquires: false);
 
         ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
             Id,
@@ -223,9 +224,9 @@ public sealed class ProviderInstallationTests
     public async Task InstallOrUpdateStaysReadyWhenAMutationAttemptFailsButThePriorInstallIsStillUsable()
     {
         FakeClock clock = new();
-        InMemoryReleaseCache cache = new();
+        FakeReleaseCache cache = new();
         CountingReleaseSource releaseSource = new(new(true, new Version(0, 148, 0)));
-        AlwaysAcquiresLock installLock = new();
+        FakeInstallLock installLock = new();
         SequencedProcessRunner runner = new(
             new ProcessResult(0, "0.146.0", string.Empty), // 1: local probe, current version
             new ProcessResult(1, string.Empty, "install failed"), // 2: install attempt fails
@@ -247,6 +248,39 @@ public sealed class ProviderInstallationTests
         // ADR 0008: "An update failure blocks only when the installed provider is no longer usable."
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.Equal("0.146.0", status.Version);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateSkipsTheMutationWhenAnotherProcessAlreadyAppliedItWhileWaitingOnTheLock()
+    {
+        FakeClock clock = new();
+        FakeReleaseCache cache = new();
+        CountingReleaseSource releaseSource = new(new(true, new Version(0, 147, 0)));
+        FakeInstallLock installLock = new();
+        SequencedProcessRunner runner = new(
+            new ProcessResult(0, "0.146.0", string.Empty), // 1: initial local probe, stale
+            new ProcessResult(0, "0.147.0", string.Empty)); // 2: re-probe under lock, already current
+
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
+            Id,
+            Spec(),
+            runner,
+            releaseSource,
+            cache,
+            installLock,
+            clock,
+            ProviderInstallation.DefaultVersionProbeTimeout,
+            ProviderInstallation.DefaultInstallTimeout,
+            ProviderInstallation.DefaultInstallLockTimeout,
+            TestContext.Current.CancellationToken);
+
+        // Regression: nothing re-read local state after the lease was granted, so a queued
+        // process reran the vendor updater against an executable another process already updated.
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Equal("0.147.0", status.Version);
+        Assert.False(status.UpdateAvailable);
+        Assert.Equal(2, runner.CallCount); // no install/update process ever ran
     }
 
     private static ProviderInstallSpec Spec(bool installed = true)
@@ -278,28 +312,14 @@ public sealed class ProviderInstallationTests
     {
         private int index;
 
+        public int CallCount { get; private set; }
+
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
         {
+            CallCount++;
             int position = Math.Min(index, responses.Length - 1);
             index++;
             return Task.FromResult(responses[position]);
-        }
-    }
-
-    private sealed class NeverAcquiresLock : IProviderInstallLock
-    {
-        public Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
-            Task.FromResult<IProviderInstallLease?>(null);
-    }
-
-    private sealed class AlwaysAcquiresLock : IProviderInstallLock
-    {
-        public Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
-            Task.FromResult<IProviderInstallLease?>(new Lease());
-
-        private sealed class Lease : IProviderInstallLease
-        {
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
     }
 
@@ -311,20 +331,6 @@ public sealed class ProviderInstallationTests
         {
             CallCount++;
             return Task.FromResult(result);
-        }
-    }
-
-    private sealed class InMemoryReleaseCache : IProviderReleaseCache
-    {
-        private readonly Dictionary<string, ProviderReleaseCacheEntry> entries = new(StringComparer.Ordinal);
-
-        public Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken) =>
-            Task.FromResult(entries.TryGetValue(id.Value, out ProviderReleaseCacheEntry? entry) ? entry : null);
-
-        public Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken)
-        {
-            entries[id.Value] = entry;
-            return Task.CompletedTask;
         }
     }
 }

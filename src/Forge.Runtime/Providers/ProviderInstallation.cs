@@ -110,6 +110,7 @@ public static partial class ProviderInstallation
             versionProbeTimeout,
             cancellationToken).ConfigureAwait(false);
         // DiscoverLocalAsync only ever returns Ready alongside a successfully parsed version.
+        Version? targetVersion = null;
         if (local.State == ProviderState.Ready && localVersion is { } version)
         {
             ProviderReleaseLookupResult lookup =
@@ -124,6 +125,8 @@ public static partial class ProviderInstallation
             {
                 return local with { UpdateAvailable = false };
             }
+
+            targetVersion = lookup.Version;
         }
 
         await using IProviderInstallLease? lease = await installLock
@@ -137,6 +140,23 @@ public static partial class ProviderInstallation
             // usable, and a missing/broken one keeps its own diagnostic (Missing,
             // VersionUnsupported, ...) instead of being mislabeled as an update failure.
             return local.State == ProviderState.Ready ? local with { UpdateAvailable = true } : local;
+        }
+
+        if (targetVersion is not null)
+        {
+            // Another process may have applied this exact update while we waited on the lock —
+            // re-read local state once (no second network check; the already-fetched
+            // targetVersion is still the comparison target) and skip a now-redundant mutation.
+            (ProviderStatus underLock, Version? lockedVersion) = await DiscoverLocalAsync(
+                id,
+                spec,
+                processRunner,
+                versionProbeTimeout,
+                cancellationToken).ConfigureAwait(false);
+            if (underLock.State == ProviderState.Ready && lockedVersion is { } current && targetVersion <= current)
+            {
+                return underLock with { UpdateAvailable = false };
+            }
         }
 
         bool alreadyInstalled = File.Exists(spec.ExecutablePath);

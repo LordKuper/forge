@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Providers;
 using Forge.Providers.Codex;
+using Forge.Tests.Support;
 using Forge.UnitTests;
 
 namespace Forge.ProviderAdapterTests;
@@ -175,16 +176,18 @@ public sealed class CodexLlmProviderTests
             _ =>
             {
                 processCalls++;
-                // 1: the initial local probe (must report the OLD version so a newer release
-                // actually looks newer). 2: the install script rerun (exit code only matters).
-                // 3: the post-update recheck, reporting the new version.
-                return new(0, processCalls == 1 ? "0.146.0" : "0.147.0", string.Empty);
+                // 1: the initial local probe. 2: the re-probe taken right after the lock is
+                // acquired (still OLD — no concurrent process updated it first). Both must report
+                // the OLD version so a newer release actually looks newer. 3: the install script
+                // rerun (exit code only matters). 4: the post-update recheck, reporting the new
+                // version.
+                return new(0, processCalls <= 2 ? "0.146.0" : "0.147.0", string.Empty);
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))));
 
         ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(3, processCalls);
+        Assert.Equal(4, processCalls);
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.False(status.UpdateAvailable);
     }
@@ -500,34 +503,4 @@ public sealed class CodexLlmProviderTests
         }
     }
 
-    private sealed class FakeReleaseSource(ProviderReleaseLookupResult result) : IProviderReleaseSource
-    {
-        public Task<ProviderReleaseLookupResult> FetchLatestVersionAsync(CancellationToken cancellationToken) =>
-            Task.FromResult(result);
-    }
-
-    private sealed class FakeReleaseCache : IProviderReleaseCache
-    {
-        public Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken) =>
-            Task.FromResult<ProviderReleaseCacheEntry?>(null);
-
-        public Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken) =>
-            Task.CompletedTask;
-    }
-
-    private sealed class FakeInstallLock(bool acquires = true) : IProviderInstallLock
-    {
-        public Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken) =>
-            Task.FromResult<IProviderInstallLease?>(acquires ? new NoOpLease() : null);
-
-        private sealed class NoOpLease : IProviderInstallLease
-        {
-            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-        }
-    }
-
-    private sealed class FakeClock : IClock
-    {
-        public DateTimeOffset UtcNow => DateTimeOffset.UtcNow;
-    }
 }

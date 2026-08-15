@@ -46,14 +46,12 @@ public static class ProviderDiagnosticCodes
     public const string VersionUnsupported = "provider_version_unsupported";
     public const string UpdateFailed = "provider_update_failed";
 
-    /// <summary>Reserved for the P8.72-82 authentication check ADR 0008 describes: "Missing
-    /// authentication blocks model work with `provider_authentication_required`." Not produced by
-    /// any code yet — only the versioned contract (<see cref="ProviderHealthAuthentication"/>)
-    /// names it ahead of that stage.</summary>
+    /// <summary>ADR 0008: "Missing authentication blocks model work with
+    /// `provider_authentication_required`." Produced by <see cref="ProviderAuthenticationStatus.Required"/>.</summary>
     public const string AuthenticationRequired = "provider_authentication_required";
 
-    /// <summary>Reserved for the P8.72-82 authentication check: "a probe failure uses
-    /// `provider_authentication_check_failed`." See <see cref="AuthenticationRequired"/>.</summary>
+    /// <summary>ADR 0008: "a probe failure uses `provider_authentication_check_failed`." Produced
+    /// by <see cref="ProviderAuthenticationStatus.CheckFailed"/>.</summary>
     public const string AuthenticationCheckFailed = "provider_authentication_check_failed";
 }
 
@@ -198,7 +196,9 @@ public interface IProviderToolchainManager
     /// <summary>Cheap, read-only, offline. Safe to call on every startup pass.</summary>
     Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken);
 
-    /// <summary>Installs or updates any provider that is not ready, then rechecks all of them.</summary>
+    /// <summary>Re-checks every enabled provider against a fresh, cache-bypassing release lookup
+    /// and installs or updates only when that check finds a missing/broken install or a newer
+    /// release, then rechecks authentication for all of them.</summary>
     Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken);
 }
 
