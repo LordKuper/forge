@@ -39,8 +39,10 @@ public sealed class PublishProfileTests
     /// update. A fixed 1980 entry timestamp, assigned to every entry walked in a
     /// path-ordered sequence, is what makes the archive byte-for-byte reproducible from a clean
     /// checkout (AGENTS.md, "Quality") and its published checksum therefore verifiable — so the
-    /// timestamp's own value and the sort key are pinned here, not just the statements that use
-    /// them.</summary>
+    /// timestamp's own value, the sort key, and the staging-relative entry name are pinned here, not
+    /// just the statements that use them. The entry name matters as much as the other two: the
+    /// staging directory carries a fresh <c>Guid</c> per run, so an entry name that keeps any of it
+    /// changes the archive on every build.</summary>
     [Fact]
     [Trait("Category", "Installer")]
     public void BundlePublisherProducesTheContractedReproducibleArchive()
@@ -58,6 +60,10 @@ public sealed class PublishProfileTests
             StringComparison.Ordinal);
         Assert.Contains(
             "Sort-Object { $_.FullName.Substring($stagingDirectory.Length).TrimStart('\\', '/') }",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "$name = $_.FullName.Substring($stagingDirectory.Length).TrimStart('\\', '/') -replace '\\\\', '/'",
             script,
             StringComparison.Ordinal);
         Assert.Contains("$entry.LastWriteTime = $timestamp", script, StringComparison.Ordinal);
