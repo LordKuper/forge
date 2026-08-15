@@ -10,6 +10,7 @@
       <Label x:Name="ProjectRootLabel" />
       <Label x:Name="ProjectStateLabel" />
       <Label x:Name="StartupChecksLabel" />
+      <Label x:Name="ProvidersLabel" />
       <Label x:Name="SuggestedActionsLabel" />
       <HorizontalStackLayout Spacing="8">
         <Entry x:Name="ProjectRootEntry" WidthRequest="360" />

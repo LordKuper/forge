@@ -12,6 +12,7 @@ public sealed record MainPageSnapshot(
     string ProjectRootText,
     string ProjectStateText,
     string StartupChecksText,
+    string ProvidersText,
     string SuggestedActionsText,
     string ConfigurationText,
     string DiagnosticsText,
@@ -54,6 +55,9 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
                 startup.Checks.Select(check => string.Create(
                     CultureInfo.InvariantCulture,
                     $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
+            Render(
+                text.Resolve(MessageKeys.ProviderToolchainTitle),
+                snapshot.Providers.Select(SurfaceFormatting.ProviderRow)),
             snapshot.SuggestedActions.Count == 0
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(

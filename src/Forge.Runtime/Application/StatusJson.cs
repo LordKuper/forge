@@ -15,11 +15,8 @@ public static class StatusJson
     public static string Serialize(IReadOnlyList<SuggestedAction> actions) =>
         JsonSerializer.Serialize(actions, Options);
 
-    public static string Serialize(ProviderToolchainStatus status) =>
-        JsonSerializer.Serialize(status, Options);
-
-    public static string Serialize(IReadOnlyList<ProviderHealthEntry> providers) =>
-        JsonSerializer.Serialize(providers, Options);
+    public static string Serialize(ProviderHealth health) =>
+        JsonSerializer.Serialize(health, Options);
 
     public static string Serialize(StartupStatus status) =>
         JsonSerializer.Serialize(status, Options);

@@ -147,6 +147,39 @@ public sealed class StatusAdvisorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task TheSnapshotListsARegisteredButDisabledProviderAsAReadOnlyEntry()
+    {
+        // The toolchain manager (standing in for enablement-filtered discovery) only ever reports
+        // "codex"; "claude_code" is registered in the catalog but never probed — the snapshot must
+        // still surface it, matching P8.83-88's "project registered/enabled/disabled ... states
+        // through ... snapshot."
+        ProviderToolchainStatus enabledOnly = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                Authentication = ProviderAuthenticationStatus.Ready,
+            },
+        ]);
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(enabledOnly),
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "0.146.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "2.1.221"),
+            ]);
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            null, TestContext.Current.CancellationToken);
+
+        ProviderHealthEntry claude = Assert.Single(snapshot.Providers, entry => entry.Id == "claude_code");
+        Assert.True(claude.Registered);
+        Assert.False(claude.Enabled);
+        Assert.Null(claude.State);
+        Assert.Equal(ProviderDiagnosticCodes.Disabled, claude.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task MachineSnapshotStaysCultureInvariant()
     {
         CultureInfo originalCulture = CultureInfo.CurrentCulture;
@@ -168,7 +201,7 @@ public sealed class StatusAdvisorTests
                 TestContext.Current.CancellationToken);
             using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));
 
-            Assert.Equal("1.1.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.2.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal("blocked", json.RootElement.GetProperty("startup").GetString());
             Assert.Equal(
                 "initialize_project",

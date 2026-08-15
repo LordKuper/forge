@@ -344,6 +344,32 @@
       }
     },
     {
+      "name": "project snapshot lists a registered but disabled provider with a null state",
+      "schema": "project-snapshot",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.2.0",
+        "state_version": 3,
+        "generated_at": "2026-08-15T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [],
+        "attention": [],
+        "suggested_actions": [],
+        "startup_checks": [],
+        "providers": [{
+          "id": "claude_code",
+          "registered": true,
+          "enabled": false,
+          "state": null,
+          "version": null,
+          "update_available": null,
+          "authentication": null,
+          "diagnostic_code": "provider_disabled"
+        }]
+      }
+    },
+    {
       "name": "project snapshot rejects more than five suggestions",
       "schema": "project-snapshot",
       "valid": false,
@@ -636,6 +662,24 @@
           "state": "missing",
           "version": null,
           "diagnostic_code": "provider_missing"
+        }]
+      }
+    },
+    {
+      "name": "provider health accepts a disabled entry with a null state",
+      "schema": "provider-health",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.1.0",
+        "providers": [{
+          "id": "claude_code",
+          "registered": true,
+          "enabled": false,
+          "state": null,
+          "version": null,
+          "update_available": null,
+          "authentication": null,
+          "diagnostic_code": "provider_disabled"
         }]
       }
     },

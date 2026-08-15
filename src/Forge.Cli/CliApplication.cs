@@ -303,19 +303,22 @@ public static class CliApplication
             ProviderToolchainStatus status = parseResult.GetValue(refresh)
                 ? await application.RefreshProviderHealthAsync(cancellationToken).ConfigureAwait(false)
                 : await application.GetProviderHealthAsync(cancellationToken).ConfigureAwait(false);
+            // The aggregate diagnostic is driven purely by enabled providers (ADR 0008: a disabled
+            // provider is never part of readiness) — computed from `status`, not the entries below.
             string diagnosticCode = status.SharedDiagnosticCode;
+            IReadOnlyList<ProviderHealthEntry> entries = application.ProjectProviderHealth(status);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(status));
+                output.WriteLine(StatusJson.Serialize(new ProviderHealth(ProviderHealth.ContractVersion, entries)));
                 return Report(diagnostics, diagnosticCode);
             }
 
             output.WriteLine(text.Resolve(MessageKeys.ProviderToolchainTitle));
-            foreach (ProviderStatus provider in status.Providers)
+            foreach (ProviderHealthEntry entry in entries)
             {
                 output.WriteLine(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"  {provider.Id.Value} {SurfaceFormatting.Machine(provider.State)} {provider.Version ?? "-"}"));
+                    $"  {SurfaceFormatting.ProviderRow(entry)}"));
             }
 
             return Report(diagnostics, diagnosticCode);

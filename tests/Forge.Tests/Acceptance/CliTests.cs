@@ -42,8 +42,78 @@ public sealed class CliTests
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("codex ready 0.146.0", output.ToString(), StringComparison.Ordinal);
-        Assert.Contains("claude_code ready 2.1.221", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("codex enabled ready 0.146.0 - ready none", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claude_code enabled ready 2.1.221 - ready none", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsCommandListsARegisteredButDisabledProviderAsReadOnly()
+    {
+        // The toolchain manager only ever reports "codex" (the user's enabled selection); a
+        // second registered provider the catalog knows about but the status never probed must
+        // still surface, read-only, as ADR 0008's "listed as disabled without probing it."
+        ProviderToolchainStatus enabledOnly = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                Authentication = ProviderAuthenticationStatus.Ready,
+            },
+        ]);
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(enabledOnly),
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "0.146.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "2.1.221"),
+            ]);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["models"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Contains("claude_code disabled - - - - provider_disabled", output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsCommandJsonIncludesRegisteredAndEnabledFieldsForEveryProvider()
+    {
+        ProviderToolchainStatus enabledOnly = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                Authentication = ProviderAuthenticationStatus.Ready,
+            },
+        ]);
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(enabledOnly),
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "0.146.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "2.1.221"),
+            ]);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["models", "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string json = output.ToString();
+        // Regression: the JSON branch used to serialize the raw ProviderToolchainStatus (missing
+        // registered/enabled) as a bare array (missing the schema_version envelope), so
+        // `forge models --json` never actually matched provider-health.schema.json.
+        Assert.Contains("\"schema_version\": \"1.1.0\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"registered\": true", json, StringComparison.Ordinal);
+        Assert.Contains("\"enabled\": false", json, StringComparison.Ordinal);
+        Assert.Contains("\"diagnostic_code\": \"provider_disabled\"", json, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -79,7 +79,8 @@ public sealed class ForgeApplication(
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
         return new(
             startup,
-            await advisor.CreateSnapshotAsync(startup, providers, detail, sprintId, cancellationToken)
+            await advisor
+                .CreateSnapshotAsync(startup, providers, providerCatalog, detail, sprintId, cancellationToken)
                 .ConfigureAwait(false));
     }
 
@@ -98,7 +99,7 @@ public sealed class ForgeApplication(
     /// <summary>The bounded, cursor-driven incremental read behind `ReadControlEvents`. See
     /// <see cref="ControlEventsReader"/> for the merge/cursor contract. An uninitialized or
     /// unresolvable project root reports no events rather than probing a `.forge/sprints/`
-    /// directory that cannot exist yet — matching <see cref="StatusAdvisor.CreateSnapshotAsync(StartupStatus,ProviderToolchainStatus,SnapshotDetail,Guid?,CancellationToken)"/>.</summary>
+    /// directory that cannot exist yet — matching <see cref="StatusAdvisor.CreateSnapshotAsync(StartupStatus,ProviderToolchainStatus,ProviderCatalog,SnapshotDetail,Guid?,CancellationToken)"/>.</summary>
     public async Task<ControlEventsPage> ReadControlEventsAsync(
         string? projectRoot,
         string? cursor,
@@ -133,6 +134,14 @@ public sealed class ForgeApplication(
     /// release, then rechecks authentication for all of them.</summary>
     public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.EnsureReadyAsync(cancellationToken);
+
+    /// <summary>Projects a toolchain status onto the versioned provider-health contract, adding a
+    /// read-only entry for every registered-but-disabled provider (ADR 0008/P8.83-88) — the same
+    /// projection <see cref="GetOverviewAsync(string?,SnapshotDetail,Guid?,CancellationToken)"/>
+    /// folds into the snapshot, exposed directly for callers (e.g. `forge models`) that only need
+    /// provider health, not a full snapshot.</summary>
+    public IReadOnlyList<ProviderHealthEntry> ProjectProviderHealth(ProviderToolchainStatus status) =>
+        ProviderHealthProjector.Project(status, providerCatalog);
 
     /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
     public async Task<RecoverStartupResult> RecoverStartupAsync(

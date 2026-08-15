@@ -16,7 +16,7 @@ namespace Forge.Application;
 /// </summary>
 public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
-    public const string ContractVersion = "1.1.0";
+    public const string ContractVersion = "1.2.0";
 
     /// <summary>Kept separate from <see cref="ContractVersion"/>: `suggested-action.schema.json`
     /// did not change when the snapshot's own contract gained provider/startup-check fields, so
@@ -30,12 +30,14 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
     public async Task<ProjectSnapshot> CreateSnapshotAsync(
         StartupStatus startup,
         ProviderToolchainStatus providers,
+        ProviderCatalog catalog,
         SnapshotDetail detail,
         Guid? sprintId,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(startup);
         ArgumentNullException.ThrowIfNull(providers);
+        ArgumentNullException.ThrowIfNull(catalog);
         long stateVersion = StateVersion(startup.Project);
         if (!startup.Project.Initialized)
         {
@@ -50,7 +52,7 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
                 [],
                 Recommend(startup, stateVersion),
                 startup.Checks,
-                ProviderHealthProjector.Project(providers),
+                ProviderHealthProjector.Project(providers, catalog),
                 detail);
         }
 
@@ -98,7 +100,7 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
             attention,
             Recommend(startup, stateVersion),
             startup.Checks,
-            ProviderHealthProjector.Project(providers),
+            ProviderHealthProjector.Project(providers, catalog),
             detail,
             details);
     }
