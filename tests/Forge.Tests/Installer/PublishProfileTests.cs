@@ -32,12 +32,15 @@ public sealed class PublishProfileTests
         Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
     }
 
-    /// <summary>Two release contracts nothing else guards, since no test executes the publisher and the
-    /// release workflow only hashes whatever bundle it produces. The asset name is how
-    /// <c>ReleaseAssetVerifier</c> resolves the asset it downloads, so renaming it breaks every update;
-    /// the fixed entry timestamp over sorted entries is what makes the archive byte-for-byte
-    /// reproducible from a clean checkout (AGENTS.md, "Quality"), so its published checksum stays
-    /// verifiable.</summary>
+    /// <summary>Three release contracts nothing else guards, since no test executes the publisher and
+    /// the release workflow only hashes whatever bundle it produces. Every host the product ships must
+    /// be published into the bundle, or the released archive is missing an executable. The asset name is
+    /// how <c>ReleaseAssetVerifier</c> resolves the asset it downloads, so renaming it breaks every
+    /// update. A fixed 1980 entry timestamp, assigned to every entry walked in a
+    /// path-ordered sequence, is what makes the archive byte-for-byte reproducible from a clean
+    /// checkout (AGENTS.md, "Quality") and its published checksum therefore verifiable — so the
+    /// timestamp's own value and the sort key are pinned here, not just the statements that use
+    /// them.</summary>
     [Fact]
     [Trait("Category", "Installer")]
     public void BundlePublisherProducesTheContractedReproducibleArchive()
@@ -45,10 +48,18 @@ public sealed class PublishProfileTests
         string script = File.ReadAllText(Path.Combine(FindRoot(), "build", "Publish-WindowsBundle.ps1"));
 
         Assert.Contains("Forge.Cli.Windows\\Forge.Cli.Windows.csproj", script, StringComparison.Ordinal);
+        Assert.Contains("Forge.Host.Windows\\Forge.Host.Windows.csproj", script, StringComparison.Ordinal);
         Assert.Contains("Forge.Desktop\\Forge.Desktop.csproj", script, StringComparison.Ordinal);
         Assert.Contains("forge-windows-$($RuntimeIdentifier.Substring(4))-portable_bundle.zip", script, StringComparison.Ordinal);
         Assert.Contains("ZipArchiveMode]::Create", script, StringComparison.Ordinal);
-        Assert.Contains("Sort-Object", script, StringComparison.Ordinal);
+        Assert.Contains(
+            "$timestamp = [DateTimeOffset]::new(1980, 1, 1, 0, 0, 0, [TimeSpan]::Zero)",
+            script,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Sort-Object { $_.FullName.Substring($stagingDirectory.Length).TrimStart('\\', '/') }",
+            script,
+            StringComparison.Ordinal);
         Assert.Contains("$entry.LastWriteTime = $timestamp", script, StringComparison.Ordinal);
     }
 
