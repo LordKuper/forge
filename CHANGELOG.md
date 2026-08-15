@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.21.0
+
+### Added
+
+- `forge models`, the project snapshot, and the Desktop overview now list every
+  registered provider, including one the user's `providers.enabled` selection
+  disables — shown read-only, without probing it, alongside its enabled
+  siblings' version, update-availability, and authentication state.
+
+### Fixed
+
+- `forge models --json` now actually matches the versioned provider-health
+  contract (it previously omitted the `registered`/`enabled` fields the schema
+  requires).
+
 ## v0.20.0
 
 ### Added

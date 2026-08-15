@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "providers"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
     "providers": {"type": "array", "items": {"$ref": "#/$defs/entry"}}
   },
   "$defs": {
@@ -18,7 +18,7 @@
         "id": {"type": "string", "minLength": 1},
         "registered": {"type": "boolean"},
         "enabled": {"type": "boolean"},
-        "state": {"enum": ["missing", "installing", "updating", "rechecking", "ready", "failed"]},
+        "state": {"enum": ["missing", "installing", "updating", "rechecking", "ready", "failed", null]},
         "version": {"type": ["string", "null"]},
         "update_available": {"type": ["boolean", "null"]},
         "authentication": {"enum": ["required", "check_failed", "ready", null]},

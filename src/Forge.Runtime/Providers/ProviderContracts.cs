@@ -53,6 +53,13 @@ public static class ProviderDiagnosticCodes
     /// <summary>ADR 0008: "a probe failure uses `provider_authentication_check_failed`." Produced
     /// by <see cref="ProviderAuthenticationStatus.CheckFailed"/>.</summary>
     public const string AuthenticationCheckFailed = "provider_authentication_check_failed";
+
+    /// <summary>A registered provider the user's `providers.enabled` selection excludes. ADR 0008:
+    /// "a disabled provider is listed as disabled without probing it." Produced only by
+    /// <see cref="ProviderHealthProjector.Project"/> for a catalog entry that never reached
+    /// <see cref="ProviderToolchainStatus.Providers"/> — never by <see cref="ILlmProvider"/> itself,
+    /// since a disabled provider is never probed.</summary>
+    public const string Disabled = "provider_disabled";
 }
 
 /// <summary>

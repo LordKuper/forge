@@ -17,4 +17,10 @@ public static class SurfaceFormatting
     public static string Machine<TEnum>(TEnum value)
         where TEnum : struct, Enum =>
         JsonNamingPolicy.SnakeCaseLower.ConvertName(value.ToString()!);
+
+    /// <summary>Same as <see cref="Machine{TEnum}(TEnum)"/>, but renders <see langword="null"/>
+    /// (e.g. a disabled provider's never-probed <c>state</c>) as <c>"-"</c> instead of throwing.</summary>
+    public static string Machine<TEnum>(TEnum? value)
+        where TEnum : struct, Enum =>
+        value is { } resolved ? Machine(resolved) : "-";
 }

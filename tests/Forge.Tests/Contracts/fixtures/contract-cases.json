@@ -640,6 +640,24 @@
       }
     },
     {
+      "name": "provider health accepts a disabled entry with a null state",
+      "schema": "provider-health",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.1.0",
+        "providers": [{
+          "id": "claude_code",
+          "registered": true,
+          "enabled": false,
+          "state": null,
+          "version": null,
+          "update_available": null,
+          "authentication": null,
+          "diagnostic_code": "provider_disabled"
+        }]
+      }
+    },
+    {
       "name": "provider health rejects an entry missing its diagnostic code",
       "schema": "provider-health",
       "valid": false,
