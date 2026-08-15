@@ -20,6 +20,13 @@ public sealed class ProviderInstallLock : IProviderInstallLock
 {
     private const string LockName = "forge-provider-install-lock";
 
+    /// <remarks>
+    /// <paramref name="cancellationToken"/> only guards the moment before the wait starts (it
+    /// short-circuits <see cref="Task.Run(Action, CancellationToken)"/> if already canceled).
+    /// Once the dedicated thread is inside <c>Mutex.WaitOne(TimeSpan)</c>, cancellation is
+    /// not observed — that native wait is not cancelable — so a cancellation requested mid-wait
+    /// only takes effect when <paramref name="timeout"/> itself elapses.
+    /// </remarks>
     public async Task<IProviderInstallLease?> TryAcquireAsync(TimeSpan timeout, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

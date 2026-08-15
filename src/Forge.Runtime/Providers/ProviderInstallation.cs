@@ -131,12 +131,12 @@ public static partial class ProviderInstallation
             .ConfigureAwait(false);
         if (lease is null)
         {
-            // Could not acquire the lock (another process is already installing/updating). A
-            // previously-usable version stays usable; a missing/broken one stays reported as such
-            // — this attempt simply could not repair it this time.
-            return local.State == ProviderState.Ready
-                ? local with { UpdateAvailable = true }
-                : new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
+            // Could not acquire the lock (another process is already installing/updating). Every
+            // case reports its own real, unaltered status — nothing was actually attempted here —
+            // rather than synthesizing a generic failure: a previously-usable version stays
+            // usable, and a missing/broken one keeps its own diagnostic (Missing,
+            // VersionUnsupported, ...) instead of being mislabeled as an update failure.
+            return local.State == ProviderState.Ready ? local with { UpdateAvailable = true } : local;
         }
 
         bool alreadyInstalled = File.Exists(spec.ExecutablePath);
