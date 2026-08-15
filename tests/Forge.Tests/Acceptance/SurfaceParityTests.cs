@@ -73,6 +73,26 @@ public sealed class SurfaceParityTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public void DesktopControlsAreWiredInCodeBehind()
+    {
+        // A declared control (checked above) that the code-behind never assigns is dead XAML — the
+        // exact shape of the round-1 P8.83-88 bug, where ProvidersLabel existed nowhere at all and
+        // a later fix could just as easily add the label without wiring it.
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(),
+            "src",
+            "Forge.Desktop",
+            "MainPage.xaml.cs"));
+
+        Assert.All(
+            CapabilityIds.Implemented,
+            id => Assert.All(
+                DesktopControls[id],
+                control => Assert.Contains(control, codeBehind, StringComparison.Ordinal)));
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public void ImplementedCapabilitiesDeclareBothSurfaces()
     {
         using JsonDocument contract = ReadCapabilities();

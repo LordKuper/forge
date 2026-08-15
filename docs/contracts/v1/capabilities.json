@@ -102,7 +102,7 @@
       "kind": "query",
       "contract": "GetProviderHealth",
       "events": ["ProviderToolchainChanged"],
-      "cli": "forge models",
+      "cli": "forge models [--json] [--refresh]",
       "desktop": "Providers/Refresh",
       "permission": "read",
       "acceptance": "provider-health-parity"

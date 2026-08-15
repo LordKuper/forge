@@ -20,8 +20,9 @@ User-facing Forge changes are listed by release, newest first.
   fields the old, non-conformant shape happened to leak — that readiness
   summary is still reported the same way it always has been, through the
   command's exit code and diagnostic-stream output, never the JSON body.
-- The project snapshot contract moves to `1.2.0`: a provider entry's `state`
-  can now be `null` for a disabled provider.
+- The provider-health contract moves to `1.1.0` and the project snapshot
+  contract (which embeds the same provider entries) moves to `1.2.0`: a
+  provider entry's `state` can now be `null` for a disabled provider.
 
 ## v0.20.0
 
