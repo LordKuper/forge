@@ -30,6 +30,15 @@ public sealed record ProviderHealthEntry(
     ProviderHealthAuthentication? Authentication,
     string DiagnosticCode);
 
+/// <summary>The `provider-health.schema.json` root envelope — every machine surface that emits
+/// provider health (currently `forge models --json`) must carry <see cref="SchemaVersion"/>, not
+/// a bare entry array, matching every other machine contract (<c>ProjectSnapshot</c>,
+/// <c>StartupStatus</c>).</summary>
+public sealed record ProviderHealth(string SchemaVersion, IReadOnlyList<ProviderHealthEntry> Providers)
+{
+    public const string ContractVersion = "1.1.0";
+}
+
 /// <summary>
 /// Projects a toolchain status plus a provider catalog onto the versioned provider-health
 /// contract, purely and without any new probe.

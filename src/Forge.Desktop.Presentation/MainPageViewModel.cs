@@ -57,11 +57,7 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
                     $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
             Render(
                 text.Resolve(MessageKeys.ProviderToolchainTitle),
-                snapshot.Providers.Select(provider => string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"{provider.Id} {(provider.Enabled ? "enabled" : "disabled")} " +
-                        $"{SurfaceFormatting.Machine(provider.State)} {provider.Version ?? "-"} " +
-                        $"{SurfaceFormatting.Machine(provider.Authentication)} {provider.DiagnosticCode}"))),
+                snapshot.Providers.Select(SurfaceFormatting.ProviderRow)),
             snapshot.SuggestedActions.Count == 0
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(

@@ -163,9 +163,8 @@ public sealed class ProviderHealthProjectorTests
     private static void AssertSatisfiesContract(ProviderToolchainStatus status, ProviderCatalog catalog)
     {
         IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status, catalog);
-        string json = StatusJson.Serialize(entries);
-        using JsonDocument instance = JsonDocument.Parse(
-            $$"""{"schema_version":"1.1.0","providers":{{json}}}""");
+        ProviderHealth health = new(ProviderHealth.ContractVersion, entries);
+        using JsonDocument instance = JsonDocument.Parse(StatusJson.Serialize(health));
 
         EvaluationResults result = ContractSchemas.Load("provider-health").Evaluate(
             instance.RootElement,

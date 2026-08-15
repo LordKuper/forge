@@ -265,8 +265,11 @@ User configuration selects an exact ordered provider set. Omission enables all
 registered built-ins in composition order; `[]` leaves diagnostics available but
 blocks model work. A project profile may narrow and reorder this set but cannot
 enable a provider the user disabled. Disabled providers are never probed,
-installed, updated, authenticated, or executed. The resolved ordered intersection
-is frozen into each sprint. See
+installed, updated, authenticated, or executed — but `forge models`, the project
+snapshot, and Desktop still list a registered-but-disabled provider as a
+read-only, never-probed row (`enabled: false`, `state: null`,
+`diagnostic_code: provider_disabled`), so it stays visible without being
+touched. The resolved ordered intersection is frozen into each sprint. See
 [`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md).
 
 Enabled adapters install and update official CLIs through each vendor's native
@@ -278,6 +281,8 @@ a newer version exists. Failed checks and updates retry after one hour;
 `forge models --refresh` bypasses the cache but not the availability check.
 After maintenance, Forge explicitly checks authentication for every enabled
 provider and retains only normalized readiness and stable diagnostics.
+`forge models --json` emits the versioned `provider-health.schema.json`
+envelope (`schema_version` plus a `providers` array), not a bare array.
 
 Provider adapters execute official CLIs without shell-string concatenation,
 consume versioned JSON/JSONL, validate schema-constrained output, and normalize

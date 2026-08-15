@@ -42,8 +42,8 @@ public sealed class CliTests
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("codex enabled ready 0.146.0 ready none", output.ToString(), StringComparison.Ordinal);
-        Assert.Contains("claude_code enabled ready 2.1.221 ready none", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("codex enabled ready 0.146.0 - ready none", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claude_code enabled ready 2.1.221 - ready none", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -76,7 +76,7 @@ public sealed class CliTests
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
         Assert.Equal(0, exitCode);
-        Assert.Contains("claude_code disabled - - - provider_disabled", output.ToString(), StringComparison.Ordinal);
+        Assert.Contains("claude_code disabled - - - - provider_disabled", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -107,8 +107,10 @@ public sealed class CliTests
 
         Assert.Equal(0, exitCode);
         string json = output.ToString();
-        // Regression: the JSON branch used to serialize the raw ProviderToolchainStatus, which has
-        // neither field, so `forge models --json` never actually matched provider-health.schema.json.
+        // Regression: the JSON branch used to serialize the raw ProviderToolchainStatus (missing
+        // registered/enabled) as a bare array (missing the schema_version envelope), so
+        // `forge models --json` never actually matched provider-health.schema.json.
+        Assert.Contains("\"schema_version\": \"1.1.0\"", json, StringComparison.Ordinal);
         Assert.Contains("\"registered\": true", json, StringComparison.Ordinal);
         Assert.Contains("\"enabled\": false", json, StringComparison.Ordinal);
         Assert.Contains("\"diagnostic_code\": \"provider_disabled\"", json, StringComparison.Ordinal);

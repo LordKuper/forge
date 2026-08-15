@@ -43,6 +43,7 @@ public partial class MainPage : ContentPage
         ProjectRootLabel.Text = snapshot.ProjectRootText;
         ProjectStateLabel.Text = snapshot.ProjectStateText;
         StartupChecksLabel.Text = snapshot.StartupChecksText;
+        ProvidersLabel.Text = snapshot.ProvidersText;
         SuggestedActionsLabel.Text = snapshot.SuggestedActionsText;
         InitializeButton.IsEnabled = snapshot.InitializeEnabled;
         RecoverButton.IsEnabled = snapshot.RecoverEnabled;

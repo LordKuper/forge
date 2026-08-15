@@ -1,5 +1,7 @@
+using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
+using Forge.Providers;
 
 namespace Forge.Localization;
 
@@ -23,4 +25,23 @@ public static class SurfaceFormatting
     public static string Machine<TEnum>(TEnum? value)
         where TEnum : struct, Enum =>
         value is { } resolved ? Machine(resolved) : "-";
+
+    /// <summary>One provider's row, shared by every surface that lists provider health (`forge
+    /// models`, Desktop) so the `provider-health-parity` capability can never drift between them —
+    /// distinguishes every state ADR 0008 requires: id, enabled/disabled, install state, version,
+    /// update availability, authentication, and diagnostic code.</summary>
+    public static string ProviderRow(ProviderHealthEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        string updateAvailable = entry.UpdateAvailable switch
+        {
+            true => "update_available",
+            false => "current",
+            null => "-",
+        };
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{entry.Id} {(entry.Enabled ? "enabled" : "disabled")} {Machine(entry.State)} " +
+                $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
+    }
 }

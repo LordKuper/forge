@@ -30,9 +30,12 @@ public sealed class MainPageViewModelTests
 
         MainPageSnapshot snapshot = await viewModel.RefreshAsync(null, TestContext.Current.CancellationToken);
 
-        Assert.Contains("codex enabled ready 0.146.0 ready none", snapshot.ProvidersText, StringComparison.Ordinal);
         Assert.Contains(
-            "claude_code disabled - - - provider_disabled",
+            "codex enabled ready 0.146.0 - ready none",
+            snapshot.ProvidersText,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "claude_code disabled - - - - provider_disabled",
             snapshot.ProvidersText,
             StringComparison.Ordinal);
     }

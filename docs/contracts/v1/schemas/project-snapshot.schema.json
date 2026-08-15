@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "state_version", "generated_at", "project", "startup", "sprints", "attention", "suggested_actions", "startup_checks", "providers"],
   "properties": {
-    "schema_version": {"const": "1.1.0"},
+    "schema_version": {"enum": ["1.1.0", "1.2.0"]},
     "state_version": {"type": "integer", "minimum": 0},
     "generated_at": {"type": "string", "format": "date-time"},
     "project": {

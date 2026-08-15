@@ -309,7 +309,7 @@ public static class CliApplication
             IReadOnlyList<ProviderHealthEntry> entries = application.ProjectProviderHealth(status);
             if (parseResult.GetValue(json))
             {
-                output.WriteLine(StatusJson.Serialize(entries));
+                output.WriteLine(StatusJson.Serialize(new ProviderHealth(ProviderHealth.ContractVersion, entries)));
                 return Report(diagnostics, diagnosticCode);
             }
 
@@ -318,9 +318,7 @@ public static class CliApplication
             {
                 output.WriteLine(string.Create(
                     CultureInfo.InvariantCulture,
-                    $"  {entry.Id} {(entry.Enabled ? "enabled" : "disabled")} " +
-                        $"{SurfaceFormatting.Machine(entry.State)} {entry.Version ?? "-"} " +
-                        $"{SurfaceFormatting.Machine(entry.Authentication)} {entry.DiagnosticCode}"));
+                    $"  {SurfaceFormatting.ProviderRow(entry)}"));
             }
 
             return Report(diagnostics, diagnosticCode);
