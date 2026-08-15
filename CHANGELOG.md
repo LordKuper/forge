@@ -11,11 +11,17 @@ User-facing Forge changes are listed by release, newest first.
   disables — shown read-only, without probing it, alongside its enabled
   siblings' version, update-availability, and authentication state.
 
-### Fixed
+### Changed
 
-- `forge models --json` now actually matches the versioned provider-health
-  contract (it previously omitted the `registered`/`enabled` fields the schema
-  requires).
+- `forge models --json` now returns the versioned `provider-health` envelope
+  (`schema_version` plus a `providers` array) instead of a bare array missing
+  the `registered`/`enabled` fields the schema requires. Its body no longer
+  includes the aggregate `ready`/`diagnostic_code`/`shared_diagnostic_code`
+  fields the old, non-conformant shape happened to leak — that readiness
+  summary is still reported the same way it always has been, through the
+  command's exit code and diagnostic-stream output, never the JSON body.
+- The project snapshot contract moves to `1.2.0`: a provider entry's `state`
+  can now be `null` for a disabled provider.
 
 ## v0.20.0
 

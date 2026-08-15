@@ -19,6 +19,7 @@ public sealed class SurfaceParityTests
         [CapabilityIds.ProjectInitialize] = ["InitializeButton", "ProjectRootEntry"],
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
+        [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
     };
 
     [Fact]
