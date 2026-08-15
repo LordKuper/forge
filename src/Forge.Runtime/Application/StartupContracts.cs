@@ -9,6 +9,16 @@ public static class DiagnosticCodes
     public const string UpdateCheckDeferred = "update_check_deferred";
     public const string ProviderPreflightPending = "provider_preflight_pending";
     public const string ProviderUpdateFailed = "provider_update_failed";
+
+    /// <summary>ADR 0008: "Missing authentication blocks model work with
+    /// `provider_authentication_required`." Shares its literal value with
+    /// <c>Forge.Providers.ProviderDiagnosticCodes.AuthenticationRequired</c> — same underlying
+    /// cause, surfaced at both the per-provider and aggregate startup-check level.</summary>
+    public const string ProviderAuthenticationRequired = "provider_authentication_required";
+
+    /// <summary>ADR 0008: "a probe failure uses `provider_authentication_check_failed`." See
+    /// <see cref="ProviderAuthenticationRequired"/>.</summary>
+    public const string ProviderAuthenticationCheckFailed = "provider_authentication_check_failed";
     public const string ConfigurationInvalid = "configuration_invalid";
     public const string ConfigurationScopeViolation = "configuration_scope_violation";
     public const string ConfigurationKeyUnknown = "configuration_key_unknown";

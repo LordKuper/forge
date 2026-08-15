@@ -292,7 +292,8 @@ public static class CliApplication
         Option<bool> json = CreateJsonOption();
         Option<bool> refresh = new("--refresh")
         {
-            Description = "Install or update any provider that is not ready.",
+            Description = "Re-check every enabled provider against the latest release and " +
+                "install or update only when needed.",
         };
         Command command = new("models", text.Resolve(MessageKeys.ModelsDescription));
         command.Options.Add(json);

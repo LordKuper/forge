@@ -128,7 +128,9 @@ public sealed class ForgeApplication(
     public Task<ProviderToolchainStatus> GetProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.CheckAsync(cancellationToken);
 
-    /// <summary>Installs or updates any provider that is not ready, then rechecks both.</summary>
+    /// <summary>Re-checks every enabled provider against a fresh, cache-bypassing release lookup
+    /// and installs or updates only when that check finds a missing/broken install or a newer
+    /// release, then rechecks authentication for all of them.</summary>
     public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.EnsureReadyAsync(cancellationToken);
 

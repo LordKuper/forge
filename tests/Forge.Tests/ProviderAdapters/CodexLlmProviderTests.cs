@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Providers;
 using Forge.Providers.Codex;
+using Forge.Tests.Support;
 using Forge.UnitTests;
 
 namespace Forge.ProviderAdapterTests;
@@ -14,7 +15,7 @@ public sealed class CodexLlmProviderTests
         using TestPaths paths = new();
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, "0.146.0", string.Empty));
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Missing, status.State);
         Assert.Equal(ProviderDiagnosticCodes.Missing, status.DiagnosticCode);
@@ -33,7 +34,7 @@ public sealed class CodexLlmProviderTests
             return new(0, "codex-cli 0.146.0", string.Empty);
         });
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.Equal("0.146.0", status.Version);
@@ -47,7 +48,7 @@ public sealed class CodexLlmProviderTests
         WriteCodexExecutable(paths);
         CodexLlmProvider provider = CreateProvider(paths, _ => new(1, string.Empty, "boom"));
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
@@ -61,9 +62,41 @@ public sealed class CodexLlmProviderTests
         WriteCodexExecutable(paths);
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, "not a version", string.Empty));
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DiscoverReportsUpdateAvailableWhenTheReleaseSourceReportsANewerVersion()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ => new(0, "0.146.0", string.Empty),
+            releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))));
+
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.True(status.UpdateAvailable);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DiscoverLeavesUpdateAvailableUnknownWhenTheReleaseCheckFails()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, "0.146.0", string.Empty));
+
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
+
+        // A release-check failure never blocks an otherwise-usable installed version.
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Null(status.UpdateAvailable);
     }
 
     [Fact]
@@ -110,6 +143,82 @@ public sealed class CodexLlmProviderTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateSkipsWorkWhenAlreadyOnTheLatestVersion()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        bool secondCall = false;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                Assert.False(secondCall, "No install/update process should run when already current.");
+                secondCall = true;
+                return new(0, "0.146.0", string.Empty);
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(0, 146, 0))));
+
+        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.False(status.UpdateAvailable);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateRunsTheInstallerAgainWhenANewerVersionIsAvailable()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        int processCalls = 0;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                processCalls++;
+                // 1: the initial local probe. 2: the re-probe taken right after the lock is
+                // acquired (still OLD — no concurrent process updated it first). Both must report
+                // the OLD version so a newer release actually looks newer. 3: the install script
+                // rerun (exit code only matters). 4: the post-update recheck, reporting the new
+                // version.
+                return new(0, processCalls <= 2 ? "0.146.0" : "0.147.0", string.Empty);
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))));
+
+        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(4, processCalls);
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.False(status.UpdateAvailable);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateReportsUsableWithoutMutatingWhenTheLockCannotBeAcquired()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        int processCalls = 0;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                processCalls++;
+                return new(0, "0.146.0", string.Empty);
+            },
+            releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))),
+            installLock: new FakeInstallLock(acquires: false));
+
+        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderState.Ready, status.State);
+        // Exactly the local probe that established a newer release exists — never the actual
+        // install/update command, since the lock could not be acquired.
+        Assert.Equal(1, processCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task DiscoverPropagatesAnAlreadyCancelledTokenRatherThanReportingFailed()
     {
         using TestPaths paths = new();
@@ -119,7 +228,7 @@ public sealed class CodexLlmProviderTests
         await cancelled.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(
-            () => provider.DiscoverAsync(cancelled.Token));
+            () => provider.DiscoverAsync(false, cancelled.Token));
     }
 
     [Fact]
@@ -128,9 +237,16 @@ public sealed class CodexLlmProviderTests
     {
         using TestPaths paths = new();
         WriteCodexExecutable(paths);
-        CodexLlmProvider provider = new(paths, new HangingProcessRunner(), versionProbeTimeout: TimeSpan.FromMilliseconds(50));
+        CodexLlmProvider provider = new(
+            paths,
+            new HangingProcessRunner(),
+            new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
+            new FakeReleaseCache(),
+            new FakeInstallLock(),
+            new FakeClock(),
+            versionProbeTimeout: TimeSpan.FromMilliseconds(50));
 
-        ProviderStatus status = await provider.DiscoverAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
@@ -141,12 +257,60 @@ public sealed class CodexLlmProviderTests
     public async Task InstallOrUpdateReportsFailedWhenTheInstallerExceedsItsTimeout()
     {
         using TestPaths paths = new();
-        CodexLlmProvider provider = new(paths, new HangingProcessRunner(), installTimeout: TimeSpan.FromMilliseconds(50));
+        CodexLlmProvider provider = new(
+            paths,
+            new HangingProcessRunner(),
+            new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
+            new FakeReleaseCache(),
+            new FakeInstallLock(),
+            new FakeClock(),
+            installTimeout: TimeSpan.FromMilliseconds(50));
 
         ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(0, true)]
+    [InlineData(1, false)]
+    public async Task CheckAuthenticationReflectsTheLoginStatusExitCode(int exitCode, bool expectedReady)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            Assert.Equal(["login", "status"], request.Arguments);
+            return new(exitCode, string.Empty, string.Empty);
+        });
+
+        ProviderAuthenticationStatus status =
+            await provider.CheckAuthenticationAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            expectedReady ? ProviderHealthAuthentication.Ready : ProviderHealthAuthentication.Required,
+            status.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CheckAuthenticationReportsCheckFailedWithoutSpawningAProcessWhenNotInstalled()
+    {
+        bool spawned = false;
+        using TestPaths paths = new();
+        CodexLlmProvider provider = CreateProvider(paths, _ =>
+        {
+            spawned = true;
+            return new(0, string.Empty, string.Empty);
+        });
+
+        ProviderAuthenticationStatus status =
+            await provider.CheckAuthenticationAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderHealthAuthentication.CheckFailed, status.State);
+        Assert.False(spawned);
     }
 
     [Fact]
@@ -262,8 +426,18 @@ public sealed class CodexLlmProviderTests
     private static string ReadFixture(string name) => File.ReadAllText(
         Path.Combine(RepositoryRoot.Find(), "tests", "Forge.Tests", "Unit", "fixtures", "providers", name));
 
-    private static CodexLlmProvider CreateProvider(TestPaths paths, Func<ProcessRequest, ProcessResult> respond) =>
-        new(paths, new StubProcessRunner(respond));
+    private static CodexLlmProvider CreateProvider(
+        TestPaths paths,
+        Func<ProcessRequest, ProcessResult> respond,
+        IProviderReleaseSource? releaseSource = null,
+        IProviderInstallLock? installLock = null) =>
+        new(
+            paths,
+            new StubProcessRunner(respond),
+            releaseSource ?? new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
+            new FakeReleaseCache(),
+            installLock ?? new FakeInstallLock(),
+            new FakeClock());
 
     private static string WriteCodexExecutable(TestPaths paths)
     {
@@ -328,4 +502,5 @@ public sealed class CodexLlmProviderTests
             throw new InvalidOperationException("Unreachable: Task.Delay(Infinite) only returns via cancellation.");
         }
     }
+
 }

@@ -36,6 +36,26 @@ public sealed class ProviderHealthProjectorTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void ProjectsUpdateAvailabilityAndAuthenticationStateWhenBothAreDetermined()
+    {
+        ProviderToolchainStatus status = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                UpdateAvailable = true,
+                Authentication = ProviderAuthenticationStatus.Required,
+            },
+        ]);
+
+        IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
+
+        ProviderHealthEntry codex = Assert.Single(entries);
+        Assert.True(codex.UpdateAvailable);
+        Assert.Equal(ProviderHealthAuthentication.Required, codex.Authentication);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void TheProjectedShapeSatisfiesTheVersionedProviderHealthContract()
     {
         ProviderToolchainStatus status = new(
@@ -43,6 +63,39 @@ public sealed class ProviderHealthProjectorTests
             ProviderStatus.Ready(new ProviderId("codex"), "0.146.0"),
             new(new ProviderId("claude_code"), ProviderState.Missing, null, ProviderDiagnosticCodes.Missing),
         ]);
+
+        AssertSatisfiesContract(status);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true, ProviderHealthAuthentication.Ready)]
+    [InlineData(false, ProviderHealthAuthentication.Required)]
+    [InlineData(null, ProviderHealthAuthentication.CheckFailed)]
+    public void APopulatedUpdateAvailabilityAndEveryAuthenticationValueSatisfiesTheVersionedContract(
+        bool? updateAvailable,
+        ProviderHealthAuthentication authentication)
+    {
+        ProviderAuthenticationStatus authenticationStatus = authentication switch
+        {
+            ProviderHealthAuthentication.Ready => ProviderAuthenticationStatus.Ready,
+            ProviderHealthAuthentication.Required => ProviderAuthenticationStatus.Required,
+            _ => ProviderAuthenticationStatus.CheckFailed,
+        };
+        ProviderToolchainStatus status = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.146.0") with
+            {
+                UpdateAvailable = updateAvailable,
+                Authentication = authenticationStatus,
+            },
+        ]);
+
+        AssertSatisfiesContract(status);
+    }
+
+    private static void AssertSatisfiesContract(ProviderToolchainStatus status)
+    {
         IReadOnlyList<ProviderHealthEntry> entries = ProviderHealthProjector.Project(status);
         string json = StatusJson.Serialize(entries);
         using JsonDocument instance = JsonDocument.Parse(

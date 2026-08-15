@@ -29,10 +29,9 @@ public sealed record ProviderHealthEntry(
 
 /// <summary>
 /// Projects the current <see cref="ProviderToolchainStatus"/> onto the versioned provider-health
-/// contract, purely and without any new probe. <see cref="ProviderHealthEntry.UpdateAvailable"/>
-/// and <see cref="ProviderHealthEntry.Authentication"/> are always <see langword="null"/> today:
-/// the P8.72-82 update/authentication check does not exist yet, so this stage only versions the
-/// contract shape that stage will populate. Every provider <see cref="IProviderToolchainManager"/>
+/// contract, purely and without any new probe — <see cref="ProviderHealthEntry.UpdateAvailable"/>
+/// and <see cref="ProviderHealthEntry.Authentication"/> are read directly off the already-computed
+/// <see cref="ProviderStatus"/> (P8.72-82). Every provider <see cref="IProviderToolchainManager"/>
 /// discovers is, by construction, both registered and enabled — <see cref="ProviderToolchainManager"/>
 /// (P8.64-71) already excludes a disabled provider before ever probing it, so this projection never
 /// sees one. Surfacing disabled providers as distinct entries is P8.83-88's job.
@@ -50,8 +49,8 @@ public static class ProviderHealthProjector
                 true,
                 provider.State,
                 provider.Version,
-                null,
-                null,
+                provider.UpdateAvailable,
+                provider.Authentication?.State,
                 provider.DiagnosticCode)),
         ];
     }

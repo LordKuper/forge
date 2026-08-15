@@ -136,6 +136,45 @@ public sealed class ProviderToolchainTests
         Assert.Equal(ExitCodes.Provider, ExitCodes.For(DiagnosticCodes.ProviderUpdateFailed));
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AReadyProviderThatRequiresAuthenticationBlocksToolchainReadiness()
+    {
+        FakeLlmProvider provider = new(
+            new ProviderId("codex"),
+            ProviderState.Ready,
+            "1.0.0",
+            authentication: ProviderAuthenticationStatus.Required);
+        ProviderToolchainManager manager = CreateManager([provider]);
+
+        ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
+
+        // ADR 0008: "every enabled provider must report local authentication readiness" — an
+        // otherwise-Ready install still blocks toolchain readiness while authentication is
+        // missing, and both the plain and shared diagnostic codes must say so (not "none").
+        Assert.False(status.Ready);
+        Assert.Equal(ProviderDiagnosticCodes.AuthenticationRequired, status.DiagnosticCode);
+        Assert.Equal(DiagnosticCodes.ProviderAuthenticationRequired, status.SharedDiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AReadyProviderWhoseAuthenticationCheckFailedBlocksToolchainReadiness()
+    {
+        FakeLlmProvider provider = new(
+            new ProviderId("codex"),
+            ProviderState.Ready,
+            "1.0.0",
+            authentication: ProviderAuthenticationStatus.CheckFailed);
+        ProviderToolchainManager manager = CreateManager([provider]);
+
+        ProviderToolchainStatus status = await manager.CheckAsync(TestContext.Current.CancellationToken);
+
+        Assert.False(status.Ready);
+        Assert.Equal(ProviderDiagnosticCodes.AuthenticationCheckFailed, status.DiagnosticCode);
+        Assert.Equal(DiagnosticCodes.ProviderAuthenticationCheckFailed, status.SharedDiagnosticCode);
+    }
+
     private static ProviderToolchainManager CreateManager(
         IEnumerable<ILlmProvider> providers,
         IReadOnlyList<string>? enabledIds = null) =>

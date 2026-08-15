@@ -61,7 +61,8 @@ public static class ProviderExecution
         string workingDirectory,
         Func<JsonElement, ProviderEventKind> classify,
         Func<JsonElement, string?> extractText,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         if (executablePath is null)
@@ -70,7 +71,7 @@ public static class ProviderExecution
         }
 
         ProcessResult result = await processRunner
-            .RunAsync(new(executablePath, arguments, workingDirectory), cancellationToken)
+            .RunAsync(new(executablePath, arguments, workingDirectory, environmentVariables), cancellationToken)
             .ConfigureAwait(false);
         if (result.ExitCode != 0)
         {

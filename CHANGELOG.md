@@ -2,6 +2,28 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.20.0
+
+### Added
+
+- Forge now checks whether each enabled provider (Codex, Claude Code) is
+  authenticated at every startup and before model work, instead of only
+  checking whether it is installed. A provider that is not logged in blocks
+  sprint work with a clear diagnostic instead of failing partway through an
+  attempt; Forge never initiates sign-in itself.
+- Forge now checks for provider updates automatically, at most once every 24
+  hours (or once an hour after a failed check), and only actually applies an
+  update through `forge models --refresh` or when repairing a missing/broken
+  install — routine use no longer re-checks or reinstalls a provider that is
+  already current. `--refresh` always checks for the latest version instead
+  of waiting out the cache, but still only updates when one is actually
+  available.
+- Concurrent Forge processes no longer race to install or update the same
+  provider at the same time.
+- Claude Code's own background auto-updater is now disabled while Forge runs
+  it normally, so Claude Code never updates itself outside of Forge's own
+  update check.
+
 ## v0.19.1
 
 ### Changed

@@ -20,69 +20,296 @@ public sealed record ProviderInstallSpec(
     Version? MinimumVersion);
 
 /// <summary>
-/// Generic provider install/discovery orchestration (ADR 0008: "generic... startup, retry...
-/// policy" stays in the core) — fixed-path discovery, version parsing, and native install/update,
-/// parameterized entirely by a vendor-supplied <see cref="ProviderInstallSpec"/> so no vendor path,
-/// URL, or command lives here.
+/// Generic provider install/discovery/maintenance orchestration (ADR 0008: "generic... startup,
+/// retry... policy" stays in the core) — fixed-path discovery, throttled release-availability
+/// comparison, native install/update behind a per-user lock, and authentication probing, all
+/// parameterized entirely by vendor-supplied specs and delegates so no vendor path, URL, command,
+/// or response format lives here.
 /// </summary>
 public static partial class ProviderInstallation
 {
     public static readonly TimeSpan DefaultVersionProbeTimeout = TimeSpan.FromSeconds(15);
     public static readonly TimeSpan DefaultInstallTimeout = TimeSpan.FromMinutes(10);
+    public static readonly TimeSpan DefaultInstallLockTimeout = TimeSpan.FromMinutes(10);
 
-    /// <summary>Reads a fixed vendor-owned path and runs `--version`. Never touches the network.</summary>
+    /// <summary>ADR 0008: "Forge checks authentication... at every startup. The commands run with
+    /// a 15-second deadline."</summary>
+    public static readonly TimeSpan DefaultAuthenticationProbeTimeout = TimeSpan.FromSeconds(15);
+
+    /// <summary>ADR 0008: "a small per-user cache limits the network update-availability check to
+    /// once per 24 hours."</summary>
+    public static readonly TimeSpan ReleaseCheckSuccessWindow = TimeSpan.FromHours(24);
+
+    /// <summary>ADR 0008: "a failed check or update is retried after one hour."</summary>
+    public static readonly TimeSpan ReleaseCheckFailureWindow = TimeSpan.FromHours(1);
+
+    /// <summary>
+    /// The local bounded probe, plus — only for an already-usable install — a throttled or
+    /// explicit release-availability comparison. Never installs or updates anything; a release
+    /// check failure leaves <see cref="ProviderStatus.UpdateAvailable"/> unknown rather than
+    /// touching <see cref="ProviderStatus.State"/> (ADR 0008: "A release-check failure does not
+    /// block an otherwise-usable installed version").
+    /// </summary>
     public static async Task<ProviderStatus> DiscoverAsync(
         ProviderId id,
         ProviderInstallSpec spec,
         IProcessRunner processRunner,
+        IProviderReleaseSource releaseSource,
+        IProviderReleaseCache cache,
+        IClock clock,
+        bool bypassReleaseCache,
         TimeSpan versionProbeTimeout,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
-        ArgumentNullException.ThrowIfNull(spec);
-        if (!File.Exists(spec.ExecutablePath))
-        {
-            return new(id, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing);
-        }
-
-        ProcessResult? result = await RunWithTimeoutAsync(
+        (ProviderStatus local, Version? localVersion) = await DiscoverLocalAsync(
+            id,
+            spec,
             processRunner,
-            new(spec.ExecutablePath, ["--version"], Path.GetDirectoryName(spec.ExecutablePath)!),
             versionProbeTimeout,
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
+        if (local.State != ProviderState.Ready || localVersion is null)
+        {
+            return local;
+        }
+
+        bool? updateAvailable = await CheckUpdateAvailableAsync(
+            id,
+            localVersion,
+            releaseSource,
+            cache,
+            clock,
+            bypassReleaseCache,
             cancellationToken).ConfigureAwait(false);
-        if (result is not { ExitCode: 0 })
-        {
-            return new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
-        }
-
-        if (!TryParseVersion(result.StandardOutput, out Version? version))
-        {
-            return new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
-        }
-
-        return spec.MinimumVersion is { } minimum && version < minimum
-            ? new(id, ProviderState.Failed, version.ToString(), ProviderDiagnosticCodes.VersionUnsupported)
-            : ProviderStatus.Ready(id, version.ToString());
+        return local with { UpdateAvailable = updateAvailable };
     }
 
+    /// <summary>
+    /// A missing, corrupt, or unsupported install is installed/repaired directly, skipping the
+    /// update comparison. An already-usable install is updated only when a fresh (never cached)
+    /// release check confirms a newer version. Either mutation is protected by
+    /// <paramref name="installLock"/> and followed by a local-only recheck — never another network
+    /// release check (ADR 0008).
+    /// </summary>
     public static async Task<ProviderStatus> InstallOrUpdateAsync(
         ProviderId id,
         ProviderInstallSpec spec,
         IProcessRunner processRunner,
+        IProviderReleaseSource releaseSource,
+        IProviderReleaseCache cache,
+        IProviderInstallLock installLock,
+        IClock clock,
         TimeSpan versionProbeTimeout,
         TimeSpan installTimeout,
-        CancellationToken cancellationToken)
+        TimeSpan installLockTimeout,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
     {
-        ArgumentNullException.ThrowIfNull(spec);
-        bool alreadyInstalled = File.Exists(spec.ExecutablePath);
-        ProcessRequest request = alreadyInstalled && spec.UpdateArguments is { } updateArguments
+        (ProviderStatus local, Version? localVersion) = await DiscoverLocalAsync(
+            id,
+            spec,
+            processRunner,
+            versionProbeTimeout,
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
+        // DiscoverLocalAsync only ever returns Ready alongside a successfully parsed version.
+        // targetVersion is not null exactly when this is a legitimate update of an already-Ready
+        // install; null covers install/repair (missing, corrupt, or below the minimum version),
+        // which skips the release comparison entirely (ADR 0008).
+        Version? targetVersion = null;
+        if (local.State == ProviderState.Ready && localVersion is { } version)
+        {
+            ProviderReleaseLookupResult lookup =
+                await FetchAndCacheAsync(id, releaseSource, cache, clock, cancellationToken).ConfigureAwait(false);
+            if (!lookup.Succeeded)
+            {
+                // A release-check failure never blocks an otherwise-usable installed version.
+                return local with { UpdateAvailable = null };
+            }
+
+            if (lookup.Version is null || lookup.Version <= version)
+            {
+                return local with { UpdateAvailable = false };
+            }
+
+            targetVersion = lookup.Version;
+        }
+
+        await using IProviderInstallLease? lease = await installLock
+            .TryAcquireAsync(installLockTimeout, cancellationToken)
+            .ConfigureAwait(false);
+        if (lease is null)
+        {
+            // Could not acquire the lock (another process is already installing/updating). Every
+            // case reports its own real, unaltered status — nothing was actually attempted here —
+            // rather than synthesizing a generic failure: a previously-usable version stays
+            // usable, and a missing/broken one keeps its own diagnostic (Missing,
+            // VersionUnsupported, ...) instead of being mislabeled as an update failure.
+            return local.State == ProviderState.Ready ? local with { UpdateAvailable = true } : local;
+        }
+
+        // Another process may have already finished installing, repairing, or updating while we
+        // waited on the lock — re-read local state once (no second network check for the update
+        // case; the already-fetched targetVersion is still the comparison target) and skip a now-
+        // redundant mutation for either the update path or the install/repair path.
+        (ProviderStatus underLock, Version? lockedVersion) = await DiscoverLocalAsync(
+            id,
+            spec,
+            processRunner,
+            versionProbeTimeout,
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
+        if (underLock.State == ProviderState.Ready &&
+            (targetVersion is null || (lockedVersion is { } current && targetVersion <= current)))
+        {
+            return underLock with { UpdateAvailable = false };
+        }
+
+        // Only a genuine update of an already-Ready install uses the vendor's lighter `update`
+        // command; install/repair (targetVersion is null) always reruns the full installer, even
+        // if a corrupt or unsupported executable happens to already exist at the target path.
+        ProcessRequest request = targetVersion is not null && spec.UpdateArguments is { } updateArguments
             ? new(spec.ExecutablePath, updateArguments, Path.GetDirectoryName(spec.ExecutablePath)!)
             : new(spec.InstallExecutable, spec.InstallArguments, Path.GetTempPath());
         ProcessResult? result = await RunWithTimeoutAsync(processRunner, request, installTimeout, cancellationToken)
             .ConfigureAwait(false);
-        return result is { ExitCode: 0 }
-            ? await DiscoverAsync(id, spec, processRunner, versionProbeTimeout, cancellationToken)
-                .ConfigureAwait(false)
-            : new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
+        if (result is not { ExitCode: 0 })
+        {
+            (ProviderStatus recheck, _) = await DiscoverLocalAsync(
+                id,
+                spec,
+                processRunner,
+                versionProbeTimeout,
+                cancellationToken,
+                environmentVariables).ConfigureAwait(false);
+            // ADR 0008: "An update failure blocks only when the installed provider is no longer
+            // usable" — a still-usable prior install after a failed update/install attempt stays
+            // reported as ready rather than failed.
+            return recheck.State == ProviderState.Ready
+                ? recheck
+                : new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed);
+        }
+
+        (ProviderStatus rechecked, _) = await DiscoverLocalAsync(
+            id,
+            spec,
+            processRunner,
+            versionProbeTimeout,
+            cancellationToken,
+            environmentVariables).ConfigureAwait(false);
+        return rechecked.State == ProviderState.Ready ? rechecked with { UpdateAvailable = false } : rechecked;
+    }
+
+    /// <summary>
+    /// Runs a vendor's local, non-network authentication-status command (ADR 0008: "Forge checks
+    /// authentication on the final executable at every startup... never persists or logs raw
+    /// status output, identity fields, authentication method, or credential material"). Only the
+    /// caller-supplied <paramref name="parseResult"/> ever sees the raw process output; its return
+    /// value is the only thing that survives.
+    /// </summary>
+    public static async Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(
+        string? executablePath,
+        IProcessRunner processRunner,
+        IReadOnlyList<string> arguments,
+        string probeDirectory,
+        TimeSpan timeout,
+        Func<ProcessResult, ProviderAuthenticationStatus> parseResult,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
+    {
+        if (executablePath is null)
+        {
+            return ProviderAuthenticationStatus.CheckFailed;
+        }
+
+        ProcessResult? result = await RunWithTimeoutAsync(
+            processRunner,
+            new(executablePath, arguments, probeDirectory, environmentVariables),
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+        return result is null ? ProviderAuthenticationStatus.CheckFailed : parseResult(result);
+    }
+
+    private static async Task<bool?> CheckUpdateAvailableAsync(
+        ProviderId id,
+        Version localVersion,
+        IProviderReleaseSource releaseSource,
+        IProviderReleaseCache cache,
+        IClock clock,
+        bool bypassReleaseCache,
+        CancellationToken cancellationToken)
+    {
+        ProviderReleaseCacheEntry? entry = bypassReleaseCache
+            ? null
+            : await cache.ReadAsync(id, cancellationToken).ConfigureAwait(false);
+        if (entry is not null && !bypassReleaseCache && !IsStale(entry, clock.UtcNow))
+        {
+            return entry.Succeeded && Version.TryParse(entry.LatestVersion, out Version? cachedLatest)
+                ? cachedLatest > localVersion
+                : null;
+        }
+
+        ProviderReleaseLookupResult lookup =
+            await FetchAndCacheAsync(id, releaseSource, cache, clock, cancellationToken).ConfigureAwait(false);
+        return lookup.Succeeded && lookup.Version is not null ? lookup.Version > localVersion : null;
+    }
+
+    private static async Task<ProviderReleaseLookupResult> FetchAndCacheAsync(
+        ProviderId id,
+        IProviderReleaseSource releaseSource,
+        IProviderReleaseCache cache,
+        IClock clock,
+        CancellationToken cancellationToken)
+    {
+        ProviderReleaseLookupResult lookup =
+            await releaseSource.FetchLatestVersionAsync(cancellationToken).ConfigureAwait(false);
+        await cache.WriteAsync(
+            id,
+            new(clock.UtcNow, lookup.Succeeded, lookup.Version?.ToString()),
+            cancellationToken).ConfigureAwait(false);
+        return lookup;
+    }
+
+    private static bool IsStale(ProviderReleaseCacheEntry entry, DateTimeOffset now)
+    {
+        TimeSpan window = entry.Succeeded ? ReleaseCheckSuccessWindow : ReleaseCheckFailureWindow;
+        return now - entry.CheckedAt >= window;
+    }
+
+    /// <summary>Reads a fixed vendor-owned path and runs `--version`. Never touches the network.</summary>
+    private static async Task<(ProviderStatus Status, Version? Version)> DiscoverLocalAsync(
+        ProviderId id,
+        ProviderInstallSpec spec,
+        IProcessRunner processRunner,
+        TimeSpan versionProbeTimeout,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        if (!File.Exists(spec.ExecutablePath))
+        {
+            return (new(id, ProviderState.Missing, null, ProviderDiagnosticCodes.Missing), null);
+        }
+
+        ProcessResult? result = await RunWithTimeoutAsync(
+            processRunner,
+            new(spec.ExecutablePath, ["--version"], Path.GetDirectoryName(spec.ExecutablePath)!, environmentVariables),
+            versionProbeTimeout,
+            cancellationToken).ConfigureAwait(false);
+        if (result is not { ExitCode: 0 })
+        {
+            return (new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed), null);
+        }
+
+        if (!TryParseVersion(result.StandardOutput, out Version? version))
+        {
+            return (new(id, ProviderState.Failed, null, ProviderDiagnosticCodes.UpdateFailed), null);
+        }
+
+        return spec.MinimumVersion is { } minimum && version < minimum
+            ? (new(id, ProviderState.Failed, version.ToString(), ProviderDiagnosticCodes.VersionUnsupported), null)
+            : (ProviderStatus.Ready(id, version.ToString()), version);
     }
 
     private static async Task<ProcessResult?> RunWithTimeoutAsync(
