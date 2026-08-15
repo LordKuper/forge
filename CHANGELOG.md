@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.19.1
+
+### Changed
+
+- Forge's development policy and planned managed-project workflow now require
+  each scoped implementation to be completed and confirmed against its
+  definition of done or user expectations before selecting and authoring the
+  smallest risk-based set of new tests. Fixes still require a regression test
+  proven against the prior defect.
+
 ## v0.19.0
 
 ### Added
