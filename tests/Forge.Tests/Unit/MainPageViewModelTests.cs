@@ -134,10 +134,13 @@ public sealed class MainPageViewModelTests
             requestedSprintId.Value.ToString(),
             cancellationToken);
 
-        // "alpha" is now the active sprint's node, so it would appear if the active sprint had been
-        // expanded instead of the requested one.
+        // Pin the precondition itself: the `*` marker proves the other sprint really did resolve as
+        // active, so this cannot silently decay back into a fixture with no active sprint at all —
+        // which is what made the pre-fix version of this test unable to prove anything.
         Assert.Contains(
-            activeSprintId.Value.ToString("D", CultureInfo.InvariantCulture),
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"* 1. {activeSprintId.Value.ToString("D", CultureInfo.InvariantCulture)} "),
             snapshot.SprintsText,
             StringComparison.Ordinal);
         Assert.DoesNotContain("alpha", snapshot.SprintsText, StringComparison.Ordinal);

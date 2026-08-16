@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Forge.Application;
 using Forge.Cli;
 using Forge.Desktop.Presentation;
@@ -14,9 +15,6 @@ namespace Forge.AcceptanceTests;
 
 public sealed class SurfaceParityTests
 {
-    /// <summary>The Desktop entries with no adjacent visible label of their own.</summary>
-    private static readonly string[] FreeTextEntries = ["ProjectRootEntry", "SprintIdEntry"];
-
     /// <summary>The Desktop control that exposes each implemented capability.</summary>
     private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
     {
@@ -107,21 +105,27 @@ public sealed class SurfaceParityTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void DesktopFreeTextEntriesCarryAScreenReaderName()
+    public void EveryDesktopFreeTextEntryCarriesAScreenReaderNameAndPlaceholder()
     {
-        // ADR 0005 requires every action to be screen-reader named. DesktopControlsAreWiredInCodeBehind
-        // only proves the control name appears somewhere in the code-behind — deleting the
-        // SemanticProperties wiring would keep it green — so pin the wiring itself. A static check
-        // fully covers this risk: no MAUI control can be instantiated headlessly here.
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(),
-            "src",
-            "Forge.Desktop",
-            "MainPage.xaml.cs"));
+        // ADR 0005 requires every action to be screen-reader named. No Entry on this page has an
+        // adjacent visible label, so every one of them must be described — and the list is derived
+        // from the XAML rather than hand-maintained, so a newly added Entry fails here instead of
+        // shipping unlabeled. DesktopControlsAreWiredInCodeBehind cannot cover this: it only proves
+        // the control name appears somewhere in the code-behind. A static check fully covers the
+        // risk, since no MAUI control can be instantiated headlessly in this suite.
+        string desktop = Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop");
+        string codeBehind = File.ReadAllText(Path.Combine(desktop, "MainPage.xaml.cs"));
+        string[] entries = [.. Regex
+            .Matches(File.ReadAllText(Path.Combine(desktop, "MainPage.xaml")), "<Entry[^>]*?x:Name=\"([^\"]+)\"")
+            .Select(match => match.Groups[1].Value)];
 
+        Assert.NotEmpty(entries);
+        // Both halves of the fix, not just the screen-reader name: the visible placeholder is what
+        // a sighted user reads, and the CHANGELOG claims both.
         Assert.Contains("SemanticProperties.SetDescription(entry, label)", codeBehind, StringComparison.Ordinal);
+        Assert.Contains("entry.Placeholder = label", codeBehind, StringComparison.Ordinal);
         Assert.All(
-            FreeTextEntries,
+            entries,
             entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
     }
 

@@ -27,10 +27,14 @@ public partial class MainPage : ContentPage
         InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);
         RecoverButton.Text = text.Resolve(MessageKeys.RecoverAction);
         ConfigurationTitleLabel.Text = text.Resolve(MessageKeys.ConfigurationTitle);
-        // Both free-text boxes sit unlabeled in the same row, so each carries its own
-        // screen-reader name and visible placeholder (ADR 0005: every action is screen-reader named).
+        // No free-text box on this page has an adjacent visible label, so each carries its own
+        // screen-reader name and visible placeholder (ADR 0005: every action is screen-reader
+        // named). SurfaceParityTests derives the list from the XAML, so a new Entry fails until
+        // it is described here too.
         Describe(ProjectRootEntry, text.Resolve(MessageKeys.ProjectRootLabel));
         Describe(SprintIdEntry, text.Resolve(MessageKeys.SprintIdLabel));
+        Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
+        Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;

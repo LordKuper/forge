@@ -14,9 +14,11 @@
       <Label x:Name="SuggestedActionsLabel" />
       <Label x:Name="SprintsLabel" />
       <Label x:Name="SprintDetailsLabel" />
+      <!-- Its own row: adding it to the action row below would push the buttons past the edge of
+           the vertical-only ScrollView, which clips rather than scrolls horizontally. -->
+      <Entry x:Name="SprintIdEntry" HorizontalOptions="Start" WidthRequest="360" />
       <HorizontalStackLayout Spacing="8">
         <Entry x:Name="ProjectRootEntry" WidthRequest="360" />
-        <Entry x:Name="SprintIdEntry" WidthRequest="320" />
         <Button x:Name="RefreshButton" Clicked="OnRefreshClicked" />
         <Button x:Name="InitializeButton" Clicked="OnInitializeClicked" />
         <Button x:Name="RecoverButton" Clicked="OnRecoverClicked" />

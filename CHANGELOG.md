@@ -23,8 +23,9 @@ User-facing Forge changes are listed by release, newest first.
   surface formatter, and an acceptance test now asserts that the CLI and
   Desktop render identical text for one project, so the two projections
   cannot drift apart. CLI output is unchanged.
-- The Desktop project-root and sprint-id boxes carry screen-reader names
-  and visible placeholders; neither was labeled before.
+- Every Desktop text box now carries a screen-reader name and a visible
+  placeholder — project root, sprint id, and both configuration boxes.
+  None of them was labeled before.
 
 ## v0.28.1
 

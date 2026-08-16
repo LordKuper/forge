@@ -60,6 +60,8 @@ public static class MessageKeys
     public const string StartupFailed = "StartupFailed";
     public const string ProjectRootLabel = "ProjectRootLabel";
     public const string SprintIdLabel = "SprintIdLabel";
+    public const string ConfigurationKeyLabel = "ConfigurationKeyLabel";
+    public const string ConfigurationValueLabel = "ConfigurationValueLabel";
     public const string ProjectInitialized = "ProjectInitialized";
     public const string ProjectNotInitialized = "ProjectNotInitialized";
     public const string InitConfirmationRequired = "InitConfirmationRequired";
