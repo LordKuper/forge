@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.23.1
+
+### Changed
+
+- Internal: added an automated CI check proving the Host's control-plane pipe
+  (`PipeOptions.CurrentUserOnly`) actually blocks a connection attempt from a
+  different local OS user, not just a different instance id. No shipped
+  behavior, contract, or configuration change.
+
 ## v0.23.0
 
 ### Changed
