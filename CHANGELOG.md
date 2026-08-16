@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.21.2
+
+### Changed
+
+- Internal: corrected the Stage 8 implementation plan to reflect actual
+  progress after an architecture audit found several sub-items marked
+  complete before their acceptance criteria were met (Host mutation
+  ownership, automatic provider startup maintenance, deferred-attempt
+  wake-up, snapshot/CLI/Desktop parity, and provider-constraint freezing).
+  No shipped behavior, contract, or configuration changes.
+
 ## v0.21.1
 
 ### Changed
