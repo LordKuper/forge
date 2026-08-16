@@ -190,6 +190,81 @@ public sealed class ProviderInstallationTests
         Assert.Equal(0, releaseSource.CallCount);
     }
 
+    // ADR 0008: routine startup respects the same 24h/1h release-check cache windows as the
+    // read-only DiscoverAsync path -- only `forge models --refresh` bypasses them.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateRespectsARecentCacheEntryInsteadOfCheckingAgain()
+    {
+        FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
+        FakeReleaseCache cache = new();
+        await cache.WriteAsync(
+            Id,
+            new(clock.UtcNow - TimeSpan.FromHours(1), true, "0.146.0"),
+            TestContext.Current.CancellationToken);
+        CountingReleaseSource releaseSource = new(new(true, new Version(0, 149, 0)));
+        FakeInstallLock installLock = new();
+
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
+            Id,
+            Spec(),
+            LocalVersionRunner("0.146.0"), // never invoked beyond the initial local probe
+            releaseSource,
+            cache,
+            installLock,
+            clock,
+            bypassReleaseCache: false,
+            ProviderInstallation.DefaultVersionProbeTimeout,
+            ProviderInstallation.DefaultInstallTimeout,
+            ProviderInstallation.DefaultInstallLockTimeout,
+            TestContext.Current.CancellationToken);
+
+        // The cached entry names the same version already installed locally, so the cache alone
+        // is enough to conclude there is nothing to update -- the network is never consulted.
+        Assert.Equal(0, releaseSource.CallCount);
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.False(status.UpdateAvailable);
+    }
+
+    // The mirror image of the test above: once the cached entry goes stale, InstallOrUpdateAsync
+    // falls back to a fresh network check even with bypassReleaseCache: false, exactly like
+    // DiscoverAsync's ACacheEntryOlderThanTheSuccessWindowTriggersAFreshCheck.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallOrUpdateChecksAgainOnceTheCacheEntryIsStale()
+    {
+        FakeClock clock = new() { UtcNow = new DateTimeOffset(2026, 1, 1, 12, 0, 0, TimeSpan.Zero) };
+        FakeReleaseCache cache = new();
+        await cache.WriteAsync(
+            Id,
+            new(clock.UtcNow - ProviderInstallation.ReleaseCheckSuccessWindow, true, "0.146.0"),
+            TestContext.Current.CancellationToken);
+        CountingReleaseSource releaseSource = new(new(true, new Version(0, 147, 0)));
+        FakeInstallLock installLock = new();
+        SequencedProcessRunner runner = new(
+            new ProcessResult(0, "0.146.0", string.Empty), // 1: initial local probe
+            new ProcessResult(0, "0.146.0", string.Empty), // 2: re-probe under lock
+            new ProcessResult(0, "0.147.0", string.Empty)); // 3: post-update probe
+
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
+            Id,
+            Spec(),
+            runner,
+            releaseSource,
+            cache,
+            installLock,
+            clock,
+            bypassReleaseCache: false,
+            ProviderInstallation.DefaultVersionProbeTimeout,
+            ProviderInstallation.DefaultInstallTimeout,
+            ProviderInstallation.DefaultInstallLockTimeout,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, releaseSource.CallCount);
+        Assert.Equal(ProviderState.Ready, status.State);
+        Assert.Equal("0.147.0", status.Version);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task InstallOrUpdateReportsTheRealDiagnosticWhenTheLockCannotBeAcquiredForAMissingProvider()
@@ -207,6 +282,7 @@ public sealed class ProviderInstallationTests
             cache,
             installLock,
             clock,
+            bypassReleaseCache: true,
             ProviderInstallation.DefaultVersionProbeTimeout,
             ProviderInstallation.DefaultInstallTimeout,
             ProviderInstallation.DefaultInstallLockTimeout,
@@ -240,6 +316,7 @@ public sealed class ProviderInstallationTests
             cache,
             installLock,
             clock,
+            bypassReleaseCache: true,
             ProviderInstallation.DefaultVersionProbeTimeout,
             ProviderInstallation.DefaultInstallTimeout,
             ProviderInstallation.DefaultInstallLockTimeout,
@@ -270,6 +347,7 @@ public sealed class ProviderInstallationTests
             cache,
             installLock,
             clock,
+            bypassReleaseCache: true,
             ProviderInstallation.DefaultVersionProbeTimeout,
             ProviderInstallation.DefaultInstallTimeout,
             ProviderInstallation.DefaultInstallLockTimeout,
@@ -303,6 +381,7 @@ public sealed class ProviderInstallationTests
             cache,
             installLock,
             clock,
+            bypassReleaseCache: true,
             ProviderInstallation.DefaultVersionProbeTimeout,
             ProviderInstallation.DefaultInstallTimeout,
             ProviderInstallation.DefaultInstallLockTimeout,
@@ -348,6 +427,7 @@ public sealed class ProviderInstallationTests
             cache,
             installLock,
             clock,
+            bypassReleaseCache: true,
             ProviderInstallation.DefaultVersionProbeTimeout,
             ProviderInstallation.DefaultInstallTimeout,
             ProviderInstallation.DefaultInstallLockTimeout,

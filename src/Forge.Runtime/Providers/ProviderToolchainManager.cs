@@ -34,16 +34,20 @@ public sealed class ProviderToolchainManager(ProviderCatalog catalog, IProviderE
         return new(statuses);
     }
 
-    public async Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken)
+    public async Task<ProviderToolchainStatus> EnsureReadyAsync(
+        bool bypassReleaseCache,
+        CancellationToken cancellationToken)
     {
         IReadOnlyList<ILlmProvider> enabled = await ResolveEnabledAsync(cancellationToken).ConfigureAwait(false);
         List<ProviderStatus> statuses = new(enabled.Count);
         foreach (ILlmProvider provider in enabled)
         {
-            // InstallOrUpdateAsync always re-checks itself (bypassing the cache, per ADR 0008's
-            // "forge models --refresh bypasses the time limit") and only actually installs/updates
-            // when its own fresh check finds a reason to.
-            ProviderStatus status = await provider.InstallOrUpdateAsync(cancellationToken).ConfigureAwait(false);
+            // InstallOrUpdateAsync re-checks itself and only actually installs/updates when that
+            // check finds a reason to; bypassReleaseCache controls only whether that check honors
+            // the 24h/1h cache windows (routine startup) or always fetches fresh (`--refresh`).
+            ProviderStatus status = await provider
+                .InstallOrUpdateAsync(bypassReleaseCache, cancellationToken)
+                .ConfigureAwait(false);
             statuses.Add(status with
             {
                 Authentication = await provider.CheckAuthenticationAsync(cancellationToken).ConfigureAwait(false),

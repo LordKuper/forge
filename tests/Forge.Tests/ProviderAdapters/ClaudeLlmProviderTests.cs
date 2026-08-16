@@ -53,7 +53,8 @@ public sealed class ClaudeLlmProviderTests
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 221))));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(4, callCount);
         Assert.Equal(ProviderState.Ready, status.State);
@@ -84,7 +85,8 @@ public sealed class ClaudeLlmProviderTests
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 221))));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(1, callCount);
         Assert.Equal(ProviderState.Ready, status.State);
@@ -157,7 +159,8 @@ public sealed class ClaudeLlmProviderTests
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(2, 1, 222))));
 
-        await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         // Every local `--version` probe disables the vendor's own background updater (it can
         // otherwise fire on any invocation); the actual `update` command never does — ADR 0008:

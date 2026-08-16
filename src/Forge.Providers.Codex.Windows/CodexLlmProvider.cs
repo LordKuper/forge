@@ -69,7 +69,7 @@ public sealed class CodexLlmProvider(
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             cancellationToken);
 
-    public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken) =>
+    public Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.InstallOrUpdateAsync(
             Id,
             spec,
@@ -78,6 +78,7 @@ public sealed class CodexLlmProvider(
             releaseCache,
             installLock,
             clock,
+            bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
             installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,

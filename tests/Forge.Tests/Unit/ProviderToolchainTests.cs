@@ -15,7 +15,8 @@ public sealed class ProviderToolchainTests
         FakeLlmProvider missing = new(new ProviderId("missing-provider"), ProviderState.Missing, null);
         ProviderToolchainManager manager = CreateManager([ready, missing]);
 
-        ProviderToolchainStatus status = await manager.EnsureReadyAsync(TestContext.Current.CancellationToken);
+        ProviderToolchainStatus status =
+            await manager.EnsureReadyAsync(bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(0, ready.InstallCalls);
         Assert.Equal(1, missing.InstallCalls);
@@ -84,7 +85,7 @@ public sealed class ProviderToolchainTests
         ProviderToolchainManager manager = CreateManager([enabled, disabled], enabledIds: ["codex"]);
 
         ProviderToolchainStatus status =
-            await manager.EnsureReadyAsync(TestContext.Current.CancellationToken);
+            await manager.EnsureReadyAsync(bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(["codex"], status.Providers.Select(provider => provider.Id.Value));
         Assert.Equal(0, disabled.DiscoverCalls);
@@ -114,6 +115,40 @@ public sealed class ProviderToolchainTests
         {
             Assert.False(status.AllowsSprintWork);
         }
+    }
+
+    // ADR 0008 (P8.72-82, reopened by the 2026-08-15 audit): "Startup performs conditional
+    // maintenance" -- a missing/broken enabled provider is installed/repaired automatically at
+    // startup, not merely reported as blocked pending an explicit `forge models --refresh`.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task StartupAutomaticallyInstallsAMissingEnabledProviderInsteadOfJustReportingIt()
+    {
+        FakeLlmProvider missing = new(new ProviderId("codex"), ProviderState.Missing, null);
+        using TestEnvironment environment = new(llmProviders: [missing]);
+
+        StartupStatus status = await environment.Application.GetStartupStatusAsync(
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, missing.InstallCalls);
+        StartupCheck providersCheck = status.Checks.Single(check => check.Id == StartupCheckId.Providers);
+        Assert.Equal(StartupCheckState.Passed, providersCheck.State);
+        Assert.Equal(DiagnosticCodes.None, providersCheck.DiagnosticCode);
+    }
+
+    // Distinguishes routine startup from `forge models --refresh`: only --refresh may bypass the
+    // 24h/1h release-check cache windows (ADR 0008).
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task StartupChecksForAnUpdateWithoutBypassingTheReleaseCache()
+    {
+        FakeLlmProvider ready = new(new ProviderId("codex"), ProviderState.Ready, "1.0.0");
+        using TestEnvironment environment = new(llmProviders: [ready]);
+
+        await environment.Application.GetStartupStatusAsync(null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(false, ready.LastInstallOrUpdateBypassedReleaseCache);
     }
 
     [Fact]

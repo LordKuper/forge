@@ -122,7 +122,8 @@ public sealed class CodexLlmProviderTests
             return new(0, "0.146.0", string.Empty);
         });
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.True(ranInstaller);
         Assert.Equal(ProviderState.Ready, status.State);
@@ -135,7 +136,8 @@ public sealed class CodexLlmProviderTests
         using TestPaths paths = new();
         CodexLlmProvider provider = CreateProvider(paths, _ => new(1, string.Empty, "install failed"));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
@@ -158,7 +160,8 @@ public sealed class CodexLlmProviderTests
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(0, 146, 0))));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Ready, status.State);
         Assert.False(status.UpdateAvailable);
@@ -185,7 +188,8 @@ public sealed class CodexLlmProviderTests
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(4, processCalls);
         Assert.Equal(ProviderState.Ready, status.State);
@@ -209,7 +213,8 @@ public sealed class CodexLlmProviderTests
             releaseSource: new FakeReleaseSource(new(true, new Version(0, 147, 0))),
             installLock: new FakeInstallLock(acquires: false));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Ready, status.State);
         // Exactly the local probe that established a newer release exists — never the actual
@@ -266,7 +271,8 @@ public sealed class CodexLlmProviderTests
             new FakeClock(),
             installTimeout: TimeSpan.FromMilliseconds(50));
 
-        ProviderStatus status = await provider.InstallOrUpdateAsync(TestContext.Current.CancellationToken);
+        ProviderStatus status = await provider.InstallOrUpdateAsync(
+            bypassReleaseCache: true, TestContext.Current.CancellationToken);
 
         Assert.Equal(ProviderState.Failed, status.State);
         Assert.Equal(ProviderDiagnosticCodes.UpdateFailed, status.DiagnosticCode);
