@@ -162,6 +162,100 @@ public sealed class StartupCliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task MachineTreeMatchesTheVersionedContract()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment, output, ["tree", "--project-root", environment.ProjectRoot, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        // `tree --json` is the same ProjectSnapshot contract `status --json` emits — no separate
+        // schema — so validating it here guards against the two ever drifting apart.
+        AssertValid("project-snapshot", output.ToString());
+        using JsonDocument snapshot = JsonDocument.Parse(output.ToString());
+        Assert.True(snapshot.RootElement.TryGetProperty("details", out _));
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task MachineTreeReportsSprintNotFoundForAnUnknownSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter error = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment,
+            output,
+            ["tree", "--project-root", environment.ProjectRoot, "--sprint", Guid.NewGuid().ToString(), "--json"],
+            error);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", error.ToString());
+        AssertValid("project-snapshot", output.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task MachineSprintInspectMatchesTheVersionedContract()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment,
+            output,
+            ["sprint", "inspect", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot, "--json"]);
+
+        Assert.Equal(0, exitCode);
+        AssertValid("project-snapshot", output.ToString());
+        using JsonDocument snapshot = JsonDocument.Parse(output.ToString());
+        Assert.Equal(sprintId.Value, snapshot.RootElement.GetProperty("details").GetProperty("sprint_id").GetGuid());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task MachineSprintInspectReportsSprintNotFoundForAnUnknownSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter error = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(
+            environment,
+            output,
+            ["sprint", "inspect", Guid.NewGuid().ToString(), "--project-root", environment.ProjectRoot, "--json"],
+            error);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", error.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task ConfigurationEditorReportsProvenanceAndRejectsWrongScope()
     {
         using TestEnvironment environment = new();

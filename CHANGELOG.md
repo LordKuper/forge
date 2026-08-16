@@ -15,9 +15,10 @@ User-facing Forge changes are listed by release, newest first.
 ### Fixed
 
 - An attempt's last-activity heartbeat now survives into the project
-  snapshot (`last_activity_at`, separate from `updated_at`) instead of being
-  dropped during projection, so `forge status --detail full` and the new
-  `tree`/`sprint inspect` commands can show it.
+  snapshot's machine contract (`last_activity_at`, separate from
+  `updated_at`) instead of being dropped during projection. Visible in
+  `--json` output from `forge status --detail full` and the new
+  `tree`/`sprint inspect` commands; no text renderer prints it yet.
 
 ## v0.27.0
 

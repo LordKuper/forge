@@ -291,9 +291,16 @@ public static class CliApplication
         {
             string? rawSprint = parseResult.GetValue(sprint);
             bool sprintRequested = !string.IsNullOrWhiteSpace(rawSprint);
-            Guid? sprintId = sprintRequested && Guid.TryParse(rawSprint, out Guid parsedSprintId)
-                ? parsedSprintId
-                : null;
+            // Unlike `status` (which only reaches SnapshotDetail.Full on an explicit --detail full),
+            // `tree` always requests Full — so a malformed --sprint value must never silently fall
+            // back to GetOverviewAsync's own "no explicit id" active-sprint resolution.
+            Guid parsedSprintId = default;
+            if (sprintRequested && !Guid.TryParse(rawSprint, out parsedSprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            Guid? sprintId = sprintRequested ? parsedSprintId : null;
             ProjectOverview overview = await application
                 .GetOverviewAsync(parseResult.GetValue(projectRoot), SnapshotDetail.Full, sprintId, cancellationToken)
                 .ConfigureAwait(false);

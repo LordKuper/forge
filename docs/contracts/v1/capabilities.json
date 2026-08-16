@@ -12,7 +12,7 @@
       "kind": "query",
       "contract": "GetProjectSnapshot",
       "events": ["ProjectSnapshotInvalidated"],
-      "cli": "forge status [--json]",
+      "cli": "forge status [--detail summary|full] [--sprint <id>] [--json] | forge tree [--sprint <id>] [--json] | forge sprint inspect <id> [--json]",
       "desktop": "Dashboard/Refresh",
       "permission": "read_redacted",
       "acceptance": "project-snapshot-parity"
@@ -45,7 +45,8 @@
       "cli": "forge sprint <create|run|resume|cancel|rebase>",
       "desktop": "Sprints/Actions",
       "permission": "workflow_mutate",
-      "acceptance": "sprint-lifecycle-parity"
+      "acceptance": "sprint-lifecycle-parity",
+      "note": "`forge sprint inspect` shares the `sprint` command group but belongs to project.snapshot (a query), not this mutation capability."
     },
     {
       "id": "attempt.supersede",

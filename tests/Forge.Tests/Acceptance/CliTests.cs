@@ -642,9 +642,15 @@ public sealed class CliTests
 
         Assert.Equal(0, exitCode);
         string text = output.ToString();
-        int nodeIndex = text.IndexOf("a running", StringComparison.Ordinal);
-        int attemptIndex = text.IndexOf(started.AttemptId!.Value.ToString("D"), StringComparison.Ordinal);
-        Assert.True(nodeIndex >= 0 && attemptIndex > nodeIndex);
+        // A flat rendering (like `status`'s Nodes:/Attempts: sections) would also satisfy a mere
+        // "attempt appears somewhere after node" check, so assert the attempt line is the very next
+        // line after the node's own line, at a deeper indent — the actual nesting `tree` promises —
+        // and that the flat section label never appears at all.
+        string expectedAdjacency = string.Create(
+            CultureInfo.InvariantCulture,
+            $"      a running{Environment.NewLine}        {started.AttemptId!.Value:D} created{Environment.NewLine}");
+        Assert.Contains(expectedAdjacency, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(catalog.Resolve(MessageKeys.AttemptsLabel), text, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -666,6 +672,35 @@ public sealed class CliTests
 
         Assert.Equal(ExitCodes.Usage, exitCode);
         Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandReportsSprintNotFoundForAMalformedSprintIdInsteadOfFallingBackToActive()
+    {
+        // Regression: `tree` always requests SnapshotDetail.Full (unlike `status`, which only
+        // reaches Full on an explicit --detail full), so a malformed --sprint value must never
+        // silently resolve to the project's own active sprint instead of being reported as invalid.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", "not-a-guid"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+        Assert.Empty(output.ToString());
     }
 
     [Fact]
