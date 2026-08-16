@@ -2,7 +2,6 @@ using System.CommandLine;
 using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Configuration;
-using Forge.Host.Client;
 using Forge.Localization;
 using Forge.Updater;
 using Microsoft.Extensions.DependencyInjection;
@@ -86,7 +85,14 @@ public static class CliHost
                     ct),
             async (mutationRoot, ct) =>
             {
-                IForgeMutations mutations = await CreateMutationsAsync(host, application, mutationRoot, ct)
+                IForgeMutations mutations = await HostMutationsFactory.CreateAsync(
+                        host.Services.GetRequiredService<ProjectRootResolver>(),
+                        host.Services.GetRequiredService<IConfigurationRegistry>(),
+                        host.Services.GetRequiredService<IEnvironmentPaths>(),
+                        application,
+                        typeof(CliApplication).Assembly.GetName().Version!.ToString(3),
+                        mutationRoot,
+                        ct)
                     .ConfigureAwait(false);
                 created = mutations as RemoteForgeMutations;
                 return mutations;
@@ -102,61 +108,5 @@ public static class CliHost
                 await created.DisposeAsync().ConfigureAwait(false);
             }
         }
-    }
-
-    /// <summary>
-    /// ADR 0005: every `.forge/` mutation routes through the project's Host once one can exist for
-    /// <paramref name="projectRoot"/> — which requires a project id, so an uninitialized project (no
-    /// manifest yet) falls back to the local <see cref="ForgeApplication"/> here, matching the one
-    /// bootstrap mutation that can precede a Host (`init`). The Host itself is started lazily, on
-    /// the first actual mutation.
-    /// </summary>
-    private static async Task<IForgeMutations> CreateMutationsAsync(
-        IHost host,
-        ForgeApplication application,
-        string? projectRoot,
-        CancellationToken cancellationToken)
-    {
-        ProjectRootResolver rootResolver = host.Services.GetRequiredService<ProjectRootResolver>();
-        ProjectRootStatus status = await rootResolver.ResolveAsync(projectRoot, cancellationToken)
-            .ConfigureAwait(false);
-        if (!status.Initialized)
-        {
-            return application;
-        }
-
-        IConfigurationRegistry registry = host.Services.GetRequiredService<IConfigurationRegistry>();
-        Guid projectId;
-        try
-        {
-            projectId = await ProjectIdentity
-                .ReadProjectIdAsync(status.Root, registry, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidDataException
-            or FormatException or ConfigurationScopeException or IOException or UnauthorizedAccessException
-            or InvalidOperationException)
-        {
-            // The same unreadable-manifest condition ControlPlaneHostedService itself treats as
-            // "this project cannot be served" — with no project id to key a Host connection on,
-            // the caller falls back to the local ForgeApplication, which will independently hit
-            // (and correctly diagnose) this same failure when it actually runs the command.
-            return application;
-        }
-
-        IEnvironmentPaths paths = host.Services.GetRequiredService<IEnvironmentPaths>();
-        string clientVersion = typeof(CliApplication).Assembly.GetName().Version!.ToString(3);
-        ForgeHostClient client = new(
-            new NamedPipeControlTransport(),
-            new ForgeHostClientOptions(projectId, paths.InstanceId, clientVersion));
-        string hostExecutablePath = Path.Combine(
-            Path.GetDirectoryName(Environment.ProcessPath) ??
-                throw new InvalidOperationException("The Forge executable path is unavailable."),
-            "Forge.Host" + Path.GetExtension(Environment.ProcessPath));
-        return new RemoteForgeMutations(
-            client,
-            async ct => await ForgeHostLauncher
-                .StartAsync(hostExecutablePath, status.Root, paths.InstanceId, ct)
-                .ConfigureAwait(false));
     }
 }

@@ -23,10 +23,19 @@ public sealed record MainPageSnapshot(
 /// The Desktop main page's reusable orchestration, independent of any MAUI/WinUI control. The Windows host
 /// (<c>Forge.Desktop</c>) assigns each resolved snapshot field to its controls; it owns no application logic itself.
 /// </summary>
-public sealed class MainPageViewModel(SurfaceText text, ForgeApplication application)
+public sealed class MainPageViewModel(
+    SurfaceText text,
+    ForgeApplication application,
+    Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null)
 {
     private readonly SurfaceText text = text ?? throw new ArgumentNullException(nameof(text));
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
+    // ADR 0005: every `.forge/` mutation routes through the project's Host once one is reachable.
+    // A caller that supplied none (every existing test, and any bootstrap path where no project is
+    // initialized yet) falls back to the local ForgeApplication, matching CliApplication's own
+    // default.
+    private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations =
+        resolveMutations ?? ((_, _) => Task.FromResult<IForgeMutations>(application));
 
     /// <summary>Restores the view from durable application state, never from serialized UI objects.</summary>
     public async Task<MainPageSnapshot> RefreshAsync(string? projectRoot, CancellationToken cancellationToken)
@@ -118,17 +127,28 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
 
     public async Task<string> RecoverAsync(string? projectRoot, bool confirmed, CancellationToken cancellationToken)
     {
-        RecoverStartupResult result = await application
-            .RecoverStartupAsync(projectRoot, confirmed, cancellationToken)
-            .ConfigureAwait(false);
-        return Message(
-            text.Resolve(result switch
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        try
+        {
+            RecoverStartupResult result = await mutations
+                .RecoverStartupAsync(projectRoot, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result switch
+                {
+                    { Succeeded: true, Check: null } => MessageKeys.RecoveryNotNeeded,
+                    { Succeeded: true } => MessageKeys.RecoveryCompleted,
+                    _ => MessageKeys.RecoveryFailed,
+                }),
+                result.DiagnosticCode);
+        }
+        finally
+        {
+            if (mutations is IAsyncDisposable disposable)
             {
-                { Succeeded: true, Check: null } => MessageKeys.RecoveryNotNeeded,
-                { Succeeded: true } => MessageKeys.RecoveryCompleted,
-                _ => MessageKeys.RecoveryFailed,
-            }),
-            result.DiagnosticCode);
+                await disposable.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     public async Task<string> SetConfigurationAsync(
@@ -138,12 +158,27 @@ public sealed class MainPageViewModel(SurfaceText text, ForgeApplication applica
         string? value,
         CancellationToken cancellationToken)
     {
-        ConfigurationWriteResult result = await application
-            .SetConfigurationAsync(scope, projectRoot, key, value, cancellationToken)
-            .ConfigureAwait(false);
-        return Message(
-            text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
-            result.DiagnosticCode);
+        // User-scope configuration is not `.forge/` project state (ADR 0005 protects the latter),
+        // so it stays local even when a Host connection is available for project mutations.
+        IForgeMutations mutations = scope == ConfigurationScope.Project
+            ? await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false)
+            : application;
+        try
+        {
+            ConfigurationWriteResult result = await mutations
+                .SetConfigurationAsync(scope, projectRoot, key, value, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
+                result.DiagnosticCode);
+        }
+        finally
+        {
+            if (mutations is IAsyncDisposable disposable)
+            {
+                await disposable.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     private static string Message(string message, string diagnosticCode) =>

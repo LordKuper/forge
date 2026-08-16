@@ -11,13 +11,32 @@ public partial class MainPage : ContentPage
     private readonly MainPageViewModel viewModel;
     private bool busy;
 
-    public MainPage(SurfaceText text, ForgeApplication application)
+    public MainPage(
+        SurfaceText text,
+        ForgeApplication application,
+        ProjectRootResolver rootResolver,
+        IConfigurationRegistry registry,
+        IEnvironmentPaths paths)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
+        ArgumentNullException.ThrowIfNull(rootResolver);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(paths);
         InitializeComponent();
         this.text = text;
-        viewModel = new MainPageViewModel(text, application);
+        string clientVersion = typeof(MainPage).Assembly.GetName().Version!.ToString(3);
+        viewModel = new MainPageViewModel(
+            text,
+            application,
+            (root, cancellationToken) => HostMutationsFactory.CreateAsync(
+                rootResolver,
+                registry,
+                paths,
+                application,
+                clientVersion,
+                root,
+                cancellationToken));
         TitleLabel.Text = text.Resolve(MessageKeys.AppTitle);
         RefreshButton.Text = text.Resolve(MessageKeys.RefreshAction);
         InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);
