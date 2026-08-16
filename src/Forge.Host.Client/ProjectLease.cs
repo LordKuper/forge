@@ -22,20 +22,24 @@ public interface IProjectLease : IDisposable
 /// writer; it must call <see cref="TryAcquire"/> and treat a null result as <c>project_in_use</c>.
 /// </summary>
 /// <remarks>
-/// Prefers <see cref="NamedWaitHandleOptions.CurrentSessionOnly"/> = <see langword="false"/> (the OS-wide
-/// <c>Global\</c> namespace) — the strongest guarantee, covering every session of the user, not just the current
-/// one — but only this process's own account can determine that: creating a <c>Global\</c> named object on Windows
-/// requires <c>SeCreateGlobalPrivilege</c>, which a standard (non-admin) user does not hold by default (a same-user
-/// CI check caught this concretely). Whether this process can create <c>Global\</c> objects at all is determined
-/// <em>once</em>, via a dedicated, always-uncontended probe name (see <see cref="CanCreateGlobalMutexes"/>) — never
-/// by catching a failure on the real lease name, which would be ambiguous: <see cref="UnauthorizedAccessException"/>
-/// on the real name means either "this account cannot create <c>Global\</c> objects" (safe to use session-scoping
-/// instead) or "a <em>different</em> user already holds this exact lease and denied me" (must NOT silently create an
-/// independent session-scoped object instead, or two accounts could both believe they hold the same lease at once).
-/// The session-scoped fallback still protects every process within one logon session (on Windows) or one shell
-/// session (on Unix-like systems) — it does not extend across two concurrent sessions of the same user (e.g. console
-/// + a simultaneous RDP session, or two separate terminal windows on Linux/macOS), an edge case judged acceptable
-/// against making the lease unusable for every non-admin Windows user.
+/// Uses <see cref="NamedWaitHandleOptions.CurrentSessionOnly"/> = <see langword="true"/> uniformly, for every
+/// process regardless of account or elevation. Two designs were tried and rejected:
+/// <list type="bullet">
+/// <item>Always <see langword="false"/> (the OS-wide <c>Global\</c> namespace): creating a <c>Global\</c> named
+/// object on Windows requires <c>SeCreateGlobalPrivilege</c>, which a standard (non-admin) user does not hold by
+/// default — a same-user CI check caught this concretely, as a hard startup failure for that account.</item>
+/// <item>A per-process capability probe (try <c>Global\</c>, fall back to session-scoped only if that account
+/// cannot create one): this does not test the <em>account</em>, it tests the <em>process token</em> —
+/// <c>SeCreateGlobalPrivilege</c> is present only on an elevated UAC token, not the same admin user's ordinary
+/// filtered token. Two processes of the identical user (one elevated, one not) would then resolve to two different,
+/// non-communicating mutex objects and never exclude each other — a silent, fail-open loss of the lease's entire
+/// purpose, for an everyday scenario (a Windows admin sometimes running a terminal elevated, sometimes not), not a
+/// rare edge case.</item>
+/// </list>
+/// Uniform session-scoping protects every process within one logon session (on Windows) or one shell session (on
+/// Unix-like systems) regardless of elevation — it does not extend across two concurrent sessions of the same user
+/// (e.g. console + a simultaneous RDP session, or two separate terminal windows on Linux/macOS), an edge case judged
+/// acceptable against either alternative above.
 /// </remarks>
 /// <remarks>
 /// A named <see cref="Mutex"/>'s ownership is tracked per OS thread, not per <see cref="Mutex"/> object or async
@@ -137,36 +141,13 @@ public sealed class MutexProjectLease : IProjectLease
         return new MutexProjectLease(thread, releaseSignal, wasAbandoned);
     }
 
-    /// <summary>Determines once, from a dedicated always-uncontended probe name (a fresh
-    /// <see cref="Guid"/> every time this runs, so it can never collide with a real lease and never
-    /// observes contention), whether this process's account can create <c>Global\</c> named objects
-    /// at all. See the type-level remarks for why the real lease name must never make this decision
-    /// itself.</summary>
-    private static readonly Lazy<bool> CanCreateGlobalMutexes = new(() =>
-    {
-        try
-        {
-            using Mutex probe = new(
-                initiallyOwned: false,
-                $"forge-global-mutex-capability-probe-{Guid.NewGuid():N}",
-                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
-                out _);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-    });
-
-    /// <summary>See the type-level remarks: uses the OS-wide <c>Global\</c> namespace when this
-    /// process's account can create one (determined once via <see cref="CanCreateGlobalMutexes"/>),
-    /// session-scoping otherwise.</summary>
+    /// <summary>See the type-level remarks for why this is uniform session-scoping rather than a
+    /// per-process <c>Global\</c> capability check.</summary>
     private static Mutex CreateMutex(string leaseName) =>
         new(
             initiallyOwned: false,
             leaseName,
-            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = !CanCreateGlobalMutexes.Value },
+            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
             out _);
 
     public void Dispose()

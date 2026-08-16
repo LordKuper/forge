@@ -4,10 +4,10 @@ namespace Forge.Providers;
 /// The one platform-neutral <see cref="IProviderInstallLock"/> implementation: a named
 /// <see cref="Mutex"/> using <see cref="NamedWaitHandleOptions.CurrentUserOnly"/> — the same
 /// portable primitive <c>Forge.Host.Client.MutexProjectLease</c> uses for the project lease,
-/// including its capability-probed Global\-namespace-when-possible construction (see
-/// <c>MutexProjectLease</c>'s own remarks for why), so this works on every OS a future provider
-/// adapter targets without an OS-specific adapter of its own (ADR 0007/0008: locking policy is
-/// generic, only vendor specifics are adapter-owned).
+/// including its uniform session-scoped construction (see <c>MutexProjectLease</c>'s own remarks
+/// for why not <c>Global\</c>), so this works on every OS a future provider adapter targets
+/// without an OS-specific adapter of its own (ADR 0007/0008: locking policy is generic, only
+/// vendor specifics are adapter-owned).
 /// </summary>
 /// <remarks>
 /// A named <see cref="Mutex"/>'s ownership is tracked per OS thread, not per <see cref="Mutex"/>
@@ -21,12 +21,11 @@ namespace Forge.Providers;
 public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.DefaultLockName) : IProviderInstallLock
 {
     /// <summary>The production per-user lock name — one lock shared by every Forge process for a
-    /// given user (the vendor executables it protects are a shared per-user resource), except on
-    /// the rare account that falls back to session-scoping (see the type-level remarks) — there it
-    /// is shared only within one session, so two concurrent installs from different sessions of the
-    /// same account are not mutually excluded. ADR 0002's install idempotency covers crash-and-retry,
-    /// not that concurrent-writer case. Tests should pass a unique name instead so they never
-    /// contend with a real install.</summary>
+    /// given user within one session (the vendor executables it protects are a shared per-user
+    /// resource); two concurrent installs from different sessions of the same account are not
+    /// mutually excluded (see the type-level remarks). ADR 0002's install idempotency covers
+    /// crash-and-retry, not that concurrent-writer case. Tests should pass a unique name instead so
+    /// they never contend with a real install.</summary>
     public const string DefaultLockName = "forge-provider-install-lock";
 
     /// <remarks>
@@ -117,36 +116,13 @@ public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.De
         return new Lease(thread, releaseSignal);
     }
 
-    /// <summary>Determines once, from a dedicated always-uncontended probe name (a fresh
-    /// <see cref="Guid"/> every time this runs, so it can never collide with a real lock and never
-    /// observes contention), whether this process's account can create <c>Global\</c> named objects
-    /// at all. See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks for why the real
-    /// lock name must never make this decision itself.</summary>
-    private static readonly Lazy<bool> CanCreateGlobalMutexes = new(() =>
-    {
-        try
-        {
-            using Mutex probe = new(
-                initiallyOwned: false,
-                $"forge-global-mutex-capability-probe-{Guid.NewGuid():N}",
-                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
-                out _);
-            return true;
-        }
-        catch (UnauthorizedAccessException)
-        {
-            return false;
-        }
-    });
-
-    /// <summary>See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks: uses the
-    /// OS-wide <c>Global\</c> namespace when this process's account can create one (determined once
-    /// via <see cref="CanCreateGlobalMutexes"/>), session-scoping otherwise.</summary>
+    /// <summary>See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks for why this is
+    /// uniform session-scoping rather than a per-process <c>Global\</c> capability check.</summary>
     private static Mutex CreateMutex(string lockName) =>
         new(
             initiallyOwned: false,
             lockName,
-            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = !CanCreateGlobalMutexes.Value },
+            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
             out _);
 
     private sealed class Lease(Thread thread, ManualResetEventSlim releaseSignal) : IProviderInstallLease

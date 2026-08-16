@@ -11,20 +11,17 @@ User-facing Forge changes are listed by release, newest first.
   their named mutex in the OS-wide `Global\` namespace, which Windows
   only lets administrators and service accounts create — a non-admin
   user's Host process failed outright the moment it tried to acquire the
-  project lease at startup. Both now decide once, from a dedicated
-  always-uncontended probe (never from the real lease/lock name, which
-  would be ambiguous with a genuine different-user denial), whether this
-  process's account can use the `Global\` namespace — the strongest
-  guarantee, covering every session of the user — and use session-scoping
-  otherwise. A new CI check (added while adding same-user isolation
-  coverage for the lease) caught the original failure by exercising the
-  real primitive as a genuine non-admin local Windows account.
-  Known residual gap this introduces: each process decides its own
-  namespace from its own account's capability, so two processes of the
-  *same* user running at different elevation levels (e.g. one elevated,
-  one not) can resolve to different namespaces and no longer exclude
-  each other — an accepted trade-off against every non-admin account
-  failing outright, the behavior this fix replaces.
+  project lease at startup. Both now use session-scoping uniformly for
+  every account, which every account can create. (An intermediate design
+  that tried `Global\` first and fell back per process was itself
+  rejected: it decided the namespace from the process's elevation token,
+  not the account, so the same admin user's elevated and non-elevated
+  Forge processes could silently stop excluding each other.) A new CI
+  check (added while adding same-user isolation coverage for the lease)
+  caught the original failure by exercising the real primitive as a
+  genuine non-admin local Windows account. Known trade-off: session
+  scoping does not extend across two concurrent sessions of the same
+  user (e.g. console + a simultaneous RDP session).
 
 ### Security
 

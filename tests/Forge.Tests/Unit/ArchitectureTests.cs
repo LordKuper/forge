@@ -99,9 +99,8 @@ public sealed class ArchitectureTests
     [Trait("Category", "Architecture")]
     public void ProjectLeaseAndProviderInstallLockConstructTheirMutexIdentically()
     {
-        // MutexProjectLease and ProviderInstallLock are two independent copies of the same
-        // capability-probed Global\-namespace-when-possible construction (see ProjectLease.cs's
-        // remarks for why the real lease/lock name must never itself decide the fallback). Nothing
+        // MutexProjectLease and ProviderInstallLock are two independent copies of the same uniform
+        // session-scoped construction (see ProjectLease.cs's remarks for why not Global\). Nothing
         // else keeps them from silently diverging.
         string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
         string projectLeaseCode = ExtractSharedMutexConstructionCode(
@@ -112,24 +111,19 @@ public sealed class ArchitectureTests
         Assert.Equal(projectLeaseCode, providerInstallLockCode);
     }
 
-    // Captures from the CanCreateGlobalMutexes field through the end of CreateMutex's `out _);`,
-    // and normalizes away the one intentional difference (the parameter name — leaseName vs
-    // lockName) and all whitespace, so the comparison catches any other divergence in the
-    // construction logic itself (options, exception type, ordering) without being brittle about
-    // formatting.
+    // Captures CreateMutex's body (from its own declaration through its `out _);`), and normalizes
+    // away the one intentional difference (the parameter name — leaseName vs lockName) and all
+    // whitespace, so the comparison catches any other divergence in the construction logic itself
+    // (options, ordering) without being brittle about formatting.
     private static string ExtractSharedMutexConstructionCode(string path)
     {
         string source = File.ReadAllText(path);
-        int start = source.IndexOf(
-            "private static readonly Lazy<bool> CanCreateGlobalMutexes", StringComparison.Ordinal);
-        Assert.True(start >= 0, $"{path} does not declare CanCreateGlobalMutexes.");
-        int createMutexStart = source.IndexOf(
-            "private static Mutex CreateMutex(", start, StringComparison.Ordinal);
-        Assert.True(createMutexStart > start, $"{path} does not declare CreateMutex after CanCreateGlobalMutexes.");
+        int start = source.IndexOf("private static Mutex CreateMutex(", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{path} does not declare a CreateMutex method.");
         // The first "out _);" at or after CreateMutex's own start — not the last one in the whole
         // file — so a future Mutex construction added elsewhere in the file can never extend this
         // boundary past CreateMutex's actual end.
-        int end = source.IndexOf("out _);", createMutexStart, StringComparison.Ordinal);
+        int end = source.IndexOf("out _);", start, StringComparison.Ordinal);
         Assert.True(end >= 0, $"{path}'s CreateMutex does not end with the expected construction.");
         end += "out _);".Length;
 

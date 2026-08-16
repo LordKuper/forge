@@ -46,30 +46,29 @@ logic locally once connected.
 The host acquires a cross-process project lease keyed by the manifest's stable
 project id before mutation. `IProjectLease` has one platform-neutral BCL
 implementation: a `System.Threading.Mutex` whose short, hashed name uses
-`NamedWaitHandleOptions` with `CurrentUserOnly = true`, and
-`CurrentSessionOnly` decided once per process from a dedicated,
-always-uncontended capability probe (a name built from a fresh GUID every
-time, so it can never collide with a real lease and never observes real
-contention): if this account can construct a `Global\`-namespaced object at
-all, every real lease uses `CurrentSessionOnly = false` (the OS-wide `Global\`
-namespace, covering every session of the user); otherwise every real lease
-falls back to `CurrentSessionOnly = true` (session-scoped). The real lease
-name itself never makes this decision — an earlier version tried the real
-name directly and fell back on `UnauthorizedAccessException`, which is
-ambiguous between "this account cannot create `Global\` objects" (safe to
-fall back) and "a different user already holds this exact lease and denied
-me" (must not silently create an independent session-scoped object instead).
-Creating a `Global\` named object on Windows requires `SeCreateGlobalPrivilege`,
-which a standard non-admin user does not hold by default — a same-user
-isolation CI check caught this concretely. `CurrentUserOnly` restricts the
-object's security descriptor to the creating user rather than creating a
-separate object per user, so a different local user's attempt to open the
-identical name is denied, not silently redirected to an independent object.
-Residual risk: because the probe runs per process, two processes of the
-*same* user running at different elevation levels can resolve to different
-namespaces (one `Global\`, one session-scoped) and so do not exclude each
-other — accepted against the alternative of every non-admin account failing
-outright. Diagnostic lease metadata lives in the shared per-user Forge state directory;
+`NamedWaitHandleOptions` with `CurrentUserOnly = true` and
+`CurrentSessionOnly = true`, uniformly for every process regardless of account
+or elevation. Two stronger designs were tried and rejected. Always
+`CurrentSessionOnly = false` (the OS-wide `Global\` namespace) fails outright
+for a standard non-admin user: creating a `Global\` named object on Windows
+requires `SeCreateGlobalPrivilege`, which that account does not hold by
+default — a same-user isolation CI check caught this concretely. A per-process
+capability probe (try `Global\`, fall back to session-scoped only for an
+account that cannot create one) does not test the *account*, it tests the
+*process token*: `SeCreateGlobalPrivilege` is present only on an elevated UAC
+token, not the same admin user's ordinary filtered token, so two processes of
+the identical user (one elevated, one not) would resolve to two different,
+non-communicating mutex objects and never exclude each other — a silent,
+fail-open loss of the lease's entire purpose, for an everyday scenario (a
+Windows admin sometimes running a terminal elevated, sometimes not), not a
+rare edge case. `CurrentUserOnly` restricts the object's security descriptor
+to the creating user rather than creating a separate object per user, so a
+different local user's attempt to open the identical name is denied, not
+silently redirected to an independent object. Uniform session-scoping does not
+extend across two concurrent sessions of the same user (e.g. console + a
+simultaneous RDP session, or two separate terminal windows on Linux/macOS,
+where each shell is its own session) — accepted against either rejected
+alternative above. Diagnostic lease metadata lives in the shared per-user Forge state directory;
 the mutex is authoritative and becomes abandoned on process death. A successor
 treats
 `AbandonedMutexException` as ownership plus a mandatory durable-state recovery
