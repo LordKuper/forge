@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Providers;
 
 namespace Forge.Application;
 
@@ -57,7 +58,9 @@ public sealed class SprintOrchestrator(
     IRepository repository,
     ScopedConfigurationService configuration,
     IClock clock,
-    SprintScheduler scheduler)
+    SprintScheduler scheduler,
+    ProviderCatalog providerCatalog,
+    IProviderEnablementSource providerEnablement)
 {
     public const string CreateSprintAction = "create_sprint";
     public const string RunSprintAction = "run_sprint";
@@ -127,6 +130,21 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.SprintGraphInvalid);
         }
 
+        // ADR 0008: "Routing candidates are the ordered intersection of the frozen project profile
+        // and the user-enabled set; when no project constraint exists, the user order is used." No
+        // project-scope constraint is configurable yet, so this is currently just the resolved
+        // user-enabled set — but freezing it here (rather than re-resolving on every routing
+        // decision) is what "frozen into the sprint profile" requires regardless of whether a
+        // project constraint exists.
+        IReadOnlyList<string>? enabledProviderIds = await providerEnablement
+            .GetEnabledIdsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string> frozenProviders =
+            [.. providerCatalog.ResolveEnabled(enabledProviderIds).Select(provider => provider.Id.Value)];
+        if (frozenProviders.Count == 0)
+        {
+            return new(false, null, DiagnosticCodes.SprintProviderCandidatesEmpty);
+        }
+
         string baseCommit;
         try
         {
@@ -193,7 +211,8 @@ public sealed class SprintOrchestrator(
                 graph,
                 await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
                 ArtifactPolicySnapshotHash(configurationSnapshot),
-                clock.UtcNow);
+                clock.UtcNow,
+                frozenProviders);
             await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
         }
 

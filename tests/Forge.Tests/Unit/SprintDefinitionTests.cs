@@ -1,12 +1,89 @@
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
 
 public sealed class SprintDefinitionTests
 {
+    // ADR 0008: "Routing candidates are the ordered intersection of the frozen project profile and
+    // the user-enabled set... The resolved candidate list is frozen into the sprint profile." No
+    // project constraint is configurable yet, so this proves the user-enabled resolution alone --
+    // in the enabled list's order, not provider-registration order.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationFreezesTheEnabledProviderCandidatesInTheEnabledOrder()
+    {
+        using TestEnvironment environment = new(
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "1.0.0"),
+            ],
+            providerEnablement: new FakeProviderEnablementSource(["claude_code", "codex"]));
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.NotNull(definition);
+        Assert.Equal(["claude_code", "codex"], definition.FrozenProviders);
+    }
+
+    // ADR 0008: "An empty intersection blocks execution with a stable diagnostic rather than
+    // silently selecting another provider."
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationWithNoEnabledProvidersFailsWithoutRegisteringASprint()
+    {
+        using TestEnvironment environment = new(llmProviders: []);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintProviderCandidatesEmpty, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // A provider id enabled by configuration but never registered (not installed/shipped in this
+    // build) must be dropped, not frozen as a phantom routing candidate -- ProviderCatalog.
+    // ResolveEnabled already drops unknown ids; this proves the freeze doesn't undo that.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnEnabledButUnregisteredProviderIsNotFrozenAsACandidate()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")],
+            providerEnablement: new FakeProviderEnablementSource(["codex", "unregistered"]));
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.Equal(["codex"], definition!.FrozenProviders);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task CreationFreezesTheBaseCommitWorkflowAndConfigurationSnapshot()

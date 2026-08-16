@@ -15,7 +15,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         IPlatformPreflight? platform = null,
         IProviderToolchainManager? providers = null,
         IRepository? repository = null,
-        IEnumerable<ILlmProvider>? llmProviders = null)
+        IEnumerable<ILlmProvider>? llmProviders = null,
+        IProviderEnablementSource? providerEnablement = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -25,9 +26,13 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         services.AddForgeCore();
         services.AddSingleton<IEnvironmentPaths>(this);
         services.AddSingleton(preflight);
-        // Registered so ProviderCatalog (resolved by ForgeApplication for write-time validation)
-        // reflects a known set even though `providers` below overrides the actual toolchain manager.
-        foreach (ILlmProvider llmProvider in llmProviders ?? [])
+        // Registered so ProviderCatalog (resolved by ForgeApplication for write-time validation,
+        // and by SprintOrchestrator to freeze a sprint's routing candidates) reflects a known set
+        // even though `providers` below overrides the actual toolchain manager. Defaults to one
+        // ready fake provider so sprint creation keeps working without every caller wiring one up;
+        // pass an empty list explicitly to exercise the no-candidates-available path.
+        foreach (ILlmProvider llmProvider in
+            llmProviders ?? [new FakeLlmProvider(new ProviderId("fake"), ProviderState.Ready, "1.0.0")])
         {
             services.AddSingleton(llmProvider);
         }
@@ -36,6 +41,13 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         // manager stays offline-safe by construction (it only discovers), but callers that need
         // a `ready` or `failed` toolchain override it explicitly.
         services.AddSingleton(providers ?? new FakeProviderToolchainManager());
+        if (providerEnablement is not null)
+        {
+            // Overrides AddForgeCore's TryAddSingleton registration (last registration wins) so a
+            // test can control which of the registered llmProviders are "enabled" without writing
+            // through real user-scope configuration.
+            services.AddSingleton(providerEnablement);
+        }
         // Test project roots are plain temp directories, not Git repositories; a real
         // `git rev-parse HEAD` would fail there, so sprint creation gets a fixed fake commit
         // unless a test explicitly needs to exercise repository-unavailable behavior.
@@ -75,7 +87,9 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
             Resolve<IRepository>(),
             Resolve<ScopedConfigurationService>(),
             Resolve<IClock>(),
-            scheduler);
+            scheduler,
+            Resolve<ProviderCatalog>(),
+            Resolve<IProviderEnablementSource>());
         return (orchestrator, scheduler, store);
     }
 

@@ -36,6 +36,11 @@ public static class DiagnosticCodes
     public const string SprintDependencyInvalid = "sprint_dependency_invalid";
     public const string SprintDependencyNotPublished = "sprint_dependency_not_published";
     public const string SprintGraphInvalid = "sprint_graph_invalid";
+
+    /// <summary>ADR 0008: "Routing candidates are the ordered intersection of the frozen project
+    /// profile and the user-enabled set... An empty intersection blocks execution with a stable
+    /// diagnostic rather than silently selecting another provider."</summary>
+    public const string SprintProviderCandidatesEmpty = "sprint_provider_candidates_empty";
     public const string SprintNotRunning = "sprint_not_running";
     public const string NodeNotFound = "node_not_found";
     public const string NodeKindMismatch = "node_kind_mismatch";

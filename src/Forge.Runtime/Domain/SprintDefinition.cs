@@ -29,6 +29,12 @@ public sealed record SprintDependency(SprintDependencyKind Kind, string Referenc
 /// govern the language of what a node produces. Conflating the two would mean a user's personal
 /// interaction language could leak into a project's committed, shared-language artifacts.
 /// </summary>
+/// <summary>
+/// <see cref="FrozenProviders"/> is ADR 0008's routing candidate list: the ordered intersection of
+/// the project's provider constraint (not yet configurable — every project currently has none) and
+/// the user-enabled set, resolved once at creation and never re-read even if enablement changes
+/// while the sprint is running.
+/// </summary>
 public sealed record SprintDefinition(
     SprintId Id,
     string BaseCommit,
@@ -39,4 +45,5 @@ public sealed record SprintDefinition(
     IReadOnlyList<NodeDefinition> Graph,
     string ConversationLanguage,
     string ArtifactPolicySnapshotHash,
-    DateTimeOffset FrozenAt);
+    DateTimeOffset FrozenAt,
+    IReadOnlyList<string> FrozenProviders);

@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.26.0
+
+### Added
+
+- A sprint now freezes its ordered list of usable providers at creation time
+  from the currently enabled providers, instead of leaving that resolved only
+  implicitly. Creating a sprint with no enabled, registered provider now fails
+  immediately with a clear diagnostic instead of creating a sprint that could
+  never make progress.
+
 ## v0.25.0
 
 ### Added

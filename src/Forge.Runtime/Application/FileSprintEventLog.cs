@@ -85,6 +85,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ConversationLanguage = definition.ConversationLanguage,
             ArtifactPolicySnapshotHash = definition.ArtifactPolicySnapshotHash,
             FrozenAt = definition.FrozenAt,
+            FrozenProviders = [.. definition.FrozenProviders],
         };
         await AtomicConfigurationFile.WriteAsync(
             DefinitionPath(directory),
@@ -132,7 +133,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 graph,
                 persisted.ConversationLanguage,
                 persisted.ArtifactPolicySnapshotHash,
-                persisted.FrozenAt);
+                persisted.FrozenAt,
+                persisted.FrozenProviders);
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException)
         {
@@ -1195,6 +1197,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string ArtifactPolicySnapshotHash { get; set; } = string.Empty;
 
         public DateTimeOffset FrozenAt { get; set; }
+
+        public List<string> FrozenProviders { get; set; } = [];
     }
 
     private sealed class PersistedDependency
