@@ -105,9 +105,7 @@ public sealed class MainPageViewModel(
                     snapshot.Details)),
             snapshot.Details is { } sprintDetails
                 ? Render(null, SurfaceFormatting.SprintDetailLines(text, sprintDetails))
-                : sprintNotFound
-                    ? DiagnosticCodes.SprintNotFound
-                    : string.Empty,
+                : string.Empty,
             Render(
                 null,
                 user.Values
@@ -122,6 +120,10 @@ public sealed class MainPageViewModel(
                     startup.Project.DiagnosticCode,
                     user.DiagnosticCode,
                     project.DiagnosticCode,
+                    // The CLI reports an unusable --sprint value on its diagnostics channel; the
+                    // Desktop equivalent is this section, not the sprint body — which stays empty
+                    // rather than being overwritten with a raw machine code.
+                    sprintNotFound ? DiagnosticCodes.SprintNotFound : DiagnosticCodes.None,
                 }.Where(code => code != DiagnosticCodes.None).Distinct(StringComparer.Ordinal)),
             !snapshot.Project.Initialized && startup.AllowsProjectMutation,
             startup.FirstFailure is not null);

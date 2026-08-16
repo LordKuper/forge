@@ -102,19 +102,31 @@ public sealed class MainPageViewModelTests
     [Trait("Category", "Unit")]
     public async Task RefreshAsyncWithAnExplicitSprintIdExpandsThatSprintNotTheOthers()
     {
-        // Two sprints, so expanding the requested one cannot coincidentally match the active one.
+        // Two sprints, with the *other* one cancelled so exactly one non-terminal sprint remains
+        // and DetermineActiveSprint really resolves it as active. Without that step the fixture
+        // has no active sprint at all, and the test could not tell "expanded the requested sprint"
+        // apart from "expanded the active one".
         using TestEnvironment environment = new();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         InitializeProjectResult init = await environment.InitializeAsync(
             environment.ProjectRoot, true, cancellationToken);
         Assert.True(init.Succeeded);
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        await orchestrator.CreateSprintAsync(
+        SprintId activeSprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("alpha", NodeKind.Work, [])]),
-            cancellationToken);
+            cancellationToken)).SprintId!;
         SprintId requestedSprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("beta", NodeKind.Work, [])]),
             cancellationToken)).SprintId!;
+        SprintSnapshot requested =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, requestedSprintId, cancellationToken))!;
+        Assert.True((await orchestrator.CancelSprintAsync(
+            new(
+                environment.ProjectRoot,
+                requestedSprintId,
+                requested.Version,
+                SprintOrchestrator.CancelSprintKey(requested)),
+            cancellationToken)).Succeeded);
         MainPageViewModel viewModel = new(Text(), environment.Application);
 
         MainPageSnapshot snapshot = await viewModel.RefreshAsync(
@@ -122,8 +134,14 @@ public sealed class MainPageViewModelTests
             requestedSprintId.Value.ToString(),
             cancellationToken);
 
-        Assert.Contains("beta ready", snapshot.SprintsText, StringComparison.Ordinal);
+        // "alpha" is now the active sprint's node, so it would appear if the active sprint had been
+        // expanded instead of the requested one.
+        Assert.Contains(
+            activeSprintId.Value.ToString("D", CultureInfo.InvariantCulture),
+            snapshot.SprintsText,
+            StringComparison.Ordinal);
         Assert.DoesNotContain("alpha", snapshot.SprintsText, StringComparison.Ordinal);
+        Assert.Contains("      beta ", snapshot.SprintsText, StringComparison.Ordinal);
         Assert.Contains("beta", snapshot.SprintDetailsText, StringComparison.Ordinal);
     }
 
@@ -151,7 +169,10 @@ public sealed class MainPageViewModelTests
             sprintId,
             cancellationToken);
 
-        Assert.Equal(DiagnosticCodes.SprintNotFound, snapshot.SprintDetailsText);
+        // Reported on the diagnostics section — the Desktop equivalent of the CLI's diagnostics
+        // channel — while the sprint body stays empty instead of showing another sprint's detail.
+        Assert.Contains(DiagnosticCodes.SprintNotFound, snapshot.DiagnosticsText, StringComparison.Ordinal);
+        Assert.Empty(snapshot.SprintDetailsText);
         // The sprint list itself still renders; only the expansion is withheld — the active
         // sprint's own node must not leak in as a substitute for the requested one.
         Assert.Contains(

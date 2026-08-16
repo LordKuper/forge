@@ -25,6 +25,7 @@
   <data name="StartupBlocked" xml:space="preserve"><value>Запуск заблокирован; работа со спринтами недоступна.</value></data>
   <data name="StartupFailed" xml:space="preserve"><value>Запуск завершился ошибкой; доступно только восстановление.</value></data>
   <data name="ProjectRootLabel" xml:space="preserve"><value>Корень проекта:</value></data>
+  <data name="SprintIdLabel" xml:space="preserve"><value>Идентификатор спринта (пусто: активный спринт):</value></data>
   <data name="ProjectInitialized" xml:space="preserve"><value>Проект инициализирован.</value></data>
   <data name="ProjectNotInitialized" xml:space="preserve"><value>Проект не инициализирован.</value></data>
   <data name="InitConfirmationRequired" xml:space="preserve"><value>Подтвердите инициализацию показанного каталога перед его созданием.</value></data>

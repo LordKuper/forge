@@ -8,22 +8,23 @@ User-facing Forge changes are listed by release, newest first.
 
 - The Desktop surface now shows per-sprint detail instead of only a
   general project overview. A sprint tree nests each attempt under its
-  owning node, a detail section lists that sprint's nodes, attempts,
-  findings, and routing state, and a sprint-id box selects which sprint
-  to expand (empty expands the active sprint). Both views are local
-  projections of the same project snapshot the CLI reads, and render the
-  exact lines `forge tree` and `forge sprint inspect` render.
-- Leaving the sprint-id box empty expands the active sprint; a value
-  that is not a sprint id reports `sprint_not_found` rather than quietly
-  showing the active sprint's detail instead.
+  owning node, and a detail section lists that sprint's nodes, attempts,
+  findings, and routing state. Both are local projections of the same
+  project snapshot the CLI reads, and render the exact lines `forge
+  tree` and `forge sprint inspect` render.
+- A sprint-id box selects which sprint to expand. Empty expands the
+  active sprint; a value that is not a known sprint id is reported as
+  `sprint_not_found` under Diagnostics rather than quietly showing the
+  active sprint's detail in its place.
 
 ### Changed
 
 - The sprint tree and sprint detail rendering moved into the shared
-  surface formatter, so the CLI and Desktop projections of one snapshot
+  surface formatter, and an acceptance test now asserts that the CLI and
+  Desktop render identical text for one project, so the two projections
   cannot drift apart. CLI output is unchanged.
-- `capabilities.json` 1.1.0 -> 1.2.0: `project.snapshot` now declares
-  the Desktop sprint tree/detail view alongside the dashboard.
+- The Desktop project-root and sprint-id boxes carry screen-reader names
+  and visible placeholders; neither was labeled before.
 
 ## v0.28.1
 

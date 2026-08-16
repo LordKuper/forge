@@ -16,7 +16,7 @@
       <Label x:Name="SprintDetailsLabel" />
       <HorizontalStackLayout Spacing="8">
         <Entry x:Name="ProjectRootEntry" WidthRequest="360" />
-        <Entry x:Name="SprintIdEntry" WidthRequest="280" />
+        <Entry x:Name="SprintIdEntry" WidthRequest="320" />
         <Button x:Name="RefreshButton" Clicked="OnRefreshClicked" />
         <Button x:Name="InitializeButton" Clicked="OnInitializeClicked" />
         <Button x:Name="RecoverButton" Clicked="OnRecoverClicked" />

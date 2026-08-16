@@ -1,7 +1,10 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using Forge.Application;
 using Forge.Cli;
+using Forge.Desktop.Presentation;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Presentation;
 using Forge.Tests.Support;
@@ -98,6 +101,54 @@ public sealed class SurfaceParityTests
                 DesktopControls[id],
                 control => Assert.Contains(control, codeBehind, StringComparison.Ordinal)));
     }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot()
+    {
+        // Sharing SurfaceFormatting is not by itself the no-drift guarantee this refactor claims:
+        // either surface can still wrap, reorder, or filter the shared lines on its way to the
+        // screen (the Desktop path already wraps them in Render(...) and trims). This compares the
+        // two rendered projections of one project directly, so any such divergence fails here.
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken)).SprintId!;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter tree = new(CultureInfo.InvariantCulture);
+        StringWriter inspect = new(CultureInfo.InvariantCulture);
+        string id = sprintId.Value.ToString("D", CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, tree, environment.Application)
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", id])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, inspect, environment.Application)
+            .Parse(["sprint", "inspect", id, "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
+            .RefreshAsync(environment.ProjectRoot, id, cancellationToken);
+
+        // `forge tree` prefixes the project line WriteProject writes; the sprint sections after it
+        // are what both surfaces share, so compare from the sprint title onwards.
+        Assert.Equal(SprintSection(tree.ToString(), text.Resolve(MessageKeys.SprintsTitle)), desktop.SprintsText);
+        Assert.Equal(
+            SprintSection(inspect.ToString(), text.Resolve(MessageKeys.SprintDetailsTitle)),
+            desktop.SprintDetailsText);
+    }
+
+    private static string SprintSection(string cliOutput, string title) =>
+        cliOutput[cliOutput.IndexOf(title, StringComparison.Ordinal)..].TrimEnd();
 
     [Fact]
     [Trait("Category", "Acceptance")]
