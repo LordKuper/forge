@@ -55,6 +55,11 @@ public static class ForgeHostApplication
                 // configuration and worktree paths under the real developer's %LOCALAPPDATA%.
                 services.AddSingleton<IEnvironmentPaths>(new SystemEnvironmentPaths(options.InstanceId));
                 configureProviders(services);
+                // Not registered as its own IHostedService: ControlPlaneHostedService owns its
+                // lifetime directly, starting it only after winning the project lease so a Host
+                // that loses the lease race never runs a tick against durable state it doesn't own.
+                services.AddSingleton(new ResumeSchedulerOptions(projectRoot));
+                services.AddSingleton<ResumeSchedulerHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

@@ -53,10 +53,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         SprintId id,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
-            EventsPath(SprintDirectory(projectRoot, id)),
-            cancellationToken).ConfigureAwait(false);
-        return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
+                EventsPath(SprintDirectory(projectRoot, id)),
+                cancellationToken).ConfigureAwait(false);
+            return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
+        }
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException($"The sprint journal for '{id.Value}' is corrupt.", error);
+        }
     }
 
     public async Task SaveDefinitionAsync(
@@ -97,19 +104,40 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
 
         byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        PersistedDefinition persisted = JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
-            throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
-        return new(
-            id,
-            persisted.BaseCommit,
-            persisted.Workflow,
-            persisted.WorkflowVersion,
-            persisted.ConfigurationSnapshot,
-            [.. persisted.Dependencies.Select(FromPersisted)],
-            [.. persisted.Graph.Select(FromPersisted)],
-            persisted.ConversationLanguage,
-            persisted.ArtifactPolicySnapshotHash,
-            persisted.FrozenAt);
+        try
+        {
+            PersistedDefinition persisted =
+                JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph.Select(FromPersisted)];
+            if (!SprintGraphValidator.IsValid(graph))
+            {
+                // Node-id uniqueness, dependency existence, and acyclicity are enforced once, at
+                // freeze time (SprintOrchestrator.CreateSprintAsync) — never re-checked on this read
+                // path. Without this, a corrupt duplicate-id graph reaches
+                // SprintScheduler.SynchronizeSprintGateStateAsync's ToDictionary and throws a raw,
+                // uncaught ArgumentException that (with no BackgroundServiceExceptionBehavior
+                // override configured anywhere) crashes the whole Host process, not just this sprint.
+                throw new InvalidDataException(
+                    $"The frozen definition's graph for sprint '{id.Value}' is corrupt.");
+            }
+
+            return new(
+                id,
+                persisted.BaseCommit,
+                persisted.Workflow,
+                persisted.WorkflowVersion,
+                persisted.ConfigurationSnapshot,
+                [.. persisted.Dependencies.Select(FromPersisted)],
+                graph,
+                persisted.ConversationLanguage,
+                persisted.ArtifactPolicySnapshotHash,
+                persisted.FrozenAt);
+        }
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+        {
+            throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
+        }
     }
 
     public async Task SaveNodeResultAsync(
@@ -532,7 +560,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // exception rather than pretend the append happened.
             return new(false, null, DiagnosticCodes.WorkflowStoreBusy);
         }
-        catch (Exception error) when (error is JsonException or InvalidDataException or FormatException)
+        catch (Exception error) when (
+            error is JsonException or InvalidDataException or FormatException or OverflowException)
         {
             // Real corruption in an already-terminated line (never produced by this store's own
             // write path) — a diagnostic, not a crash reaching all the way out to the caller.
