@@ -495,9 +495,13 @@ public sealed class CliTests
     {
         // Regression coverage: the resolver must see THIS command's own `--project-root`, never a
         // root fixed before argument parsing (the bug an architecture audit found: a Host
-        // connection bound once at startup silently ignored a per-command `--project-root`).
+        // connection bound once at startup silently ignored a per-command `--project-root`). The
+        // supplied root deliberately differs from `environment.ProjectRoot` (== CWD in this test
+        // harness) — asserting equality against `environment.ProjectRoot` here would pass under the
+        // pre-fix, CWD-fixed resolution too, and so would not actually catch that regression.
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        string otherRoot = Path.Combine(Path.GetTempPath(), $"forge-other-{Guid.NewGuid():N}");
         FakeForgeMutations mutations = new();
         string? capturedRoot = "unset";
         StringWriter output = new(CultureInfo.InvariantCulture);
@@ -513,13 +517,11 @@ public sealed class CliTests
             });
 
         await root
-            .Parse([
-                "config", "project", "artifacts.language.user_facing", "ru",
-                "--project-root", environment.ProjectRoot,
-            ])
+            .Parse(["config", "project", "artifacts.language.user_facing", "ru", "--project-root", otherRoot])
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-        Assert.Equal(environment.ProjectRoot, capturedRoot);
+        Assert.Equal(otherRoot, capturedRoot);
+        Assert.NotEqual(environment.ProjectRoot, capturedRoot);
     }
 
     [Fact]
@@ -570,6 +572,37 @@ public sealed class CliTests
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
         Assert.Equal(1, mutations.RecoverStartupCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DoctorRecoverResolvesMutationsUsingTheCommandsOwnProjectRoot()
+    {
+        // Same regression this covers for `config project set` — `doctor --recover` is the other
+        // command the audited bug affected, and it had no coverage distinguishing a per-command
+        // root from a CWD-fixed one.
+        using TestEnvironment environment = new();
+        string otherRoot = Path.Combine(Path.GetTempPath(), $"forge-other-{Guid.NewGuid():N}");
+        FakeForgeMutations mutations = new();
+        string? capturedRoot = "unset";
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            resolveMutations: (mutationRoot, _) =>
+            {
+                capturedRoot = mutationRoot;
+                return Task.FromResult<IForgeMutations>(mutations);
+            });
+
+        await root
+            .Parse(["doctor", "--recover", "--yes", "--project-root", otherRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(otherRoot, capturedRoot);
+        Assert.NotEqual(environment.ProjectRoot, capturedRoot);
     }
 
     private static SurfaceText Text(ILocalizationCatalog catalog) =>

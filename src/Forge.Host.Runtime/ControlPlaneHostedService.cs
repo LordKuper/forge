@@ -406,6 +406,15 @@ public sealed class ControlPlaneHostedService(
             throw new InvalidDataException($"A project Host cannot set '{payload.Scope}'-scope configuration.");
         }
 
+        if (payload.Key is null)
+        {
+            // The record's `Key` is non-nullable, but nothing stops a non-conforming client from
+            // sending `"key": null` on the wire — reject it as malformed rather than passing null
+            // into ForgeApplication.SetConfigurationAsync, whose own `key` parameter is not
+            // null-checked (it always comes from a well-formed CLI Argument<string>).
+            throw new InvalidDataException("The 'key' field is required.");
+        }
+
         ConfigurationWriteResult result = await application
             .SetConfigurationAsync(
                 ConfigurationScope.Project,

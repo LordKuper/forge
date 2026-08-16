@@ -472,6 +472,39 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task SetConfigurationWithAnEmptyKeyReturnsConfigurationKeyUnknownInsteadOfThrowing()
+    {
+        // Regression test: RemoteForgeMutations.SetConfigurationAsync previously rejected an empty
+        // key with an unhandled ArgumentException instead of the diagnostic the local
+        // ForgeApplication path returns for the same input (registry.FindRequired's
+        // KeyNotFoundException, mapped to ConfigurationKeyUnknown).
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        ConfigurationWriteResult result = await mutations.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            string.Empty,
+            "ru",
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationKeyUnknown, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task SetConfigurationRejectsUserScopeAsMalformed()
     {
         // User-scope configuration is not project state and must never be accepted by a project's
