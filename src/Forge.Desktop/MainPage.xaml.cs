@@ -11,13 +11,17 @@ public partial class MainPage : ContentPage
     private readonly MainPageViewModel viewModel;
     private bool busy;
 
-    public MainPage(SurfaceText text, ForgeApplication application)
+    public MainPage(
+        SurfaceText text,
+        ForgeApplication application,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
+        ArgumentNullException.ThrowIfNull(resolveMutations);
         InitializeComponent();
         this.text = text;
-        viewModel = new MainPageViewModel(text, application);
+        viewModel = new MainPageViewModel(text, application, resolveMutations);
         TitleLabel.Text = text.Resolve(MessageKeys.AppTitle);
         RefreshButton.Text = text.Resolve(MessageKeys.RefreshAction);
         InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);

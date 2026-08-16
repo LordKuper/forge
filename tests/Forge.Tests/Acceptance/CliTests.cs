@@ -607,34 +607,4 @@ public sealed class CliTests
 
     private static SurfaceText Text(ILocalizationCatalog catalog) =>
         new(catalog, CultureInfo.CurrentUICulture);
-
-    private sealed class FakeForgeMutations : IForgeMutations
-    {
-        public int RecoverStartupCalls { get; private set; }
-
-        public int SetConfigurationCalls { get; private set; }
-
-        public ConfigurationScope? LastScope { get; private set; }
-
-        public Task<RecoverStartupResult> RecoverStartupAsync(
-            string? projectRoot,
-            bool confirmed,
-            CancellationToken cancellationToken)
-        {
-            RecoverStartupCalls++;
-            return Task.FromResult(new RecoverStartupResult(true, null, DiagnosticCodes.None));
-        }
-
-        public Task<ConfigurationWriteResult> SetConfigurationAsync(
-            ConfigurationScope scope,
-            string? projectRoot,
-            string key,
-            string? rawValue,
-            CancellationToken cancellationToken)
-        {
-            SetConfigurationCalls++;
-            LastScope = scope;
-            return Task.FromResult(ConfigurationWriteResult.Success);
-        }
-    }
 }

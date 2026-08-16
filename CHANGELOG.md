@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.23.0
+
+### Changed
+
+- Desktop now also routes startup recovery and project-scope configuration
+  changes through the project's Host, matching the CLI (ADR 0005): the two
+  clients no longer mutate `.forge/` independently, closing the window for a
+  concurrent CLI/Desktop write to race. User-scope configuration is
+  unaffected.
+
 ## v0.22.0
 
 ### Changed

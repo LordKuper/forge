@@ -232,3 +232,64 @@ internal sealed class FakeProviderEnablementSource(IReadOnlyList<string>? enable
     public Task<IReadOnlyList<string>?> GetEnabledIdsAsync(CancellationToken cancellationToken) =>
         Task.FromResult(enabledIds);
 }
+
+/// <summary>Stands in for a real Host connection (ADR 0005): counts calls and their arguments
+/// without ever touching durable state, so a test can prove a mutation routed here — and not to
+/// the local <see cref="ForgeApplication"/> — without a real Host process.</summary>
+internal sealed class FakeForgeMutations : IForgeMutations
+{
+    public int RecoverStartupCalls { get; private set; }
+
+    public int SetConfigurationCalls { get; private set; }
+
+    public ConfigurationScope? LastScope { get; private set; }
+
+    public Task<RecoverStartupResult> RecoverStartupAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        RecoverStartupCalls++;
+        return Task.FromResult(new RecoverStartupResult(true, null, DiagnosticCodes.None));
+    }
+
+    public Task<ConfigurationWriteResult> SetConfigurationAsync(
+        ConfigurationScope scope,
+        string? projectRoot,
+        string key,
+        string? rawValue,
+        CancellationToken cancellationToken)
+    {
+        SetConfigurationCalls++;
+        LastScope = scope;
+        return Task.FromResult(ConfigurationWriteResult.Success);
+    }
+}
+
+/// <summary>Like <see cref="FakeForgeMutations"/>, but disposable — proves a caller that resolves a
+/// disposable <see cref="IForgeMutations"/> (standing in for a real <c>RemoteForgeMutations</c>) actually
+/// disposes it.</summary>
+internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisposable
+{
+    public int DisposeCalls { get; private set; }
+
+    public Task<RecoverStartupResult> RecoverStartupAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new RecoverStartupResult(true, null, DiagnosticCodes.None));
+
+    public Task<ConfigurationWriteResult> SetConfigurationAsync(
+        ConfigurationScope scope,
+        string? projectRoot,
+        string key,
+        string? rawValue,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(ConfigurationWriteResult.Success);
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCalls++;
+        return ValueTask.CompletedTask;
+    }
+}
