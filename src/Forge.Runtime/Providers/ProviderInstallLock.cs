@@ -4,7 +4,7 @@ namespace Forge.Providers;
 /// The one platform-neutral <see cref="IProviderInstallLock"/> implementation: a named
 /// <see cref="Mutex"/> using <see cref="NamedWaitHandleOptions.CurrentUserOnly"/> — the same
 /// portable primitive <c>Forge.Host.Client.MutexProjectLease</c> uses for the project lease,
-/// including its Global\-first-then-session-scoped-fallback construction (see
+/// including its capability-probed Global\-namespace-when-possible construction (see
 /// <c>MutexProjectLease</c>'s own remarks for why), so this works on every OS a future provider
 /// adapter targets without an OS-specific adapter of its own (ADR 0007/0008: locking policy is
 /// generic, only vendor specifics are adapter-owned).
@@ -117,28 +117,37 @@ public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.De
         return new Lease(thread, releaseSignal);
     }
 
-    /// <summary>See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks: tries the OS-wide
-    /// <c>Global\</c> namespace first, falling back to session-scoping only if the current account
-    /// lacks the Windows privilege <c>Global\</c> creation needs.</summary>
-    private static Mutex CreateMutex(string lockName)
+    /// <summary>Determines once, from a dedicated always-uncontended probe name (a fresh
+    /// <see cref="Guid"/> every time this runs, so it can never collide with a real lock and never
+    /// observes contention), whether this process's account can create <c>Global\</c> named objects
+    /// at all. See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks for why the real
+    /// lock name must never make this decision itself.</summary>
+    private static readonly Lazy<bool> CanCreateGlobalMutexes = new(() =>
     {
         try
         {
-            return new Mutex(
+            using Mutex probe = new(
                 initiallyOwned: false,
-                lockName,
+                $"forge-global-mutex-capability-probe-{Guid.NewGuid():N}",
                 new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
                 out _);
+            return true;
         }
         catch (UnauthorizedAccessException)
         {
-            return new Mutex(
-                initiallyOwned: false,
-                lockName,
-                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
-                out _);
+            return false;
         }
-    }
+    });
+
+    /// <summary>See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks: uses the
+    /// OS-wide <c>Global\</c> namespace when this process's account can create one (determined once
+    /// via <see cref="CanCreateGlobalMutexes"/>), session-scoping otherwise.</summary>
+    private static Mutex CreateMutex(string lockName) =>
+        new(
+            initiallyOwned: false,
+            lockName,
+            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = !CanCreateGlobalMutexes.Value },
+            out _);
 
     private sealed class Lease(Thread thread, ManualResetEventSlim releaseSignal) : IProviderInstallLease
     {

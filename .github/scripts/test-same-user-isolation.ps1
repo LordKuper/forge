@@ -211,7 +211,12 @@ try {
     # different ACL surface. So an unrelated read-access failure on the probe DLL itself could also
     # produce non-empty diagnostic text here — require the SPECIFIC exception NamedPipeClientStream
     # raises for a CurrentUserOnly rejection, not merely "some diagnostic text exists".
-    $accessDeniedIndicators = @('UnauthorizedAccessException', 'access is denied', 'access denied')
+    # Both exception types are recognized because .NET's documented behavior for a CurrentUserOnly
+    # owner/DACL mismatch is WaitHandleCannotBeOpenedException, while the actual OS-level access
+    # denial observed empirically in this CI job's own runs is UnauthorizedAccessException — the
+    # exact type can depend on exactly which layer detects the mismatch first.
+    $accessDeniedIndicators = @(
+        'UnauthorizedAccessException', 'WaitHandleCannotBeOpenedException', 'access is denied', 'access denied')
     $diagnostic = $otherUserConnect.StdOut.Trim()
     $isAccessDenied = $accessDeniedIndicators | Where-Object { $diagnostic -like "*$_*" }
     if (-not $isAccessDenied) {
@@ -255,6 +260,12 @@ try {
         $otherUserMutexAcquire = Invoke-ProcessAsCredential `
             -ArgumentList @($mutexProbeDll, 'acquire', $otherLease, '0', '5') `
             -Credential $credential
+        # Measured HERE, not after reaping the holder job below: Receive-Job -Wait blocks until the
+        # holder's own script block returns, which does not happen until it finishes sleeping for
+        # the full $holdSeconds and releases — so measuring afterward would always show an elapsed
+        # time at or beyond $holdSeconds regardless of how fast the credentialed attempt actually
+        # ran, making the overlap guard below vacuous.
+        $elapsedSinceHolderStarted = ((Get-Date) - $holderStarted).TotalSeconds
     }
     finally {
         # Reclaim the holder job even if the credentialed acquire attempt above throws a
@@ -262,7 +273,6 @@ try {
         $currentUserHolderResult = Receive-Job -Job $currentUserHolderJob -Wait -ErrorAction SilentlyContinue
         Remove-Job -Job $currentUserHolderJob -Force
     }
-    $elapsedSinceHolderStarted = ((Get-Date) - $holderStarted).TotalSeconds
 
     Write-Host "Different-user mutex acquire exit code: $($otherUserMutexAcquire.ExitCode)"
     Write-Host "Different-user mutex acquire stdout: $($otherUserMutexAcquire.StdOut)"

@@ -100,51 +100,47 @@ public sealed class ArchitectureTests
     public void ProjectLeaseAndProviderInstallLockConstructTheirMutexIdentically()
     {
         // MutexProjectLease and ProviderInstallLock are two independent copies of the same
-        // Global\-first, session-scoped-fallback construction (see ProjectLease.cs's remarks for
-        // why); nothing else keeps them from silently diverging — e.g. one keeping the
-        // Global\-only construction the same-user isolation CI check caught as broken for standard
-        // Windows users, while the other picks up the fix.
+        // capability-probed Global\-namespace-when-possible construction (see ProjectLease.cs's
+        // remarks for why the real lease/lock name must never itself decide the fallback). Nothing
+        // else keeps them from silently diverging.
         string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
-        string projectLeaseBody = ExtractCreateMutexBody(
+        string projectLeaseCode = ExtractSharedMutexConstructionCode(
             Path.Combine(sourceRoot, "Forge.Host.Client", "ProjectLease.cs"));
-        string providerInstallLockBody = ExtractCreateMutexBody(
+        string providerInstallLockCode = ExtractSharedMutexConstructionCode(
             Path.Combine(sourceRoot, "Forge.Runtime", "Providers", "ProviderInstallLock.cs"));
 
-        Assert.Equal(projectLeaseBody, providerInstallLockBody);
+        Assert.Equal(projectLeaseCode, providerInstallLockCode);
     }
 
-    // Normalizes away the one intentional difference (the parameter name — leaseName vs
+    // Captures from the CanCreateGlobalMutexes field through the end of CreateMutex's `out _);`,
+    // and normalizes away the one intentional difference (the parameter name — leaseName vs
     // lockName) and all whitespace, so the comparison catches any other divergence in the
     // construction logic itself (options, exception type, ordering) without being brittle about
     // formatting.
-    private static string ExtractCreateMutexBody(string path)
+    private static string ExtractSharedMutexConstructionCode(string path)
     {
         string source = File.ReadAllText(path);
-        int start = source.IndexOf("private static Mutex CreateMutex(", StringComparison.Ordinal);
-        Assert.True(start >= 0, $"{path} does not declare a CreateMutex method.");
-        int braceStart = source.IndexOf('{', start);
-        int depth = 0;
-        int index = braceStart;
-        for (; index < source.Length; index++)
-        {
-            if (source[index] == '{')
-            {
-                depth++;
-            }
-            else if (source[index] == '}')
-            {
-                depth--;
-                if (depth == 0)
-                {
-                    break;
-                }
-            }
-        }
+        int start = source.IndexOf(
+            "private static readonly Lazy<bool> CanCreateGlobalMutexes", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{path} does not declare CanCreateGlobalMutexes.");
+        int createMutexStart = source.IndexOf(
+            "private static Mutex CreateMutex(", start, StringComparison.Ordinal);
+        Assert.True(createMutexStart > start, $"{path} does not declare CreateMutex after CanCreateGlobalMutexes.");
+        int end = source.LastIndexOf("out _);", StringComparison.Ordinal);
+        Assert.True(end > createMutexStart, $"{path}'s CreateMutex does not end with the expected construction.");
+        end += "out _);".Length;
 
-        string body = source[braceStart..(index + 1)];
+        // Doc comments intentionally differ (one cross-references the other type by name), so only
+        // the actual code is compared — everything a `///` line contributes is documentation, never
+        // construction logic.
+        string code = string.Join(
+            '\n',
+            source[start..end]
+                .Split('\n')
+                .Where(line => !line.TrimStart().StartsWith("///", StringComparison.Ordinal)));
         return string.Join(
             ' ',
-            body.Replace("leaseName", "name", StringComparison.Ordinal)
+            code.Replace("leaseName", "name", StringComparison.Ordinal)
                 .Replace("lockName", "name", StringComparison.Ordinal)
                 .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }

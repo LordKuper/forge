@@ -47,19 +47,27 @@ The host acquires a cross-process project lease keyed by the manifest's stable
 project id before mutation. `IProjectLease` has one platform-neutral BCL
 implementation: a `System.Threading.Mutex` whose short, hashed name uses
 `NamedWaitHandleOptions` with `CurrentUserOnly = true`, and
-`CurrentSessionOnly = false` (the OS-wide `Global\` namespace) tried first,
-falling back to `CurrentSessionOnly = true` (session-scoped) only if that
-construction throws `UnauthorizedAccessException`. Creating a `Global\` named
-object on Windows requires `SeCreateGlobalPrivilege`, which a standard
-non-admin user does not hold by default — a same-user isolation CI check
-caught this concretely — so the fallback keeps Forge usable for that account
-while still using the strongest, cross-session guarantee everywhere it is
-available. `CurrentUserOnly` restricts the object's security descriptor to
-the creating user rather than creating a separate object per user, so a
-different local user's attempt to open the identical name is denied, not
-silently redirected to an independent object. Diagnostic lease metadata lives
-in the shared per-user Forge state directory; the mutex is authoritative and
-becomes abandoned on process death. A successor treats
+`CurrentSessionOnly` decided once per process from a dedicated,
+always-uncontended capability probe (a name built from a fresh GUID every
+time, so it can never collide with a real lease and never observes real
+contention): if this account can construct a `Global\`-namespaced object at
+all, every real lease uses `CurrentSessionOnly = false` (the OS-wide `Global\`
+namespace, covering every session of the user); otherwise every real lease
+falls back to `CurrentSessionOnly = true` (session-scoped). The real lease
+name itself never makes this decision — an earlier version tried the real
+name directly and fell back on `UnauthorizedAccessException`, which is
+ambiguous between "this account cannot create `Global\` objects" (safe to
+fall back) and "a different user already holds this exact lease and denied
+me" (must not silently create an independent session-scoped object instead).
+Creating a `Global\` named object on Windows requires `SeCreateGlobalPrivilege`,
+which a standard non-admin user does not hold by default — a same-user
+isolation CI check caught this concretely. `CurrentUserOnly` restricts the
+object's security descriptor to the creating user rather than creating a
+separate object per user, so a different local user's attempt to open the
+identical name is denied, not silently redirected to an independent object.
+Diagnostic lease metadata lives in the shared per-user Forge state directory;
+the mutex is authoritative and becomes abandoned on process death. A successor
+treats
 `AbandonedMutexException` as ownership plus a mandatory durable-state recovery
 signal, not as clean state. Release, development, test, CLI, and Desktop
 instances use the same lease namespace, so distinct instance data roots cannot
