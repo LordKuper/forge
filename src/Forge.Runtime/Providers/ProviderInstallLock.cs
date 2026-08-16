@@ -21,8 +21,12 @@ namespace Forge.Providers;
 public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.DefaultLockName) : IProviderInstallLock
 {
     /// <summary>The production per-user lock name — one lock shared by every Forge process for a
-    /// given user, matching the vendor executables it protects being a shared per-user resource.
-    /// Tests should pass a unique name instead so they never contend with a real install.</summary>
+    /// given user (the vendor executables it protects are a shared per-user resource), except on
+    /// the rare account that falls back to session-scoping (see the type-level remarks) — there it
+    /// is shared only within one session, so two concurrent installs from different sessions of the
+    /// same account are not mutually excluded. ADR 0002's install idempotency covers crash-and-retry,
+    /// not that concurrent-writer case. Tests should pass a unique name instead so they never
+    /// contend with a real install.</summary>
     public const string DefaultLockName = "forge-provider-install-lock";
 
     /// <remarks>

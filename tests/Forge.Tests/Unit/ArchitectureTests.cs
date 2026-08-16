@@ -97,6 +97,60 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void ProjectLeaseAndProviderInstallLockConstructTheirMutexIdentically()
+    {
+        // MutexProjectLease and ProviderInstallLock are two independent copies of the same
+        // Global\-first, session-scoped-fallback construction (see ProjectLease.cs's remarks for
+        // why); nothing else keeps them from silently diverging — e.g. one keeping the
+        // Global\-only construction the same-user isolation CI check caught as broken for standard
+        // Windows users, while the other picks up the fix.
+        string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
+        string projectLeaseBody = ExtractCreateMutexBody(
+            Path.Combine(sourceRoot, "Forge.Host.Client", "ProjectLease.cs"));
+        string providerInstallLockBody = ExtractCreateMutexBody(
+            Path.Combine(sourceRoot, "Forge.Runtime", "Providers", "ProviderInstallLock.cs"));
+
+        Assert.Equal(projectLeaseBody, providerInstallLockBody);
+    }
+
+    // Normalizes away the one intentional difference (the parameter name — leaseName vs
+    // lockName) and all whitespace, so the comparison catches any other divergence in the
+    // construction logic itself (options, exception type, ordering) without being brittle about
+    // formatting.
+    private static string ExtractCreateMutexBody(string path)
+    {
+        string source = File.ReadAllText(path);
+        int start = source.IndexOf("private static Mutex CreateMutex(", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{path} does not declare a CreateMutex method.");
+        int braceStart = source.IndexOf('{', start);
+        int depth = 0;
+        int index = braceStart;
+        for (; index < source.Length; index++)
+        {
+            if (source[index] == '{')
+            {
+                depth++;
+            }
+            else if (source[index] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    break;
+                }
+            }
+        }
+
+        string body = source[braceStart..(index + 1)];
+        return string.Join(
+            ' ',
+            body.Replace("leaseName", "name", StringComparison.Ordinal)
+                .Replace("lockName", "name", StringComparison.Ordinal)
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void HostsDoNotBypassConfigurationStores()
     {
         string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
