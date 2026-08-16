@@ -2,6 +2,24 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.28.0
+
+### Added
+
+- `forge tree` shows the project's sprint hierarchy with each sprint's
+  attempts nested under their owning node, instead of the flat separate
+  lists `forge status` prints.
+- `forge sprint inspect <id>` is a dedicated entry point for one sprint's
+  full node/attempt/finding/routing detail.
+
+### Fixed
+
+- An attempt's last-activity heartbeat now survives into the project
+  snapshot's machine contract (`last_activity_at`, separate from
+  `updated_at`) instead of being dropped during projection. Visible in
+  `--json` output from `forge status --detail full` and the new
+  `tree`/`sprint inspect` commands; no text renderer prints it yet.
+
 ## v0.27.0
 
 ### Added

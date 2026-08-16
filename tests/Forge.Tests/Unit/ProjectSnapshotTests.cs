@@ -96,6 +96,34 @@ public sealed class ProjectSnapshotTests
         Assert.Null(snapshot.Details.Routing.ResumeNotBefore);
     }
 
+    // ADR 0005: "phase profile, last activity, active deadline... attached to their owners." The
+    // 2026-08-15 audit found LastActivityAt read from the domain model but never carried into the
+    // snapshot's EntityStatus row.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnAttemptsLastActivityHeartbeatSurvivesProjectionSeparatelyFromItsUpdatedAt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        RecordActivityResult activity = await scheduler.RecordAttemptActivityAsync(
+            environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
+        Assert.True(activity.Succeeded);
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            environment.ProjectRoot, SnapshotDetail.Full, null, cancellationToken);
+
+        EntityStatus attempt = Assert.Single(snapshot.Details!.Attempts);
+        Assert.NotNull(attempt.LastActivityAt);
+        Assert.Equal(activity.Attempt!.LastActivityAt, attempt.LastActivityAt);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task AnExplicitSprintIdAttachesDetailEvenAtSummaryDetail()

@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "state_version", "generated_at", "project", "startup", "sprints", "attention", "suggested_actions", "startup_checks", "providers"],
   "properties": {
-    "schema_version": {"enum": ["1.1.0", "1.2.0"]},
+    "schema_version": {"enum": ["1.1.0", "1.2.0", "1.3.0"]},
     "state_version": {"type": "integer", "minimum": 0},
     "generated_at": {"type": "string", "format": "date-time"},
     "project": {
@@ -70,7 +70,8 @@
         "owner_id": {"type": ["string", "null"]},
         "kind": {"type": ["string", "null"]},
         "severity": {"type": ["string", "null"]},
-        "updated_at": {"type": ["string", "null"], "format": "date-time"}
+        "updated_at": {"type": ["string", "null"], "format": "date-time"},
+        "last_activity_at": {"type": ["string", "null"], "format": "date-time"}
       }
     }
   }

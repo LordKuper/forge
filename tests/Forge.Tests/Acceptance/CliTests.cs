@@ -378,6 +378,44 @@ public sealed class CliTests
         Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
     }
 
+    [Theory]
+    [Trait("Category", "Acceptance")]
+    [InlineData("not-a-guid")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task StatusCommandWithFullDetailReportsSprintNotFoundForAMalformedSprintIdInsteadOfFallingBackToActive(
+        string malformedSprintId)
+    {
+        // Regression: with --detail full and a malformed/blank --sprint value, the old
+        // string.IsNullOrWhiteSpace-gated check let a null sprint id reach GetOverviewAsync's own
+        // active-sprint resolution instead of being reported — the same bug class `tree` (which
+        // always requests Full) was fixed for; this proves --detail full closes it for `status` too,
+        // now that README/capabilities.json explicitly document that flag combination.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse([
+                "status", "--project-root", environment.ProjectRoot,
+                "--detail", "full", "--sprint", malformedSprintId,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+        Assert.Empty(output.ToString());
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task StatusCommandReportsSprintNotFoundForAnUnknownSprintId()
@@ -603,6 +641,239 @@ public sealed class CliTests
 
         Assert.Equal(otherRoot, capturedRoot);
         Assert.NotEqual(environment.ProjectRoot, capturedRoot);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandNestsAnAttemptUnderItsOwningNode()
+    {
+        // ADR 0005: "project -> sprint -> node -> attempt" — `status` lists nodes and attempts as
+        // two separate flat sections; `tree` is the projection that actually nests one under the
+        // other, using the same EntityStatus.OwnerId link `status` already carries but never uses.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        // Two independent nodes (no shared dependency) so an OwnerId filter that matched every
+        // attempt regardless of owner — e.g. a predicate mutated to always return true — would
+        // print the one attempt under BOTH nodes instead of only "a", which the occurrence-count
+        // assertion below catches. A single-node graph can't distinguish that mutation from a
+        // correct filter.
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        // Node "b" has no dependencies either, but the scheduler only auto-starts one node per
+        // Ready -> Running transition, so it stays "ready" — present, with no attempt of its own.
+        Assert.Contains("      b ready", text, StringComparison.Ordinal);
+        // A flat rendering (like `status`'s Nodes:/Attempts: sections) would also satisfy a mere
+        // "attempt appears somewhere after node" check, so assert the attempt line is the very next
+        // line after node "a"'s own line, at a deeper indent — the actual nesting `tree` promises —
+        // and that the flat section label never appears at all.
+        string attemptId = started.AttemptId!.Value.ToString("D", CultureInfo.InvariantCulture);
+        string expectedAdjacency = string.Create(
+            CultureInfo.InvariantCulture,
+            $"      a running{Environment.NewLine}        {attemptId} created{Environment.NewLine}");
+        Assert.Contains(expectedAdjacency, text, StringComparison.Ordinal);
+        Assert.DoesNotContain(catalog.Resolve(MessageKeys.AttemptsLabel), text, StringComparison.Ordinal);
+        // The attempt must appear exactly once (only nested under its own node "a") — a broken
+        // OwnerId filter that matched every node would duplicate it under "b" too.
+        Assert.Equal(1, text.Split(attemptId, StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandWithAnExplicitSprintIdExpandsThatSprintNotTheOthers()
+    {
+        // Two sprints, neither auto-resolves as "active" — proves --sprint actually targets the
+        // requested sprint instead of coincidentally matching a single-sprint project's active one.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("alpha", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        SprintId requestedSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("beta", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse([
+                "tree", "--project-root", environment.ProjectRoot,
+                "--sprint", requestedSprintId.Value.ToString(),
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        Assert.Contains("beta ready", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("alpha", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandReportsSprintNotFoundForAnUnknownSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", Guid.NewGuid().ToString()])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Theory]
+    [Trait("Category", "Acceptance")]
+    [InlineData("not-a-guid")]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task TreeCommandReportsSprintNotFoundForAMalformedSprintIdInsteadOfFallingBackToActive(
+        string malformedSprintId)
+    {
+        // Regression: `tree` always requests SnapshotDetail.Full (unlike `status`, which only
+        // reaches Full on an explicit --detail full), so a malformed --sprint value must never
+        // silently resolve to the project's own active sprint instead of being reported as invalid.
+        // "" and "   " are covered separately from "not-a-guid": an earlier fix used
+        // string.IsNullOrWhiteSpace to decide whether a sprint id was requested at all, which treated
+        // a blank explicit value as "not requested" and let it through to the same active-sprint
+        // fallback.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", malformedSprintId])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+        Assert.Empty(output.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintInspectCommandPrintsTheRequestedSprintsDetailNotTheOtherSprints()
+    {
+        // Two sprints, each with a differently-named node, and neither auto-resolves as "active"
+        // (that requires exactly one non-terminal sprint) — so this can only pass if the command
+        // actually honors the requested id instead of coincidentally matching a single-sprint
+        // project's own active sprint.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("alpha", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken);
+        SprintId requestedSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("beta", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["sprint", "inspect", requestedSprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        Assert.Contains("beta ready", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("alpha", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintInspectCommandReportsSprintNotFoundForAMalformedId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["sprint", "inspect", "not-a-guid", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintInspectCommandSurfacesProjectNotInitializedInsteadOfMaskingItAsSprintNotFound()
+    {
+        // Regression: an uninitialized project also leaves ProjectSnapshot.Details null, which the
+        // command must not collapse into a bare sprint_not_found — the underlying, more actionable
+        // cause has to reach diagnostics too, matching `status` and `tree`.
+        using TestEnvironment environment = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["sprint", "inspect", Guid.NewGuid().ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal(
+            $"{DiagnosticCodes.ProjectNotInitialized}{Environment.NewLine}{DiagnosticCodes.SprintNotFound}{Environment.NewLine}",
+            diagnostics.ToString());
     }
 
     private static SurfaceText Text(ILocalizationCatalog catalog) =>

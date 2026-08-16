@@ -24,8 +24,12 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 |---|---|
 | `forge doctor [--startup] [--recover --yes]` | Show the startup summary, the ordered checks with `--startup`, or quarantine unreadable configuration with `--recover`. |
 | `forge init --project-root <absolute-path> [--yes]` | Display the absolute root and initialize `.forge/` after confirmation. |
-| `forge status [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
+| `forge status [--detail summary\|full] [--sprint <id>] [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
+| `forge tree [--sprint <id>] [--json]` | Show the sprint hierarchy, nesting each attempt under its owning node. |
+| `forge sprint inspect <id> [--json]` | Show one sprint's full node/attempt/finding/routing detail. |
 | `forge next [--json]` | Show the deterministic recommended actions. |
+| `forge events [--after <cursor>] [--follow] [--json]` | Read incremental workflow events. |
+| `forge models [--json] [--refresh]` | Show provider toolchain health. |
 | `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
 
 `--project-root` accepts only an absolute directory and is never resolved

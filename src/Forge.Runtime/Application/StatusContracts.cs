@@ -68,14 +68,17 @@ public enum SnapshotDetail
 }
 
 /// <summary>Matches `$defs.entity`: a small, uniform shape for the node/attempt/finding/gate/artifact
-/// rows inside <see cref="SprintDetails"/>, so one presentation code path renders every kind.</summary>
+/// rows inside <see cref="SprintDetails"/>, so one presentation code path renders every kind.
+/// <see cref="LastActivityAt"/> is only ever set for an attempt row (ADR 0006's throttled
+/// activity heartbeat) — every other kind leaves it <see langword="null"/>.</summary>
 public sealed record EntityStatus(
     string Id,
     string State,
     string? OwnerId = null,
     string? Kind = null,
     string? Severity = null,
-    DateTimeOffset? UpdatedAt = null);
+    DateTimeOffset? UpdatedAt = null,
+    DateTimeOffset? LastActivityAt = null);
 
 public sealed record RoutingStatus(int RetryRemaining, DateTimeOffset? ResumeNotBefore);
 

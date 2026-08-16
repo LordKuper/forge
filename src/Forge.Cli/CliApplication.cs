@@ -39,6 +39,8 @@ public static class CliApplication
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateEventsCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateTreeCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateSprintCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         if (install is not null)
@@ -176,10 +178,19 @@ public static class CliApplication
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             string? rawSprint = parseResult.GetValue(sprint);
-            bool sprintRequested = !string.IsNullOrWhiteSpace(rawSprint);
-            Guid? sprintId = sprintRequested && Guid.TryParse(rawSprint, out Guid parsedSprintId)
-                ? parsedSprintId
-                : null;
+            // Any explicitly supplied value — including "" or whitespace — must go through the
+            // Guid.TryParse guard below; treating a blank value as "not requested" would let it
+            // silently fall back to GetOverviewAsync's own active-sprint resolution instead.
+            bool sprintRequested = rawSprint is not null;
+            // A malformed --sprint value must never reach GetOverviewAsync as "no explicit id" —
+            // with --detail full that resolves to the active sprint instead of being reported.
+            Guid parsedSprintId = default;
+            if (sprintRequested && !Guid.TryParse(rawSprint, out parsedSprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            Guid? sprintId = sprintRequested ? parsedSprintId : null;
             SnapshotDetail requestedDetail = string.Equals(
                 parseResult.GetValue(detail), "full", StringComparison.OrdinalIgnoreCase)
                 ? SnapshotDetail.Full
@@ -187,10 +198,10 @@ public static class CliApplication
             ProjectOverview overview = await application
                 .GetOverviewAsync(parseResult.GetValue(projectRoot), requestedDetail, sprintId, cancellationToken)
                 .ConfigureAwait(false);
-            // A malformed --sprint value never parses to a Guid, and a well-formed but unknown one
-            // never resolves a Details section — both must be reported rather than silently treated
-            // as "no sprint requested". This leaves every other exit-code case exactly as before
-            // (the project startup diagnostic stays informational-only on this read command).
+            // A well-formed but unknown sprint id never resolves a Details section — that must be
+            // reported too, not silently treated as "no sprint requested". This leaves every other
+            // exit-code case exactly as before (the project startup diagnostic stays
+            // informational-only on this read command).
             bool sprintNotFound = sprintRequested && overview.Snapshot.Details is null;
             if (parseResult.GetValue(json))
             {
@@ -262,6 +273,119 @@ public static class CliApplication
                 // Bounded short polling (ADR 0005): no subscriber registry, no streaming socket.
                 await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken).ConfigureAwait(false);
             }
+        });
+        return command;
+    }
+
+    /// <summary>ADR 0005: "`forge status`, `next`, `tree`, `sprint inspect`... are local projections
+    /// of this DTO; they are not separate Host queries." `tree` nests attempts under their owning
+    /// node (via <see cref="EntityStatus.OwnerId"/>), which the flat lists in `status` don't show.</summary>
+    private static Command CreateTreeCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string?> sprint = new("--sprint")
+        {
+            Description = "Sprint id to expand (default: active sprint).",
+        };
+        Option<bool> json = CreateJsonOption();
+        Command command = new("tree", text.Resolve(MessageKeys.TreeDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? rawSprint = parseResult.GetValue(sprint);
+            // Any explicitly supplied value — including "" or whitespace — must go through the
+            // Guid.TryParse guard below; treating a blank value as "not requested" (like
+            // string.IsNullOrWhiteSpace would) let it silently fall back to the active sprint too.
+            bool sprintRequested = rawSprint is not null;
+            // Unlike `status` (which only reaches SnapshotDetail.Full on an explicit --detail full),
+            // `tree` always requests Full — so a malformed --sprint value must never silently fall
+            // back to GetOverviewAsync's own "no explicit id" active-sprint resolution.
+            Guid parsedSprintId = default;
+            if (sprintRequested && !Guid.TryParse(rawSprint, out parsedSprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            Guid? sprintId = sprintRequested ? parsedSprintId : null;
+            ProjectOverview overview = await application
+                .GetOverviewAsync(parseResult.GetValue(projectRoot), SnapshotDetail.Full, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            bool sprintNotFound = sprintRequested && overview.Snapshot.Details is null;
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
+                return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
+            }
+
+            WriteProject(text, output, overview.Startup.Project);
+            WriteSprintTree(text, output, overview.Snapshot.Sprints, overview.Snapshot.ActiveSprintId, overview.Snapshot.Details);
+            WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
+            return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    private static Command CreateSprintCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Command command = new("sprint", text.Resolve(MessageKeys.SprintDescription));
+        command.Subcommands.Add(CreateSprintInspectCommand(text, output, diagnostics, application));
+        return command;
+    }
+
+    private static Command CreateSprintInspectCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<bool> json = CreateJsonOption();
+        Argument<string> id = new("id") { Description = "Sprint id." };
+        Command command = new("inspect", text.Resolve(MessageKeys.SprintInspectDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            ProjectOverview overview = await application
+                .GetOverviewAsync(parseResult.GetValue(projectRoot), SnapshotDetail.Full, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            bool sprintNotFound = overview.Snapshot.Details is null;
+            if (parseResult.GetValue(json))
+            {
+                // Matching `tree`/`status`: the machine contract always comes back well-formed, even
+                // on a not-found id, instead of collapsing to empty stdout.
+                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
+                return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
+            }
+
+            if (sprintNotFound)
+            {
+                // A null Details section isn't always "no such sprint" — an uninitialized or missing
+                // project reports it too. Surface that underlying diagnostic first, matching `status`
+                // and `tree`, instead of masking it behind sprint_not_found.
+                WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            WriteSprintDetails(text, output, overview.Snapshot.Details!);
+            WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
+            return ExitCodes.Ok;
         });
         return command;
     }
@@ -519,6 +643,62 @@ public static class CliApplication
             output.WriteLine(string.Create(
                 CultureInfo.InvariantCulture,
                 $"  {marker} {sprint.CreationSequence}. {sprint.Id} {SurfaceFormatting.Machine(sprint.State)}"));
+        }
+    }
+
+    /// <summary>Same sprint list as <see cref="WriteSprints"/>, but nests the expanded sprint's
+    /// attempts under their owning node instead of listing nodes and attempts as separate flat
+    /// sections — kept as its own method so `status`'s existing flat output stays unchanged.</summary>
+    private static void WriteSprintTree(
+        SurfaceText text,
+        TextWriter output,
+        IReadOnlyList<SprintStatus> sprints,
+        Guid? activeSprintId,
+        SprintDetails? details)
+    {
+        output.WriteLine(text.Resolve(MessageKeys.SprintsTitle));
+        if (sprints.Count == 0)
+        {
+            output.WriteLine(text.Resolve(MessageKeys.NoSprints));
+            return;
+        }
+
+        foreach (SprintStatus sprint in sprints)
+        {
+            string marker = sprint.Id == activeSprintId ? "*" : " ";
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {marker} {sprint.CreationSequence}. {sprint.Id} {SurfaceFormatting.Machine(sprint.State)}"));
+            if (details is { } sprintDetails && sprintDetails.SprintId == sprint.Id)
+            {
+                WriteNodeTree(text, output, sprintDetails);
+            }
+        }
+    }
+
+    private static void WriteNodeTree(SurfaceText text, TextWriter output, SprintDetails details)
+    {
+        foreach (EntityStatus node in details.Nodes)
+        {
+            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"      {node.Id} {node.State}"));
+            foreach (EntityStatus attempt in details.Attempts.Where(attempt =>
+                string.Equals(attempt.OwnerId, node.Id, StringComparison.Ordinal)))
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"        {attempt.Id} {attempt.State}"));
+            }
+        }
+
+        if (details.Findings.Count > 0)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"      {text.Resolve(MessageKeys.FindingsLabel)}"));
+            foreach (EntityStatus finding in details.Findings)
+            {
+                output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"        {finding.Id} {finding.State}"));
+            }
         }
     }
 

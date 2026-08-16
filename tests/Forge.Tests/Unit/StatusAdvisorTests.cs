@@ -168,7 +168,7 @@ public sealed class StatusAdvisorTests
                 TestContext.Current.CancellationToken);
             using JsonDocument json = JsonDocument.Parse(StatusJson.Serialize(snapshot));
 
-            Assert.Equal("1.2.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.3.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal("blocked", json.RootElement.GetProperty("startup").GetString());
             Assert.Equal(
                 "initialize_project",
