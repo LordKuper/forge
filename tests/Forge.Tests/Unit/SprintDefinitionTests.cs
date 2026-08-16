@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
@@ -82,6 +83,37 @@ public sealed class SprintDefinitionTests
             await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
 
         Assert.Equal(["codex"], definition!.FrozenProviders);
+    }
+
+    // A definition.json written before FrozenProviders existed has no such key at all -- proves
+    // LoadDefinitionAsync tolerates that instead of throwing, defaulting to an empty list.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyDefinitionWithNoFrozenProvidersFieldLoadsWithAnEmptyList()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        JsonNode definitionRoot = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        JsonObject definitionObject = definitionRoot.AsObject();
+        string frozenProvidersKey = definitionObject.Select(property => property.Key)
+            .First(key => string.Equals(key, "frozen_providers", StringComparison.OrdinalIgnoreCase));
+        definitionObject.Remove(frozenProvidersKey);
+        await File.WriteAllTextAsync(definitionPath, definitionRoot.ToJsonString(), cancellationToken);
+
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.NotNull(definition);
+        Assert.Empty(definition.FrozenProviders);
     }
 
     [Fact]
