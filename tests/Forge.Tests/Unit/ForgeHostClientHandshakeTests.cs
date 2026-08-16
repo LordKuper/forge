@@ -58,6 +58,52 @@ public sealed class ForgeHostClientHandshakeTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task EnsureConnectedReportsTheCorrelationMismatchWhenBothChecksWouldFail()
+    {
+        // Pins down the check order: correlation id is validated before anything else on the
+        // response — including its own protocol version — is trusted at all. A response that fails
+        // both must report Malformed, not VersionIncompatible.
+        EchoingFakeConnection connection = new(_ => new ControlHandshakeResponse(
+            "99.0.0",
+            "1.0.0",
+            [],
+            ControlDiagnostic.None,
+            Guid.NewGuid()));
+        await using ForgeHostClient client = new(
+            new FakeControlTransport(connection),
+            new ForgeHostClientOptions(Guid.NewGuid(), "test-instance", "1.0.0-test"));
+
+        ControlDiagnostic diagnostic = await client.EnsureConnectedAsync(null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.Malformed, diagnostic.Code);
+        Assert.False(client.IsConnected);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task EnsureConnectedRejectsAMissingProtocolVersionInsteadOfThrowing()
+    {
+        // ControlProtocol.IsCompatible itself throws ArgumentException for a null/blank version —
+        // the client must guard against that rather than let it escape EnsureConnectedAsync, whose
+        // whole contract is "return a diagnostic, never throw except on cancellation."
+        EchoingFakeConnection connection = new(request => new ControlHandshakeResponse(
+            string.Empty,
+            "1.0.0",
+            [],
+            ControlDiagnostic.None,
+            request.CorrelationId));
+        await using ForgeHostClient client = new(
+            new FakeControlTransport(connection),
+            new ForgeHostClientOptions(Guid.NewGuid(), "test-instance", "1.0.0-test"));
+
+        ControlDiagnostic diagnostic = await client.EnsureConnectedAsync(null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.VersionIncompatible, diagnostic.Code);
+        Assert.False(client.IsConnected);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task EnsureConnectedAcceptsAWellFormedResponseThatEchoesTheRequestCorrectly()
     {
         EchoingFakeConnection connection = new(request => new ControlHandshakeResponse(

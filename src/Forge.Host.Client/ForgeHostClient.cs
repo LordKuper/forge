@@ -151,31 +151,39 @@ public sealed class ForgeHostClient : IAsyncDisposable
                 JsonSerializer.Deserialize<ControlHandshakeResponse>(responseBytes, ControlProtocol.JsonOptions) ??
                     throw new ControlProtocolException(ControlDiagnosticCode.Malformed, "The handshake response was empty.");
 
-            if (response.Diagnostic.Code != ControlDiagnosticCode.None)
-            {
-                await candidate.DisposeAsync().ConfigureAwait(false);
-                return response.Diagnostic;
-            }
-
-            // Never trust a well-formed-looking response at face value: it must actually answer THIS
-            // handshake, and the Host's own claimed protocol version must actually be one this client
-            // understands — checked independently of the Host's own Diagnostic field, which a
-            // misbehaving or corrupted Host could report as None while echoing an incompatible
-            // version.
+            // Never trust ANY field on the response — including its own Diagnostic — until it's
+            // confirmed to actually answer THIS handshake. Checking Diagnostic first would let a
+            // response that doesn't correlate (stale, foreign, or forged) stand unexamined as long as
+            // it carried a plausible-looking diagnostic.
             if (response.CorrelationId != request.CorrelationId)
             {
-                await candidate.DisposeAsync().ConfigureAwait(false);
-                return new ControlDiagnostic(
-                    ControlDiagnosticCode.Malformed,
-                    "The handshake response's correlation id did not match the request.");
+                return await RejectAsync(
+                        candidate,
+                        new ControlDiagnostic(
+                            ControlDiagnosticCode.Malformed,
+                            "The handshake response's correlation id did not match the request."))
+                    .ConfigureAwait(false);
             }
 
-            if (!ControlProtocol.IsCompatible(response.ProtocolVersion, ControlProtocol.Version))
+            if (response.Diagnostic.Code != ControlDiagnosticCode.None)
             {
-                await candidate.DisposeAsync().ConfigureAwait(false);
-                return new ControlDiagnostic(
-                    ControlDiagnosticCode.VersionIncompatible,
-                    $"This client supports protocol {ControlProtocol.Version}; the Host reported {response.ProtocolVersion}.");
+                return await RejectAsync(candidate, response.Diagnostic).ConfigureAwait(false);
+            }
+
+            // The Host's own claimed protocol version must actually be one this client understands,
+            // checked independently of its Diagnostic field, which a misbehaving or corrupted Host
+            // could report as None while echoing an incompatible — or missing/blank, which
+            // IsCompatible itself would reject with an ArgumentException rather than a diagnostic —
+            // version.
+            if (string.IsNullOrWhiteSpace(response.ProtocolVersion) ||
+                !ControlProtocol.IsCompatible(response.ProtocolVersion, ControlProtocol.Version))
+            {
+                return await RejectAsync(
+                        candidate,
+                        new ControlDiagnostic(
+                            ControlDiagnosticCode.VersionIncompatible,
+                            $"This client supports protocol {ControlProtocol.Version}; the Host reported '{response.ProtocolVersion}'."))
+                    .ConfigureAwait(false);
             }
 
             connection = candidate;
@@ -197,6 +205,17 @@ public sealed class ForgeHostClient : IAsyncDisposable
             await candidate.DisposeAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    /// <summary>A rejected handshake never keeps its candidate connection — every rejection branch in
+    /// <see cref="TryHandshakeAsync"/> routes through this so the dispose-then-return pairing can't
+    /// drift out of sync as branches are added.</summary>
+    private static async Task<ControlDiagnostic> RejectAsync(
+        ILocalControlConnection candidate,
+        ControlDiagnostic diagnostic)
+    {
+        await candidate.DisposeAsync().ConfigureAwait(false);
+        return diagnostic;
     }
 
     private async Task DropConnectionAsync()
