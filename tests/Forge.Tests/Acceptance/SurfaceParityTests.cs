@@ -15,7 +15,15 @@ public sealed class SurfaceParityTests
     private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
     {
         [CapabilityIds.ProjectSnapshot] =
-            ["StartupChecksLabel", "StatusLabel", "ProjectStateLabel", "SuggestedActionsLabel"],
+        [
+            "StartupChecksLabel",
+            "StatusLabel",
+            "ProjectStateLabel",
+            "SuggestedActionsLabel",
+            "SprintsLabel",
+            "SprintDetailsLabel",
+            "SprintIdEntry",
+        ],
         [CapabilityIds.ProjectInitialize] = ["InitializeButton", "ProjectRootEntry"],
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],

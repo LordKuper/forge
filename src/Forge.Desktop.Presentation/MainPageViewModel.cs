@@ -14,6 +14,8 @@ public sealed record MainPageSnapshot(
     string StartupChecksText,
     string ProvidersText,
     string SuggestedActionsText,
+    string SprintsText,
+    string SprintDetailsText,
     string ConfigurationText,
     string DiagnosticsText,
     bool InitializeEnabled,
@@ -37,14 +39,33 @@ public sealed class MainPageViewModel(
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations =
         resolveMutations ?? ((_, _) => Task.FromResult<IForgeMutations>(application));
 
-    /// <summary>Restores the view from durable application state, never from serialized UI objects.</summary>
-    public async Task<MainPageSnapshot> RefreshAsync(string? projectRoot, CancellationToken cancellationToken)
+    /// <summary>Restores the view from durable application state, never from serialized UI objects.
+    /// <paramref name="sprintId"/> selects the sprint to expand; <see langword="null"/> or an empty
+    /// value expands the active sprint, matching `forge tree` with no <c>--sprint</c>.</summary>
+    public async Task<MainPageSnapshot> RefreshAsync(
+        string? projectRoot,
+        string? sprintId,
+        CancellationToken cancellationToken)
     {
+        // A supplied but malformed sprint id must never silently fall back to the active sprint —
+        // the same edge case `forge status --detail full`/`tree` report as sprint_not_found. Only a
+        // genuinely empty entry means "no sprint requested" here, because the Desktop entry is
+        // always present and blank by default (unlike an omitted CLI option).
+        bool sprintRequested = !string.IsNullOrWhiteSpace(sprintId);
+        Guid requestedSprintId = default;
+        bool sprintMalformed = sprintRequested && !Guid.TryParse(sprintId, out requestedSprintId);
         ProjectOverview overview = await application
-            .GetOverviewAsync(projectRoot, cancellationToken)
+            .GetOverviewAsync(
+                projectRoot,
+                // Summary for a malformed id: requesting Full with no id would resolve the active
+                // sprint's detail section, i.e. a different sprint than the one asked for.
+                sprintMalformed ? SnapshotDetail.Summary : SnapshotDetail.Full,
+                sprintRequested && !sprintMalformed ? requestedSprintId : null,
+                cancellationToken)
             .ConfigureAwait(false);
         StartupStatus startup = overview.Startup;
         ProjectSnapshot snapshot = overview.Snapshot;
+        bool sprintNotFound = sprintRequested && snapshot.Details is null;
         ConfigurationView user = await application
             .GetUserConfigurationAsync(cancellationToken)
             .ConfigureAwait(false);
@@ -74,6 +95,19 @@ public sealed class MainPageViewModel(
                     snapshot.SuggestedActions.Select(action => string.Create(
                         CultureInfo.InvariantCulture,
                         $"{action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"))),
+            // Same shared projection `forge tree` renders (ADR 0005: both surfaces read one snapshot).
+            Render(
+                null,
+                SurfaceFormatting.SprintTreeLines(
+                    text,
+                    snapshot.Sprints,
+                    snapshot.ActiveSprintId,
+                    snapshot.Details)),
+            snapshot.Details is { } sprintDetails
+                ? Render(null, SurfaceFormatting.SprintDetailLines(text, sprintDetails))
+                : sprintNotFound
+                    ? DiagnosticCodes.SprintNotFound
+                    : string.Empty,
             Render(
                 null,
                 user.Values

@@ -32,6 +32,11 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 | `forge models [--json] [--refresh]` | Show provider toolchain health. |
 | `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
 
+The Desktop surface reads the same snapshot: the dashboard plus a sprint tree
+and a sprint detail view equivalent to `forge tree` and `forge sprint inspect`.
+Its sprint-id box selects which sprint to expand and expands the active sprint
+when left empty.
+
 `--project-root` accepts only an absolute directory and is never resolved
 upward. Values passed to `forge config` follow the declared type of the key, so
 boolean and numeric keys keep their type and string keys keep the raw text.

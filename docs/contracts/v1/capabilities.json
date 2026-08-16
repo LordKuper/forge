@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -13,10 +13,10 @@
       "contract": "GetProjectSnapshot",
       "events": ["ProjectSnapshotInvalidated"],
       "cli": "forge status [--detail summary|full] [--sprint <id>] [--json]",
-      "desktop": "Dashboard/Refresh",
+      "desktop": "Dashboard/Refresh + Sprints/Detail",
       "permission": "read_redacted",
       "acceptance": "project-snapshot-parity",
-      "note": "`forge tree [--sprint <id>] [--json]` and `forge sprint inspect <id> [--json]` are additional CLI-only local projections of this same query (ADR 0005) — not separate capabilities, and not covered by the automated CLI-surface parity check below."
+      "note": "`forge tree [--sprint <id>] [--json]` and `forge sprint inspect <id> [--json]` are additional local projections of this same query (ADR 0005) — not separate capabilities, and not covered by the automated CLI-surface parity check below. The Desktop sprint tree/detail view is their counterpart and renders the same shared lines."
     },
     {
       "id": "project.initialize",

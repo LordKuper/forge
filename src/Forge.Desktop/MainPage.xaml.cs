@@ -39,9 +39,13 @@ public partial class MainPage : ContentPage
     private string? ProjectRoot =>
         string.IsNullOrWhiteSpace(ProjectRootEntry.Text) ? null : ProjectRootEntry.Text;
 
+    /// <summary>Empty means "expand the active sprint", matching `forge tree` with no `--sprint`.</summary>
+    private string? SprintId =>
+        string.IsNullOrWhiteSpace(SprintIdEntry.Text) ? null : SprintIdEntry.Text;
+
     public async Task RefreshAsync()
     {
-        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, CancellationToken.None)
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
             .ConfigureAwait(true);
         StatusLabel.Text = snapshot.StatusText;
         ProjectRootLabel.Text = snapshot.ProjectRootText;
@@ -49,6 +53,8 @@ public partial class MainPage : ContentPage
         StartupChecksLabel.Text = snapshot.StartupChecksText;
         ProvidersLabel.Text = snapshot.ProvidersText;
         SuggestedActionsLabel.Text = snapshot.SuggestedActionsText;
+        SprintsLabel.Text = snapshot.SprintsText;
+        SprintDetailsLabel.Text = snapshot.SprintDetailsText;
         InitializeButton.IsEnabled = snapshot.InitializeEnabled;
         RecoverButton.IsEnabled = snapshot.RecoverEnabled;
         ConfigurationLabel.Text = snapshot.ConfigurationText;
