@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.25.1
+
+### Fixed
+
+- Reading a sprint's journal now retries briefly on a transient file-sharing
+  conflict (e.g. a virus scanner or search indexer momentarily holding the
+  file right after it's written) instead of failing the read immediately.
+
 ## v0.25.0
 
 ### Added

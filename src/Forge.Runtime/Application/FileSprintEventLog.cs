@@ -1080,7 +1080,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             return [];
         }
 
-        byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+        byte[] bytes = await ReadAllBytesWithRetryAsync(path, cancellationToken).ConfigureAwait(false);
         List<WorkflowEvent> events = [];
         int offset = 0;
         while (offset < bytes.Length)
@@ -1102,6 +1102,31 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
 
         return events;
+    }
+
+    /// <summary>
+    /// This read is deliberately unguarded by the per-directory append lock (an unrelated sprint's
+    /// journal must stay readable while another is mid-append), so it can race a concurrent
+    /// <see cref="AppendLineAsync"/>/<see cref="TruncateAsync"/> even though both open with
+    /// <see cref="FileShare.Read"/>: on Windows, a virus scanner or search indexer can transiently
+    /// hold its own incompatible handle on a just-written file. A short retry absorbs that without
+    /// treating it as real corruption — a genuinely corrupt file fails the same way after retrying,
+    /// just slightly later.
+    /// </summary>
+    private static async Task<byte[]> ReadAllBytesWithRetryAsync(string path, CancellationToken cancellationToken)
+    {
+        const int maxAttempts = 5;
+        for (int attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+            }
+        }
     }
 
     private static async Task TruncateAsync(string path, long length, CancellationToken cancellationToken)
