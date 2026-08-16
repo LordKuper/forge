@@ -228,10 +228,8 @@ try {
 
     # --- Positive control: prove the new account can construct/acquire a CurrentUserOnly mutex of
     # its OWN, uncontended, before drawing any conclusion from the contended check below. Without
-    # this, any setup problem specific to this account (e.g. a Windows privilege it lacks) would
-    # read as a "SECURITY REGRESSION" instead of an inconclusive environment problem. This also
-    # exercises MutexProjectLease's Global\-first-then-session-scoped-fallback construction under a
-    # standard non-admin account for real. ---
+    # this, any setup problem specific to this account would read as a "SECURITY REGRESSION" instead
+    # of an inconclusive environment problem. ---
     $mutexControlLease = "forge-mutex-isolation-control-$([guid]::NewGuid().ToString('N'))"
     $mutexControl = Invoke-ProcessAsCredential `
         -ArgumentList @($mutexProbeDll, 'acquire', $mutexControlLease, '0', '5') `
