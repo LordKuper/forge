@@ -290,7 +290,10 @@ public static class CliApplication
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             string? rawSprint = parseResult.GetValue(sprint);
-            bool sprintRequested = !string.IsNullOrWhiteSpace(rawSprint);
+            // Any explicitly supplied value — including "" or whitespace — must go through the
+            // Guid.TryParse guard below; treating a blank value as "not requested" (like
+            // string.IsNullOrWhiteSpace would) let it silently fall back to the active sprint too.
+            bool sprintRequested = rawSprint is not null;
             // Unlike `status` (which only reaches SnapshotDetail.Full on an explicit --detail full),
             // `tree` always requests Full — so a malformed --sprint value must never silently fall
             // back to GetOverviewAsync's own "no explicit id" active-sprint resolution.
@@ -355,6 +358,10 @@ public static class CliApplication
                 .ConfigureAwait(false);
             if (overview.Snapshot.Details is not { } details)
             {
+                // A null Details section isn't always "no such sprint" — an uninitialized or missing
+                // project reports it too. Surface that underlying diagnostic first, matching `status`
+                // and `tree`, instead of masking it behind sprint_not_found.
+                WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
                 return Report(diagnostics, DiagnosticCodes.SprintNotFound);
             }
 
