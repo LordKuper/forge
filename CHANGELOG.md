@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.28.1
+
+### Security
+
+- Added CI coverage proving the per-user isolation of the project lease
+  (`MutexProjectLease`, `NamedWaitHandleOptions.CurrentUserOnly`): two
+  different local OS users acquiring a lease of the identical name each
+  succeed independently, confirming the primitive is namespaced per user
+  rather than only per process/instance. No behavior change; this closes
+  the last gap the 2026-08-15 audit found in same-user isolation coverage.
+
 ## v0.28.0
 
 ### Added

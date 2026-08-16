@@ -13,6 +13,7 @@
   <Project Path="src/Forge.Runtime.Windows/Forge.Runtime.Windows.csproj" />
   <Project Path="src/Forge.Updater.Windows/Forge.Updater.Windows.csproj" />
   <Project Path="src/Forge.Updater/Forge.Updater.csproj" />
+  <Project Path="tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj" />
   <Project Path="tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj" />
   <Project Path="tests/Forge.Tests/Forge.Tests.csproj" />
 </Solution>

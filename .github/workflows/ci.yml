@@ -60,7 +60,7 @@ jobs:
         run: ./.github/scripts/lint.ps1
 
   same-user-isolation:
-    name: Validate same-user pipe isolation
+    name: Validate same-user pipe and mutex isolation
     runs-on: windows-2025
     steps:
       - name: Check out repository
@@ -71,7 +71,7 @@ jobs:
         with:
           global-json-file: global.json
 
-      - name: Validate CurrentUserOnly control-plane pipe isolation
+      - name: Validate CurrentUserOnly control-plane pipe and project-lease mutex isolation
         shell: pwsh
         run: ./.github/scripts/test-same-user-isolation.ps1
 
