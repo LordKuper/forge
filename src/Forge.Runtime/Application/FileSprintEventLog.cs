@@ -109,6 +109,19 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             PersistedDefinition persisted =
                 JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
                 throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph.Select(FromPersisted)];
+            if (!SprintGraphValidator.IsValid(graph))
+            {
+                // Node-id uniqueness, dependency existence, and acyclicity are enforced once, at
+                // freeze time (SprintOrchestrator.CreateSprintAsync) — never re-checked on this read
+                // path. Without this, a corrupt duplicate-id graph reaches
+                // SprintScheduler.SynchronizeSprintGateStateAsync's ToDictionary and throws a raw,
+                // uncaught ArgumentException that (with no BackgroundServiceExceptionBehavior
+                // override configured anywhere) crashes the whole Host process, not just this sprint.
+                throw new InvalidDataException(
+                    $"The frozen definition's graph for sprint '{id.Value}' is corrupt.");
+            }
+
             return new(
                 id,
                 persisted.BaseCommit,
@@ -116,7 +129,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.WorkflowVersion,
                 persisted.ConfigurationSnapshot,
                 [.. persisted.Dependencies.Select(FromPersisted)],
-                [.. persisted.Graph.Select(FromPersisted)],
+                graph,
                 persisted.ConversationLanguage,
                 persisted.ArtifactPolicySnapshotHash,
                 persisted.FrozenAt);

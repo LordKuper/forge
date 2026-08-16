@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
@@ -181,6 +182,117 @@ public sealed class ResumeSchedulerHostedServiceTests
         finally
         {
             await overflowService.StopAsync(cancellationToken);
+        }
+    }
+
+    // Before this fix, a schema-valid definition.json with a DUPLICATE node id (never re-validated
+    // once frozen -- SprintGraphValidator only runs at CreateSprintAsync time) reached
+    // SprintScheduler.SynchronizeSprintGateStateAsync's Graph.ToDictionary and threw a raw,
+    // uncaught ArgumentException. That method only runs for a Running/AwaitingHuman sprint, so the
+    // corruption must land on an already-Running sprint's definition -- exactly what a damaged
+    // definition.json discovered well after freeze would look like. With no
+    // BackgroundServiceExceptionBehavior override configured anywhere, the escaping exception would
+    // crash the whole Host process, not just fault this one background loop.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASprintWithADuplicateNodeIdInItsDefinitionDoesNotCrashTheHost()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult initializedForDuplicate = await environment
+            .InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        Assert.True(initializedForDuplicate.Succeeded);
+
+        SprintOrchestrator duplicateOrchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler duplicateScheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore duplicateStore = environment.Resolve<ISprintStore>();
+
+        // Reach Running first, while the definition is still valid -- only then does
+        // SynchronizeSprintGateStateAsync's gate condition (Running/AwaitingHuman) let a later
+        // corrupt read reach the vulnerable Graph.ToDictionary call.
+        CreateSprintResult duplicateSprint = await duplicateOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, [])]),
+            cancellationToken);
+        Assert.True(duplicateSprint.Succeeded);
+        SprintId duplicateSprintId = duplicateSprint.SprintId!;
+        SprintWorkflowState duplicateDraft =
+            (await duplicateStore.LoadAsync(environment.ProjectRoot, duplicateSprintId, cancellationToken))!;
+        SprintTransitionResult duplicateToReady = await duplicateOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, duplicateSprintId, duplicateDraft.Sprint.Version,
+                SprintOrchestrator.RunSprintKey(duplicateDraft.Sprint)), cancellationToken);
+        SprintTransitionResult duplicateToRunning = await duplicateOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, duplicateSprintId, duplicateToReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(duplicateToReady.Sprint)), cancellationToken);
+        Assert.True(duplicateToRunning.Succeeded);
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, duplicateSprintId), "definition.json");
+        JsonNode definitionRoot = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        JsonObject definitionObject = definitionRoot.AsObject();
+        string graphKey = definitionObject.Select(property => property.Key)
+            .First(key => string.Equals(key, "graph", StringComparison.OrdinalIgnoreCase));
+        JsonArray graph = definitionObject[graphKey]!.AsArray();
+        JsonObject firstNode = graph[0]!.AsObject();
+        string idKey = firstNode.Select(property => property.Key)
+            .First(key => string.Equals(key, "id", StringComparison.OrdinalIgnoreCase));
+        string firstNodeId = firstNode[idKey]!.GetValue<string>();
+        graph[1]!.AsObject()[idKey] = firstNodeId;
+        await File.WriteAllTextAsync(definitionPath, definitionRoot.ToJsonString(), cancellationToken);
+
+        // A separate, healthy sprint proves the service survives the corrupted tick and keeps
+        // re-deriving everything else -- same shape as the other corruption regression tests.
+        CreateSprintResult createdForDuplicate = await duplicateOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken);
+        Assert.True(createdForDuplicate.Succeeded);
+        SprintId goodSprintId = createdForDuplicate.SprintId!;
+
+        SprintWorkflowState goodDraft =
+            (await duplicateStore.LoadAsync(environment.ProjectRoot, goodSprintId, cancellationToken))!;
+        SprintTransitionResult goodToReady = await duplicateOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, goodSprintId, goodDraft.Sprint.Version,
+                SprintOrchestrator.RunSprintKey(goodDraft.Sprint)), cancellationToken);
+        SprintTransitionResult goodToRunning = await duplicateOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, goodSprintId, goodToReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(goodToReady.Sprint)), cancellationToken);
+        Assert.True(goodToRunning.Succeeded);
+
+        SprintWorkflowState goodRunning =
+            (await duplicateStore.LoadAsync(environment.ProjectRoot, goodSprintId, cancellationToken))!;
+        NodeSnapshot goodNodeA = goodRunning.Nodes["a"];
+        AppendOutcome goodNodeARunning = await duplicateStore.AppendTransitionAsync(
+            environment.ProjectRoot, goodSprintId, AggregateKind.Node, goodNodeA.Id.Value, "NodeChanged",
+            "workflow.node_running", WorkflowStateNames.ToSnakeCase(NodeState.Running), goodNodeA.Version,
+            Guid.NewGuid(), cancellationToken);
+        AppendOutcome goodNodeASucceeded = await duplicateStore.AppendTransitionAsync(
+            environment.ProjectRoot, goodSprintId, AggregateKind.Node, goodNodeA.Id.Value, "NodeChanged",
+            "workflow.node_succeeded", WorkflowStateNames.ToSnakeCase(NodeState.Succeeded),
+            goodNodeARunning.State!.Nodes["a"].Version, Guid.NewGuid(), cancellationToken);
+        Assert.Equal(NodeState.Pending, goodNodeASucceeded.State!.Nodes["b"].State);
+
+        ResumeSchedulerOptions duplicateOptions = new(environment.ProjectRoot, TimeSpan.FromMilliseconds(50));
+        ResumeSchedulerHostedService duplicateService = new(
+            duplicateOptions, duplicateStore, duplicateScheduler, NullLogger<ResumeSchedulerHostedService>.Instance);
+        await duplicateService.StartAsync(cancellationToken);
+        try
+        {
+            NodeState observed = NodeState.Pending;
+            for (int attempt = 0; attempt < 40 && observed == NodeState.Pending; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+                SprintWorkflowState polled = (await duplicateStore.LoadAsync(
+                    environment.ProjectRoot, goodSprintId, cancellationToken))!;
+                observed = polled.Nodes["b"].State;
+            }
+
+            Assert.Equal(NodeState.Ready, observed);
+            Assert.Null(duplicateService.ExecuteTask!.Exception);
+        }
+        finally
+        {
+            await duplicateService.StopAsync(cancellationToken);
         }
     }
 
