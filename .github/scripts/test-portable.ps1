@@ -19,7 +19,8 @@ $leafProjects = @(
     # Neutral (references only Forge.Host.Client); its own same-user isolation test is Windows-only
     # (test-same-user-isolation.ps1, requiring OS user creation), but the project itself must still
     # build on every OS per this script's own rule.
-    'tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj'
+    'tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj',
+    'tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj'
 )
 
 foreach ($project in $leafProjects) {

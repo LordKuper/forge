@@ -3,9 +3,11 @@ namespace Forge.Providers;
 /// <summary>
 /// The one platform-neutral <see cref="IProviderInstallLock"/> implementation: a named
 /// <see cref="Mutex"/> using <see cref="NamedWaitHandleOptions.CurrentUserOnly"/> — the same
-/// portable primitive <c>Forge.Host.Client.MutexProjectLease</c> uses for the project lease, so
-/// this works on every OS a future provider adapter targets without an OS-specific adapter of its
-/// own (ADR 0007/0008: locking policy is generic, only vendor specifics are adapter-owned).
+/// portable primitive <c>Forge.Host.Client.MutexProjectLease</c> uses for the project lease,
+/// including its fixed platform choice of <c>CurrentSessionOnly</c> (see <c>MutexProjectLease</c>'s
+/// own remarks for why), so this works on every OS a future provider adapter targets without an
+/// OS-specific adapter of its own (ADR 0007/0008: locking policy is generic, only vendor specifics
+/// are adapter-owned).
 /// </summary>
 /// <remarks>
 /// A named <see cref="Mutex"/>'s ownership is tracked per OS thread, not per <see cref="Mutex"/>
@@ -19,8 +21,11 @@ namespace Forge.Providers;
 public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.DefaultLockName) : IProviderInstallLock
 {
     /// <summary>The production per-user lock name — one lock shared by every Forge process for a
-    /// given user, matching the vendor executables it protects being a shared per-user resource.
-    /// Tests should pass a unique name instead so they never contend with a real install.</summary>
+    /// given user (the vendor executables it protects are a shared per-user resource) machine-wide
+    /// on non-Windows, or within one Windows logon session on Windows (see the type-level remarks);
+    /// two concurrent installs from different Windows sessions of the same account are not mutually
+    /// excluded. ADR 0002's install idempotency covers crash-and-retry, not that concurrent-writer
+    /// case. Tests should pass a unique name instead so they never contend with a real install.</summary>
     public const string DefaultLockName = "forge-provider-install-lock";
 
     /// <remarks>
@@ -48,11 +53,7 @@ public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.De
             Mutex? mutex = null;
             try
             {
-                mutex = new Mutex(
-                    initiallyOwned: false,
-                    lockName,
-                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
-                    out _);
+                mutex = CreateMutex(lockName);
                 try
                 {
                     acquired = mutex.WaitOne(timeout);
@@ -114,6 +115,16 @@ public sealed class ProviderInstallLock(string lockName = ProviderInstallLock.De
 
         return new Lease(thread, releaseSignal);
     }
+
+    /// <summary>See <c>Forge.Host.Client.MutexProjectLease</c>'s type-level remarks for why this is
+    /// a fixed platform choice rather than a per-process <c>Global\</c> capability check or uniform
+    /// session-scoping.</summary>
+    private static Mutex CreateMutex(string lockName) =>
+        new(
+            initiallyOwned: false,
+            lockName,
+            new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = OperatingSystem.IsWindows() },
+            out _);
 
     private sealed class Lease(Thread thread, ManualResetEventSlim releaseSignal) : IProviderInstallLease
     {

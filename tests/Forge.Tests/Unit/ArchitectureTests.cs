@@ -97,6 +97,53 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void ProjectLeaseAndProviderInstallLockConstructTheirMutexIdentically()
+    {
+        // MutexProjectLease and ProviderInstallLock are two independent copies of the same uniform
+        // session-scoped construction (see ProjectLease.cs's remarks for why not Global\). Nothing
+        // else keeps them from silently diverging.
+        string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
+        string projectLeaseCode = ExtractSharedMutexConstructionCode(
+            Path.Combine(sourceRoot, "Forge.Host.Client", "ProjectLease.cs"));
+        string providerInstallLockCode = ExtractSharedMutexConstructionCode(
+            Path.Combine(sourceRoot, "Forge.Runtime", "Providers", "ProviderInstallLock.cs"));
+
+        Assert.Equal(projectLeaseCode, providerInstallLockCode);
+    }
+
+    // Captures CreateMutex's body (from its own declaration through its `out _);`), and normalizes
+    // away the one intentional difference (the parameter name — leaseName vs lockName) and all
+    // whitespace, so the comparison catches any other divergence in the construction logic itself
+    // (options, ordering) without being brittle about formatting.
+    private static string ExtractSharedMutexConstructionCode(string path)
+    {
+        string source = File.ReadAllText(path);
+        int start = source.IndexOf("private static Mutex CreateMutex(", StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{path} does not declare a CreateMutex method.");
+        // The first "out _);" at or after CreateMutex's own start — not the last one in the whole
+        // file — so a future Mutex construction added elsewhere in the file can never extend this
+        // boundary past CreateMutex's actual end.
+        int end = source.IndexOf("out _);", start, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"{path}'s CreateMutex does not end with the expected construction.");
+        end += "out _);".Length;
+
+        // Doc comments intentionally differ (one cross-references the other type by name), so only
+        // the actual code is compared — everything a `///` line contributes is documentation, never
+        // construction logic.
+        string code = string.Join(
+            '\n',
+            source[start..end]
+                .Split('\n')
+                .Where(line => !line.TrimStart().StartsWith("///", StringComparison.Ordinal)));
+        return string.Join(
+            ' ',
+            code.Replace("leaseName", "name", StringComparison.Ordinal)
+                .Replace("lockName", "name", StringComparison.Ordinal)
+                .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void HostsDoNotBypassConfigurationStores()
     {
         string sourceRoot = Path.Combine(RepositoryRoot.Find(), "src");
