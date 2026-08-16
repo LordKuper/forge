@@ -14,6 +14,9 @@ namespace Forge.AcceptanceTests;
 
 public sealed class SurfaceParityTests
 {
+    /// <summary>The Desktop entries with no adjacent visible label of their own.</summary>
+    private static readonly string[] FreeTextEntries = ["ProjectRootEntry", "SprintIdEntry"];
+
     /// <summary>The Desktop control that exposes each implemented capability.</summary>
     private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
     {
@@ -104,6 +107,26 @@ public sealed class SurfaceParityTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public void DesktopFreeTextEntriesCarryAScreenReaderName()
+    {
+        // ADR 0005 requires every action to be screen-reader named. DesktopControlsAreWiredInCodeBehind
+        // only proves the control name appears somewhere in the code-behind — deleting the
+        // SemanticProperties wiring would keep it green — so pin the wiring itself. A static check
+        // fully covers this risk: no MAUI control can be instantiated headlessly here.
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(),
+            "src",
+            "Forge.Desktop",
+            "MainPage.xaml.cs"));
+
+        Assert.Contains("SemanticProperties.SetDescription(entry, label)", codeBehind, StringComparison.Ordinal);
+        Assert.All(
+            FreeTextEntries,
+            entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot()
     {
         // Sharing SurfaceFormatting is not by itself the no-drift guarantee this refactor claims:
@@ -116,6 +139,7 @@ public sealed class SurfaceParityTests
             environment.ProjectRoot, true, cancellationToken);
         Assert.True(init.Succeeded);
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(
                 environment.ProjectRoot,
@@ -123,17 +147,45 @@ public sealed class SurfaceParityTests
                 Guid.NewGuid(),
                 Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
             cancellationToken)).SprintId!;
+        // Drive the sprint far enough to own a real attempt and a real finding, so the fixture
+        // exercises AppendNodeTree's OwnerId nesting loop and its findings block. Comparing two
+        // renderings of a sprint that has neither would leave both branches dead, and a surface
+        // that silently dropped attempt or finding lines would still pass.
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded);
+        Assert.True((await scheduler.RecordFindingAsync(
+            environment.ProjectRoot,
+            sprintId,
+            FindingSeverity.High,
+            "finding.example",
+            new Dictionary<string, string?>(),
+            ["src/Foo.cs:1"],
+            null,
+            cancellationToken)).Succeeded);
         SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
         StringWriter tree = new(CultureInfo.InvariantCulture);
         StringWriter inspect = new(CultureInfo.InvariantCulture);
+        // Separate diagnostics writers: the CLI defaults them to `output`, which would fold the
+        // diagnostics channel into the text being compared and make this assertion depend on the
+        // fixture happening to produce no diagnostic.
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
         string id = sprintId.Value.ToString("D", CultureInfo.InvariantCulture);
 
         Assert.Equal(0, await CliApplication
-            .CreateRootCommand(text, tree, environment.Application)
+            .CreateRootCommand(text, tree, environment.Application, diagnostics)
             .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", id])
             .InvokeAsync(new InvocationConfiguration(), cancellationToken));
         Assert.Equal(0, await CliApplication
-            .CreateRootCommand(text, inspect, environment.Application)
+            .CreateRootCommand(text, inspect, environment.Application, diagnostics)
             .Parse(["sprint", "inspect", id, "--project-root", environment.ProjectRoot])
             .InvokeAsync(new InvocationConfiguration(), cancellationToken));
         MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
@@ -145,6 +197,14 @@ public sealed class SurfaceParityTests
         Assert.Equal(
             SprintSection(inspect.ToString(), text.Resolve(MessageKeys.SprintDetailsTitle)),
             desktop.SprintDetailsText);
+        // The comparison above is only as strong as its fixture, so pin that the compared text
+        // really carries an attempt nested under its node and a finding.
+        string attemptId = started.AttemptId!.Value.ToString("D", CultureInfo.InvariantCulture);
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"        {attemptId} "),
+            desktop.SprintsText,
+            StringComparison.Ordinal);
+        Assert.Contains(text.Resolve(MessageKeys.FindingsLabel), desktop.SprintsText, StringComparison.Ordinal);
     }
 
     private static string SprintSection(string cliOutput, string title) =>
