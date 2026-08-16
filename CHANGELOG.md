@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.25.0
+
+### Added
+
+- Forge Host now periodically re-derives sprint node readiness in the
+  background, so a node whose dependency settled while nothing else was
+  actively working the sprint no longer stays stuck until some unrelated
+  call happens to touch it again.
+
 ## v0.24.0
 
 ### Changed

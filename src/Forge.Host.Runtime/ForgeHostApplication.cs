@@ -56,6 +56,8 @@ public static class ForgeHostApplication
                 services.AddSingleton<IEnvironmentPaths>(new SystemEnvironmentPaths(options.InstanceId));
                 configureProviders(services);
                 services.AddHostedService<ControlPlaneHostedService>();
+                services.AddSingleton(new ResumeSchedulerOptions(projectRoot));
+                services.AddHostedService<ResumeSchedulerHostedService>();
             })
             .Build();
         await host.RunAsync(cancellationToken).ConfigureAwait(false);
