@@ -59,6 +59,22 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/lint.ps1
 
+  same-user-isolation:
+    name: Validate same-user pipe isolation
+    runs-on: windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
+        with:
+          global-json-file: global.json
+
+      - name: Validate CurrentUserOnly control-plane pipe isolation
+        shell: pwsh
+        run: ./.github/scripts/test-same-user-isolation.ps1
+
   portable:
     name: Validate portable core (${{ matrix.os }})
     strategy:
