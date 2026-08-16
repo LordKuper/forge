@@ -282,9 +282,9 @@
       "forge.cli": {
         "type": "Project",
         "dependencies": {
-          "Forge.Host.Client": "[0.23.1, )",
-          "Forge.Runtime": "[0.23.1, )",
-          "Forge.Updater": "[0.23.1, )",
+          "Forge.Host.Client": "[0.24.0, )",
+          "Forge.Runtime": "[0.24.0, )",
+          "Forge.Updater": "[0.24.0, )",
           "System.CommandLine": "[2.0.10, )",
           "Terminal.Gui": "[1.18.0, )"
         }
@@ -295,21 +295,21 @@
       "forge.providers.claude.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.23.1, )",
+          "Forge.Runtime": "[0.24.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
       "forge.providers.codex.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.23.1, )",
+          "Forge.Runtime": "[0.24.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
-          "Forge.Host.Client": "[0.23.1, )",
+          "Forge.Host.Client": "[0.24.0, )",
           "JsonSchema.Net": "[9.4.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
@@ -318,7 +318,7 @@
       "forge.runtime.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.23.1, )"
+          "Forge.Runtime": "[0.24.0, )"
         }
       },
       "forge.updater": {
@@ -327,8 +327,8 @@
       "forge.updater.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.23.1, )",
-          "Forge.Updater": "[0.23.1, )",
+          "Forge.Runtime": "[0.24.0, )",
+          "Forge.Updater": "[0.24.0, )",
           "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
         }
       },

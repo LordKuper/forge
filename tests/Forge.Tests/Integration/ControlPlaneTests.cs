@@ -7,6 +7,7 @@ using Forge.Domain;
 using Forge.Host;
 using Forge.Host.Client;
 using Forge.Infrastructure;
+using Forge.Presentation;
 using Forge.Tests.Support;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -44,6 +45,39 @@ public sealed class ControlPlaneTests
         ControlResponse response = await client.PingAsync(cancellationToken);
 
         Assert.Equal(ControlDiagnosticCode.None, response.Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task HandshakeResponseAdvertisesTheHostsRealCapabilities()
+    {
+        // Regression coverage: the handshake response's Capabilities field used to be hardcoded to
+        // an empty list regardless of what the Host actually supports (2026-08-15 audit finding).
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        string endpointName = InstanceIdentity.ComputePipeName(instanceId, projectId);
+        NamedPipeControlTransport transport = new();
+
+        await using ILocalControlConnection connection = await transport
+            .ConnectAsync(endpointName, TimeSpan.FromSeconds(5), cancellationToken);
+        ControlHandshakeRequest handshake =
+            new(ControlProtocol.Version, "1.0.0-test", instanceId, [], Guid.NewGuid());
+        await connection.SendAsync(
+            JsonSerializer.SerializeToUtf8Bytes(handshake, ControlProtocol.JsonOptions),
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        byte[] responseBytes = await connection.ReceiveAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        ControlHandshakeResponse response =
+            JsonSerializer.Deserialize<ControlHandshakeResponse>(responseBytes, ControlProtocol.JsonOptions)!;
+
+        Assert.Equal(handshake.CorrelationId, response.CorrelationId);
+        Assert.Equal(CapabilityIds.Implemented, response.Capabilities);
     }
 
     [Fact]

@@ -157,6 +157,27 @@ public sealed class ForgeHostClient : IAsyncDisposable
                 return response.Diagnostic;
             }
 
+            // Never trust a well-formed-looking response at face value: it must actually answer THIS
+            // handshake, and the Host's own claimed protocol version must actually be one this client
+            // understands — checked independently of the Host's own Diagnostic field, which a
+            // misbehaving or corrupted Host could report as None while echoing an incompatible
+            // version.
+            if (response.CorrelationId != request.CorrelationId)
+            {
+                await candidate.DisposeAsync().ConfigureAwait(false);
+                return new ControlDiagnostic(
+                    ControlDiagnosticCode.Malformed,
+                    "The handshake response's correlation id did not match the request.");
+            }
+
+            if (!ControlProtocol.IsCompatible(response.ProtocolVersion, ControlProtocol.Version))
+            {
+                await candidate.DisposeAsync().ConfigureAwait(false);
+                return new ControlDiagnostic(
+                    ControlDiagnosticCode.VersionIncompatible,
+                    $"This client supports protocol {ControlProtocol.Version}; the Host reported {response.ProtocolVersion}.");
+            }
+
             connection = candidate;
             return ControlDiagnostic.None;
         }
