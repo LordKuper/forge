@@ -57,4 +57,7 @@
   <data name="EventsDescription" xml:space="preserve"><value>Прочитать инкрементальные события рабочего процесса.</value></data>
   <data name="EventsTitle" xml:space="preserve"><value>События:</value></data>
   <data name="NoEvents" xml:space="preserve"><value>Новых событий нет.</value></data>
+  <data name="TreeDescription" xml:space="preserve"><value>Показать иерархию спринтов/узлов/попыток проекта.</value></data>
+  <data name="SprintDescription" xml:space="preserve"><value>Команды спринта.</value></data>
+  <data name="SprintInspectDescription" xml:space="preserve"><value>Показать полные детали одного спринта.</value></data>
 </root>

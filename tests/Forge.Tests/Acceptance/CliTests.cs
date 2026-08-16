@@ -605,6 +605,115 @@ public sealed class CliTests
         Assert.NotEqual(environment.ProjectRoot, capturedRoot);
     }
 
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandNestsAnAttemptUnderItsOwningNode()
+    {
+        // ADR 0005: "project -> sprint -> node -> attempt" — `status` lists nodes and attempts as
+        // two separate flat sections; `tree` is the projection that actually nests one under the
+        // other, using the same EntityStatus.OwnerId link `status` already carries but never uses.
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        int nodeIndex = text.IndexOf("a running", StringComparison.Ordinal);
+        int attemptIndex = text.IndexOf(started.AttemptId!.Value.ToString("D"), StringComparison.Ordinal);
+        Assert.True(nodeIndex >= 0 && attemptIndex > nodeIndex);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task TreeCommandReportsSprintNotFoundForAnUnknownSprintId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", Guid.NewGuid().ToString()])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintInspectCommandPrintsTheRequestedSprintsDetail()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            TestContext.Current.CancellationToken)).SprintId!;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["sprint", "inspect", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string text = output.ToString();
+        Assert.Contains("a ready", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintInspectCommandReportsSprintNotFoundForAMalformedId()
+    {
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse(["sprint", "inspect", "not-a-guid", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", diagnostics.ToString());
+    }
+
     private static SurfaceText Text(ILocalizationCatalog catalog) =>
         new(catalog, CultureInfo.CurrentUICulture);
 }

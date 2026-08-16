@@ -91,4 +91,7 @@ public static class MessageKeys
     public const string EventsDescription = "EventsDescription";
     public const string EventsTitle = "EventsTitle";
     public const string NoEvents = "NoEvents";
+    public const string TreeDescription = "TreeDescription";
+    public const string SprintDescription = "SprintDescription";
+    public const string SprintInspectDescription = "SprintInspectDescription";
 }
