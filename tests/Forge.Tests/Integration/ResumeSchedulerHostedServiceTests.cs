@@ -86,6 +86,104 @@ public sealed class ResumeSchedulerHostedServiceTests
         }
     }
 
+    // Before this fix, WorkflowFold.Apply's int.Parse on a node's attempt_number argument could
+    // throw OverflowException for an out-of-int32-range value -- an exception type distinct from
+    // (and missed alongside) the JsonException/FormatException cases already fixed. That raw
+    // OverflowException escaped LoadAsync and TickAsync's catch filter, permanently faulting the
+    // whole BackgroundService's ExecuteTask.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASprintWithAnOutOfRangeAttemptNumberDoesNotStopOtherSprintsFromBeingReDerived()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult initializedForOverflow = await environment
+            .InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        Assert.True(initializedForOverflow.Succeeded);
+
+        SprintOrchestrator overflowOrchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler overflowScheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore overflowStore = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult overflowSprint = await overflowOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken);
+        Assert.True(overflowSprint.Succeeded);
+        SprintWorkflowState overflowState = (await overflowStore.LoadAsync(
+            environment.ProjectRoot, overflowSprint.SprintId!, cancellationToken))!;
+        NodeSnapshot overflowNodeA = overflowState.Nodes["a"];
+        AppendOutcome overflowAppend = await overflowStore.AppendTransitionAsync(
+            environment.ProjectRoot, overflowSprint.SprintId!, AggregateKind.Node, overflowNodeA.Id.Value,
+            "NodeChanged", "workflow.node_running", WorkflowStateNames.ToSnakeCase(NodeState.Running),
+            overflowNodeA.Version, Guid.NewGuid(), cancellationToken,
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.AttemptNumberArgument] = "1" });
+        Assert.True(overflowAppend.Succeeded);
+
+        // AppendTransitionAsync re-folds and would itself reject an out-of-range attempt_number at
+        // write time (WorkflowLogCorrupted) -- this must land as *durable* corruption discovered only
+        // on a later read, matching a real journal damaged after the fact, so it is written directly.
+        string overflowEventsPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, overflowSprint.SprintId!), "events.jsonl");
+        string overflowJournalText = await File.ReadAllTextAsync(overflowEventsPath, cancellationToken);
+        string corruptedJournalText = overflowJournalText.Replace(
+            "\"attempt_number\":\"1\"", "\"attempt_number\":\"99999999999999999999\"", StringComparison.Ordinal);
+        Assert.NotEqual(overflowJournalText, corruptedJournalText);
+        await File.WriteAllTextAsync(overflowEventsPath, corruptedJournalText, cancellationToken);
+
+        CreateSprintResult createdForOverflow = await overflowOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken);
+        Assert.True(createdForOverflow.Succeeded);
+        SprintId overflowSprintId = createdForOverflow.SprintId!;
+
+        SprintWorkflowState overflowDraft =
+            (await overflowStore.LoadAsync(environment.ProjectRoot, overflowSprintId, cancellationToken))!;
+        SprintTransitionResult overflowToReady = await overflowOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, overflowSprintId, overflowDraft.Sprint.Version,
+                SprintOrchestrator.RunSprintKey(overflowDraft.Sprint)), cancellationToken);
+        SprintTransitionResult overflowToRunning = await overflowOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, overflowSprintId, overflowToReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(overflowToReady.Sprint)), cancellationToken);
+        Assert.True(overflowToRunning.Succeeded);
+
+        SprintWorkflowState overflowRunning =
+            (await overflowStore.LoadAsync(environment.ProjectRoot, overflowSprintId, cancellationToken))!;
+        NodeSnapshot overflowRunningNodeA = overflowRunning.Nodes["a"];
+        AppendOutcome overflowNodeARunning = await overflowStore.AppendTransitionAsync(
+            environment.ProjectRoot, overflowSprintId, AggregateKind.Node, overflowRunningNodeA.Id.Value,
+            "NodeChanged", "workflow.node_running", WorkflowStateNames.ToSnakeCase(NodeState.Running),
+            overflowRunningNodeA.Version, Guid.NewGuid(), cancellationToken);
+        AppendOutcome overflowNodeASucceeded = await overflowStore.AppendTransitionAsync(
+            environment.ProjectRoot, overflowSprintId, AggregateKind.Node, overflowRunningNodeA.Id.Value,
+            "NodeChanged", "workflow.node_succeeded", WorkflowStateNames.ToSnakeCase(NodeState.Succeeded),
+            overflowNodeARunning.State!.Nodes["a"].Version, Guid.NewGuid(), cancellationToken);
+        Assert.Equal(NodeState.Pending, overflowNodeASucceeded.State!.Nodes["b"].State);
+
+        ResumeSchedulerOptions overflowOptions = new(environment.ProjectRoot, TimeSpan.FromMilliseconds(50));
+        ResumeSchedulerHostedService overflowService = new(
+            overflowOptions, overflowStore, overflowScheduler, NullLogger<ResumeSchedulerHostedService>.Instance);
+        await overflowService.StartAsync(cancellationToken);
+        try
+        {
+            NodeState observed = NodeState.Pending;
+            for (int attempt = 0; attempt < 40 && observed == NodeState.Pending; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+                SprintWorkflowState polled = (await overflowStore.LoadAsync(
+                    environment.ProjectRoot, overflowSprintId, cancellationToken))!;
+                observed = polled.Nodes["b"].State;
+            }
+
+            Assert.Equal(NodeState.Ready, observed);
+            Assert.Null(overflowService.ExecuteTask!.Exception);
+        }
+        finally
+        {
+            await overflowService.StopAsync(cancellationToken);
+        }
+    }
+
     // Before this fix, FileSprintEventLog.LoadAsync (the path SprintScheduler.RequireStateAsync
     // uses every tick, for every sprint) let a corrupt events.jsonl line's raw JsonException escape
     // uncaught. That raw JsonException would escape TickAsync's catch filter entirely, permanently

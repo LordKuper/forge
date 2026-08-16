@@ -60,7 +60,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 cancellationToken).ConfigureAwait(false);
             return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
         }
-        catch (Exception error) when (error is JsonException or FormatException)
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
         {
             throw new InvalidDataException($"The sprint journal for '{id.Value}' is corrupt.", error);
         }
@@ -121,7 +121,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.ArtifactPolicySnapshotHash,
                 persisted.FrozenAt);
         }
-        catch (Exception error) when (error is JsonException or FormatException)
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
         {
             throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
         }
@@ -547,7 +547,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // exception rather than pretend the append happened.
             return new(false, null, DiagnosticCodes.WorkflowStoreBusy);
         }
-        catch (Exception error) when (error is JsonException or InvalidDataException or FormatException)
+        catch (Exception error) when (
+            error is JsonException or InvalidDataException or FormatException or OverflowException)
         {
             // Real corruption in an already-terminated line (never produced by this store's own
             // write path) — a diagnostic, not a crash reaching all the way out to the caller.
