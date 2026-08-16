@@ -97,8 +97,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
 
         byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        PersistedDefinition persisted = JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
-            throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+        PersistedDefinition persisted;
+        try
+        {
+            persisted = JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+        }
+        catch (JsonException error)
+        {
+            throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
+        }
+
         return new(
             id,
             persisted.BaseCommit,
