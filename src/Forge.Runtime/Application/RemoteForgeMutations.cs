@@ -43,7 +43,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         string? rawValue,
         CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrEmpty(key);
+        ArgumentNullException.ThrowIfNull(key);
         if (scope != ConfigurationScope.Project)
         {
             // A programming error in the caller, not a runtime condition — see IForgeMutations'

@@ -452,7 +452,7 @@ public sealed class CliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public async Task ConfigProjectSetRoutesThroughTheSuppliedMutationsInsteadOfTheLocalApplication()
+    public async Task ConfigProjectSetRoutesThroughTheResolvedMutationsInsteadOfTheLocalApplication()
     {
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable — `mutations` here stands in for a real Host connection.
@@ -465,7 +465,7 @@ public sealed class CliTests
             Text(catalog),
             output,
             environment.Application,
-            mutations: mutations);
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
 
         int exitCode = await root
             .Parse([
@@ -491,7 +491,40 @@ public sealed class CliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public async Task ConfigUserSetNeverRoutesThroughTheSuppliedMutations()
+    public async Task ConfigProjectSetResolvesMutationsUsingTheCommandsOwnProjectRoot()
+    {
+        // Regression coverage: the resolver must see THIS command's own `--project-root`, never a
+        // root fixed before argument parsing (the bug an architecture audit found: a Host
+        // connection bound once at startup silently ignored a per-command `--project-root`).
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        FakeForgeMutations mutations = new();
+        string? capturedRoot = "unset";
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            resolveMutations: (mutationRoot, _) =>
+            {
+                capturedRoot = mutationRoot;
+                return Task.FromResult<IForgeMutations>(mutations);
+            });
+
+        await root
+            .Parse([
+                "config", "project", "artifacts.language.user_facing", "ru",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(environment.ProjectRoot, capturedRoot);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ConfigUserSetNeverRoutesThroughTheResolvedMutations()
     {
         // User-scope configuration is not `.forge/` project state (ADR 0005 protects the latter),
         // so it stays local even when a Host connection is available for project mutations.
@@ -503,7 +536,7 @@ public sealed class CliTests
             Text(catalog),
             output,
             environment.Application,
-            mutations: mutations);
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
 
         int exitCode = await root
             .Parse(["config", "user", "interaction.confirm_destructive", "false"])
@@ -520,7 +553,7 @@ public sealed class CliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public async Task DoctorRecoverRoutesThroughTheSuppliedMutations()
+    public async Task DoctorRecoverRoutesThroughTheResolvedMutations()
     {
         using TestEnvironment environment = new();
         FakeForgeMutations mutations = new();
@@ -530,7 +563,7 @@ public sealed class CliTests
             Text(catalog),
             output,
             environment.Application,
-            mutations: mutations);
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
 
         await root
             .Parse(["doctor", "--recover", "--yes"])

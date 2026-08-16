@@ -61,8 +61,12 @@ public static class CliHost
         // The startup sequence resolves the UI language before any text is rendered.
         StartupStatus startup = await application.GetStartupStatusAsync(null, cancellationToken)
             .ConfigureAwait(false);
-        await using RemoteForgeMutations? mutations = await CreateMutationsAsync(host, startup, cancellationToken)
-            .ConfigureAwait(false);
+        // Created lazily, at most once, only by a command that actually mutates — never for a
+        // read-only command (`status`, `next`, ...), and always scoped to THAT command's own
+        // resolved `--project-root`, never the CWD-resolved root above (which is only for language
+        // selection). Tracked here so it can be disposed once the command finishes, however it
+        // resolved (falling back to the local `application` never sets this).
+        RemoteForgeMutations? created = null;
         RootCommand root = CliApplication.CreateRootCommand(
             SurfaceText.For(catalog, startup.Language.Ui),
             Console.Out,
@@ -80,26 +84,45 @@ public static class CliHost
                         Environment.CurrentDirectory,
                         UpdateSurface.Cli),
                     ct),
-            mutations);
-        return await root.Parse(args).InvokeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+            async (mutationRoot, ct) =>
+            {
+                IForgeMutations mutations = await CreateMutationsAsync(host, application, mutationRoot, ct)
+                    .ConfigureAwait(false);
+                created = mutations as RemoteForgeMutations;
+                return mutations;
+            });
+        try
+        {
+            return await root.Parse(args).InvokeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            if (created is not null)
+            {
+                await created.DisposeAsync().ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>
-    /// ADR 0005: every `.forge/` mutation routes through the project's Host once one can exist —
-    /// which requires a project id, so an uninitialized project (no manifest yet) gets
-    /// <see langword="null"/> here and <see cref="CliApplication.CreateRootCommand"/> falls back to
-    /// the local <see cref="ForgeApplication"/> for the one bootstrap mutation that can precede a
-    /// Host (`init`). The Host itself is started lazily, on the first actual mutation — nothing here
-    /// blocks a read-only command (`status`, `next`, ...) on a Host connection it never needs.
+    /// ADR 0005: every `.forge/` mutation routes through the project's Host once one can exist for
+    /// <paramref name="projectRoot"/> — which requires a project id, so an uninitialized project (no
+    /// manifest yet) falls back to the local <see cref="ForgeApplication"/> here, matching the one
+    /// bootstrap mutation that can precede a Host (`init`). The Host itself is started lazily, on
+    /// the first actual mutation.
     /// </summary>
-    private static async Task<RemoteForgeMutations?> CreateMutationsAsync(
+    private static async Task<IForgeMutations> CreateMutationsAsync(
         IHost host,
-        StartupStatus startup,
+        ForgeApplication application,
+        string? projectRoot,
         CancellationToken cancellationToken)
     {
-        if (!startup.Project.Initialized)
+        ProjectRootResolver rootResolver = host.Services.GetRequiredService<ProjectRootResolver>();
+        ProjectRootStatus status = await rootResolver.ResolveAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (!status.Initialized)
         {
-            return null;
+            return application;
         }
 
         IConfigurationRegistry registry = host.Services.GetRequiredService<IConfigurationRegistry>();
@@ -107,7 +130,7 @@ public static class CliHost
         try
         {
             projectId = await ProjectIdentity
-                .ReadProjectIdAsync(startup.Project.Root, registry, cancellationToken)
+                .ReadProjectIdAsync(status.Root, registry, cancellationToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidDataException
@@ -118,7 +141,7 @@ public static class CliHost
             // "this project cannot be served" — with no project id to key a Host connection on,
             // the caller falls back to the local ForgeApplication, which will independently hit
             // (and correctly diagnose) this same failure when it actually runs the command.
-            return null;
+            return application;
         }
 
         IEnvironmentPaths paths = host.Services.GetRequiredService<IEnvironmentPaths>();
@@ -133,7 +156,7 @@ public static class CliHost
         return new RemoteForgeMutations(
             client,
             async ct => await ForgeHostLauncher
-                .StartAsync(hostExecutablePath, startup.Project.Root, paths.InstanceId, ct)
+                .StartAsync(hostExecutablePath, status.Root, paths.InstanceId, ct)
                 .ConfigureAwait(false));
     }
 }

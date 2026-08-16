@@ -300,6 +300,17 @@
           "Forge.Runtime": "[0.22.0, )"
         }
       },
+      "forge.updater": {
+        "type": "Project"
+      },
+      "forge.updater.windows": {
+        "type": "Project",
+        "dependencies": {
+          "Forge.Runtime": "[0.22.0, )",
+          "Forge.Updater": "[0.22.0, )",
+          "Microsoft.Extensions.DependencyInjection.Abstractions": "[10.0.10, )"
+        }
+      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",
