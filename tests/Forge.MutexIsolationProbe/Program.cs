@@ -36,8 +36,18 @@ try
 }
 catch (Exception exception)
 {
-    // Any other failure is reported by type, not swallowed, so a caller script can tell a real
-    // primitive error apart from the expected "timeout" outcome.
-    Console.WriteLine(exception.GetType().Name);
+    // Any other failure is reported by the full type/message chain, not just the outer wrapper
+    // type — MutexProjectLease.TryAcquire wraps every construction failure in the same
+    // InvalidOperationException, so printing only GetType().Name erases the actual cause (e.g. an
+    // access-denial reason) a caller script needs to diagnose or distinguish from "timeout".
+    Console.WriteLine(string.Join(" | ", ExceptionChain(exception).Select(item => $"{item.GetType().Name}: {item.Message}")));
     return 1;
+}
+
+static IEnumerable<Exception> ExceptionChain(Exception exception)
+{
+    for (Exception? current = exception; current is not null; current = current.InnerException)
+    {
+        yield return current;
+    }
 }

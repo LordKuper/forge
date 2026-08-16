@@ -47,14 +47,19 @@ The host acquires a cross-process project lease keyed by the manifest's stable
 project id before mutation. `IProjectLease` has one platform-neutral BCL
 implementation: a `System.Threading.Mutex` whose short, hashed name uses
 `NamedWaitHandleOptions` with `CurrentUserOnly = true` and
-`CurrentSessionOnly = false`. Diagnostic lease metadata lives in the shared
-per-user Forge state directory; the mutex is authoritative and becomes abandoned
-on process death. A successor treats `AbandonedMutexException` as ownership plus
-a mandatory durable-state recovery signal, not as clean state. Release,
-development, test, CLI, and Desktop instances use the same lease namespace, so
-distinct instance data roots cannot become concurrent writers of one `.forge/`
-tree. A second host may read but returns `project_in_use` for mutation; it never
-steals a live lease.
+`CurrentSessionOnly = true`. `CurrentSessionOnly = false` (the OS-wide
+`Global\` namespace on Windows) was tried first but requires
+`SeCreateGlobalPrivilege`, which a standard non-admin user does not hold by
+default — a same-user isolation CI check caught this concretely, so the lease
+is scoped to the user's own logon session instead, still covering every
+process a Forge user actually runs within one session. Diagnostic lease
+metadata lives in the shared per-user Forge state directory; the mutex is
+authoritative and becomes abandoned on process death. A successor treats
+`AbandonedMutexException` as ownership plus a mandatory durable-state recovery
+signal, not as clean state. Release, development, test, CLI, and Desktop
+instances use the same lease namespace, so distinct instance data roots cannot
+become concurrent writers of one `.forge/` tree. A second host may read but
+returns `project_in_use` for mutation; it never steals a live lease.
 
 ### The local protocol is small, versioned, and user-scoped
 

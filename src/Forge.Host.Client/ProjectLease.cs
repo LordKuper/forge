@@ -22,6 +22,16 @@ public interface IProjectLease : IDisposable
 /// writer; it must call <see cref="TryAcquire"/> and treat a null result as <c>project_in_use</c>.
 /// </summary>
 /// <remarks>
+/// Uses <see cref="NamedWaitHandleOptions.CurrentSessionOnly"/> = <see langword="true"/> (the BCL default),
+/// scoping the mutex to the user's own logon session rather than the OS-wide <c>Global\</c> namespace: creating a
+/// <c>Global\</c> named object on Windows requires <c>SeCreateGlobalPrivilege</c>, which a standard (non-admin)
+/// user does not hold by default — a same-user CI check caught this concretely (a fresh standard local user's
+/// <see cref="Mutex"/> construction threw <see cref="UnauthorizedAccessException"/>). Session-scoping still
+/// protects every process within one logon session (the case Forge actually runs in); it does not extend across
+/// two concurrent sessions of the same user (e.g. console + a simultaneous RDP session), an edge case judged
+/// acceptable against making the lease unusable for every non-admin user.
+/// </remarks>
+/// <remarks>
 /// A named <see cref="Mutex"/>'s ownership is tracked per OS thread, not per <see cref="Mutex"/> object or async
 /// flow — an <c>await</c> between acquiring and releasing it can resume on a different thread-pool thread and
 /// make <see cref="Mutex.ReleaseMutex"/> throw. This type owns a dedicated background thread for the mutex's
@@ -61,7 +71,7 @@ public sealed class MutexProjectLease : IProjectLease
                 mutex = new Mutex(
                     initiallyOwned: false,
                     leaseName,
-                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
+                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
                     out _);
                 try
                 {

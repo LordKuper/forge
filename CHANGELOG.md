@@ -2,7 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.28.1
+## v0.29.0
+
+### Fixed
+
+- Forge's project lease and provider-install lock now work for standard
+  (non-administrator) Windows users. Both previously constructed their
+  named mutex in the OS-wide `Global\` namespace, which Windows only lets
+  administrators and service accounts create — a non-admin user's Host
+  process failed outright the moment it tried to acquire the project
+  lease at startup. Both now scope to the user's own logon session
+  instead, which every user can create and which still covers every
+  process a Forge user actually runs within one session. A new CI check
+  (added while adding same-user isolation coverage for the lease) caught
+  this by exercising the real primitive as a genuine non-admin local
+  Windows account.
 
 ### Security
 
@@ -10,8 +24,8 @@ User-facing Forge changes are listed by release, newest first.
   (`MutexProjectLease`, `NamedWaitHandleOptions.CurrentUserOnly`): two
   different local OS users acquiring a lease of the identical name each
   succeed independently, confirming the primitive is namespaced per user
-  rather than only per process/instance. No behavior change; this closes
-  the last gap the 2026-08-15 audit found in same-user isolation coverage.
+  rather than only per process/instance. This closes the last gap the
+  2026-08-15 audit found in same-user isolation coverage.
 
 ## v0.28.0
 

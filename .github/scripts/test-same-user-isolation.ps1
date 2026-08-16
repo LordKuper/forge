@@ -134,8 +134,8 @@ Write-Host 'Same-user round trip succeeded.'
 # denied (i.e. actually time out) while the first holder is still alive. Without this, the
 # cross-user "both succeed" result below could just mean the probe never really contends at all. ---
 $sameLease = "forge-mutex-isolation-same-$([guid]::NewGuid().ToString('N'))"
-$sameUserHolderJob = Start-MutexHolder -LeaseName $sameLease -HoldSeconds 6
-Start-Sleep -Seconds 2
+$sameUserHolderJob = Start-MutexHolder -LeaseName $sameLease -HoldSeconds 8
+Start-Sleep -Seconds 3
 $sameUserContend = Invoke-MutexProbeAsCurrentUser -LeaseName $sameLease -TimeoutSeconds 3
 $sameUserHolderResult = Receive-Job -Job $sameUserHolderJob -Wait
 Remove-Job -Job $sameUserHolderJob
@@ -216,15 +216,32 @@ try {
 
     Write-Host "Same-user isolation confirmed: a different local OS user could not connect (reason: $diagnostic)."
 
+    # --- Positive control: prove the new account can construct/acquire a CurrentUserOnly mutex at
+    # all, uncontended, before drawing any conclusion from the contended check below. Without this,
+    # any setup problem specific to this account (e.g. a Windows privilege it lacks) would read as
+    # a "SECURITY REGRESSION" instead of an inconclusive environment problem. ---
+    $mutexControlLease = "forge-mutex-isolation-control-$([guid]::NewGuid().ToString('N'))"
+    $mutexControl = Invoke-ProcessAsCredential `
+        -ArgumentList @($mutexProbeDll, 'acquire', $mutexControlLease, '0', '5') `
+        -Credential $credential
+    $mutexControlOutput = if ($null -ne $mutexControl.StdOut) { $mutexControl.StdOut.Trim() } else { '' }
+    Write-Host "Mutex positive control (uncontended acquire as the new user) exit code: $($mutexControl.ExitCode), output: $mutexControlOutput"
+    if ($mutexControl.ExitCode -ne 0 -or $mutexControlOutput -ne 'acquired') {
+        Write-Error "Mutex positive control failed: the new local user could not acquire an uncontended CurrentUserOnly mutex at all (exit $($mutexControl.ExitCode), output '$mutexControlOutput'). $($mutexControl.StdErr) The isolation check below cannot distinguish a real per-user-namespace problem from this account being unable to use the primitive at all, so it will not run."
+        exit 1
+    }
+
     # --- Mutex isolation check: TWO DIFFERENT local OS users acquiring a mutex of the identical
     # name must BOTH succeed independently — the inverse assertion from the pipe check above. If
     # NamedWaitHandleOptions.CurrentUserOnly actually namespaces the mutex per user, the current
     # user's holder below and the other user's acquire attempt are different underlying OS objects
     # and never contend, even though the name string is identical. ---
     $otherLease = "forge-mutex-isolation-other-$([guid]::NewGuid().ToString('N'))"
-    $currentUserHolderJob = Start-MutexHolder -LeaseName $otherLease -HoldSeconds 8
+    $holdSeconds = 8
+    $holderStarted = Get-Date
+    $currentUserHolderJob = Start-MutexHolder -LeaseName $otherLease -HoldSeconds $holdSeconds
     try {
-        Start-Sleep -Seconds 2
+        Start-Sleep -Seconds 3
         $otherUserMutexAcquire = Invoke-ProcessAsCredential `
             -ArgumentList @($mutexProbeDll, 'acquire', $otherLease, '0', '5') `
             -Credential $credential
@@ -235,24 +252,31 @@ try {
         $currentUserHolderResult = Receive-Job -Job $currentUserHolderJob -Wait -ErrorAction SilentlyContinue
         Remove-Job -Job $currentUserHolderJob -Force
     }
+    $elapsedSinceHolderStarted = ((Get-Date) - $holderStarted).TotalSeconds
 
     Write-Host "Different-user mutex acquire exit code: $($otherUserMutexAcquire.ExitCode)"
     Write-Host "Different-user mutex acquire stdout: $($otherUserMutexAcquire.StdOut)"
     Write-Host "Different-user mutex acquire stderr: $($otherUserMutexAcquire.StdErr)"
     Write-Host "Current-user holder result while the other user acquired: exit=$($currentUserHolderResult.ExitCode) output=$($currentUserHolderResult.Output)"
+    Write-Host "Elapsed since the holder started (must stay under its ${holdSeconds}s hold to prove genuine overlap): $elapsedSinceHolderStarted s"
 
     if ($currentUserHolderResult.ExitCode -ne 0 -or $currentUserHolderResult.Output -ne 'acquired') {
         Write-Error "Cross-user mutex check invalid: the current user's own holder never acquired the lease (exit $($currentUserHolderResult.ExitCode), output '$($currentUserHolderResult.Output)') — cannot prove isolation against a baseline that never actually held anything."
         exit 1
     }
 
-    $otherAcquiredOutput = $otherUserMutexAcquire.StdOut.Trim()
+    if ($elapsedSinceHolderStarted -ge $holdSeconds) {
+        Write-Error "Cross-user mutex check inconclusive: the credentialed acquire attempt took $elapsedSinceHolderStarted s, longer than the holder's ${holdSeconds}s hold — the holder may have already released before the other user's attempt ran, so a success there would not prove genuine overlap-free isolation."
+        exit 1
+    }
+
+    $otherAcquiredOutput = if ($null -ne $otherUserMutexAcquire.StdOut) { $otherUserMutexAcquire.StdOut.Trim() } else { '' }
     if ($otherUserMutexAcquire.ExitCode -ne 0 -or $otherAcquiredOutput -ne 'acquired') {
         Write-Error "SECURITY/CORRECTNESS REGRESSION: a different local OS user could not acquire a NamedWaitHandleOptions.CurrentUserOnly mutex of an identical name that the current user already holds (exit $($otherUserMutexAcquire.ExitCode), output '$otherAcquiredOutput'). Per-user namespace isolation means the two should never contend at all, so the other user's attempt should have succeeded immediately. $($otherUserMutexAcquire.StdErr)"
         exit 1
     }
 
-    Write-Host 'Mutex per-user namespace isolation confirmed: two different local OS users each independently acquired a mutex of the identical name.'
+    Write-Host 'Mutex per-user namespace isolation confirmed: two different local OS users each independently acquired a mutex of the identical name while overlapping with the holder.'
 }
 finally {
     Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
