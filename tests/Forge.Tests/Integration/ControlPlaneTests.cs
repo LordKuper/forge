@@ -657,6 +657,8 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
 
     private ControlPlaneHost(IHost host) => this.host = host;
 
+    public IServiceProvider Services => host.Services;
+
     /// <summary>True once <see cref="ControlPlaneHostedService"/> has called <c>StopApplication</c> — e.g. it lost the lease.</summary>
     public bool IsStopping =>
         host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.IsCancellationRequested;
@@ -705,6 +707,8 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
                 // (RecoverStartup, SetConfiguration) would otherwise always fail its Platform check
                 // on this test harness, regardless of the request under test.
                 services.AddSingleton<IPlatformPreflight>(new SupportedPlatformPreflight());
+                services.AddSingleton(new ResumeSchedulerOptions(options.ProjectRoot));
+                services.AddSingleton<ResumeSchedulerHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

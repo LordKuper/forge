@@ -1,16 +1,20 @@
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host;
+using Forge.Host.Client;
 using Forge.Tests.Support;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Forge.IntegrationTests;
 
 public sealed class ResumeSchedulerHostedServiceTests
 {
-    // ADR 0006: a node whose dependency just settled must not stay stuck forever waiting for some
-    // other call to happen to notice — this proves the background timer itself, not
-    // SprintScheduler.AdvanceGraphAsync's own correctness (already covered by SprintSchedulerTests).
+    // A node whose dependency just settled outside the normal scheduler flow must not stay stuck
+    // forever waiting for some other call to happen to notice — this proves the background timer
+    // itself, not SprintScheduler.AdvanceGraphAsync's own correctness (already covered by
+    // SprintSchedulerTests).
     [Fact]
     [Trait("Category", "Integration")]
     public async Task TheServicePromotesANodeLeftStuckAfterItsDependencySucceededOutsideTheScheduler()
@@ -101,5 +105,44 @@ public sealed class ResumeSchedulerHostedServiceTests
         await service.StartAsync(cancellationToken);
         await Task.Delay(TimeSpan.FromMilliseconds(200), cancellationToken);
         await service.StopAsync(cancellationToken);
+    }
+
+    // ADR 0005: a Host that loses the project-lease race must never mutate durable state. Before
+    // ControlPlaneHostedService started ResumeSchedulerHostedService itself only after winning the
+    // lease, both Hosts registered it as their own independent IHostedService and the generic host
+    // started it unconditionally — including on the loser, which would tick against state it did
+    // not own before its own shutdown ever caught up.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task TheResumeSchedulerNeverStartsOnAHostThatLosesTheProjectLease()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string firstInstanceId = InstanceIdentity.CreateEphemeral();
+        string secondInstanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost first = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, firstInstanceId, cancellationToken);
+
+        // Confirm "first" is listening (and therefore already holds the lease) before "second"
+        // starts, or the two Hosts could race for the mutex in either order.
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, firstInstanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        await using ControlPlaneHost second = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, secondInstanceId, cancellationToken);
+        Assert.True(await second.WaitForStoppingAsync(TimeSpan.FromSeconds(10), cancellationToken));
+
+        ResumeSchedulerHostedService winnerScheduler =
+            first.Services.GetRequiredService<ResumeSchedulerHostedService>();
+        ResumeSchedulerHostedService loserScheduler =
+            second.Services.GetRequiredService<ResumeSchedulerHostedService>();
+        Assert.NotNull(winnerScheduler.ExecuteTask);
+        Assert.Null(loserScheduler.ExecuteTask);
     }
 }

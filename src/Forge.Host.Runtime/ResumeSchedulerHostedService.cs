@@ -15,19 +15,26 @@ public sealed record ResumeSchedulerOptions(string ProjectRoot, TimeSpan? PollIn
 }
 
 /// <summary>
-/// ADR 0006: "Forge Host re-enqueues it idempotently after the timestamp" — a
-/// <see cref="RouteDecision.Outcome"/> of <see cref="RouteOutcome.Deferred"/> leaves its node ready
-/// but routing-deferred, and nothing else in this codebase re-visits it once the deferral's
-/// <c>resume_not_before</c> elapses. This periodically calls <see cref="SprintScheduler.AdvanceGraphAsync"/>
-/// for every sprint in the Host's own project — the same idempotent, safe-to-call-repeatedly
-/// re-entry point every other state change already uses — so a routing decision that becomes
-/// resumable again is picked back up without a human or client having to notice and retry it.
+/// Nothing in this codebase re-visits a sprint node once its dependency settles outside of a
+/// scheduler-driven call (e.g. a node completion recorded directly, bypassing
+/// <see cref="SprintScheduler"/>'s own callers). This periodically calls
+/// <see cref="SprintScheduler.AdvanceGraphAsync"/> for every sprint in the Host's own project — the
+/// same idempotent, safe-to-call-repeatedly re-entry point every other state change already uses —
+/// so a node left `pending` with satisfied dependencies is promoted to `ready` without a human or
+/// client having to notice and retry it.
 /// </summary>
 /// <remarks>
-/// Deliberately holds no per-sprint memory of what it last saw: like <see cref="RoutingLedger"/>
-/// itself, every tick re-derives entirely from durable state, so a Host restart loses nothing and
-/// two Hosts racing for the same project's lease can never double-fire — the losing Host never
-/// starts this service at all (<see cref="ControlPlaneHostedService"/> stops it before listening).
+/// This does not itself act on <see cref="RouteDecision.Outcome"/> == <see cref="RouteOutcome.Deferred"/>
+/// or <c>resume_not_before</c>: no attempt executor exists yet to start a fresh attempt once a
+/// routing deferral elapses (that is Stage 11's territory), so there is nothing here for this
+/// service to re-enqueue on that axis today. It is deliberately scoped to the one thing
+/// <see cref="SprintScheduler.AdvanceGraphAsync"/> already does: `pending` → `ready` promotion.
+/// <para>
+/// Holds no per-sprint memory of what it last saw: every tick re-derives entirely from durable
+/// state, so a Host restart loses nothing. <see cref="ControlPlaneHostedService"/> owns this
+/// service's lifetime directly — starting it only after winning the project lease and stopping it
+/// before releasing that lease — so a Host that loses the lease race never runs a tick at all.
+/// </para>
 /// </remarks>
 public sealed class ResumeSchedulerHostedService(
     ResumeSchedulerOptions options,
