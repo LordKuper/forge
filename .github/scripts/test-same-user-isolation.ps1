@@ -315,3 +315,11 @@ try {
 finally {
     Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
 }
+
+# Explicit success exit code, not implicit: every prior check's own "timeout"/"denied" outcome is
+# an EXPECTED result and is itself achieved via a native `&` process invocation that sets
+# $LASTEXITCODE to a non-zero value (e.g. the same-user contention check's own "timeout" leaves
+# $LASTEXITCODE = 1). Nothing after that resets it, and this script never calls `exit N` on any
+# success path, so without this line the pwsh process would exit with that stale non-zero code and
+# the job would be reported as failed despite every check having actually passed.
+exit 0
