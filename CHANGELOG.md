@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.24.0
+
+### Changed
+
+- The CLI and Desktop now independently validate every Host handshake response
+  (the echoed correlation id and protocol version), rather than trusting a
+  well-formed-looking response at face value. A mismatched or incompatible
+  response is now rejected as a protocol error instead of silently accepted.
+- The Host's handshake response now advertises its real supported capability
+  set instead of always reporting none.
+
 ## v0.23.1
 
 ### Changed

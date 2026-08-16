@@ -3,6 +3,7 @@ using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Host.Client;
+using Forge.Presentation;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using YamlDotNet.Core;
@@ -253,7 +254,11 @@ public sealed class ControlPlaneHostedService(
         ControlHandshakeResponse response = new(
             ControlProtocol.Version,
             typeof(ControlPlaneHostedService).Assembly.GetName().Version!.ToString(3),
-            [],
+            // Always this Host's own real capability set — never gated on what the client declared.
+            // There is no negotiation logic yet that filters by the client's list; advertising the
+            // Host's actual capabilities is what closes the "always returns []" gap, and gives a
+            // future client something real to check before assuming a capability is available.
+            CapabilityIds.Implemented,
             diagnostic,
             request?.CorrelationId ?? Guid.Empty);
         byte[] responseBytes = JsonSerializer.SerializeToUtf8Bytes(response, ControlProtocol.JsonOptions);
