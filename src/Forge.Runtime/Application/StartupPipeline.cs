@@ -108,13 +108,19 @@ public sealed class StartupPipeline(
         }
     }
 
-    /// <summary>Read-only discovery only; installing/updating happens through `forge models`. Returns
-    /// the raw status alongside the folded check so callers building the project snapshot's
-    /// provider-health projection never need a second probe.</summary>
+    /// <summary>
+    /// ADR 0008: "Startup performs conditional maintenance" — installs, repairs, or updates a
+    /// missing/broken/stale enabled provider, respecting the 24h/1h release-check cache windows
+    /// (unlike `forge models --refresh`, which bypasses them). Returns the raw status alongside
+    /// the folded check so callers building the project snapshot's provider-health projection
+    /// never need a second probe.
+    /// </summary>
     private async Task<(StartupCheck Check, ProviderToolchainStatus Status)> CheckProvidersAsync(
         CancellationToken cancellationToken)
     {
-        ProviderToolchainStatus status = await providers.CheckAsync(cancellationToken).ConfigureAwait(false);
+        ProviderToolchainStatus status = await providers
+            .EnsureReadyAsync(bypassReleaseCache: false, cancellationToken)
+            .ConfigureAwait(false);
         StartupCheck check = status.Ready
             ? StartupCheck.Passed(StartupCheckId.Providers)
             : new(StartupCheckId.Providers, StartupCheckState.Blocked, status.SharedDiagnosticCode);

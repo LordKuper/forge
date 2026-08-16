@@ -87,10 +87,12 @@ public static partial class ProviderInstallation
 
     /// <summary>
     /// A missing, corrupt, or unsupported install is installed/repaired directly, skipping the
-    /// update comparison. An already-usable install is updated only when a fresh (never cached)
-    /// release check confirms a newer version. Either mutation is protected by
-    /// <paramref name="installLock"/> and followed by a local-only recheck — never another network
-    /// release check (ADR 0008).
+    /// update comparison. An already-usable install is updated only when a release check confirms
+    /// a newer version — throttled to once per 24 hours on success and once per hour after a
+    /// failed check unless <paramref name="bypassReleaseCache"/> is <see langword="true"/>
+    /// (`forge models --refresh`), matching <see cref="DiscoverAsync"/>'s own cache policy. Either
+    /// mutation is protected by <paramref name="installLock"/> and followed by a local-only
+    /// recheck — never another network release check (ADR 0008).
     /// </summary>
     public static async Task<ProviderStatus> InstallOrUpdateAsync(
         ProviderId id,
@@ -100,6 +102,7 @@ public static partial class ProviderInstallation
         IProviderReleaseCache cache,
         IProviderInstallLock installLock,
         IClock clock,
+        bool bypassReleaseCache,
         TimeSpan versionProbeTimeout,
         TimeSpan installTimeout,
         TimeSpan installLockTimeout,
@@ -120,8 +123,8 @@ public static partial class ProviderInstallation
         Version? targetVersion = null;
         if (local.State == ProviderState.Ready && localVersion is { } version)
         {
-            ProviderReleaseLookupResult lookup =
-                await FetchAndCacheAsync(id, releaseSource, cache, clock, cancellationToken).ConfigureAwait(false);
+            ProviderReleaseLookupResult lookup = await ResolveLatestReleaseAsync(
+                id, releaseSource, cache, clock, bypassReleaseCache, cancellationToken).ConfigureAwait(false);
             if (!lookup.Succeeded)
             {
                 // A release-check failure never blocks an otherwise-usable installed version.
@@ -240,19 +243,40 @@ public static partial class ProviderInstallation
         bool bypassReleaseCache,
         CancellationToken cancellationToken)
     {
+        ProviderReleaseLookupResult lookup = await ResolveLatestReleaseAsync(
+            id, releaseSource, cache, clock, bypassReleaseCache, cancellationToken).ConfigureAwait(false);
+        return lookup.Succeeded && lookup.Version is not null ? lookup.Version > localVersion : null;
+    }
+
+    /// <summary>
+    /// A recent cache entry is reused as-is (a cached failure is reported as failure, never
+    /// retried within its own window); a missing, stale, or bypassed entry triggers one fresh
+    /// network lookup, whose result is written back through <see cref="FetchAndCacheAsync"/> for
+    /// the next caller. Shared by both the read-only availability check
+    /// (<see cref="CheckUpdateAvailableAsync"/>) and <see cref="InstallOrUpdateAsync"/>'s own
+    /// pre-mutation comparison, so both honor the same 24h/1h cache windows (ADR 0008).
+    /// </summary>
+    private static async Task<ProviderReleaseLookupResult> ResolveLatestReleaseAsync(
+        ProviderId id,
+        IProviderReleaseSource releaseSource,
+        IProviderReleaseCache cache,
+        IClock clock,
+        bool bypassReleaseCache,
+        CancellationToken cancellationToken)
+    {
         ProviderReleaseCacheEntry? entry = bypassReleaseCache
             ? null
             : await cache.ReadAsync(id, cancellationToken).ConfigureAwait(false);
-        if (entry is not null && !bypassReleaseCache && !IsStale(entry, clock.UtcNow))
+        if (entry is not null && !IsStale(entry, clock.UtcNow))
         {
-            return entry.Succeeded && Version.TryParse(entry.LatestVersion, out Version? cachedLatest)
-                ? cachedLatest > localVersion
-                : null;
+            return new(
+                entry.Succeeded,
+                entry.Succeeded && Version.TryParse(entry.LatestVersion, out Version? cachedLatest)
+                    ? cachedLatest
+                    : null);
         }
 
-        ProviderReleaseLookupResult lookup =
-            await FetchAndCacheAsync(id, releaseSource, cache, clock, cancellationToken).ConfigureAwait(false);
-        return lookup.Succeeded && lookup.Version is not null ? lookup.Version > localVersion : null;
+        return await FetchAndCacheAsync(id, releaseSource, cache, clock, cancellationToken).ConfigureAwait(false);
     }
 
     private static async Task<ProviderReleaseLookupResult> FetchAndCacheAsync(

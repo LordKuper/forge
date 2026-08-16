@@ -157,11 +157,14 @@ public sealed class ForgeApplication(
     public Task<ProviderToolchainStatus> GetProviderHealthAsync(CancellationToken cancellationToken) =>
         providerToolchain.CheckAsync(cancellationToken);
 
-    /// <summary>Re-checks every enabled provider against a fresh, cache-bypassing release lookup
-    /// and installs or updates only when that check finds a missing/broken install or a newer
-    /// release, then rechecks authentication for all of them.</summary>
+    /// <summary>ADR 0008: "`forge models --refresh` bypasses the time limit but still checks
+    /// availability before invoking an updater." Re-checks every enabled provider against a
+    /// fresh, cache-bypassing release lookup and installs or updates only when that check finds a
+    /// missing/broken install or a newer release, then rechecks authentication for all of them.
+    /// Routine startup performs the same maintenance respecting the cache instead — see
+    /// <see cref="StartupPipeline"/>.</summary>
     public Task<ProviderToolchainStatus> RefreshProviderHealthAsync(CancellationToken cancellationToken) =>
-        providerToolchain.EnsureReadyAsync(cancellationToken);
+        providerToolchain.EnsureReadyAsync(bypassReleaseCache: true, cancellationToken);
 
     /// <summary>Projects a toolchain status onto the versioned provider-health contract, adding a
     /// read-only entry for every registered-but-disabled provider (ADR 0008/P8.83-88) — the same

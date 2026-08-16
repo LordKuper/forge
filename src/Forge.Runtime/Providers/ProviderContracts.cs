@@ -179,11 +179,14 @@ public interface ILlmProvider
     /// <summary>
     /// Ensures the provider is installed and current. A missing, corrupt, or unsupported install
     /// is an install/repair case and skips the update comparison; an already-usable install is
-    /// updated only when a fresh release check confirms a newer version. Either path is protected
-    /// by a per-user interprocess lock and followed by a local-only recheck — never another
-    /// network release check.
+    /// updated only when a release check confirms a newer version — throttled to once per 24
+    /// hours on success and once per hour after a failed check unless
+    /// <paramref name="bypassReleaseCache"/> is <see langword="true"/> (`forge models --refresh`),
+    /// matching <see cref="DiscoverAsync"/>'s own cache policy. Either path is protected by a
+    /// per-user interprocess lock and followed by a local-only recheck — never another network
+    /// release check.
     /// </summary>
-    Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken);
+    Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken);
 
     /// <summary>The absolute path to the vendor-installed executable, or null when not installed.</summary>
     Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken);
@@ -205,13 +208,16 @@ public interface ILlmProvider
 /// see <see cref="ProviderToolchainManager"/>).</summary>
 public interface IProviderToolchainManager
 {
-    /// <summary>Cheap, read-only, offline. Safe to call on every startup pass.</summary>
+    /// <summary>Cheap, read-only, offline. Never installs, updates, or repairs anything.</summary>
     Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken);
 
-    /// <summary>Re-checks every enabled provider against a fresh, cache-bypassing release lookup
-    /// and installs or updates only when that check finds a missing/broken install or a newer
-    /// release, then rechecks authentication for all of them.</summary>
-    Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken);
+    /// <summary>Re-checks every enabled provider and installs, repairs, or updates only when that
+    /// check finds a missing/broken install or (subject to <paramref name="bypassReleaseCache"/>'s
+    /// same 24h/1h cache policy as <see cref="ILlmProvider.InstallOrUpdateAsync"/>) a newer
+    /// release, then rechecks authentication for all of them. Forge Host calls this with
+    /// <see langword="false"/> on routine startup; `forge models --refresh` calls it with
+    /// <see langword="true"/>.</summary>
+    Task<ProviderToolchainStatus> EnsureReadyAsync(bool bypassReleaseCache, CancellationToken cancellationToken);
 }
 
 /// <summary>

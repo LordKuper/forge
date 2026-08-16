@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.27.0
+
+### Added
+
+- Forge Host now installs, repairs, or updates an enabled provider automatically
+  at startup instead of only reporting that it needs attention, matching what
+  `forge models --refresh` already did explicitly. Routine startup respects the
+  existing 24-hour/1-hour release-check cache windows; `--refresh` still bypasses
+  them to force a fresh check.
+
 ## v0.26.0
 
 ### Added

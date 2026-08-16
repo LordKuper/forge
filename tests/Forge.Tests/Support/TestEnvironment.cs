@@ -37,10 +37,20 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
             services.AddSingleton(llmProvider);
         }
 
-        // Tests never touch the network or the real provider installation; a real toolchain
-        // manager stays offline-safe by construction (it only discovers), but callers that need
-        // a `ready` or `failed` toolchain override it explicitly.
-        services.AddSingleton(providers ?? new FakeProviderToolchainManager());
+        if (providers is not null)
+        {
+            services.AddSingleton(providers);
+        }
+        else if (llmProviders is null)
+        {
+            // No explicit fake providers were registered above (only the one default fake), and no
+            // toolchain override was given either: default to a network/process-free toolchain
+            // fake so a test that doesn't care about provider startup behavior at all keeps
+            // working without wiring anything. A test that DOES register its own llmProviders (to
+            // exercise real install/repair orchestration, e.g. through StartupPipeline) gets
+            // AddForgeCore's real ProviderToolchainManager instead, backed by those providers.
+            services.AddSingleton<IProviderToolchainManager>(new FakeProviderToolchainManager());
+        }
         if (providerEnablement is not null)
         {
             // Overrides AddForgeCore's TryAddSingleton registration (last registration wins) so a
@@ -185,7 +195,7 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
     public Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken) =>
         Task.FromResult(status);
 
-    public Task<ProviderToolchainStatus> EnsureReadyAsync(CancellationToken cancellationToken) =>
+    public Task<ProviderToolchainStatus> EnsureReadyAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         Task.FromResult(status);
 }
 
@@ -211,11 +221,14 @@ internal sealed class FakeLlmProvider(
         return Task.FromResult(new ProviderStatus(id, state, version, ProviderDiagnosticCodes.None));
     }
 
-    public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken)
+    public bool? LastInstallOrUpdateBypassedReleaseCache { get; private set; }
+
+    public Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
         // Mirrors the real adapters: InstallOrUpdateAsync always probes first and only actually
         // mutates anything when that probe found a reason to (ProviderInstallation's own
         // conditional-update/install-repair policy).
+        LastInstallOrUpdateBypassedReleaseCache = bypassReleaseCache;
         DiscoverCalls++;
         if (state == ProviderState.Ready)
         {

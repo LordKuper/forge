@@ -74,7 +74,7 @@ public sealed class ClaudeLlmProvider(
             cancellationToken,
             ExecutionEnvironmentVariables);
 
-    public Task<ProviderStatus> InstallOrUpdateAsync(CancellationToken cancellationToken) =>
+    public Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.InstallOrUpdateAsync(
             Id,
             spec,
@@ -83,6 +83,7 @@ public sealed class ClaudeLlmProvider(
             releaseCache,
             installLock,
             clock,
+            bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
             installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,
