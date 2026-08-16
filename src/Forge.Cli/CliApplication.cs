@@ -178,10 +178,19 @@ public static class CliApplication
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             string? rawSprint = parseResult.GetValue(sprint);
-            bool sprintRequested = !string.IsNullOrWhiteSpace(rawSprint);
-            Guid? sprintId = sprintRequested && Guid.TryParse(rawSprint, out Guid parsedSprintId)
-                ? parsedSprintId
-                : null;
+            // Any explicitly supplied value — including "" or whitespace — must go through the
+            // Guid.TryParse guard below; treating a blank value as "not requested" would let it
+            // silently fall back to GetOverviewAsync's own active-sprint resolution instead.
+            bool sprintRequested = rawSprint is not null;
+            // A malformed --sprint value must never reach GetOverviewAsync as "no explicit id" —
+            // with --detail full that resolves to the active sprint instead of being reported.
+            Guid parsedSprintId = default;
+            if (sprintRequested && !Guid.TryParse(rawSprint, out parsedSprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            Guid? sprintId = sprintRequested ? parsedSprintId : null;
             SnapshotDetail requestedDetail = string.Equals(
                 parseResult.GetValue(detail), "full", StringComparison.OrdinalIgnoreCase)
                 ? SnapshotDetail.Full
@@ -189,10 +198,10 @@ public static class CliApplication
             ProjectOverview overview = await application
                 .GetOverviewAsync(parseResult.GetValue(projectRoot), requestedDetail, sprintId, cancellationToken)
                 .ConfigureAwait(false);
-            // A malformed --sprint value never parses to a Guid, and a well-formed but unknown one
-            // never resolves a Details section — both must be reported rather than silently treated
-            // as "no sprint requested". This leaves every other exit-code case exactly as before
-            // (the project startup diagnostic stays informational-only on this read command).
+            // A well-formed but unknown sprint id never resolves a Details section — that must be
+            // reported too, not silently treated as "no sprint requested". This leaves every other
+            // exit-code case exactly as before (the project startup diagnostic stays
+            // informational-only on this read command).
             bool sprintNotFound = sprintRequested && overview.Snapshot.Details is null;
             if (parseResult.GetValue(json))
             {
@@ -356,7 +365,16 @@ public static class CliApplication
             ProjectOverview overview = await application
                 .GetOverviewAsync(parseResult.GetValue(projectRoot), SnapshotDetail.Full, sprintId, cancellationToken)
                 .ConfigureAwait(false);
-            if (overview.Snapshot.Details is not { } details)
+            bool sprintNotFound = overview.Snapshot.Details is null;
+            if (parseResult.GetValue(json))
+            {
+                // Matching `tree`/`status`: the machine contract always comes back well-formed, even
+                // on a not-found id, instead of collapsing to empty stdout.
+                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
+                return sprintNotFound ? Report(diagnostics, DiagnosticCodes.SprintNotFound) : ExitCodes.Ok;
+            }
+
+            if (sprintNotFound)
             {
                 // A null Details section isn't always "no such sprint" — an uninitialized or missing
                 // project reports it too. Surface that underlying diagnostic first, matching `status`
@@ -365,13 +383,7 @@ public static class CliApplication
                 return Report(diagnostics, DiagnosticCodes.SprintNotFound);
             }
 
-            if (parseResult.GetValue(json))
-            {
-                output.WriteLine(StatusJson.Serialize(overview.Snapshot));
-                return ExitCodes.Ok;
-            }
-
-            WriteSprintDetails(text, output, details);
+            WriteSprintDetails(text, output, overview.Snapshot.Details!);
             WriteDiagnostic(diagnostics, overview.Startup.Project.DiagnosticCode);
             return ExitCodes.Ok;
         });

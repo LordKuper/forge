@@ -251,7 +251,11 @@ public sealed class StartupCliTests
 
         Assert.Equal(ExitCodes.Usage, exitCode);
         Assert.Equal($"{DiagnosticCodes.SprintNotFound}{Environment.NewLine}", error.ToString());
-        Assert.Empty(output.ToString());
+        // Matches `tree`/`status --json`: the machine contract comes back well-formed (no details
+        // section) even on a not-found id, instead of collapsing to empty stdout.
+        AssertValid("project-snapshot", output.ToString());
+        using JsonDocument snapshot = JsonDocument.Parse(output.ToString());
+        Assert.False(snapshot.RootElement.TryGetProperty("details", out _));
     }
 
     [Fact]
