@@ -2,29 +2,30 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.29.0
+## v0.28.1
 
 ### Fixed
 
 - Forge's project lease and provider-install lock now work for standard
-  (non-administrator) Windows users. Both previously constructed their
-  named mutex in the OS-wide `Global\` namespace, which Windows only lets
-  administrators and service accounts create — a non-admin user's Host
-  process failed outright the moment it tried to acquire the project
-  lease at startup. Both now scope to the user's own logon session
-  instead, which every user can create and which still covers every
-  process a Forge user actually runs within one session. A new CI check
-  (added while adding same-user isolation coverage for the lease) caught
-  this by exercising the real primitive as a genuine non-admin local
-  Windows account.
+  (non-administrator) Windows users. Both previously always constructed
+  their named mutex in the OS-wide `Global\` namespace, which Windows
+  only lets administrators and service accounts create — a non-admin
+  user's Host process failed outright the moment it tried to acquire the
+  project lease at startup. Both now try the `Global\` namespace first
+  (the strongest guarantee, covering every session of the user) and fall
+  back to session-scoping only when that fails, so most accounts keep
+  the stronger guarantee and every account stays functional. A new CI
+  check (added while adding same-user isolation coverage for the lease)
+  caught this by exercising the real primitive as a genuine non-admin
+  local Windows account.
 
 ### Security
 
-- Added CI coverage proving the per-user isolation of the project lease
-  (`MutexProjectLease`, `NamedWaitHandleOptions.CurrentUserOnly`): two
-  different local OS users acquiring a lease of the identical name each
-  succeed independently, confirming the primitive is namespaced per user
-  rather than only per process/instance. This closes the last gap the
+- Added CI coverage proving a *different* local OS user cannot acquire
+  the project lease (`MutexProjectLease`, `NamedWaitHandleOptions
+  .CurrentUserOnly`) of the identical name the current user already
+  holds — access is denied, the same isolation guarantee already
+  covered for the control-plane pipe. This closes the last gap the
   2026-08-15 audit found in same-user isolation coverage.
 
 ## v0.28.0

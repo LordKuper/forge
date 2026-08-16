@@ -22,14 +22,16 @@ public interface IProjectLease : IDisposable
 /// writer; it must call <see cref="TryAcquire"/> and treat a null result as <c>project_in_use</c>.
 /// </summary>
 /// <remarks>
-/// Uses <see cref="NamedWaitHandleOptions.CurrentSessionOnly"/> = <see langword="true"/> (the BCL default),
-/// scoping the mutex to the user's own logon session rather than the OS-wide <c>Global\</c> namespace: creating a
-/// <c>Global\</c> named object on Windows requires <c>SeCreateGlobalPrivilege</c>, which a standard (non-admin)
-/// user does not hold by default — a same-user CI check caught this concretely (a fresh standard local user's
-/// <see cref="Mutex"/> construction threw <see cref="UnauthorizedAccessException"/>). Session-scoping still
-/// protects every process within one logon session (the case Forge actually runs in); it does not extend across
-/// two concurrent sessions of the same user (e.g. console + a simultaneous RDP session), an edge case judged
-/// acceptable against making the lease unusable for every non-admin user.
+/// Tries <see cref="NamedWaitHandleOptions.CurrentSessionOnly"/> = <see langword="false"/> (the OS-wide
+/// <c>Global\</c> namespace) first — the strongest guarantee, covering every session of the user, not just the
+/// current one — and falls back to <see langword="true"/> (session-scoped) only if that construction throws
+/// <see cref="UnauthorizedAccessException"/>. Creating a <c>Global\</c> named object on Windows requires
+/// <c>SeCreateGlobalPrivilege</c>, which a standard (non-admin) user does not hold by default — a same-user CI
+/// check caught this concretely (a fresh standard local user's <see cref="Mutex"/> construction threw that
+/// exception). The session-scoped fallback still protects every process within one logon session (on Windows) or
+/// one shell session (on Unix-like systems) — it does not extend across two concurrent sessions of the same user
+/// (e.g. console + a simultaneous RDP session, or two separate terminal windows on Linux/macOS), an edge case
+/// judged acceptable against making the lease unusable for every non-admin Windows user.
 /// </remarks>
 /// <remarks>
 /// A named <see cref="Mutex"/>'s ownership is tracked per OS thread, not per <see cref="Mutex"/> object or async
@@ -68,11 +70,7 @@ public sealed class MutexProjectLease : IProjectLease
             Mutex? mutex = null;
             try
             {
-                mutex = new Mutex(
-                    initiallyOwned: false,
-                    leaseName,
-                    new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
-                    out _);
+                mutex = CreateMutex(leaseName);
                 try
                 {
                     acquired = mutex.WaitOne(timeout);
@@ -133,6 +131,28 @@ public sealed class MutexProjectLease : IProjectLease
         }
 
         return new MutexProjectLease(thread, releaseSignal, wasAbandoned);
+    }
+
+    /// <summary>See the type-level remarks: tries the OS-wide <c>Global\</c> namespace first, falling back to
+    /// session-scoping only if the current account lacks the Windows privilege <c>Global\</c> creation needs.</summary>
+    private static Mutex CreateMutex(string leaseName)
+    {
+        try
+        {
+            return new Mutex(
+                initiallyOwned: false,
+                leaseName,
+                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = false },
+                out _);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return new Mutex(
+                initiallyOwned: false,
+                leaseName,
+                new NamedWaitHandleOptions { CurrentUserOnly = true, CurrentSessionOnly = true },
+                out _);
+        }
     }
 
     public void Dispose()
