@@ -429,6 +429,158 @@ public sealed class ControlPlaneTests
         Assert.Equal(ControlDiagnosticCode.None, (await client.PingAsync(cancellationToken)).Diagnostic.Code);
         Assert.False(host.IsStopping);
     }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task SetConfigurationRoundTripsThroughTheHostAndPersistsTheValue()
+    {
+        // ADR 0005: the Host is the only `.forge/` writer — RemoteForgeMutations is the real
+        // production client, not a raw ForgeHostClient.SendAsync call.
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        // A string-typed key keeps the raw surface text verbatim (ConfigurationValueParser.Parse) —
+        // the raw value is the bare content ("ru"), not a JSON-quoted literal ("\"ru\"" would store
+        // literal quote characters as part of the string).
+        ConfigurationWriteResult result = await mutations.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "artifacts.language.user_facing",
+            "ru",
+            cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        ConfigurationView project = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot,
+            cancellationToken);
+        EffectiveConfigurationValue value = Assert.Single(
+            project.Values,
+            item => item.Key == "artifacts.language.user_facing");
+        Assert.Equal("\"ru\"", value.Value.GetRawText());
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task SetConfigurationRejectsUserScopeAsMalformed()
+    {
+        // User-scope configuration is not project state and must never be accepted by a project's
+        // Host, even from a client that (incorrectly) sends it — RemoteForgeMutations itself
+        // refuses to send this (see the corresponding unit test), so this proves the Host's own
+        // defense-in-depth independent of a well-behaved client.
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        ControlResponse response = await client.SendAsync(
+            ControlProtocol.SetConfigurationKind,
+            JsonSerializer.SerializeToElement(
+                new SetConfigurationRequest("user", "interaction.confirm_destructive", "false"),
+                ControlProtocol.JsonOptions),
+            cancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.Malformed, response.Diagnostic.Code);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task RecoverStartupRoundTripsThroughTheHostWhenNoRecoveryIsNeeded()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        RecoverStartupResult result =
+            await mutations.RecoverStartupAsync(environment.ProjectRoot, confirmed: true, cancellationToken);
+
+        // A healthy project has nothing to recover — ForgeApplication.RecoverStartupAsync's own
+        // early-return path, reached this time via the Host instead of in-process.
+        Assert.True(result.Succeeded);
+        Assert.Null(result.Check);
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task RemoteMutationsReportHostUnavailableInsteadOfThrowingWhenNoHostIsRunning()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(Guid.NewGuid(), InstanceIdentity.CreateEphemeral(), "1.0.0-test")
+            {
+                ConnectTimeout = TimeSpan.FromMilliseconds(300),
+            });
+        await using RemoteForgeMutations mutations = new(client);
+
+        ConfigurationWriteResult configResult = await mutations.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            null,
+            "artifacts.language.user_facing",
+            "\"ru\"",
+            cancellationToken);
+        RecoverStartupResult recoverResult =
+            await mutations.RecoverStartupAsync(null, confirmed: true, cancellationToken);
+
+        Assert.False(configResult.Succeeded);
+        Assert.Equal(DiagnosticCodes.HostUnavailable, configResult.DiagnosticCode);
+        Assert.False(recoverResult.Succeeded);
+        Assert.Equal(DiagnosticCodes.HostUnavailable, recoverResult.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void RemoteMutationsRefuseToSendUserScopeConfigurationAtAll()
+    {
+        // A programming error, not a runtime condition: catching it client-side (before ever
+        // touching the network) is stronger than relying solely on the Host's own rejection.
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(Guid.NewGuid(), InstanceIdentity.CreateEphemeral(), "1.0.0-test"));
+        RemoteForgeMutations mutations = new(client);
+
+        ArgumentOutOfRangeException exception = Assert.Throws<ArgumentOutOfRangeException>(
+            () => mutations
+                .SetConfigurationAsync(
+                    ConfigurationScope.User,
+                    null,
+                    "interaction.confirm_destructive",
+                    "false",
+                    TestContext.Current.CancellationToken)
+                .GetAwaiter()
+                .GetResult());
+        Assert.Equal("scope", exception.ParamName);
+    }
 }
 
 /// <summary>Runs <see cref="ControlPlaneHostedService"/> in-process against a real project directory for tests.</summary>
@@ -481,6 +633,11 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
                 // would share one Debug-build IEnvironmentPaths instead of this test's own ephemeral
                 // instance id, writing into the real developer machine's %LOCALAPPDATA%.
                 services.AddSingleton<IEnvironmentPaths>(new SystemEnvironmentPaths(options.InstanceId));
+                // Matches TestEnvironment's own override: ForgeHost.AddForgeCore only registers
+                // UnsupportedPlatformPreflight as a fallback, so a real StartupPipeline round-trip
+                // (RecoverStartup, SetConfiguration) would otherwise always fail its Platform check
+                // on this test harness, regardless of the request under test.
+                services.AddSingleton<IPlatformPreflight>(new SupportedPlatformPreflight());
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

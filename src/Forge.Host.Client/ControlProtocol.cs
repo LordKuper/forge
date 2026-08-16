@@ -51,6 +51,16 @@ public sealed record ControlRequest(string Kind, Guid CorrelationId, JsonElement
 
 public sealed record ControlResponse(Guid CorrelationId, ControlDiagnostic Diagnostic, JsonElement? Payload = null);
 
+/// <summary><see cref="ControlProtocol.RecoverStartupKind"/>'s request payload. The Host always
+/// recovers its own project (it is already scoped to exactly one), so no project root travels on
+/// the wire.</summary>
+public sealed record RecoverStartupRequest(bool Confirmed);
+
+/// <summary><see cref="ControlProtocol.SetConfigurationKind"/>'s request payload. Only
+/// <c>"project"</c> is ever valid here — user-scope configuration is not project state and is never
+/// routed through a project's Host (see <c>Forge.Application.RemoteForgeMutations</c>).</summary>
+public sealed record SetConfigurationRequest(string Scope, string Key, string? RawValue);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -67,6 +77,17 @@ public static class ControlProtocol
     /// journals. Request payload: <c>{"cursor"?: string}</c>. Response payload: a
     /// `control-event-page.schema.json` instance.</summary>
     public const string ReadControlEventsKind = "read_control_events";
+
+    /// <summary>ADR 0005: the Host owns every `.forge/` mutation — recovering a project whose
+    /// configuration cannot be read is one. Request payload: a <see cref="RecoverStartupRequest"/>.
+    /// Response payload: <c>{"succeeded": bool, "check"?: string, "diagnostic_code": string}</c>.</summary>
+    public const string RecoverStartupKind = "recover_startup";
+
+    /// <summary>ADR 0005: the Host owns every `.forge/` mutation — writing a project configuration
+    /// value is one (user-scope configuration is not routed here; see
+    /// <see cref="SetConfigurationRequest"/>). Response payload:
+    /// <c>{"succeeded": bool, "diagnostic_code": string}</c>.</summary>
+    public const string SetConfigurationKind = "set_configuration";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

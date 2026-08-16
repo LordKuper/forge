@@ -8,6 +8,11 @@
     <PackageReference Include="YamlDotNet" />
   </ItemGroup>
   <ItemGroup>
+    <!-- Forge.Host.Client is a dependency-free leaf (ADR 0005); RemoteForgeMutations wraps its
+         ForgeHostClient so every CLI/Desktop mutation routes through the project's Host. -->
+    <ProjectReference Include="..\Forge.Host.Client\Forge.Host.Client.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <EmbeddedResource Update="Localization\Resources\Messages.resx"
                       LogicalName="Forge.Localization.Resources.Messages.resources" />
     <EmbeddedResource Update="Localization\Resources\Messages.ru.resx"

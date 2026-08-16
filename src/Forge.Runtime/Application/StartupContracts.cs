@@ -55,6 +55,10 @@ public static class DiagnosticCodes
     public const string WorktreeCommitInvalid = "worktree_commit_invalid";
     public const string WorktreeUnavailable = "worktree_unavailable";
     public const string ControlCursorStale = "control_cursor_stale";
+
+    /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
+    /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
+    public const string HostUnavailable = "host_unavailable";
 }
 
 public enum StartupState

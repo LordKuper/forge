@@ -16,21 +16,27 @@ public static class CliApplication
         ForgeApplication application,
         TextWriter? error = null,
         Func<CancellationToken, ValueTask<InstallationResult>>? install = null,
-        Func<CancellationToken, ValueTask<UpdateResult>>? update = null)
+        Func<CancellationToken, ValueTask<UpdateResult>>? update = null,
+        IForgeMutations? mutations = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(application);
         TextWriter diagnostics = error ?? output;
+        // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
+        // reachable. A caller that connected one (CliHost.RunAsync) supplies it here; a caller that
+        // did not (every existing test, and any bootstrap path where no project is initialized yet)
+        // falls back to the local ForgeApplication, which implements the same interface directly.
+        IForgeMutations effectiveMutations = mutations ?? application;
 
         RootCommand root = new(text.Resolve(MessageKeys.AppDescription));
-        root.Subcommands.Add(CreateDoctorCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateDoctorCommand(text, output, diagnostics, application, effectiveMutations));
         root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateEventsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
-        root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveMutations));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -54,7 +60,8 @@ public static class CliApplication
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        ForgeApplication application)
+        ForgeApplication application,
+        IForgeMutations mutations)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<bool> startup = new("--startup") { Description = "Show the startup checks." };
@@ -70,7 +77,7 @@ public static class CliApplication
             string? root = parseResult.GetValue(projectRoot);
             if (parseResult.GetValue(recover))
             {
-                RecoverStartupResult recovered = await application
+                RecoverStartupResult recovered = await mutations
                     .RecoverStartupAsync(root, parseResult.GetValue(confirm), cancellationToken)
                     .ConfigureAwait(false);
                 output.WriteLine(text.Resolve(RecoveryMessage(recovered)));
@@ -330,7 +337,8 @@ public static class CliApplication
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        ForgeApplication application)
+        ForgeApplication application,
+        IForgeMutations mutations)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Command command = new("config", text.Resolve(MessageKeys.ConfigDescription));
@@ -351,6 +359,9 @@ public static class CliApplication
             return Report(diagnostics, user.DiagnosticCode);
         });
         command.Subcommands.Add(show);
+        // User-scope configuration is not project state and stays local (see IForgeMutations'
+        // remarks); ForgeApplication implements IForgeMutations directly, so passing it here is the
+        // same call it already made. Only project scope routes through `mutations`.
         command.Subcommands.Add(CreateConfigSetCommand(
             text,
             output,
@@ -361,7 +372,7 @@ public static class CliApplication
             text,
             output,
             diagnostics,
-            application,
+            mutations,
             ConfigurationScope.Project));
         return command;
     }
@@ -370,7 +381,7 @@ public static class CliApplication
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        ForgeApplication application,
+        IForgeMutations mutations,
         ConfigurationScope scope)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
@@ -384,7 +395,7 @@ public static class CliApplication
         command.Options.Add(projectRoot);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            ConfigurationWriteResult result = await application
+            ConfigurationWriteResult result = await mutations
                 .SetConfigurationAsync(
                     scope,
                     parseResult.GetValue(projectRoot),

@@ -1,6 +1,8 @@
 using System.CommandLine;
 using Forge.Application;
 using Forge.Bootstrap;
+using Forge.Configuration;
+using Forge.Host.Client;
 using Forge.Localization;
 using Forge.Updater;
 using Microsoft.Extensions.DependencyInjection;
@@ -59,6 +61,8 @@ public static class CliHost
         // The startup sequence resolves the UI language before any text is rendered.
         StartupStatus startup = await application.GetStartupStatusAsync(null, cancellationToken)
             .ConfigureAwait(false);
+        await using RemoteForgeMutations? mutations = await CreateMutationsAsync(host, startup, cancellationToken)
+            .ConfigureAwait(false);
         RootCommand root = CliApplication.CreateRootCommand(
             SurfaceText.For(catalog, startup.Language.Ui),
             Console.Out,
@@ -75,7 +79,61 @@ public static class CliHost
                         ["status"],
                         Environment.CurrentDirectory,
                         UpdateSurface.Cli),
-                    ct));
+                    ct),
+            mutations);
         return await root.Parse(args).InvokeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ADR 0005: every `.forge/` mutation routes through the project's Host once one can exist —
+    /// which requires a project id, so an uninitialized project (no manifest yet) gets
+    /// <see langword="null"/> here and <see cref="CliApplication.CreateRootCommand"/> falls back to
+    /// the local <see cref="ForgeApplication"/> for the one bootstrap mutation that can precede a
+    /// Host (`init`). The Host itself is started lazily, on the first actual mutation — nothing here
+    /// blocks a read-only command (`status`, `next`, ...) on a Host connection it never needs.
+    /// </summary>
+    private static async Task<RemoteForgeMutations?> CreateMutationsAsync(
+        IHost host,
+        StartupStatus startup,
+        CancellationToken cancellationToken)
+    {
+        if (!startup.Project.Initialized)
+        {
+            return null;
+        }
+
+        IConfigurationRegistry registry = host.Services.GetRequiredService<IConfigurationRegistry>();
+        Guid projectId;
+        try
+        {
+            projectId = await ProjectIdentity
+                .ReadProjectIdAsync(startup.Project.Root, registry, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidDataException
+            or FormatException or ConfigurationScopeException or IOException or UnauthorizedAccessException
+            or InvalidOperationException)
+        {
+            // The same unreadable-manifest condition ControlPlaneHostedService itself treats as
+            // "this project cannot be served" — with no project id to key a Host connection on,
+            // the caller falls back to the local ForgeApplication, which will independently hit
+            // (and correctly diagnose) this same failure when it actually runs the command.
+            return null;
+        }
+
+        IEnvironmentPaths paths = host.Services.GetRequiredService<IEnvironmentPaths>();
+        string clientVersion = typeof(CliApplication).Assembly.GetName().Version!.ToString(3);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, paths.InstanceId, clientVersion));
+        string hostExecutablePath = Path.Combine(
+            Path.GetDirectoryName(Environment.ProcessPath) ??
+                throw new InvalidOperationException("The Forge executable path is unavailable."),
+            "Forge.Host" + Path.GetExtension(Environment.ProcessPath));
+        return new RemoteForgeMutations(
+            client,
+            async ct => await ForgeHostLauncher
+                .StartAsync(hostExecutablePath, startup.Project.Root, paths.InstanceId, ct)
+                .ConfigureAwait(false));
     }
 }

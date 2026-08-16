@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using Forge.Application;
 using Forge.Cli;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
@@ -449,6 +450,125 @@ public sealed class CliTests
         Assert.Contains(catalog.Resolve(MessageKeys.NoEvents, culture), output.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ConfigProjectSetRoutesThroughTheSuppliedMutationsInsteadOfTheLocalApplication()
+    {
+        // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
+        // reachable — `mutations` here stands in for a real Host connection.
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            mutations: mutations);
+
+        int exitCode = await root
+            .Parse([
+                "config", "project", "artifacts.language.user_facing", "\"ru\"",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(1, mutations.SetConfigurationCalls);
+        Assert.Equal(ConfigurationScope.Project, mutations.LastScope);
+        // Still the key's registered default ("en"), never actually written locally — the fake
+        // never touches durable state, and a real ForgeApplication call would have overwritten it
+        // to "ru" (proving the write really left this process instead of landing here).
+        ConfigurationView project = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot,
+            TestContext.Current.CancellationToken);
+        EffectiveConfigurationValue value = Assert.Single(
+            project.Values,
+            item => item.Key == "artifacts.language.user_facing");
+        Assert.Equal("\"en\"", value.Value.GetRawText());
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ConfigUserSetNeverRoutesThroughTheSuppliedMutations()
+    {
+        // User-scope configuration is not `.forge/` project state (ADR 0005 protects the latter),
+        // so it stays local even when a Host connection is available for project mutations.
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            mutations: mutations);
+
+        int exitCode = await root
+            .Parse(["config", "user", "interaction.confirm_destructive", "false"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, mutations.SetConfigurationCalls);
+        ConfigurationView user = await environment.Application.GetUserConfigurationAsync(
+            TestContext.Current.CancellationToken);
+        Assert.Contains(
+            user.Values,
+            value => value.Key == "interaction.confirm_destructive" && value.Value.GetBoolean() == false);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DoctorRecoverRoutesThroughTheSuppliedMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            mutations: mutations);
+
+        await root
+            .Parse(["doctor", "--recover", "--yes"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.RecoverStartupCalls);
+    }
+
     private static SurfaceText Text(ILocalizationCatalog catalog) =>
         new(catalog, CultureInfo.CurrentUICulture);
+
+    private sealed class FakeForgeMutations : IForgeMutations
+    {
+        public int RecoverStartupCalls { get; private set; }
+
+        public int SetConfigurationCalls { get; private set; }
+
+        public ConfigurationScope? LastScope { get; private set; }
+
+        public Task<RecoverStartupResult> RecoverStartupAsync(
+            string? projectRoot,
+            bool confirmed,
+            CancellationToken cancellationToken)
+        {
+            RecoverStartupCalls++;
+            return Task.FromResult(new RecoverStartupResult(true, null, DiagnosticCodes.None));
+        }
+
+        public Task<ConfigurationWriteResult> SetConfigurationAsync(
+            ConfigurationScope scope,
+            string? projectRoot,
+            string key,
+            string? rawValue,
+            CancellationToken cancellationToken)
+        {
+            SetConfigurationCalls++;
+            LastScope = scope;
+            return Task.FromResult(ConfigurationWriteResult.Success);
+        }
+    }
 }

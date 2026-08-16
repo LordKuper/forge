@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.22.0
+
+### Changed
+
+- The Forge Host is now the sole writer of a project's `.forge/` state for
+  startup recovery (`forge doctor --recover`) and project-scope configuration
+  (`forge config project`): the CLI routes both through the project's Host
+  over the control-plane protocol instead of mutating `.forge/` in its own
+  process, starting the Host first if none is already running (ADR 0005).
+  User-scope configuration (`forge config user`) and first-time project
+  initialization (`forge init`) are unaffected — a Host cannot exist before a
+  project has an id to key its lease on.
+
 ## v0.21.2
 
 ### Changed

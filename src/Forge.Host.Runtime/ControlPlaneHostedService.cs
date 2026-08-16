@@ -272,6 +272,10 @@ public sealed class ControlPlaneHostedService(
                     await DispatchGetProjectSnapshotAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.ReadControlEventsKind =>
                     await DispatchReadControlEventsAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.RecoverStartupKind =>
+                    await DispatchRecoverStartupAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.SetConfigurationKind =>
+                    await DispatchSetConfigurationAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -359,5 +363,58 @@ public sealed class ControlPlaneHostedService(
         // response, so the transport-level diagnostic here stays None.
         using JsonDocument document = JsonDocument.Parse(ControlEventsJson.Serialize(page));
         return new(request.CorrelationId, ControlDiagnostic.None, document.RootElement.Clone());
+    }
+
+    private async Task<ControlResponse> DispatchRecoverStartupAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        RecoverStartupRequest? payload = request.Payload is { } value
+            ? value.Deserialize<RecoverStartupRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The recover_startup payload is required.");
+        }
+
+        // Always this Host's own project — a project's Host never recovers another project, so the
+        // request carries no project root of its own (matching GetProjectSnapshot/ReadControlEvents).
+        RecoverStartupResult result = await application
+            .RecoverStartupAsync(options.ProjectRoot, payload.Confirmed, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchSetConfigurationAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SetConfigurationRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SetConfigurationRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The set_configuration payload is required.");
+        }
+
+        if (payload.Scope != "project")
+        {
+            // User-scope configuration is not project state (ADR 0005 protects `.forge/`, not the
+            // user's own config file) and is never routed through a project's Host — a client
+            // sending one here has a routing bug, not a legitimate request.
+            throw new InvalidDataException($"A project Host cannot set '{payload.Scope}'-scope configuration.");
+        }
+
+        ConfigurationWriteResult result = await application
+            .SetConfigurationAsync(
+                ConfigurationScope.Project,
+                options.ProjectRoot,
+                payload.Key,
+                payload.RawValue,
+                cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
     }
 }
