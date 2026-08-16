@@ -2,7 +2,7 @@ using Forge.Host.Client;
 
 // Exercises the exact production IProjectLease (MutexProjectLease, NamedWaitHandleOptions with
 // CurrentUserOnly = true) that ControlPlaneHostedService/ProviderInstallLock use, so a same-user
-// isolation test proves the real primitive is namespaced per user — not a hand-rolled stand-in.
+// isolation result is about the primitive Forge actually ships, not a hand-rolled stand-in.
 //
 // Usage: Forge.MutexIsolationProbe acquire <leaseName> <holdSeconds> <timeoutSeconds>
 // Acquires the named lease within <timeoutSeconds>. On success, prints "acquired" (flushed

@@ -126,8 +126,11 @@ public sealed class ArchitectureTests
         int createMutexStart = source.IndexOf(
             "private static Mutex CreateMutex(", start, StringComparison.Ordinal);
         Assert.True(createMutexStart > start, $"{path} does not declare CreateMutex after CanCreateGlobalMutexes.");
-        int end = source.LastIndexOf("out _);", StringComparison.Ordinal);
-        Assert.True(end > createMutexStart, $"{path}'s CreateMutex does not end with the expected construction.");
+        // The first "out _);" at or after CreateMutex's own start — not the last one in the whole
+        // file — so a future Mutex construction added elsewhere in the file can never extend this
+        // boundary past CreateMutex's actual end.
+        int end = source.IndexOf("out _);", createMutexStart, StringComparison.Ordinal);
+        Assert.True(end >= 0, $"{path}'s CreateMutex does not end with the expected construction.");
         end += "out _);".Length;
 
         // Doc comments intentionally differ (one cross-references the other type by name), so only

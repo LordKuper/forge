@@ -11,13 +11,20 @@ User-facing Forge changes are listed by release, newest first.
   their named mutex in the OS-wide `Global\` namespace, which Windows
   only lets administrators and service accounts create — a non-admin
   user's Host process failed outright the moment it tried to acquire the
-  project lease at startup. Both now try the `Global\` namespace first
-  (the strongest guarantee, covering every session of the user) and fall
-  back to session-scoping only when that fails, so most accounts keep
-  the stronger guarantee and every account stays functional. A new CI
-  check (added while adding same-user isolation coverage for the lease)
-  caught this by exercising the real primitive as a genuine non-admin
-  local Windows account.
+  project lease at startup. Both now decide once, from a dedicated
+  always-uncontended probe (never from the real lease/lock name, which
+  would be ambiguous with a genuine different-user denial), whether this
+  process's account can use the `Global\` namespace — the strongest
+  guarantee, covering every session of the user — and use session-scoping
+  otherwise. A new CI check (added while adding same-user isolation
+  coverage for the lease) caught the original failure by exercising the
+  real primitive as a genuine non-admin local Windows account.
+  Known residual gap this introduces: each process decides its own
+  namespace from its own account's capability, so two processes of the
+  *same* user running at different elevation levels (e.g. one elevated,
+  one not) can resolve to different namespaces and no longer exclude
+  each other — an accepted trade-off against every non-admin account
+  failing outright, the behavior this fix replaces.
 
 ### Security
 

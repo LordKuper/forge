@@ -285,13 +285,17 @@ try {
         exit 1
     }
 
-    if ($elapsedSinceHolderStarted -ge $holdSeconds) {
-        Write-Error "Cross-user mutex check inconclusive: the credentialed acquire attempt took $elapsedSinceHolderStarted s, longer than the holder's ${holdSeconds}s hold — the holder may have already released before the other user's attempt ran, so this result would not prove genuine overlap."
+    # An acquire that succeeded is a regression regardless of timing precision: a genuinely LATE
+    # success (after the holder released) would be inconclusive, but a success can never be
+    # evidence of isolation, so it must never be reported as merely "inconclusive". Checked before
+    # the elapsed-time guard below — same ordering as the pipe check's own ExitCode -eq 0 check.
+    if ($otherUserMutexAcquire.ExitCode -eq 0) {
+        Write-Error 'SECURITY REGRESSION: a different local OS user acquired a NamedWaitHandleOptions.CurrentUserOnly mutex of an identical name that the current user already holds.'
         exit 1
     }
 
-    if ($otherUserMutexAcquire.ExitCode -eq 0) {
-        Write-Error 'SECURITY REGRESSION: a different local OS user acquired a NamedWaitHandleOptions.CurrentUserOnly mutex of an identical name that the current user already holds.'
+    if ($elapsedSinceHolderStarted -ge $holdSeconds) {
+        Write-Error "Cross-user mutex check inconclusive: the credentialed acquire attempt took $elapsedSinceHolderStarted s, longer than the holder's ${holdSeconds}s hold — the holder may have already released before the other user's attempt ran, so a DENIAL result here would not prove genuine overlap."
         exit 1
     }
 

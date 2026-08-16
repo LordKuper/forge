@@ -65,7 +65,11 @@ isolation CI check caught this concretely. `CurrentUserOnly` restricts the
 object's security descriptor to the creating user rather than creating a
 separate object per user, so a different local user's attempt to open the
 identical name is denied, not silently redirected to an independent object.
-Diagnostic lease metadata lives in the shared per-user Forge state directory;
+Residual risk: because the probe runs per process, two processes of the
+*same* user running at different elevation levels can resolve to different
+namespaces (one `Global\`, one session-scoped) and so do not exclude each
+other — accepted against the alternative of every non-admin account failing
+outright. Diagnostic lease metadata lives in the shared per-user Forge state directory;
 the mutex is authoritative and becomes abandoned on process death. A successor
 treats
 `AbandonedMutexException` as ownership plus a mandatory durable-state recovery
