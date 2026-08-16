@@ -86,6 +86,88 @@ public sealed class ResumeSchedulerHostedServiceTests
         }
     }
 
+    // Before this fix, FileSprintEventLog.LoadAsync (the path SprintScheduler.RequireStateAsync
+    // uses every tick, for every sprint) let a corrupt events.jsonl line's raw JsonException escape
+    // uncaught. That raw JsonException would escape TickAsync's catch filter entirely, permanently
+    // faulting the whole BackgroundService's ExecuteTask -- the same bug class fixed for
+    // definition.json, just on the journal instead.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASprintWithACorruptJournalDoesNotStopOtherSprintsFromBeingReDerived()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult initializedForJournal = await environment
+            .InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        Assert.True(initializedForJournal.Succeeded);
+
+        SprintOrchestrator journalOrchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler journalScheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore journalStore = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult corruptedJournal = await journalOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken);
+        Assert.True(corruptedJournal.Succeeded);
+        string eventsPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, corruptedJournal.SprintId!),
+            "events.jsonl");
+        await File.AppendAllTextAsync(eventsPath, "{ not valid json\n", cancellationToken);
+
+        CreateSprintResult createdForJournal = await journalOrchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken);
+        Assert.True(createdForJournal.Succeeded);
+        SprintId journalSprintId = createdForJournal.SprintId!;
+
+        SprintWorkflowState journalDraft =
+            (await journalStore.LoadAsync(environment.ProjectRoot, journalSprintId, cancellationToken))!;
+        SprintTransitionResult journalToReady = await journalOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, journalSprintId, journalDraft.Sprint.Version,
+                SprintOrchestrator.RunSprintKey(journalDraft.Sprint)), cancellationToken);
+        SprintTransitionResult journalToRunning = await journalOrchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, journalSprintId, journalToReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(journalToReady.Sprint)), cancellationToken);
+        Assert.True(journalToRunning.Succeeded);
+
+        SprintWorkflowState journalRunning =
+            (await journalStore.LoadAsync(environment.ProjectRoot, journalSprintId, cancellationToken))!;
+        NodeSnapshot journalNodeA = journalRunning.Nodes["a"];
+        AppendOutcome journalNodeARunning = await journalStore.AppendTransitionAsync(
+            environment.ProjectRoot, journalSprintId, AggregateKind.Node, journalNodeA.Id.Value, "NodeChanged",
+            "workflow.node_running", WorkflowStateNames.ToSnakeCase(NodeState.Running), journalNodeA.Version,
+            Guid.NewGuid(), cancellationToken);
+        AppendOutcome journalNodeASucceeded = await journalStore.AppendTransitionAsync(
+            environment.ProjectRoot, journalSprintId, AggregateKind.Node, journalNodeA.Id.Value, "NodeChanged",
+            "workflow.node_succeeded", WorkflowStateNames.ToSnakeCase(NodeState.Succeeded),
+            journalNodeARunning.State!.Nodes["a"].Version, Guid.NewGuid(), cancellationToken);
+        Assert.Equal(NodeState.Pending, journalNodeASucceeded.State!.Nodes["b"].State);
+
+        ResumeSchedulerOptions journalOptions = new(environment.ProjectRoot, TimeSpan.FromMilliseconds(50));
+        ResumeSchedulerHostedService journalService = new(
+            journalOptions, journalStore, journalScheduler, NullLogger<ResumeSchedulerHostedService>.Instance);
+        await journalService.StartAsync(cancellationToken);
+        try
+        {
+            NodeState observed = NodeState.Pending;
+            for (int attempt = 0; attempt < 40 && observed == NodeState.Pending; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+                SprintWorkflowState polled = (await journalStore.LoadAsync(
+                    environment.ProjectRoot, journalSprintId, cancellationToken))!;
+                observed = polled.Nodes["b"].State;
+            }
+
+            Assert.Equal(NodeState.Ready, observed);
+            Assert.Null(journalService.ExecuteTask!.Exception);
+        }
+        finally
+        {
+            await journalService.StopAsync(cancellationToken);
+        }
+    }
+
     // Before this fix, FileSprintEventLog.LoadDefinitionAsync let a corrupt definition.json's raw
     // JsonException escape uncaught -- unlike its sibling journal-read path, which already wraps
     // JsonException into InvalidDataException. That raw JsonException escaped TickAsync's catch

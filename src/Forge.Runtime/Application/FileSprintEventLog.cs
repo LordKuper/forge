@@ -53,10 +53,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         SprintId id,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
-            EventsPath(SprintDirectory(projectRoot, id)),
-            cancellationToken).ConfigureAwait(false);
-        return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
+                EventsPath(SprintDirectory(projectRoot, id)),
+                cancellationToken).ConfigureAwait(false);
+            return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
+        }
+        catch (Exception error) when (error is JsonException or FormatException)
+        {
+            throw new InvalidDataException($"The sprint journal for '{id.Value}' is corrupt.", error);
+        }
     }
 
     public async Task SaveDefinitionAsync(
@@ -97,28 +104,27 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
 
         byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-        PersistedDefinition persisted;
         try
         {
-            persisted = JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
+            PersistedDefinition persisted =
+                JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
                 throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
+            return new(
+                id,
+                persisted.BaseCommit,
+                persisted.Workflow,
+                persisted.WorkflowVersion,
+                persisted.ConfigurationSnapshot,
+                [.. persisted.Dependencies.Select(FromPersisted)],
+                [.. persisted.Graph.Select(FromPersisted)],
+                persisted.ConversationLanguage,
+                persisted.ArtifactPolicySnapshotHash,
+                persisted.FrozenAt);
         }
-        catch (JsonException error)
+        catch (Exception error) when (error is JsonException or FormatException)
         {
             throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
         }
-
-        return new(
-            id,
-            persisted.BaseCommit,
-            persisted.Workflow,
-            persisted.WorkflowVersion,
-            persisted.ConfigurationSnapshot,
-            [.. persisted.Dependencies.Select(FromPersisted)],
-            [.. persisted.Graph.Select(FromPersisted)],
-            persisted.ConversationLanguage,
-            persisted.ArtifactPolicySnapshotHash,
-            persisted.FrozenAt);
     }
 
     public async Task SaveNodeResultAsync(
