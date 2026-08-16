@@ -65,7 +65,13 @@ public static class CliHost
         // resolved `--project-root`, never the CWD-resolved root above (which is only for language
         // selection). Tracked here so it can be disposed once the command finishes, however it
         // resolved (falling back to the local `application` never sets this).
-        RemoteForgeMutations? created = null;
+        IAsyncDisposable? created = null;
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations = HostMutationsFactory.CreateResolver(
+            host.Services.GetRequiredService<ProjectRootResolver>(),
+            host.Services.GetRequiredService<IConfigurationRegistry>(),
+            host.Services.GetRequiredService<IEnvironmentPaths>(),
+            application,
+            typeof(CliApplication).Assembly.GetName().Version!.ToString(3));
         RootCommand root = CliApplication.CreateRootCommand(
             SurfaceText.For(catalog, startup.Language.Ui),
             Console.Out,
@@ -85,16 +91,8 @@ public static class CliHost
                     ct),
             async (mutationRoot, ct) =>
             {
-                IForgeMutations mutations = await HostMutationsFactory.CreateAsync(
-                        host.Services.GetRequiredService<ProjectRootResolver>(),
-                        host.Services.GetRequiredService<IConfigurationRegistry>(),
-                        host.Services.GetRequiredService<IEnvironmentPaths>(),
-                        application,
-                        typeof(CliApplication).Assembly.GetName().Version!.ToString(3),
-                        mutationRoot,
-                        ct)
-                    .ConfigureAwait(false);
-                created = mutations as RemoteForgeMutations;
+                IForgeMutations mutations = await resolveMutations(mutationRoot, ct).ConfigureAwait(false);
+                created = mutations as IAsyncDisposable;
                 return mutations;
             });
         try

@@ -14,29 +14,14 @@ public partial class MainPage : ContentPage
     public MainPage(
         SurfaceText text,
         ForgeApplication application,
-        ProjectRootResolver rootResolver,
-        IConfigurationRegistry registry,
-        IEnvironmentPaths paths)
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
-        ArgumentNullException.ThrowIfNull(rootResolver);
-        ArgumentNullException.ThrowIfNull(registry);
-        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(resolveMutations);
         InitializeComponent();
         this.text = text;
-        string clientVersion = typeof(MainPage).Assembly.GetName().Version!.ToString(3);
-        viewModel = new MainPageViewModel(
-            text,
-            application,
-            (root, cancellationToken) => HostMutationsFactory.CreateAsync(
-                rootResolver,
-                registry,
-                paths,
-                application,
-                clientVersion,
-                root,
-                cancellationToken));
+        viewModel = new MainPageViewModel(text, application, resolveMutations);
         TitleLabel.Text = text.Resolve(MessageKeys.AppTitle);
         RefreshButton.Text = text.Resolve(MessageKeys.RefreshAction);
         InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);

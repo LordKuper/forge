@@ -13,6 +13,30 @@ namespace Forge.Application;
 /// </summary>
 public static class HostMutationsFactory
 {
+    /// <summary>
+    /// Binds every dependency <see cref="CreateAsync"/> needs except the per-call project root, so a
+    /// composition root threads one delegate through its command layer (matching
+    /// <c>CliApplication.CreateRootCommand</c>'s <c>resolveMutations</c> parameter) instead of the 3
+    /// raw services plus <paramref name="application"/> and <paramref name="clientVersion"/> — and
+    /// so the two same-typed <c>string</c> parameters on <see cref="CreateAsync"/> are never both
+    /// live at a call site captured here.
+    /// </summary>
+    public static Func<string?, CancellationToken, Task<IForgeMutations>> CreateResolver(
+        ProjectRootResolver rootResolver,
+        IConfigurationRegistry registry,
+        IEnvironmentPaths paths,
+        ForgeApplication application,
+        string clientVersion)
+    {
+        ArgumentNullException.ThrowIfNull(rootResolver);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(application);
+        ArgumentException.ThrowIfNullOrEmpty(clientVersion);
+        return (projectRoot, cancellationToken) =>
+            CreateAsync(rootResolver, registry, paths, application, clientVersion, projectRoot, cancellationToken);
+    }
+
     public static async Task<IForgeMutations> CreateAsync(
         ProjectRootResolver rootResolver,
         IConfigurationRegistry registry,

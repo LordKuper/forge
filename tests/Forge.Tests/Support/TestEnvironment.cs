@@ -265,3 +265,31 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(ConfigurationWriteResult.Success);
     }
 }
+
+/// <summary>Like <see cref="FakeForgeMutations"/>, but disposable — proves a caller that resolves a
+/// disposable <see cref="IForgeMutations"/> (standing in for a real <c>RemoteForgeMutations</c>) actually
+/// disposes it.</summary>
+internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisposable
+{
+    public int DisposeCalls { get; private set; }
+
+    public Task<RecoverStartupResult> RecoverStartupAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new RecoverStartupResult(true, null, DiagnosticCodes.None));
+
+    public Task<ConfigurationWriteResult> SetConfigurationAsync(
+        ConfigurationScope scope,
+        string? projectRoot,
+        string key,
+        string? rawValue,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(ConfigurationWriteResult.Success);
+
+    public ValueTask DisposeAsync()
+    {
+        DisposeCalls++;
+        return ValueTask.CompletedTask;
+    }
+}

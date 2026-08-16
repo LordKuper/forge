@@ -128,7 +128,7 @@ public sealed class MainPageViewModel(
     public async Task<string> RecoverAsync(string? projectRoot, bool confirmed, CancellationToken cancellationToken)
     {
         IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
-        try
+        return await UseMutationsAsync(mutations, async () =>
         {
             RecoverStartupResult result = await mutations
                 .RecoverStartupAsync(projectRoot, confirmed, cancellationToken)
@@ -141,14 +141,7 @@ public sealed class MainPageViewModel(
                     _ => MessageKeys.RecoveryFailed,
                 }),
                 result.DiagnosticCode);
-        }
-        finally
-        {
-            if (mutations is IAsyncDisposable disposable)
-            {
-                await disposable.DisposeAsync().ConfigureAwait(false);
-            }
-        }
+        }).ConfigureAwait(false);
     }
 
     public async Task<string> SetConfigurationAsync(
@@ -163,7 +156,7 @@ public sealed class MainPageViewModel(
         IForgeMutations mutations = scope == ConfigurationScope.Project
             ? await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false)
             : application;
-        try
+        return await UseMutationsAsync(mutations, async () =>
         {
             ConfigurationWriteResult result = await mutations
                 .SetConfigurationAsync(scope, projectRoot, key, value, cancellationToken)
@@ -171,6 +164,18 @@ public sealed class MainPageViewModel(
             return Message(
                 text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
                 result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
+    /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive
+    /// across calls. A no-op for the local <see cref="ForgeApplication"/> fallback, which implements
+    /// neither <see cref="IDisposable"/> nor <see cref="IAsyncDisposable"/>.</summary>
+    private static async Task<T> UseMutationsAsync<T>(IForgeMutations mutations, Func<Task<T>> action)
+    {
+        try
+        {
+            return await action().ConfigureAwait(false);
         }
         finally
         {

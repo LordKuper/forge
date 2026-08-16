@@ -141,5 +141,77 @@ public sealed class MainPageViewModelTests
             value => value.Key == "interaction.confirm_destructive" && value.Value.GetBoolean() == false);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecoverAsyncReturnsTheSameMessageOnTheLocalFallbackPathAsBeforeThisChange()
+    {
+        // No resolver supplied — the default fallback routes straight to the local
+        // ForgeApplication, exactly as it always did. The Host-routing addition must not change
+        // this path's returned message.
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel
+            .RecoverAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(Text().Resolve(MessageKeys.RecoveryNotNeeded), message);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetConfigurationAsyncReturnsTheSameMessageOnTheLocalFallbackPathAsBeforeThisChange()
+    {
+        using TestEnvironment environment = new();
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            "interaction.confirm_destructive",
+            "false",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(Text().Resolve(MessageKeys.ConfigurationUpdated), message);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecoverAsyncDisposesTheResolvedMutationsAfterTheCall()
+    {
+        using TestEnvironment environment = new();
+        DisposableFakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.RecoverAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.DisposeCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetConfigurationAsyncDisposesTheResolvedMutationsAfterTheCall()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        DisposableFakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "artifacts.language.user_facing",
+            "ru",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.DisposeCalls);
+    }
+
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);
 }
