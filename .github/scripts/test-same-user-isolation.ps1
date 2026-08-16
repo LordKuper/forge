@@ -126,12 +126,20 @@ try {
 
     $otherPipe = "forge-isolation-other-$([guid]::NewGuid().ToString('N'))"
     $otherUserListenJob = Start-ProbeListener -PipeName $otherPipe
-    Start-Sleep -Seconds 3
-    $otherUserConnect = Invoke-ProcessAsCredential `
-        -ArgumentList @($probeDll, 'connect', $otherPipe, '5') `
-        -Credential $credential
-    $otherUserListenResult = Receive-Job -Job $otherUserListenJob -Wait
-    Remove-Job -Job $otherUserListenJob
+    try {
+        Start-Sleep -Seconds 3
+        $otherUserConnect = Invoke-ProcessAsCredential `
+            -ArgumentList @($probeDll, 'connect', $otherPipe, '5') `
+            -Credential $credential
+    }
+    finally {
+        # Reclaim the listener job (and its spawned dotnet.exe child) even if the credentialed
+        # connect attempt above throws a terminating error instead of returning — e.g. a transient
+        # Start-Process -Credential logon failure — which would otherwise skip the Receive-Job/
+        # Remove-Job pair entirely and leak the background job.
+        $otherUserListenResult = Receive-Job -Job $otherUserListenJob -Wait -ErrorAction SilentlyContinue
+        Remove-Job -Job $otherUserListenJob -Force
+    }
 
     Write-Host "Different-user connect exit code: $($otherUserConnect.ExitCode)"
     Write-Host "Different-user connect stdout: $($otherUserConnect.StdOut)"
@@ -143,12 +151,20 @@ try {
         exit 1
     }
 
-    if ([string]::IsNullOrWhiteSpace($otherUserConnect.StdOut)) {
-        Write-Error "Isolation check inconclusive: the different-user connect attempt failed (exit $($otherUserConnect.ExitCode)) but printed no diagnostic — the probe may have crashed before reporting a reason, rather than the pipe rejecting the connection. $($otherUserConnect.StdErr)"
+    # The positive control above only proves the account can launch dotnet.exe from the repo root;
+    # it does NOT prove the account can read tests/Forge.PipeIsolationProbe's own build output, a
+    # different ACL surface. So an unrelated read-access failure on the probe DLL itself could also
+    # produce non-empty diagnostic text here — require the SPECIFIC exception NamedPipeClientStream
+    # raises for a CurrentUserOnly rejection, not merely "some diagnostic text exists".
+    $accessDeniedIndicators = @('UnauthorizedAccessException', 'access is denied', 'access denied')
+    $diagnostic = $otherUserConnect.StdOut.Trim()
+    $isAccessDenied = $accessDeniedIndicators | Where-Object { $diagnostic -like "*$_*" }
+    if (-not $isAccessDenied) {
+        Write-Error "Isolation check inconclusive: the different-user connect attempt failed (exit $($otherUserConnect.ExitCode)) but the reason ('$diagnostic') is not a recognized access-control failure — it may be an unrelated setup problem (e.g. the account cannot read the probe's own build output) rather than PipeOptions.CurrentUserOnly rejecting the connection. $($otherUserConnect.StdErr)"
         exit 1
     }
 
-    Write-Host "Same-user isolation confirmed: a different local OS user could not connect (reason: $($otherUserConnect.StdOut.Trim()))."
+    Write-Host "Same-user isolation confirmed: a different local OS user could not connect (reason: $diagnostic)."
 }
 finally {
     Remove-LocalUser -Name $userName -ErrorAction SilentlyContinue
