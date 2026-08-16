@@ -27,8 +27,9 @@ public sealed record ResumeSchedulerOptions(string ProjectRoot, TimeSpan? PollIn
 /// This does not itself act on <see cref="RouteDecision.Outcome"/> == <see cref="RouteOutcome.Deferred"/>
 /// or <c>resume_not_before</c>: no attempt executor exists yet to start a fresh attempt once a
 /// routing deferral elapses (that is Stage 11's territory), so there is nothing here for this
-/// service to re-enqueue on that axis today. It is deliberately scoped to the one thing
-/// <see cref="SprintScheduler.AdvanceGraphAsync"/> already does: `pending` → `ready` promotion.
+/// service to re-enqueue on that axis today. It is deliberately scoped to whatever
+/// <see cref="SprintScheduler.AdvanceGraphAsync"/> already does — `pending` → `ready` promotion,
+/// plus that same call's existing human-gate and sprint-state synchronization side effects.
 /// <para>
 /// Holds no per-sprint memory of what it last saw: every tick re-derives entirely from durable
 /// state, so a Host restart loses nothing. <see cref="ControlPlaneHostedService"/> owns this
@@ -42,10 +43,15 @@ public sealed class ResumeSchedulerHostedService(
     SprintScheduler scheduler,
     ILogger<ResumeSchedulerHostedService> logger) : BackgroundService
 {
-    private static readonly Action<ILogger, Exception> LogTickFailed = LoggerMessage.Define(
+    private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
         LogLevel.Warning,
-        new EventId(2010, "ResumeSchedulerTickFailed"),
-        "Re-deriving sprint readiness failed for one sprint; continuing with the rest.");
+        new EventId(2010, "ResumeSchedulerListFailed"),
+        "Re-deriving sprint readiness failed while listing this project's sprints; retrying next tick.");
+
+    private static readonly Action<ILogger, Guid, Exception> LogSprintFailed = LoggerMessage.Define<Guid>(
+        LogLevel.Warning,
+        new EventId(2011, "ResumeSchedulerSprintFailed"),
+        "Re-deriving sprint readiness failed for sprint {SprintId}; continuing with the rest.");
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -64,9 +70,10 @@ public sealed class ResumeSchedulerHostedService(
         {
             sprintIds = await store.ListAsync(options.ProjectRoot, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
-            LogTickFailed(logger, exception);
+            LogListFailed(logger, exception);
             return;
         }
 
@@ -81,13 +88,15 @@ public sealed class ResumeSchedulerHostedService(
             {
                 throw;
             }
-            catch (Exception exception) when (
-                exception is IOException or UnauthorizedAccessException or InvalidDataException)
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+                or InvalidDataException or InvalidOperationException)
             {
-                // One sprint's unreadable journal must never stop every other sprint in the
-                // project from being re-derived — matches ControlPlaneHostedService's own
-                // per-connection failure isolation.
-                LogTickFailed(logger, exception);
+                // One sprint's unreadable journal, or a race with its own concurrent deletion
+                // (RequireStateAsync/RequireDefinitionAsync throw InvalidOperationException when a
+                // sprint ListAsync just returned no longer loads), must never stop every other
+                // sprint in the project from being re-derived — matches ControlPlaneHostedService's
+                // own per-connection failure isolation.
+                LogSprintFailed(logger, sprintId.Value, exception);
             }
         }
     }

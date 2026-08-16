@@ -86,6 +86,90 @@ public sealed class ResumeSchedulerHostedServiceTests
         }
     }
 
+    // Before this fix, any single sprint whose state failed to load (SprintScheduler's
+    // RequireStateAsync/RequireDefinitionAsync throw InvalidOperationException) escaped TickAsync's
+    // catch filter entirely, faulting the whole BackgroundService's ExecuteTask permanently -- so
+    // every OTHER sprint in the project would silently stop being re-derived too, forever.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASprintWithNoDurableDefinitionDoesNotStopOtherSprintsFromBeingReDerived()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult initialized = await environment
+            .InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        Assert.True(initialized.Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        // A sprint that is durably "created" (visible via ListAsync) but was never given a frozen
+        // definition -- the exact shape RequireDefinitionAsync's InvalidOperationException guards.
+        SprintId brokenSprintId = new(Guid.NewGuid());
+        AppendOutcome brokenCreated = await store.AppendTransitionAsync(
+            environment.ProjectRoot, brokenSprintId, AggregateKind.Sprint, brokenSprintId.Value.ToString("D"),
+            "SprintChanged", "workflow.sprint_created", WorkflowStateNames.ToSnakeCase(SprintState.Draft), 0,
+            Guid.NewGuid(), cancellationToken);
+        Assert.True(brokenCreated.Succeeded);
+        await store.MarkSprintCreatedAsync(environment.ProjectRoot, brokenSprintId, cancellationToken);
+
+        CreateSprintResult created = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken);
+        Assert.True(created.Succeeded);
+        SprintId sprintId = created.SprintId!;
+
+        SprintWorkflowState draft = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, draft.Sprint.Version,
+                SprintOrchestrator.RunSprintKey(draft.Sprint)), cancellationToken);
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)), cancellationToken);
+        Assert.True(toRunning.Succeeded);
+
+        SprintWorkflowState running = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        NodeSnapshot nodeA = running.Nodes["a"];
+        AppendOutcome nodeARunning = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Node, nodeA.Id.Value, "NodeChanged",
+            "workflow.node_running", WorkflowStateNames.ToSnakeCase(NodeState.Running), nodeA.Version,
+            Guid.NewGuid(), cancellationToken);
+        AppendOutcome nodeASucceeded = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Node, nodeA.Id.Value, "NodeChanged",
+            "workflow.node_succeeded", WorkflowStateNames.ToSnakeCase(NodeState.Succeeded),
+            nodeARunning.State!.Nodes["a"].Version, Guid.NewGuid(), cancellationToken);
+        Assert.Equal(NodeState.Pending, nodeASucceeded.State!.Nodes["b"].State);
+
+        // Sanity check: the broken sprint is really in ListAsync's result, ahead of the good one is
+        // not required, just present -- so a naive foreach really does reach it.
+        Assert.Contains(brokenSprintId, await store.ListAsync(environment.ProjectRoot, cancellationToken));
+
+        ResumeSchedulerOptions options = new(environment.ProjectRoot, TimeSpan.FromMilliseconds(50));
+        ResumeSchedulerHostedService service = new(
+            options, store, scheduler, NullLogger<ResumeSchedulerHostedService>.Instance);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            NodeState observed = NodeState.Pending;
+            for (int attempt = 0; attempt < 40 && observed == NodeState.Pending; attempt++)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+                SprintWorkflowState polled =
+                    (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+                observed = polled.Nodes["b"].State;
+            }
+
+            Assert.Equal(NodeState.Ready, observed);
+            Assert.Null(service.ExecuteTask!.Exception);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task TheServiceTicksOverAProjectWithNoSprintsWithoutFailing()
