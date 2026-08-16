@@ -12,6 +12,11 @@
       <Label x:Name="StartupChecksLabel" />
       <Label x:Name="ProvidersLabel" />
       <Label x:Name="SuggestedActionsLabel" />
+      <Label x:Name="SprintsLabel" />
+      <Label x:Name="SprintDetailsLabel" />
+      <!-- Its own row: adding it to the action row below would push the buttons past the edge of
+           the vertical-only ScrollView, which clips rather than scrolls horizontally. -->
+      <Entry x:Name="SprintIdEntry" HorizontalOptions="Start" WidthRequest="360" />
       <HorizontalStackLayout Spacing="8">
         <Entry x:Name="ProjectRootEntry" WidthRequest="360" />
         <Button x:Name="RefreshButton" Clicked="OnRefreshClicked" />

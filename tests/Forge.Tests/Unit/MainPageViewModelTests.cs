@@ -2,6 +2,7 @@ using System.Globalization;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Desktop.Presentation;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Tests.Support;
@@ -30,7 +31,7 @@ public sealed class MainPageViewModelTests
             ]);
         MainPageViewModel viewModel = new(Text(), environment.Application);
 
-        MainPageSnapshot snapshot = await viewModel.RefreshAsync(null, TestContext.Current.CancellationToken);
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(null, null, TestContext.Current.CancellationToken);
 
         Assert.Contains(
             "codex enabled ready 0.146.0 - ready none",
@@ -40,6 +41,148 @@ public sealed class MainPageViewModelTests
             "claude_code disabled - - - - provider_disabled",
             snapshot.ProvidersText,
             StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RefreshAsyncNestsAnAttemptUnderItsOwningNodeAndRendersTheSprintDetailSections()
+    {
+        // The Desktop counterpart of `forge tree`/`forge sprint inspect`: ADR 0005's
+        // "project -> sprint -> node -> attempt" hierarchy, projected locally from the same
+        // snapshot the CLI reads. Two independent nodes so an OwnerId filter that matched every
+        // attempt would print the one attempt under "b" too.
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(environment.ProjectRoot, null, cancellationToken);
+
+        string attemptId = started.AttemptId!.Value.ToString("D", CultureInfo.InvariantCulture);
+        // The attempt line must be the very next line after its own node's line, at a deeper
+        // indent — a flat list would satisfy a mere "appears somewhere after" check.
+        Assert.Contains(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"      a running{Environment.NewLine}        {attemptId} created"),
+            snapshot.SprintsText,
+            StringComparison.Ordinal);
+        Assert.Contains("      b ready", snapshot.SprintsText, StringComparison.Ordinal);
+        Assert.Equal(1, snapshot.SprintsText.Split(attemptId, StringSplitOptions.None).Length - 1);
+        // The flat per-sprint sections are the second view, equivalent to `forge sprint inspect`.
+        Assert.Contains(
+            Text().Resolve(MessageKeys.AttemptsLabel),
+            snapshot.SprintDetailsText,
+            StringComparison.Ordinal);
+        Assert.Contains("retry_remaining=", snapshot.SprintDetailsText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RefreshAsyncWithAnExplicitSprintIdExpandsThatSprintNotTheOthers()
+    {
+        // Two sprints, with the *other* one cancelled so exactly one non-terminal sprint remains
+        // and DetermineActiveSprint really resolves it as active. Without that step the fixture
+        // has no active sprint at all, and the test could not tell "expanded the requested sprint"
+        // apart from "expanded the active one".
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId activeSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("alpha", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintId requestedSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("beta", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintSnapshot requested =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, requestedSprintId, cancellationToken))!;
+        Assert.True((await orchestrator.CancelSprintAsync(
+            new(
+                environment.ProjectRoot,
+                requestedSprintId,
+                requested.Version,
+                SprintOrchestrator.CancelSprintKey(requested)),
+            cancellationToken)).Succeeded);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(
+            environment.ProjectRoot,
+            requestedSprintId.Value.ToString(),
+            cancellationToken);
+
+        // Pin the precondition itself: the `*` marker proves the other sprint really did resolve as
+        // active, so this cannot silently decay back into a fixture with no active sprint at all —
+        // which is what made the pre-fix version of this test unable to prove anything.
+        Assert.Contains(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"* 1. {activeSprintId.Value.ToString("D", CultureInfo.InvariantCulture)} "),
+            snapshot.SprintsText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("alpha", snapshot.SprintsText, StringComparison.Ordinal);
+        Assert.Contains("      beta ", snapshot.SprintsText, StringComparison.Ordinal);
+        Assert.Contains("beta", snapshot.SprintDetailsText, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("not-a-guid")]
+    [InlineData("11111111-1111-1111-1111-111111111111")]
+    public async Task RefreshAsyncReportsSprintNotFoundInsteadOfFallingBackToTheActiveSprint(string sprintId)
+    {
+        // Same edge case `forge status --detail full`/`tree` report: an unusable --sprint value
+        // must never silently resolve the active sprint's detail instead.
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId existingSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("alpha", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(
+            environment.ProjectRoot,
+            sprintId,
+            cancellationToken);
+
+        // Reported on the diagnostics section — the Desktop equivalent of the CLI's diagnostics
+        // channel — while the sprint body stays empty instead of showing another sprint's detail.
+        Assert.Contains(DiagnosticCodes.SprintNotFound, snapshot.DiagnosticsText, StringComparison.Ordinal);
+        Assert.Empty(snapshot.SprintDetailsText);
+        // The sprint list itself still renders; only the expansion is withheld — the active
+        // sprint's own node must not leak in as a substitute for the requested one.
+        Assert.Contains(
+            existingSprintId.Value.ToString("D", CultureInfo.InvariantCulture),
+            snapshot.SprintsText,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("alpha", snapshot.SprintsText, StringComparison.Ordinal);
     }
 
     [Fact]

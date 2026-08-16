@@ -624,105 +624,36 @@ public static class CliApplication
         }
     }
 
+    /// <summary>The flat sprint list `status` shows: the same projection as
+    /// <see cref="WriteSprintTree"/> with no sprint expanded.</summary>
     private static void WriteSprints(
         SurfaceText text,
         TextWriter output,
         IReadOnlyList<SprintStatus> sprints,
-        Guid? activeSprintId)
-    {
-        output.WriteLine(text.Resolve(MessageKeys.SprintsTitle));
-        if (sprints.Count == 0)
-        {
-            output.WriteLine(text.Resolve(MessageKeys.NoSprints));
-            return;
-        }
-
-        foreach (SprintStatus sprint in sprints)
-        {
-            string marker = sprint.Id == activeSprintId ? "*" : " ";
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"  {marker} {sprint.CreationSequence}. {sprint.Id} {SurfaceFormatting.Machine(sprint.State)}"));
-        }
-    }
+        Guid? activeSprintId) =>
+        WriteSprintTree(text, output, sprints, activeSprintId, null);
 
     /// <summary>Same sprint list as <see cref="WriteSprints"/>, but nests the expanded sprint's
     /// attempts under their owning node instead of listing nodes and attempts as separate flat
-    /// sections — kept as its own method so `status`'s existing flat output stays unchanged.</summary>
+    /// sections — kept as its own method so `status`'s existing flat output stays unchanged. The
+    /// lines themselves come from <see cref="SurfaceFormatting"/>, shared with the Desktop sprint
+    /// view.</summary>
     private static void WriteSprintTree(
         SurfaceText text,
         TextWriter output,
         IReadOnlyList<SprintStatus> sprints,
         Guid? activeSprintId,
-        SprintDetails? details)
+        SprintDetails? details) =>
+        WriteLines(output, SurfaceFormatting.SprintTreeLines(text, sprints, activeSprintId, details));
+
+    private static void WriteSprintDetails(SurfaceText text, TextWriter output, SprintDetails details) =>
+        WriteLines(output, SurfaceFormatting.SprintDetailLines(text, details));
+
+    private static void WriteLines(TextWriter output, IReadOnlyList<string> lines)
     {
-        output.WriteLine(text.Resolve(MessageKeys.SprintsTitle));
-        if (sprints.Count == 0)
+        foreach (string line in lines)
         {
-            output.WriteLine(text.Resolve(MessageKeys.NoSprints));
-            return;
-        }
-
-        foreach (SprintStatus sprint in sprints)
-        {
-            string marker = sprint.Id == activeSprintId ? "*" : " ";
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"  {marker} {sprint.CreationSequence}. {sprint.Id} {SurfaceFormatting.Machine(sprint.State)}"));
-            if (details is { } sprintDetails && sprintDetails.SprintId == sprint.Id)
-            {
-                WriteNodeTree(text, output, sprintDetails);
-            }
-        }
-    }
-
-    private static void WriteNodeTree(SurfaceText text, TextWriter output, SprintDetails details)
-    {
-        foreach (EntityStatus node in details.Nodes)
-        {
-            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"      {node.Id} {node.State}"));
-            foreach (EntityStatus attempt in details.Attempts.Where(attempt =>
-                string.Equals(attempt.OwnerId, node.Id, StringComparison.Ordinal)))
-            {
-                output.WriteLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"        {attempt.Id} {attempt.State}"));
-            }
-        }
-
-        if (details.Findings.Count > 0)
-        {
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"      {text.Resolve(MessageKeys.FindingsLabel)}"));
-            foreach (EntityStatus finding in details.Findings)
-            {
-                output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"        {finding.Id} {finding.State}"));
-            }
-        }
-    }
-
-    private static void WriteSprintDetails(SurfaceText text, TextWriter output, SprintDetails details)
-    {
-        output.WriteLine(text.Resolve(MessageKeys.SprintDetailsTitle));
-        WriteEntities(text, output, MessageKeys.NodesLabel, details.Nodes);
-        WriteEntities(text, output, MessageKeys.AttemptsLabel, details.Attempts);
-        WriteEntities(text, output, MessageKeys.FindingsLabel, details.Findings);
-        output.WriteLine(string.Create(
-            CultureInfo.InvariantCulture,
-            $"  {text.Resolve(MessageKeys.RoutingLabel)} retry_remaining={details.Routing.RetryRemaining}"));
-    }
-
-    private static void WriteEntities(
-        SurfaceText text,
-        TextWriter output,
-        string titleKey,
-        IReadOnlyList<EntityStatus> entities)
-    {
-        output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"  {text.Resolve(titleKey)}"));
-        foreach (EntityStatus entity in entities)
-        {
-            output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    {entity.Id} {entity.State}"));
+            output.WriteLine(line);
         }
     }
 

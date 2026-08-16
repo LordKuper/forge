@@ -44,4 +44,91 @@ public static class SurfaceFormatting
             $"{entry.Id} {(entry.Enabled ? "enabled" : "disabled")} {Machine(entry.State)} " +
                 $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
     }
+
+    /// <summary>ADR 0005's `project -> sprint -> node -> attempt` hierarchy as one ordered line
+    /// list, shared by `forge tree` and the Desktop sprint view so the two projections of the same
+    /// snapshot can never drift. <paramref name="details"/> expands exactly the sprint it names;
+    /// every other sprint stays a single summary row.</summary>
+    public static IReadOnlyList<string> SprintTreeLines(
+        SurfaceText text,
+        IReadOnlyList<SprintStatus> sprints,
+        Guid? activeSprintId,
+        SprintDetails? details)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(sprints);
+        List<string> lines = [text.Resolve(MessageKeys.SprintsTitle)];
+        if (sprints.Count == 0)
+        {
+            lines.Add(text.Resolve(MessageKeys.NoSprints));
+            return lines;
+        }
+
+        foreach (SprintStatus sprint in sprints)
+        {
+            string marker = sprint.Id == activeSprintId ? "*" : " ";
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {marker} {sprint.CreationSequence}. {sprint.Id} {Machine(sprint.State)}"));
+            if (details is { } sprintDetails && sprintDetails.SprintId == sprint.Id)
+            {
+                AppendNodeTree(text, lines, sprintDetails);
+            }
+        }
+
+        return lines;
+    }
+
+    /// <summary>One sprint's flat node/attempt/finding/routing sections, shared by `forge sprint
+    /// inspect`, `forge status --detail full`, and the Desktop sprint view.</summary>
+    public static IReadOnlyList<string> SprintDetailLines(SurfaceText text, SprintDetails details)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(details);
+        List<string> lines = [text.Resolve(MessageKeys.SprintDetailsTitle)];
+        AppendEntities(text, lines, MessageKeys.NodesLabel, details.Nodes);
+        AppendEntities(text, lines, MessageKeys.AttemptsLabel, details.Attempts);
+        AppendEntities(text, lines, MessageKeys.FindingsLabel, details.Findings);
+        lines.Add(string.Create(
+            CultureInfo.InvariantCulture,
+            $"  {text.Resolve(MessageKeys.RoutingLabel)} retry_remaining={details.Routing.RetryRemaining}"));
+        return lines;
+    }
+
+    private static void AppendNodeTree(SurfaceText text, List<string> lines, SprintDetails details)
+    {
+        foreach (EntityStatus node in details.Nodes)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"      {node.Id} {node.State}"));
+            foreach (EntityStatus attempt in details.Attempts.Where(attempt =>
+                string.Equals(attempt.OwnerId, node.Id, StringComparison.Ordinal)))
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture, $"        {attempt.Id} {attempt.State}"));
+            }
+        }
+
+        if (details.Findings.Count > 0)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"      {text.Resolve(MessageKeys.FindingsLabel)}"));
+            foreach (EntityStatus finding in details.Findings)
+            {
+                lines.Add(string.Create(CultureInfo.InvariantCulture, $"        {finding.Id} {finding.State}"));
+            }
+        }
+    }
+
+    private static void AppendEntities(
+        SurfaceText text,
+        List<string> lines,
+        string titleKey,
+        IReadOnlyList<EntityStatus> entities)
+    {
+        lines.Add(string.Create(CultureInfo.InvariantCulture, $"  {text.Resolve(titleKey)}"));
+        foreach (EntityStatus entity in entities)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"    {entity.Id} {entity.State}"));
+        }
+    }
 }

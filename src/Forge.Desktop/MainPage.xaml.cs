@@ -27,6 +27,14 @@ public partial class MainPage : ContentPage
         InitializeButton.Text = text.Resolve(MessageKeys.InitializeAction);
         RecoverButton.Text = text.Resolve(MessageKeys.RecoverAction);
         ConfigurationTitleLabel.Text = text.Resolve(MessageKeys.ConfigurationTitle);
+        // No free-text box on this page has an adjacent visible label, so each carries its own
+        // screen-reader name and visible placeholder (ADR 0005: every action is screen-reader
+        // named). SurfaceParityTests derives the list from the XAML, so a new Entry fails until
+        // it is described here too.
+        Describe(ProjectRootEntry, text.Resolve(MessageKeys.ProjectRootLabel));
+        Describe(SprintIdEntry, text.Resolve(MessageKeys.SprintIdLabel));
+        Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
+        Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -36,12 +44,22 @@ public partial class MainPage : ContentPage
         ConfigurationScopePicker.SelectedIndex = 0;
     }
 
+    private static void Describe(Entry entry, string label)
+    {
+        entry.Placeholder = label;
+        SemanticProperties.SetDescription(entry, label);
+    }
+
     private string? ProjectRoot =>
         string.IsNullOrWhiteSpace(ProjectRootEntry.Text) ? null : ProjectRootEntry.Text;
 
+    /// <summary>Empty means "expand the active sprint", matching `forge tree` with no `--sprint`.</summary>
+    private string? SprintId =>
+        string.IsNullOrWhiteSpace(SprintIdEntry.Text) ? null : SprintIdEntry.Text;
+
     public async Task RefreshAsync()
     {
-        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, CancellationToken.None)
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
             .ConfigureAwait(true);
         StatusLabel.Text = snapshot.StatusText;
         ProjectRootLabel.Text = snapshot.ProjectRootText;
@@ -49,6 +67,8 @@ public partial class MainPage : ContentPage
         StartupChecksLabel.Text = snapshot.StartupChecksText;
         ProvidersLabel.Text = snapshot.ProvidersText;
         SuggestedActionsLabel.Text = snapshot.SuggestedActionsText;
+        SprintsLabel.Text = snapshot.SprintsText;
+        SprintDetailsLabel.Text = snapshot.SprintDetailsText;
         InitializeButton.IsEnabled = snapshot.InitializeEnabled;
         RecoverButton.IsEnabled = snapshot.RecoverEnabled;
         ConfigurationLabel.Text = snapshot.ConfigurationText;

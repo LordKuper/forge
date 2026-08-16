@@ -1,7 +1,11 @@
 using System.CommandLine;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using Forge.Application;
 using Forge.Cli;
+using Forge.Desktop.Presentation;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Presentation;
 using Forge.Tests.Support;
@@ -15,7 +19,15 @@ public sealed class SurfaceParityTests
     private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
     {
         [CapabilityIds.ProjectSnapshot] =
-            ["StartupChecksLabel", "StatusLabel", "ProjectStateLabel", "SuggestedActionsLabel"],
+        [
+            "StartupChecksLabel",
+            "StatusLabel",
+            "ProjectStateLabel",
+            "SuggestedActionsLabel",
+            "SprintsLabel",
+            "SprintDetailsLabel",
+            "SprintIdEntry",
+        ],
         [CapabilityIds.ProjectInitialize] = ["InitializeButton", "ProjectRootEntry"],
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
@@ -90,6 +102,117 @@ public sealed class SurfaceParityTests
                 DesktopControls[id],
                 control => Assert.Contains(control, codeBehind, StringComparison.Ordinal)));
     }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void EveryDesktopFreeTextEntryCarriesAScreenReaderNameAndPlaceholder()
+    {
+        // ADR 0005 requires every action to be screen-reader named. No Entry on this page has an
+        // adjacent visible label, so every one of them must be described — and the list is derived
+        // from the XAML rather than hand-maintained, so a newly added Entry fails here instead of
+        // shipping unlabeled. DesktopControlsAreWiredInCodeBehind cannot cover this: it only proves
+        // the control name appears somewhere in the code-behind. A static check fully covers the
+        // risk, since no MAUI control can be instantiated headlessly in this suite.
+        string desktop = Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop");
+        string codeBehind = File.ReadAllText(Path.Combine(desktop, "MainPage.xaml.cs"));
+        string[] entries = [.. Regex
+            .Matches(File.ReadAllText(Path.Combine(desktop, "MainPage.xaml")), "<Entry[^>]*?x:Name=\"([^\"]+)\"")
+            .Select(match => match.Groups[1].Value)];
+
+        Assert.NotEmpty(entries);
+        // Both halves of the fix, not just the screen-reader name: the visible placeholder is what
+        // a sighted user reads, and the CHANGELOG claims both.
+        Assert.Contains("SemanticProperties.SetDescription(entry, label)", codeBehind, StringComparison.Ordinal);
+        Assert.Contains("entry.Placeholder = label", codeBehind, StringComparison.Ordinal);
+        Assert.All(
+            entries,
+            entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot()
+    {
+        // Sharing SurfaceFormatting is not by itself the no-drift guarantee this refactor claims:
+        // either surface can still wrap, reorder, or filter the shared lines on its way to the
+        // screen (the Desktop path already wraps them in Render(...) and trims). This compares the
+        // two rendered projections of one project directly, so any such divergence fails here.
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph: [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])]),
+            cancellationToken)).SprintId!;
+        // Drive the sprint far enough to own a real attempt and a real finding, so the fixture
+        // exercises AppendNodeTree's OwnerId nesting loop and its findings block. Comparing two
+        // renderings of a sprint that has neither would leave both branches dead, and a surface
+        // that silently dropped attempt or finding lines would still pass.
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded);
+        Assert.True((await scheduler.RecordFindingAsync(
+            environment.ProjectRoot,
+            sprintId,
+            FindingSeverity.High,
+            "finding.example",
+            new Dictionary<string, string?>(),
+            ["src/Foo.cs:1"],
+            null,
+            cancellationToken)).Succeeded);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter tree = new(CultureInfo.InvariantCulture);
+        StringWriter inspect = new(CultureInfo.InvariantCulture);
+        // Separate diagnostics writers: the CLI defaults them to `output`, which would fold the
+        // diagnostics channel into the text being compared and make this assertion depend on the
+        // fixture happening to produce no diagnostic.
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        string id = sprintId.Value.ToString("D", CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, tree, environment.Application, diagnostics)
+            .Parse(["tree", "--project-root", environment.ProjectRoot, "--sprint", id])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, inspect, environment.Application, diagnostics)
+            .Parse(["sprint", "inspect", id, "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
+            .RefreshAsync(environment.ProjectRoot, id, cancellationToken);
+
+        // `forge tree` prefixes the project line WriteProject writes; the sprint sections after it
+        // are what both surfaces share, so compare from the sprint title onwards.
+        Assert.Equal(SprintSection(tree.ToString(), text.Resolve(MessageKeys.SprintsTitle)), desktop.SprintsText);
+        Assert.Equal(
+            SprintSection(inspect.ToString(), text.Resolve(MessageKeys.SprintDetailsTitle)),
+            desktop.SprintDetailsText);
+        // The comparison above is only as strong as its fixture, so pin that the compared text
+        // really carries an attempt nested under its node and a finding.
+        string attemptId = started.AttemptId!.Value.ToString("D", CultureInfo.InvariantCulture);
+        Assert.Contains(
+            string.Create(CultureInfo.InvariantCulture, $"        {attemptId} "),
+            desktop.SprintsText,
+            StringComparison.Ordinal);
+        Assert.Contains(text.Resolve(MessageKeys.FindingsLabel), desktop.SprintsText, StringComparison.Ordinal);
+    }
+
+    private static string SprintSection(string cliOutput, string title) =>
+        cliOutput[cliOutput.IndexOf(title, StringComparison.Ordinal)..].TrimEnd();
 
     [Fact]
     [Trait("Category", "Acceptance")]

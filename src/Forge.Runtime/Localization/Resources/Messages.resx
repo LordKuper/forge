@@ -25,6 +25,9 @@
   <data name="StartupBlocked" xml:space="preserve"><value>Startup is blocked; sprint work stays unavailable.</value></data>
   <data name="StartupFailed" xml:space="preserve"><value>Startup failed; only recovery is available.</value></data>
   <data name="ProjectRootLabel" xml:space="preserve"><value>Project root:</value></data>
+  <data name="SprintIdLabel" xml:space="preserve"><value>Sprint id (empty: active sprint):</value></data>
+  <data name="ConfigurationKeyLabel" xml:space="preserve"><value>Configuration key:</value></data>
+  <data name="ConfigurationValueLabel" xml:space="preserve"><value>Configuration value:</value></data>
   <data name="ProjectInitialized" xml:space="preserve"><value>The project is initialized.</value></data>
   <data name="ProjectNotInitialized" xml:space="preserve"><value>The project is not initialized.</value></data>
   <data name="InitConfirmationRequired" xml:space="preserve"><value>Confirm initialization of the displayed directory before it is created.</value></data>
