@@ -11,5 +11,10 @@
     <ProjectReference Include="..\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
     <ProjectReference Include="..\Forge.Providers.Codex.Windows\Forge.Providers.Codex.Windows.csproj" />
     <ProjectReference Include="..\Forge.Providers.Claude.Windows\Forge.Providers.Claude.Windows.csproj" />
+    <!-- Only for IPlatformPreflight (WindowsPlatformPreflight): without it StartupPipeline's
+         platform check always fails here, falling back to ForgeHost.AddForgeCore's
+         UnsupportedPlatformPreflight — matching the same registration Forge.Cli.Windows and
+         Forge.Desktop already make. -->
+    <ProjectReference Include="..\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
   </ItemGroup>
 </Project>

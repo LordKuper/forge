@@ -295,9 +295,13 @@
           "System.CodeDom": "8.0.0"
         }
       },
+      "forge.host.client": {
+        "type": "Project"
+      },
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
+          "Forge.Host.Client": "[0.22.0, )",
           "JsonSchema.Net": "[9.4.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"

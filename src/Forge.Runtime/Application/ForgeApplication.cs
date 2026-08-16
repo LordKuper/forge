@@ -28,6 +28,34 @@ public sealed record ConfigurationView(
 public sealed record ProjectOverview(StartupStatus Startup, ProjectSnapshot Snapshot);
 
 /// <summary>
+/// ADR 0005: every `.forge/` mutation this interface names must be routed through the project's
+/// Host, never executed against a local <see cref="ForgeApplication"/> once one is reachable — see
+/// <c>RemoteForgeMutations</c> (`Forge.Host.Client`-backed) versus <see cref="ForgeApplication"/>
+/// itself (the Host's own in-process implementation; also the client-side fallback while no
+/// project is initialized yet, since a Host cannot exist before <c>InitializeProjectAsync</c> gives
+/// it a project id to key its lease/pipe on — ADR 0005's "minimal bootstrap... path needed before a
+/// host is available"). `RefreshProviderHealthAsync` and `InitializeProjectAsync` are deliberately
+/// excluded: the former is already serialized by its own per-user <c>IProviderInstallLock</c>
+/// regardless of which process calls it, and the latter is the bootstrap step itself.
+/// </summary>
+public interface IForgeMutations
+{
+    /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
+    Task<RecoverStartupResult> RecoverStartupAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
+    /// <summary>Converts the raw surface input using the declared type of the key.</summary>
+    Task<ConfigurationWriteResult> SetConfigurationAsync(
+        ConfigurationScope scope,
+        string? projectRoot,
+        string key,
+        string? rawValue,
+        CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The single entry point both surfaces use. Presentation adapters format and collect input;
 /// every check, mutation, and recommendation is decided here.
 /// </summary>
@@ -41,7 +69,7 @@ public sealed class ForgeApplication(
     ScopedConfigurationService configuration,
     IProviderToolchainManager providerToolchain,
     ProviderCatalog providerCatalog,
-    ControlEventsReader eventsReader)
+    ControlEventsReader eventsReader) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 

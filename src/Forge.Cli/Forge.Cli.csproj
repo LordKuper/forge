@@ -2,6 +2,7 @@
   <ItemGroup>
     <PackageReference Include="System.CommandLine" />
     <PackageReference Include="Terminal.Gui" />
+    <ProjectReference Include="..\Forge.Host.Client\Forge.Host.Client.csproj" />
     <ProjectReference Include="..\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>

@@ -13,7 +13,11 @@ namespace Forge.Bootstrap;
 public static class ForgeHost
 {
     public static IHostBuilder CreateBuilder() =>
-        Host.CreateDefaultBuilder()
+        // Fully qualified: unqualified `Host` now resolves to the `Forge.Host` namespace (reachable
+        // from here via Forge.Host.Client, which RemoteForgeMutations added as a dependency) rather
+        // than Microsoft.Extensions.Hosting.Host, since namespace lookup wins over a `using`-imported
+        // type when both share an enclosing namespace segment.
+        Microsoft.Extensions.Hosting.Host.CreateDefaultBuilder()
             .ConfigureLogging(logging =>
             {
                 logging.ClearProviders();
