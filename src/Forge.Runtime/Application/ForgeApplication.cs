@@ -53,6 +53,20 @@ public interface IForgeMutations
         string key,
         string? rawValue,
         CancellationToken cancellationToken);
+
+    /// <summary>Writes `CLAUDE.md`/`AGENTS.md` for every enabled provider (ADR 0011). Idempotent;
+    /// never overwrites a target file that is not Forge-owned.</summary>
+    Task<IntegrationWriteResult> InstallIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
+    /// <summary>Deletes a Forge-owned `CLAUDE.md`/`AGENTS.md` for every enabled provider (ADR
+    /// 0011). Idempotent; never deletes a target file that is not Forge-owned.</summary>
+    Task<IntegrationWriteResult> RemoveIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -69,9 +83,16 @@ public sealed class ForgeApplication(
     ScopedConfigurationService configuration,
     IProviderToolchainManager providerToolchain,
     ProviderCatalog providerCatalog,
-    ControlEventsReader eventsReader) : IForgeMutations
+    ControlEventsReader eventsReader,
+    IProviderEnablementSource providerEnablement,
+    IntegrationInstallationService integrationInstallation) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
+
+    /// <summary>Matches <c>ControlPlaneHostedService</c>'s own `typeof(...).Assembly.GetName().Version`
+    /// idiom for reporting a build's own product version (ADR 0011's `generator_version`).</summary>
+    private static readonly string GeneratorVersion =
+        typeof(ForgeApplication).Assembly.GetName().Version!.ToString(3);
 
     /// <summary>The key any surface must present to initialize the observed project state.</summary>
     public static Guid InitializationKey(ProjectSnapshot snapshot)
@@ -361,6 +382,103 @@ public sealed class ForgeApplication(
         {
             return new(false, DiagnosticCodes.ConfigurationInvalid);
         }
+    }
+
+    /// <summary>The read-only `forge integration skill generate` preview (ADR 0011) — a plain read
+    /// like <see cref="GetStartupStatusAsync"/>, never routed through the Host, since it writes
+    /// nothing.</summary>
+    public async Task<IntegrationInspectionResult> InspectIntegrationAsync(
+        string? projectRoot,
+        CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return IntegrationInspectionResult.Empty(status.DiagnosticCode);
+        }
+
+        (IReadOnlyList<ProviderId> Enabled, string UserFacing, string AgentFacing)? inputs =
+            await ResolveIntegrationInputsAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        if (inputs is not { } resolved)
+        {
+            return IntegrationInspectionResult.Empty(DiagnosticCodes.ConfigurationInvalid);
+        }
+
+        return await integrationInstallation
+            .InspectAsync(status.Root, resolved.Enabled, resolved.UserFacing, resolved.AgentFacing, GeneratorVersion, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public Task<IntegrationWriteResult> InstallIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        MutateIntegrationAsync(projectRoot, confirmed, integrationInstallation.InstallAsync, cancellationToken);
+
+    public Task<IntegrationWriteResult> RemoveIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        MutateIntegrationAsync(projectRoot, confirmed, integrationInstallation.RemoveAsync, cancellationToken);
+
+    private async Task<IntegrationWriteResult> MutateIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        Func<string, IReadOnlyList<ProviderId>, string, string, string, CancellationToken, Task<IntegrationWriteResult>> mutate,
+        CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return IntegrationWriteResult.Empty(status.DiagnosticCode);
+        }
+
+        bool actuallyConfirmed = confirmed ||
+            !await RequiresConfirmationAsync(cancellationToken).ConfigureAwait(false);
+        if (!actuallyConfirmed)
+        {
+            return IntegrationWriteResult.Empty(DiagnosticCodes.ConfirmationRequired);
+        }
+
+        (IReadOnlyList<ProviderId> Enabled, string UserFacing, string AgentFacing)? inputs =
+            await ResolveIntegrationInputsAsync(status.Root, cancellationToken).ConfigureAwait(false);
+        if (inputs is not { } resolved)
+        {
+            return IntegrationWriteResult.Empty(DiagnosticCodes.ConfigurationInvalid);
+        }
+
+        return await mutate(
+                status.Root, resolved.Enabled, resolved.UserFacing, resolved.AgentFacing, GeneratorVersion, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The same enabled-provider resolution <c>SprintOrchestrator.CreateSprintAsync</c>
+    /// freezes into a sprint (ADR 0008), and the same artifact-language extraction
+    /// <c>SprintOrchestrator.ConversationLanguageAsync</c> uses for `language.llm` — re-derived
+    /// fresh on every call, never cached, since integration state carries no frozen snapshot of its
+    /// own (ADR 0011).</summary>
+    private async Task<(IReadOnlyList<ProviderId> Enabled, string UserFacing, string AgentFacing)?> ResolveIntegrationInputsAsync(
+        string root,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string>? enabledProviderIds =
+            await providerEnablement.GetEnabledIdsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ProviderId> enabled =
+            [.. providerCatalog.ResolveEnabled(enabledProviderIds).Select(provider => provider.Id)];
+
+        ConfigurationView project = await GetProjectConfigurationAsync(root, cancellationToken).ConfigureAwait(false);
+        if (project.DiagnosticCode != DiagnosticCodes.None)
+        {
+            return null;
+        }
+
+        string userFacing = project.Values
+            .FirstOrDefault(value => value.Key == "artifacts.language.user_facing")?.Value.GetString() ?? "en";
+        string agentFacing = project.Values
+            .FirstOrDefault(value => value.Key == "artifacts.language.agent_facing")?.Value.GetString() ?? "en";
+        return (enabled, userFacing, agentFacing);
     }
 
     private static bool IsRecoverable(Exception error) =>

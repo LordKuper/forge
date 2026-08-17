@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.32.0
+
+### Added
+
+- `forge integration skill generate|install|remove` manages the generated
+  Claude Code (`CLAUDE.md`) and Codex (`AGENTS.md`) integration files.
+  `generate` previews what would be written for every enabled provider
+  without touching disk, reporting whether each target file is missing,
+  up to date, would change, or already exists as a file Forge did not
+  create. `install` writes it (confirmation required); `remove` deletes
+  it. Neither ever overwrites or deletes a file that isn't recognizably
+  Forge's own -- an unrelated or hand-written file at the same path is
+  left untouched and reported instead.
+
 ## v0.31.0
 
 ### Added

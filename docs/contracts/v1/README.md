@@ -45,6 +45,8 @@ gate on workstations and CI.
 | 7 | provider | `provider_session_timeout` | Provider attempt exceeded its absolute deadline |
 | 7 | provider | `provider_authentication_required` | Enabled provider has no local authentication |
 | 7 | provider | `provider_authentication_check_failed` | Provider authentication probe itself failed |
+| 7 | provider | `integration_language_unsupported` | Project agent-facing language has no localization capability |
+| 7 | provider | `integration_partially_refused` | An enabled provider's integration file exists and is not Forge-owned |
 | 8 | authorization | `permission_denied` | Policy denied the command |
 | 9 | confirmation | `confirmation_required` | Required human confirmation absent |
 | 10 | concurrency | `suggestion_stale` | Expected state version no longer matches |

@@ -271,6 +271,12 @@ internal sealed class FakeForgeMutations : IForgeMutations
 
     public ConfigurationScope? LastScope { get; private set; }
 
+    public int InstallIntegrationCalls { get; private set; }
+
+    public int RemoveIntegrationCalls { get; private set; }
+
+    public bool? LastIntegrationConfirmed { get; private set; }
+
     public Task<RecoverStartupResult> RecoverStartupAsync(
         string? projectRoot,
         bool confirmed,
@@ -290,6 +296,26 @@ internal sealed class FakeForgeMutations : IForgeMutations
         SetConfigurationCalls++;
         LastScope = scope;
         return Task.FromResult(ConfigurationWriteResult.Success);
+    }
+
+    public Task<IntegrationWriteResult> InstallIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        InstallIntegrationCalls++;
+        LastIntegrationConfirmed = confirmed;
+        return Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
+    }
+
+    public Task<IntegrationWriteResult> RemoveIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        RemoveIntegrationCalls++;
+        LastIntegrationConfirmed = confirmed;
+        return Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
     }
 }
 
@@ -313,6 +339,18 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         string? rawValue,
         CancellationToken cancellationToken) =>
         Task.FromResult(ConfigurationWriteResult.Success);
+
+    public Task<IntegrationWriteResult> InstallIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
+
+    public Task<IntegrationWriteResult> RemoveIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
 
     public ValueTask DisposeAsync()
     {

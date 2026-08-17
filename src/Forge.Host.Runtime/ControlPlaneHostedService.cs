@@ -288,6 +288,10 @@ public sealed class ControlPlaneHostedService(
                     await DispatchRecoverStartupAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.SetConfigurationKind =>
                     await DispatchSetConfigurationAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.InstallIntegrationKind =>
+                    await DispatchInstallIntegrationAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.RemoveIntegrationKind =>
+                    await DispatchRemoveIntegrationAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -434,6 +438,45 @@ public sealed class ControlPlaneHostedService(
                 payload.Key,
                 payload.RawValue,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchInstallIntegrationAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        IntegrationWriteRequest? payload = request.Payload is { } value
+            ? value.Deserialize<IntegrationWriteRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The install_integration payload is required.");
+        }
+
+        // Always this Host's own project, matching recover_startup/set_configuration.
+        IntegrationWriteResult result = await application
+            .InstallIntegrationAsync(options.ProjectRoot, payload.Confirmed, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchRemoveIntegrationAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        IntegrationWriteRequest? payload = request.Payload is { } value
+            ? value.Deserialize<IntegrationWriteRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The remove_integration payload is required.");
+        }
+
+        IntegrationWriteResult result = await application
+            .RemoveIntegrationAsync(options.ProjectRoot, payload.Confirmed, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

@@ -64,6 +64,17 @@ public static class DiagnosticCodes
     /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";
+
+    /// <summary>ADR 0011: the project's resolved `artifacts.language.agent_facing` is not in
+    /// <c>ILocalizationCatalog.SupportedCultures</c>; integration generation/install/remove refuses
+    /// rather than silently falling back to English.</summary>
+    public const string IntegrationLanguageUnsupported = "integration_language_unsupported";
+
+    /// <summary>ADR 0011: install or remove completed for every Forge-owned artifact, but at least
+    /// one enabled provider's target file exists and is not Forge-owned (no recognizable ownership
+    /// marker) — left untouched rather than overwritten or deleted. See the per-artifact
+    /// <c>IntegrationArtifactOutcome.Refused</c> entries for which one(s).</summary>
+    public const string IntegrationPartiallyRefused = "integration_partially_refused";
 }
 
 public enum StartupState

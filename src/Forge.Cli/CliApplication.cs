@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Localization;
 using Forge.Providers;
@@ -43,6 +44,7 @@ public static class CliApplication
         root.Subcommands.Add(CreateSprintCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
+        root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -538,6 +540,118 @@ public static class CliApplication
             output.WriteLine(text.Resolve(result.Succeeded
                 ? MessageKeys.ConfigurationUpdated
                 : MessageKeys.ConfigurationRejected));
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateIntegrationCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+    {
+        Command command = new("integration", text.Resolve(MessageKeys.IntegrationDescription));
+        Command skill = new("skill", text.Resolve(MessageKeys.IntegrationSkillDescription));
+        skill.Subcommands.Add(CreateIntegrationGenerateCommand(text, output, diagnostics, application));
+        skill.Subcommands.Add(CreateIntegrationWriteCommand(
+            text, output, diagnostics, resolveMutations, "install",
+            MessageKeys.IntegrationInstallDescription,
+            (mutations, root, confirmed, ct) => mutations.InstallIntegrationAsync(root, confirmed, ct)));
+        skill.Subcommands.Add(CreateIntegrationWriteCommand(
+            text, output, diagnostics, resolveMutations, "remove",
+            MessageKeys.IntegrationRemoveDescription,
+            (mutations, root, confirmed, ct) => mutations.RemoveIntegrationAsync(root, confirmed, ct)));
+        command.Subcommands.Add(skill);
+        return command;
+    }
+
+    private static Command CreateIntegrationGenerateCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<bool> json = CreateJsonOption();
+        Command command = new("generate", text.Resolve(MessageKeys.IntegrationGenerateDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            IntegrationInspectionResult result = await application
+                .InspectIntegrationAsync(parseResult.GetValue(projectRoot), cancellationToken)
+                .ConfigureAwait(false);
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(result));
+                return Report(diagnostics, result.DiagnosticCode);
+            }
+
+            output.WriteLine(text.Resolve(MessageKeys.IntegrationTitle));
+            if (result.Artifacts.Count == 0 && result.DiagnosticCode == DiagnosticCodes.None)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.NoIntegrationArtifacts));
+            }
+
+            foreach (IntegrationArtifactInspection inspection in result.Artifacts)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {SurfaceFormatting.IntegrationInspectionRow(inspection)}"));
+            }
+
+            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>Surfaces `.forge/rules`/`knowledge` parse failures (ADR 0009) alongside the
+    /// artifact rows, in every output mode — a document error silently degrades what generation
+    /// compiled, and dropping it from plain-text output left a user with no indication why some
+    /// content was missing.</summary>
+    private static void WriteIntegrationDocumentErrors(TextWriter output, IReadOnlyList<ForgeDocumentError> errors)
+    {
+        foreach (ForgeDocumentError error in errors)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  ! {error.RelativePath} {error.DiagnosticCode}"));
+        }
+    }
+
+    private static Command CreateIntegrationWriteCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        string name,
+        string descriptionKey,
+        Func<IForgeMutations, string?, bool, CancellationToken, Task<IntegrationWriteResult>> write)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<bool> confirm = new("--yes") { Description = "Confirm the write." };
+        Command command = new(name, text.Resolve(descriptionKey));
+        command.Options.Add(projectRoot);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            IntegrationWriteResult result = await write(
+                    mutations, root, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            output.WriteLine(text.Resolve(MessageKeys.IntegrationTitle));
+            foreach (IntegrationArtifactResult artifact in result.Artifacts)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {SurfaceFormatting.IntegrationWriteRow(artifact)}"));
+            }
+
+            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
             return Report(diagnostics, result.DiagnosticCode);
         });
         return command;

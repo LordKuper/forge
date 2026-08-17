@@ -99,4 +99,11 @@ public static class MessageKeys
     public const string SprintInspectDescription = "SprintInspectDescription";
     public const string IntegrationHeaderPreamble = "IntegrationHeaderPreamble";
     public const string IntegrationTestingInvariant = "IntegrationTestingInvariant";
+    public const string IntegrationDescription = "IntegrationDescription";
+    public const string IntegrationSkillDescription = "IntegrationSkillDescription";
+    public const string IntegrationGenerateDescription = "IntegrationGenerateDescription";
+    public const string IntegrationInstallDescription = "IntegrationInstallDescription";
+    public const string IntegrationRemoveDescription = "IntegrationRemoveDescription";
+    public const string IntegrationTitle = "IntegrationTitle";
+    public const string NoIntegrationArtifacts = "NoIntegrationArtifacts";
 }

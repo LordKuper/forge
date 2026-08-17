@@ -61,6 +61,13 @@ public sealed record RecoverStartupRequest(bool Confirmed);
 /// routed through a project's Host (see <c>Forge.Application.RemoteForgeMutations</c>).</summary>
 public sealed record SetConfigurationRequest(string Scope, string Key, string? RawValue);
 
+/// <summary>Shared by both <see cref="ControlProtocol.InstallIntegrationKind"/> and
+/// <see cref="ControlProtocol.RemoveIntegrationKind"/> — identical shape to
+/// <see cref="RecoverStartupRequest"/> for the same reason (ADR 0011: the Host always acts on its
+/// own project, and re-derives integration state fresh on every call, so no project root or
+/// expected-state-version travels on the wire).</summary>
+public sealed record IntegrationWriteRequest(bool Confirmed);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -88,6 +95,16 @@ public static class ControlProtocol
     /// <see cref="SetConfigurationRequest"/>). Response payload:
     /// <c>{"succeeded": bool, "diagnostic_code": string}</c>.</summary>
     public const string SetConfigurationKind = "set_configuration";
+
+    /// <summary>ADR 0011: writes `CLAUDE.md`/`AGENTS.md` for every enabled provider. Request
+    /// payload: an <see cref="IntegrationWriteRequest"/>. Response payload:
+    /// <c>{"artifacts": [...], "diagnostic_code": string}</c>.</summary>
+    public const string InstallIntegrationKind = "install_integration";
+
+    /// <summary>ADR 0011: deletes a Forge-owned `CLAUDE.md`/`AGENTS.md` for every enabled provider.
+    /// Request payload: an <see cref="IntegrationWriteRequest"/>. Response payload:
+    /// <c>{"artifacts": [...], "diagnostic_code": string}</c>.</summary>
+    public const string RemoveIntegrationKind = "remove_integration";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is
