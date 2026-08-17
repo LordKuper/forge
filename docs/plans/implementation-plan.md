@@ -162,7 +162,7 @@
 | 11 architecture | ADRs 0006 and 0008; supervised execution/review gate above |
 | 11 (P11.1-12) | ADR 0013; `docs/contracts/v1/schemas/confirmation-result.schema.json`; PR #53 |
 | 11 (P11.13-20) | ADR 0014; `docs/contracts/v1/schemas/execution-profile.schema.json`; PR #54 |
-| 11 (P11.21-31) | ADR 0015; `docs/contracts/v1/schemas/review-iteration.schema.json`; the PR closing P11.21-31 |
+| 11 (P11.21-31) | ADR 0015; `docs/contracts/v1/schemas/review-iteration.schema.json`; PR #55 |
 
 ## Resolved decisions
 
