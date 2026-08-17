@@ -24,6 +24,9 @@
       Include="..\..\docs\contracts\v1\schemas\project-manifest.schema.json"
       LogicalName="Forge.Configuration.Schemas.project-manifest.schema.json" />
     <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\forge-document.schema.json"
+      LogicalName="Forge.Compiler.Schemas.forge-document.schema.json" />
+    <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\event.schema.json"
       LogicalName="Forge.Application.Schemas.event.schema.json" />
     <EmbeddedResource

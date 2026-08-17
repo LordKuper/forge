@@ -23,6 +23,42 @@
       }
     },
     {
+      "name": "forge document accepts a project-scoped rule with references and a context limit",
+      "schema": "forge-document",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "id": "testing-invariant",
+        "title": "Implementation-first testing invariant",
+        "scope": "project",
+        "references": ["knowledge/adr-0006.md"],
+        "context_limit_tokens": 1200
+      }
+    },
+    {
+      "name": "forge document rejects a sprint scope the MVP does not produce yet",
+      "schema": "forge-document",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "id": "sprint-spec",
+        "title": "Sprint specification",
+        "scope": "sprint"
+      }
+    },
+    {
+      "name": "forge document rejects a context limit above the hard ceiling",
+      "schema": "forge-document",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "id": "oversized",
+        "title": "Oversized document",
+        "scope": "project",
+        "context_limit_tokens": 8001
+      }
+    },
+    {
       "name": "event accepts typed invariant data",
       "schema": "event",
       "valid": true,

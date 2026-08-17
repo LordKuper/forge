@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/forge-document.schema.json",
+  "title": "Forge canonical document frontmatter v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "title", "scope"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "id": {"type": "string", "pattern": "^[a-z0-9]([a-z0-9-]{0,62}[a-z0-9])?$"},
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "scope": {"enum": ["project"]},
+    "references": {
+      "type": "array",
+      "items": {"type": "string", "minLength": 1},
+      "uniqueItems": true
+    },
+    "context_limit_tokens": {"type": "integer", "minimum": 1, "maximum": 8000}
+  }
+}

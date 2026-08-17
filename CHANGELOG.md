@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.30.0
+
+### Added
+
+- Forge can now parse authored `.forge/rules/*.md` and `.forge/knowledge/*.md`
+  documents (Markdown with a YAML frontmatter block) into validated project
+  knowledge. Each document declares a stable id, title, scope, optional
+  references to other documents, and an optional per-document context-token
+  limit; unsafe references (path traversal, absolute paths, symlink escapes,
+  or a target outside the parsed document set) and oversized documents are
+  reported individually rather than blocking the rest of the project's rules
+  and knowledge. Nothing consumes this yet — it lands ahead of the provider
+  integration generator and context assembly that will read it.
+
 ## v0.29.1
 
 ### Changed
