@@ -130,6 +130,24 @@ stable, well-documented mechanism for both vendors today; a richer package
 format can be added as an additive minor contract change once one is
 actually needed and its shape is confirmed.
 
+`ClaudeIntegrationGenerator.Generate`/`CodexIntegrationGenerator.Generate`
+themselves contain no OS-specific call — the vendor-file-name-and-shape
+policy they encode would run identically on any OS. They still live in
+`Forge.Providers.Claude.Windows`/`Forge.Providers.Codex.Windows` rather than
+a portable location, matching where `ClaudeReleaseSource`/`CodexReleaseSource`
+(also largely OS-agnostic) already live and where Stage 8's own ADR 0007
+adapter-boundary audit already accepted them. ADR 0008 frames this
+placement as vendor ownership, not OS-call translation: "One `ILlmProvider`
+represents one complete integration"; each adapter project "exclusively
+owns its vendor's paths, scripts, commands, authentication, environment, and
+output normalization." A generated file's name and shape is exactly that
+kind of vendor-owned knowledge. Splitting it into a third, portable
+"provider-neutral-but-vendor-specific" location ahead of an actual
+non-Windows provider adapter would add structure nothing consumes yet
+(ADR 0009's own bias against building unused structure). Extraction remains
+straightforward — pure string templating with no adapter-local state — if
+and when a non-Windows provider adapter makes it worth doing.
+
 ### Generated-artifact metadata is a versioned contract
 
 `docs/contracts/v1/schemas/generated-artifact.schema.json` (Draft 2020-12)
