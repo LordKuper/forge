@@ -402,6 +402,79 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         return confirmations;
     }
 
+    public async Task SaveReviewIterationAsync(
+        string projectRoot,
+        ReviewIterationRecord record,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        WorkflowRecordCodec.ValidateReviewIteration(record);
+        string directory = ReviewIterationsDirectory(SprintDirectory(projectRoot, record.SprintId));
+        Directory.CreateDirectory(directory);
+        PersistedReviewIteration persisted = new()
+        {
+            ReviewIterationId = record.ReviewIterationId,
+            NodeId = record.NodeId.Value,
+            Dimension = WorkflowStateNames.ToSnakeCase(record.Dimension),
+            ReviewerKind = WorkflowStateNames.ToSnakeCase(record.ReviewerKind),
+            Iteration = record.Iteration,
+            Outcome = WorkflowStateNames.ToSnakeCase(record.Outcome),
+            ExternalFindings = [.. record.ExternalFindings.Select(ToPersisted)],
+            Coverage = record.Coverage is { } coverage ? ToPersisted(coverage) : null,
+            RecordedAt = record.RecordedAt,
+        };
+        await AtomicConfigurationFile.WriteAsync(
+            Path.Combine(directory, $"{record.ReviewIterationId:N}.json"),
+            JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        string directory = ReviewIterationsDirectory(SprintDirectory(projectRoot, sprintId));
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        List<ReviewIterationRecord> records = [];
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedReviewIteration persisted =
+                JsonSerializer.Deserialize<PersistedReviewIteration>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The review iteration at '{path}' is empty.");
+            records.Add(FromPersisted(sprintId, persisted));
+        }
+
+        return records;
+    }
+
+    public Task SetReviewFloorPinnedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        CancellationToken cancellationToken) =>
+        AtomicConfigurationFile.WriteAsync(
+            ReviewFloorPinPath(projectRoot, sprintId, nodeId, dimension), ReadOnlyMemory<byte>.Empty, cancellationToken);
+
+    public Task<bool> IsReviewFloorPinnedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(File.Exists(ReviewFloorPinPath(projectRoot, sprintId, nodeId, dimension)));
+
+    private static string ReviewFloorPinPath(string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension) =>
+        Path.Combine(
+            ReviewIterationsDirectory(SprintDirectory(projectRoot, sprintId)),
+            $"{nodeId}.{WorkflowStateNames.ToSnakeCase(dimension)}.floor-pinned.marker");
+
     public async Task AppendRouteDecisionAsync(
         string projectRoot,
         RouteDecision decision,
@@ -665,6 +738,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private static string ConfirmationsDirectory(string sprintDirectory) =>
         Path.Combine(sprintDirectory, "confirmations");
 
+    private static string ReviewIterationsDirectory(string sprintDirectory) =>
+        Path.Combine(sprintDirectory, "review-iterations");
+
     private static string FindingsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "findings");
 
     /// <summary>
@@ -804,6 +880,37 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             confirmation.DefinitionOfDone,
             [.. confirmation.Evidence.Select(FromPersisted)],
             confirmation.RecordedAt);
+
+    private static PersistedNormalizedFindingKey ToPersisted(NormalizedFindingKey key) =>
+        new() { File = key.File, Line = key.Line, Rule = key.Rule, MessageFingerprint = key.MessageFingerprint };
+
+    private static NormalizedFindingKey FromPersisted(PersistedNormalizedFindingKey key) =>
+        new(key.File, key.Line, key.Rule, key.MessageFingerprint);
+
+    private static PersistedCoverageLedger ToPersisted(CoverageLedger ledger) =>
+        new()
+        {
+            ScopedFiles = [.. ledger.ScopedFiles],
+            RubricItemIds = [.. ledger.RubricItemIds],
+            CoveredFiles = [.. ledger.CoveredFiles],
+            CoveredRubricItemIds = [.. ledger.CoveredRubricItemIds],
+        };
+
+    private static CoverageLedger FromPersisted(PersistedCoverageLedger ledger) =>
+        new(ledger.ScopedFiles, ledger.RubricItemIds, ledger.CoveredFiles, ledger.CoveredRubricItemIds);
+
+    private static ReviewIterationRecord FromPersisted(SprintId sprintId, PersistedReviewIteration record) =>
+        new(
+            record.ReviewIterationId,
+            sprintId,
+            new(record.NodeId),
+            WorkflowStateNames.Parse<ReviewDimension>(record.Dimension),
+            WorkflowStateNames.Parse<ReviewerKind>(record.ReviewerKind),
+            record.Iteration,
+            WorkflowStateNames.Parse<ReviewOutcome>(record.Outcome),
+            [.. record.ExternalFindings.Select(FromPersisted)],
+            record.Coverage is { } coverage ? FromPersisted(coverage) : null,
+            record.RecordedAt);
 
     private static PersistedDependency ToPersisted(SprintDependency dependency) =>
         new()
@@ -1522,5 +1629,48 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string ImplementationModel { get; set; } = string.Empty;
 
         public bool AchievedIndependence { get; set; }
+    }
+
+    private sealed class PersistedReviewIteration
+    {
+        public Guid ReviewIterationId { get; set; }
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Dimension { get; set; } = string.Empty;
+
+        public string ReviewerKind { get; set; } = string.Empty;
+
+        public int Iteration { get; set; }
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public List<PersistedNormalizedFindingKey> ExternalFindings { get; set; } = [];
+
+        public PersistedCoverageLedger? Coverage { get; set; }
+
+        public DateTimeOffset RecordedAt { get; set; }
+    }
+
+    private sealed class PersistedNormalizedFindingKey
+    {
+        public string? File { get; set; }
+
+        public int? Line { get; set; }
+
+        public string Rule { get; set; } = string.Empty;
+
+        public string MessageFingerprint { get; set; } = string.Empty;
+    }
+
+    private sealed class PersistedCoverageLedger
+    {
+        public List<string> ScopedFiles { get; set; } = [];
+
+        public List<string> RubricItemIds { get; set; } = [];
+
+        public List<string> CoveredFiles { get; set; } = [];
+
+        public List<string> CoveredRubricItemIds { get; set; } = [];
     }
 }

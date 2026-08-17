@@ -23,6 +23,8 @@ internal static class WorkflowRecordCodec
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.confirmation-result.schema.json");
     private static readonly JsonSchema ExecutionProfileSchema =
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.execution-profile.schema.json");
+    private static readonly JsonSchema ReviewIterationSchema =
+        SchemaValidation.LoadEmbedded("Forge.Application.Schemas.review-iteration.schema.json");
     private static readonly JsonSerializerOptions JsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static void ValidateNodeResult(NodeResult result)
@@ -147,6 +149,41 @@ internal static class WorkflowRecordCodec
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), ExecutionProfileSchema, "execution profile");
+    }
+
+    public static void ValidateReviewIteration(ReviewIterationRecord record)
+    {
+        ArgumentNullException.ThrowIfNull(record);
+        WireReviewIteration wire = new()
+        {
+            ReviewIterationId = record.ReviewIterationId.ToString("D"),
+            SprintId = record.SprintId.Value.ToString("D"),
+            NodeId = record.NodeId.Value,
+            Dimension = WorkflowStateNames.ToSnakeCase(record.Dimension),
+            ReviewerKind = WorkflowStateNames.ToSnakeCase(record.ReviewerKind),
+            Iteration = record.Iteration,
+            Outcome = WorkflowStateNames.ToSnakeCase(record.Outcome),
+            ExternalFindings = [.. record.ExternalFindings.Select(
+                item => new WireNormalizedFindingKey
+                {
+                    File = item.File,
+                    Line = item.Line,
+                    Rule = item.Rule,
+                    MessageFingerprint = item.MessageFingerprint,
+                })],
+            Coverage = record.Coverage is { } coverage
+                ? new()
+                {
+                    ScopedFiles = [.. coverage.ScopedFiles],
+                    RubricItemIds = [.. coverage.RubricItemIds],
+                    CoveredFiles = [.. coverage.CoveredFiles],
+                    CoveredRubricItemIds = [.. coverage.CoveredRubricItemIds],
+                }
+                : null,
+            RecordedAt = record.RecordedAt,
+        };
+        SchemaValidation.Validate(
+            JsonSerializer.SerializeToElement(wire, JsonOptions), ReviewIterationSchema, "review iteration");
     }
 
     private sealed class WireNodeResult
@@ -309,5 +346,52 @@ internal static class WorkflowRecordCodec
         public string ImplementationModel { get; set; } = string.Empty;
 
         public bool AchievedIndependence { get; set; }
+    }
+
+    private sealed class WireReviewIteration
+    {
+        public string SchemaVersion { get; set; } = "1.0.0";
+
+        public string ReviewIterationId { get; set; } = string.Empty;
+
+        public string SprintId { get; set; } = string.Empty;
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Dimension { get; set; } = string.Empty;
+
+        public string ReviewerKind { get; set; } = string.Empty;
+
+        public int Iteration { get; set; }
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public List<WireNormalizedFindingKey> ExternalFindings { get; set; } = [];
+
+        public WireCoverageLedger? Coverage { get; set; }
+
+        public DateTimeOffset RecordedAt { get; set; }
+    }
+
+    private sealed class WireNormalizedFindingKey
+    {
+        public string? File { get; set; }
+
+        public int? Line { get; set; }
+
+        public string Rule { get; set; } = string.Empty;
+
+        public string MessageFingerprint { get; set; } = string.Empty;
+    }
+
+    private sealed class WireCoverageLedger
+    {
+        public List<string> ScopedFiles { get; set; } = [];
+
+        public List<string> RubricItemIds { get; set; } = [];
+
+        public List<string> CoveredFiles { get; set; } = [];
+
+        public List<string> CoveredRubricItemIds { get; set; } = [];
     }
 }

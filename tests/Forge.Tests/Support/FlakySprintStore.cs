@@ -90,6 +90,24 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken);
 
+    public Task SaveReviewIterationAsync(
+        string projectRoot, ReviewIterationRecord record, CancellationToken cancellationToken) =>
+        inner.SaveReviewIterationAsync(projectRoot, record, cancellationToken);
+
+    public Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
+        string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+        inner.GetReviewIterationsAsync(projectRoot, sprintId, cancellationToken);
+
+    public Task SetReviewFloorPinnedAsync(
+        string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension,
+        CancellationToken cancellationToken) =>
+        inner.SetReviewFloorPinnedAsync(projectRoot, sprintId, nodeId, dimension, cancellationToken);
+
+    public Task<bool> IsReviewFloorPinnedAsync(
+        string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension,
+        CancellationToken cancellationToken) =>
+        inner.IsReviewFloorPinnedAsync(projectRoot, sprintId, nodeId, dimension, cancellationToken);
+
     public Task AppendRouteDecisionAsync(
         string projectRoot, RouteDecision decision, CancellationToken cancellationToken) =>
         inner.AppendRouteDecisionAsync(projectRoot, decision, cancellationToken);

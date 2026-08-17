@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Forge.Domain;
 
 namespace Forge.Application;
@@ -16,6 +17,10 @@ public sealed record RecordFindingResult(bool Succeeded, Finding? Finding, strin
 public sealed record RecordHandoffResult(bool Succeeded, Handoff? Handoff, string DiagnosticCode);
 
 public sealed record RecordConfirmationResult(bool Succeeded, ConfirmationArtifact? Confirmation, string DiagnosticCode);
+
+public sealed record RecordReviewIterationResult(bool Succeeded, ReviewIterationRecord? Record, string DiagnosticCode);
+
+public sealed record ResolveReviewConvergenceResult(bool Succeeded, string DiagnosticCode);
 
 public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attempt, string DiagnosticCode);
 
@@ -34,6 +39,11 @@ public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attem
 public sealed class SprintScheduler(ISprintStore store, IClock clock)
 {
     public const int MaxAutomaticRetries = 2;
+
+    // Matches `finding.schema.json`'s own `message_key` pattern — validated here too since
+    // `RecordReviewIterationAsync` must reject a malformed `ReviewFindingDraft` before persisting
+    // anything, not discover the same constraint mid-loop via a schema-validation exception.
+    private static readonly Regex MessageKeyPattern = new("^[a-z0-9_.-]+$", RegexOptions.Compiled);
 
     private static readonly AttemptState[] AttemptSucceededPath =
     [
@@ -766,12 +776,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     }
 
     /// <summary>A durable <see cref="WorkflowEvent.BlockedReasonArgument"/> tag for each of the
-    /// four sites that can append a sprint's `blocked` transition — a stuck/failed node
+    /// five sites that can append a sprint's `blocked` transition — a stuck/failed node
     /// (<see cref="EvaluateCompletionAsync"/>), a late-arriving open finding
     /// (<see cref="RecordFindingAsync"/>), a rejected human gate
-    /// (<see cref="SynchronizeSprintGateStateAsync"/>), and a `NotConfirmed` confirmation
-    /// (<see cref="RecordConfirmationAsync"/>). Only <see cref="BlockedByFinding"/> may ever
-    /// recover automatically; the other three require the operator's explicit
+    /// (<see cref="SynchronizeSprintGateStateAsync"/>), a `NotConfirmed` confirmation
+    /// (<see cref="RecordConfirmationAsync"/>), and a review-convergence trigger
+    /// (<see cref="RecordReviewIterationAsync"/>). Only <see cref="BlockedByFinding"/> may ever
+    /// recover automatically; the other four require the operator's explicit
     /// `resume_sprint`/`run_sprint` decision, and nothing here may blur that distinction by treating
     /// "every node happens to be settled good right now" as proof of *why* it got that way.</summary>
     private const string BlockedByNode = "node";
@@ -781,6 +792,50 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     private const string BlockedByGate = "gate";
 
     private const string BlockedByConfirmation = "confirmation";
+
+    private const string BlockedByReviewConvergence = "review_convergence";
+
+    /// <summary>
+    /// Appends a `blocked` transition with <paramref name="reason"/> if (and only if) the sprint is
+    /// currently in a blockable state (<see cref="SprintState.Running"/> or
+    /// <see cref="SprintState.ReadyToFinalize"/>), retrying up to 5 times on a version conflict.
+    /// Returns <see langword="true"/> when nothing needed blocking, or the block landed;
+    /// <see langword="false"/> only when blocking was needed and never landed after retrying —
+    /// callers that already made their own primary effect durable (a confirmation artifact, a
+    /// review-iteration record) use that to report a partial failure without losing the artifact
+    /// itself, since this append is only ever the sprint's secondary, operator-visible signal.
+    /// </summary>
+    private async Task<bool> TryBlockSprintAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string reason,
+        CancellationToken cancellationToken)
+    {
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            if (state.Sprint.State is not (SprintState.Running or SprintState.ReadyToFinalize))
+            {
+                return true;
+            }
+
+            AppendOutcome blocked = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+                "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
+                state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.BlockedReasonArgument] = reason,
+                }).ConfigureAwait(false);
+            if (blocked.Succeeded)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// The one narrow, explicit path that may resume a finding-blocked sprint automatically:
@@ -1015,46 +1070,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         if (outcome != ConfirmationOutcome.Confirmed)
         {
-            // Retried on a version conflict rather than fired once: this append is the sprint's
-            // *only* durable, operator-visible signal that a `NotConfirmed` verdict landed (the
-            // artifact itself already blocks eligibility via `IsTestWorkEligibleAsync` regardless
-            // of whether this succeeds, but a lost append here would otherwise leave the sprint
-            // silently `running` with no indication anything needs attention). `blockNeeded` stays
-            // false (and this reports success) when the sprint was not even in a blockable state to
-            // begin with — that is not a failure to surface, since there is nothing this call could
-            // have done.
-            bool blockNeeded = false;
-            bool blockLanded = false;
-            for (int attempt = 0; attempt < 5; attempt++)
+            // The artifact itself already blocks eligibility via `IsTestWorkEligibleAsync`
+            // regardless of whether this lands — only the secondary, operator-visible block signal
+            // can fail here.
+            if (!await TryBlockSprintAsync(projectRoot, sprintId, BlockedByConfirmation, cancellationToken)
+                .ConfigureAwait(false))
             {
-                SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
-                    .ConfigureAwait(false);
-                if (state.Sprint.State is not (SprintState.Running or SprintState.ReadyToFinalize))
-                {
-                    break;
-                }
-
-                blockNeeded = true;
-                AppendOutcome blocked = await store.AppendTransitionAsync(
-                    projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
-                    "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
-                    state.Sprint.Version, Guid.NewGuid(), cancellationToken,
-                    new Dictionary<string, string?>(StringComparer.Ordinal)
-                    {
-                        [WorkflowEvent.BlockedReasonArgument] = BlockedByConfirmation,
-                    }).ConfigureAwait(false);
-                if (blocked.Succeeded)
-                {
-                    blockLanded = true;
-                    break;
-                }
-            }
-
-            if (blockNeeded && !blockLanded)
-            {
-                // The artifact itself is already durable and already governs eligibility — only the
-                // secondary, operator-visible block signal failed to land, so the caller is told
-                // that specifically rather than losing it silently.
                 return new(false, confirmation, DiagnosticCodes.WorkflowEventConflict);
             }
         }
@@ -1074,6 +1095,239 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         SprintId sprintId,
         CancellationToken cancellationToken) =>
         store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// Records one review iteration's combined verdict for <paramref name="nodeId"/> (a
+    /// <see cref="NodeRole.Review"/> node) and <paramref name="dimension"/> — ADR 0006's ASD
+    /// severity-floor policy (see <see cref="ReviewConvergencePolicy"/>). <see cref="ReviewIterationRecord.Iteration"/>
+    /// is derived: the count of prior records for the same (node, dimension) plus one. A
+    /// <see cref="ReviewerKind.Internal"/> call with a missing or incomplete
+    /// <paramref name="coverage"/> ledger records nothing and does not consume an iteration — ADR
+    /// 0006: "An incomplete ledger invalidates that verdict and causes one fresh re-dispatch in the
+    /// same iteration." On <see cref="ReviewOutcome.ChangesRequested"/>, every finding at or above
+    /// the iteration's severity floor (or the pinned critical floor, once
+    /// <see cref="PinReviewFloorAsync"/> has been called for this dimension) is recorded the normal,
+    /// blocking way via <see cref="RecordFindingAsync"/>; findings below the floor are still
+    /// recorded, but immediately <see cref="FindingStatus.Dismissed"/> — "dropped, not silently
+    /// lost." The sprint is blocked (reason <c>review_convergence</c>, matching the
+    /// <c>confirmation</c>/<c>node</c>/<c>gate</c> family — an explicit
+    /// `resume_sprint`/`run_sprint` is always required afterward, nothing here auto-recovers) when
+    /// either: this is a <see cref="ReviewOutcome.ChangesRequested"/> verdict whose iteration would
+    /// exceed the cumulative severity-floor budget and the floor is not already pinned
+    /// (<see cref="DiagnosticCodes.ReviewIterationLimit"/> — an <see cref="ReviewOutcome.Approved"/>
+    /// verdict never trips this, however high its iteration number: nothing is left to converge
+    /// on once review has approved), or this is an external reviewer's
+    /// <see cref="ReviewOutcome.ChangesRequested"/> repeating the immediately preceding external
+    /// iteration's exact normalized finding set (<see cref="DiagnosticCodes.ReviewRepeatedFindings"/>).
+    /// </summary>
+    public async Task<RecordReviewIterationResult> RecordReviewIterationAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        ReviewerKind reviewerKind,
+        ReviewOutcome outcome,
+        IReadOnlyList<ReviewFindingDraft> findings,
+        CoverageLedger? coverage,
+        CancellationToken cancellationToken)
+    {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null)
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        if (definedNode.Role != NodeRole.Review)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        if (reviewerKind == ReviewerKind.Internal &&
+            (coverage is null || !ReviewConvergencePolicy.IsCoverageComplete(coverage)))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
+        // Every draft must already satisfy `finding.schema.json`'s own constraints — non-empty
+        // evidence, a message key matching its `^[a-z0-9_.-]+$` pattern, and a location line of at
+        // least 1 when a location is given — before anything is recorded, checked once, up front,
+        // so a malformed draft fails cleanly with no iteration consumed (the same "invalid input,
+        // nothing recorded" rule the coverage-ledger check above already enforces), rather than
+        // reaching `RecordFindingAsync`/`SaveFindingAsync` mid-loop with some findings already
+        // durable and others not.
+        if (outcome == ReviewOutcome.ChangesRequested &&
+            findings.Any(finding =>
+                finding.Evidence.Count == 0 || !MessageKeyPattern.IsMatch(finding.MessageKey) ||
+                finding.Location?.Line < 1))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
+        IReadOnlyList<ReviewIterationRecord> priorForDimension = [.. (await store
+                .GetReviewIterationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false))
+            .Where(item => item.NodeId.Value == nodeId && item.Dimension == dimension)
+            .OrderBy(item => item.Iteration)];
+        // ponytail: derived from a plain count, not committed under an expected-version compare
+        // like `StartAttemptAsync`'s attempt numbers — two genuinely concurrent calls for the same
+        // (node, dimension) could compute the same iteration number, since nothing here claims it
+        // atomically. Matches this class's own documented single-process assumption elsewhere
+        // (`AppendNodeAsync`'s remarks); add a version-gated claim if this engine ever needs to run
+        // outside that assumption.
+        int iteration = priorForDimension.Count + 1;
+        bool floorPinned = await store
+            .IsReviewFloorPinnedAsync(projectRoot, sprintId, nodeId, dimension, cancellationToken)
+            .ConfigureAwait(false);
+
+        List<NormalizedFindingKey> externalKeys = reviewerKind == ReviewerKind.External
+            ? [.. findings.Select(finding => new NormalizedFindingKey(
+                finding.Location?.Path, finding.Location?.Line, finding.MessageKey,
+                Fingerprint(sprintId, finding.MessageKey, finding.Evidence)))]
+            : [];
+        bool repeated = reviewerKind == ReviewerKind.External && outcome == ReviewOutcome.ChangesRequested &&
+            ReviewConvergencePolicy.HasRepeatedExternalFindingSet(
+                [.. priorForDimension.Where(item => item.ReviewerKind == ReviewerKind.External)], externalKeys);
+        // Only an unresolved `ChangesRequested` verdict has anything left to converge on — an
+        // *approving* verdict that happens to land on iteration 15 closed the review; gating it
+        // the same way as a real budget overrun would force a needless operator decision.
+        bool exceedsLimit = outcome == ReviewOutcome.ChangesRequested && !floorPinned &&
+            ReviewConvergencePolicy.RequiresConvergenceGate(iteration);
+
+        ReviewIterationRecord record = new(
+            Guid.NewGuid(), sprintId, new(nodeId), dimension, reviewerKind, iteration, outcome, externalKeys,
+            coverage, clock.UtcNow);
+        try
+        {
+            await store.SaveReviewIterationAsync(projectRoot, record, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
+        // Blocked *before* any finding is recorded below, deliberately: an at-or-above-floor
+        // finding recorded via `RecordFindingAsync` can itself block a `ReadyToFinalize` sprint
+        // with reason `finding` — the one reason that recovers automatically once every open
+        // finding clears. If that ran first, `TryBlockSprintAsync` below would find the sprint
+        // already `Blocked` and no-op, leaving the durable reason `finding` instead of
+        // `review_convergence` — silently laundering a gate that requires an explicit operator
+        // decision into one that resolving the findings alone would clear.
+        bool convergenceBlockLanded = true;
+        if (exceedsLimit || repeated)
+        {
+            // `TryBlockSprintAsync` itself only appends from `Running`/`ReadyToFinalize` — if the
+            // sprint is *already* `Blocked` for some other, possibly auto-recovering reason (e.g.
+            // a still-open finding from an earlier, unresolved call), it would otherwise return
+            // `true` as a harmless-looking no-op, silently discarding this trigger instead of
+            // durably recording it. `Blocked -> Blocked` is not a legal sprint transition (this
+            // class's `IsLegalTransition` check would reject it), so there is no way to durably
+            // re-tag the block reason while already blocked. Checked explicitly here so that case
+            // reports a real failure instead of a false success — see ADR 0015's "known
+            // limitation" note for what a complete fix would need.
+            SprintWorkflowState currentState = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            convergenceBlockLanded = currentState.Sprint.State is SprintState.Running or SprintState.ReadyToFinalize &&
+                await TryBlockSprintAsync(projectRoot, sprintId, BlockedByReviewConvergence, cancellationToken)
+                    .ConfigureAwait(false);
+        }
+
+        if (outcome == ReviewOutcome.ChangesRequested)
+        {
+            FindingSeverity floor = floorPinned
+                ? FindingSeverity.Critical
+                : ReviewConvergencePolicy.SeverityFloorFor(iteration);
+            foreach (ReviewFindingDraft finding in findings)
+            {
+                if (ReviewConvergencePolicy.IsAtOrAboveFloor(finding.Severity, floor))
+                {
+                    RecordFindingResult recorded = await RecordFindingAsync(
+                        projectRoot, sprintId, finding.Severity, finding.MessageKey, finding.Arguments,
+                        finding.Evidence, finding.Location, cancellationToken).ConfigureAwait(false);
+                    if (!recorded.Succeeded)
+                    {
+                        // The iteration record is already durable (it governs eligibility/counting
+                        // regardless), but a finding this verdict was supposed to leave open never
+                        // landed — that must not be reported as a clean success.
+                        return new(false, record, recorded.DiagnosticCode);
+                    }
+                }
+                else
+                {
+                    try
+                    {
+                        await store.SaveFindingAsync(
+                            projectRoot,
+                            new(
+                                Guid.NewGuid(), sprintId, Fingerprint(sprintId, finding.MessageKey, finding.Evidence),
+                                finding.Severity, FindingStatus.Dismissed, finding.MessageKey, finding.Arguments,
+                                finding.Evidence, finding.Location),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return new(false, record, DiagnosticCodes.WorkflowRecordInvalid);
+                    }
+                }
+            }
+        }
+
+        if (exceedsLimit || repeated)
+        {
+            if (!convergenceBlockLanded)
+            {
+                return new(false, record, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            return new(
+                true, record, exceedsLimit ? DiagnosticCodes.ReviewIterationLimit : DiagnosticCodes.ReviewRepeatedFindings);
+        }
+
+        return new(true, record, DiagnosticCodes.None);
+    }
+
+    public Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken) =>
+        store.GetReviewIterationsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// Pins <paramref name="dimension"/>'s severity floor at <see cref="FindingSeverity.Critical"/>
+    /// from now on — the operator's "continue" choice at a review-convergence human gate. ADR
+    /// 0006: "User-approved continuation keeps the counter and pins the floor at critical; it never
+    /// resets or re-admits lower severities" — a one-way marker, never revoked, and deliberately
+    /// not itself a sprint resume: the operator still issues an explicit `resume_sprint`/
+    /// `run_sprint`, same as every other blocked-sprint recovery. "Accept current findings" needs
+    /// no new capability here — a caller already has <see cref="ResolveFindingAsync"/> for that;
+    /// "abort" is exactly <c>SprintOrchestrator.CancelSprintAsync</c>.
+    /// </summary>
+    public async Task<NodeActionResult> PinReviewFloorAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        CancellationToken cancellationToken)
+    {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null)
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        if (definedNode.Role != NodeRole.Review)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        await store.SetReviewFloorPinnedAsync(projectRoot, sprintId, nodeId, dimension, cancellationToken)
+            .ConfigureAwait(false);
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, state.Nodes.GetValueOrDefault(nodeId), DiagnosticCodes.None);
+    }
 
     /// <summary>
     /// True once every <see cref="NodeRole.Confirmation"/>-role dependency of <paramref name="node"/>
