@@ -186,18 +186,22 @@ public sealed class IntegrationInstallationService(IntegrationGenerationService 
         string expectedDigest,
         CancellationToken cancellationToken)
     {
+        if (new FileInfo(path).LinkTarget is not null)
+        {
+            // Checked before File.Exists, not after: File.Exists follows the link and reports
+            // false for a symlink whose target is missing/outside the project (POSIX stat()
+            // semantics on Linux/macOS) — which would otherwise fall through to Missing and let
+            // AtomicConfigurationFile.WriteAsync's File.Move silently replace the dangling symlink
+            // with a plain file instead of refusing it. No legitimate installed integration file is
+            // ever a symlink, so any reparse point at this path is conservatively foreign — the
+            // same as an unrecognized marker — regardless of what it resolves to or whether it
+            // resolves at all (ADR 0011).
+            return IntegrationArtifactState.Foreign;
+        }
+
         if (!File.Exists(path))
         {
             return IntegrationArtifactState.Missing;
-        }
-
-        if (new FileInfo(path).LinkTarget is not null)
-        {
-            // No legitimate installed integration file is ever a symlink — reading through one
-            // would judge Current/Stale/Foreign against whatever it points at, and writing/deleting
-            // through one would mutate that target instead of a plain file at this path (ADR 0011).
-            // Conservatively foreign, the same as an unrecognized marker.
-            return IntegrationArtifactState.Foreign;
         }
 
         string existing;

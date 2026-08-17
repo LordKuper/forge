@@ -162,6 +162,36 @@ public sealed class IntegrationInstallationServiceTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task InstallRefusesADanglingSymlinkInsteadOfSilentlyReplacingIt()
+    {
+        // File.Exists follows a symlink and reports false when its target is missing (POSIX
+        // stat() semantics on Linux/macOS) — the symlink check must not depend on File.Exists
+        // having already returned true, or a dangling link would fall through to Missing and get
+        // silently replaced by AtomicConfigurationFile.WriteAsync's File.Move.
+        using TempForgeProject project = new();
+        string targetPath = Path.Combine(project.Root, ArtifactName);
+        string nonExistentTarget = Path.Combine(Path.GetTempPath(), $"forge-integration-absent-{Guid.NewGuid():N}.md");
+        try
+        {
+            File.CreateSymbolicLink(targetPath, nonExistentTarget);
+        }
+        catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
+        {
+            Assert.Skip("Symlink creation is not permitted in this environment.");
+            return;
+        }
+
+        IntegrationInstallationService service = CreateService();
+
+        IntegrationWriteResult result = await service.InstallAsync(
+            project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+
+        Assert.Equal(IntegrationArtifactOutcome.Refused, Assert.Single(result.Artifacts).Outcome);
+        Assert.False(File.Exists(nonExistentTarget));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RemoveDeletesAForgeOwnedArtifact()
     {
         using TempForgeProject project = new();
