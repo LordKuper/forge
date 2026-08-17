@@ -41,9 +41,18 @@ public sealed class ForgeDocumentCompiler
     public async Task<ForgeDocumentSet> ParseAsync(string projectRoot, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
-        string forgeRoot = ProjectRootResolver.ForgeDirectory(Path.GetFullPath(projectRoot));
+        string projectRootFull = Path.GetFullPath(projectRoot);
+        string forgeRoot = ProjectRootResolver.ForgeDirectory(projectRootFull);
 
         List<ForgeDocumentError> errors = [];
+        if (Directory.Exists(forgeRoot) && EscapesContainment(forgeRoot, projectRootFull))
+        {
+            return new([], [new(
+                $"{ProjectRootResolver.ForgeDirectoryName}/",
+                ForgeDocumentDiagnosticCodes.LocationUnsafe,
+                $"'{ProjectRootResolver.ForgeDirectoryName}/' is a symlink that resolves outside the project root; no documents were parsed.")]);
+        }
+
         List<Candidate> candidates = [
             .. Discover(forgeRoot, RulesDirectoryName, ForgeDocumentKind.Rule, errors),
             .. Discover(forgeRoot, KnowledgeDirectoryName, ForgeDocumentKind.Knowledge, errors),
@@ -165,8 +174,7 @@ public sealed class ForgeDocumentCompiler
             yield break;
         }
 
-        string? directoryTarget = new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-        if (directoryTarget is not null && !IsWithin(forgeRoot, directoryTarget))
+        if (EscapesContainment(directory, forgeRoot))
         {
             errors.Add(new(
                 $"{directoryName}/",
@@ -180,8 +188,7 @@ public sealed class ForgeDocumentCompiler
             string fileName = Path.GetFileName(fullPath);
             string relativePath = $"{directoryName}/{fileName}";
             string candidateFull = Path.GetFullPath(fullPath);
-            string? fileTarget = new FileInfo(candidateFull).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-            if (fileTarget is not null && !IsWithin(forgeRoot, fileTarget))
+            if (EscapesContainment(candidateFull, forgeRoot))
             {
                 errors.Add(new(
                     relativePath,
@@ -338,8 +345,7 @@ public sealed class ForgeDocumentCompiler
             return false;
         }
 
-        string? finalTarget = new FileInfo(candidateFull).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
-        if (finalTarget is not null && !IsWithin(forgeRoot, finalTarget))
+        if (EscapesContainment(candidateFull, forgeRoot))
         {
             reason = "it resolves outside .forge/ through a symlink";
             return false;
@@ -361,6 +367,20 @@ public sealed class ForgeDocumentCompiler
         string normalizedRoot = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
             Path.DirectorySeparatorChar;
         return candidate.StartsWith(normalizedRoot, PathComparison);
+    }
+
+    /// <summary>Resolves <paramref name="path"/> as a reparse point (file or directory) and
+    /// reports whether its final target escapes <paramref name="containingRoot"/>. Shared by
+    /// every symlink-escape check in this compiler — a `.forge/` that is itself a symlink escaping
+    /// the project root, a `rules/`/`knowledge/` directory that is a symlink escaping `.forge/`, a
+    /// candidate `.md` file that is a symlink escaping `.forge/`, and a `references` entry that
+    /// resolves to a symlink escaping `.forge/` — so all four sites apply the identical rule.</summary>
+    private static bool EscapesContainment(string path, string containingRoot)
+    {
+        string? target = Directory.Exists(path)
+            ? new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true)?.FullName
+            : new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        return target is not null && !IsWithin(containingRoot, target);
     }
 
     private static bool TrySplitFrontmatter(string text, out string frontmatter, out string body)

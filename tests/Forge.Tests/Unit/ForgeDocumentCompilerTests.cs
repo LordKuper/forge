@@ -142,7 +142,9 @@ public sealed class ForgeDocumentCompilerTests
         catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
         {
             // Creating a symlink requires elevated privileges or Developer Mode on some Windows
-            // CI runners; the safe-path check under test cannot be exercised there.
+            // CI runners; the safe-path check under test cannot be exercised there. Assert.Skip
+            // reports this as skipped rather than silently passing, so lost coverage stays visible.
+            Assert.Skip("Symlink creation is not permitted in this environment.");
             return;
         }
 
@@ -194,20 +196,32 @@ public sealed class ForgeDocumentCompilerTests
     public async Task ReferenceDangledByDuplicateIdRejectionIsAlsoRejected()
     {
         using TempForgeProject project = new();
-        project.WriteKnowledge("b.md", Frontmatter("dup", "B") + "Body B.");
-        project.WriteKnowledge("c.md", Frontmatter("dup", "C") + "Body C.");
+        project.WriteKnowledge("z1.md", Frontmatter("dup", "Z1") + "Body Z1.");
+        project.WriteKnowledge("z2.md", Frontmatter("dup", "Z2") + "Body Z2.");
+        // y references the (soon-to-be-rejected) duplicate directly; x references y, not z —
+        // this is a two-hop cascade a single filtering pass over the post-duplicate-removal
+        // snapshot would miss, since x's reference to y is still "valid" at the moment that pass
+        // starts. Only a fixed-point loop that recomputes survivors after each removal catches x.
         project.WriteRule(
-            "a.md",
-            Frontmatter("referrer", "A", references: ["knowledge/b.md"]) + "References B.");
+            "y.md",
+            Frontmatter("y-doc", "Y", references: ["knowledge/z1.md"]) + "References Z1.");
+        project.WriteRule(
+            "x.md",
+            Frontmatter("x-doc", "X", references: ["rules/y.md"]) + "References Y.");
 
         ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
             project.Root, TestContext.Current.CancellationToken);
 
         Assert.Empty(set.Documents);
-        ForgeDocumentError duplicateOfB = Assert.Single(set.Errors, e => e.RelativePath == "knowledge/b.md");
-        Assert.Equal(ForgeDocumentDiagnosticCodes.DuplicateId, duplicateOfB.DiagnosticCode);
-        ForgeDocumentError dangling = Assert.Single(set.Errors, e => e.RelativePath == "rules/a.md");
-        Assert.Equal(ForgeDocumentDiagnosticCodes.ReferenceUnsafe, dangling.DiagnosticCode);
+        Assert.Equal(4, set.Errors.Count);
+        Assert.Contains(set.Errors, e => e.RelativePath == "knowledge/z1.md" &&
+            e.DiagnosticCode == ForgeDocumentDiagnosticCodes.DuplicateId);
+        Assert.Contains(set.Errors, e => e.RelativePath == "knowledge/z2.md" &&
+            e.DiagnosticCode == ForgeDocumentDiagnosticCodes.DuplicateId);
+        Assert.Contains(set.Errors, e => e.RelativePath == "rules/y.md" &&
+            e.DiagnosticCode == ForgeDocumentDiagnosticCodes.ReferenceUnsafe);
+        Assert.Contains(set.Errors, e => e.RelativePath == "rules/x.md" &&
+            e.DiagnosticCode == ForgeDocumentDiagnosticCodes.ReferenceUnsafe);
     }
 
     [Fact]
@@ -232,6 +246,9 @@ public sealed class ForgeDocumentCompilerTests
             {
                 // Creating a symlink requires elevated privileges or Developer Mode on some
                 // Windows CI runners; the safe-path check under test cannot be exercised there.
+                // Assert.Skip reports this as skipped rather than silently passing, so lost
+                // coverage stays visible.
+                Assert.Skip("Symlink creation is not permitted in this environment.");
                 return;
             }
 
@@ -275,6 +292,9 @@ public sealed class ForgeDocumentCompilerTests
             {
                 // Creating a symlink requires elevated privileges or Developer Mode on some
                 // Windows CI runners; the safe-path check under test cannot be exercised there.
+                // Assert.Skip reports this as skipped rather than silently passing, so lost
+                // coverage stays visible.
+                Assert.Skip("Symlink creation is not permitted in this environment.");
                 return;
             }
 
@@ -292,6 +312,49 @@ public sealed class ForgeDocumentCompilerTests
         finally
         {
             File.Delete(outsideFile);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SymlinkedForgeDirectoryItselfIsRejected()
+    {
+        string projectRoot = Directory.CreateTempSubdirectory("forge-doc-tests-").FullName;
+        string outsideDirectory = Path.Combine(Path.GetTempPath(), $"forge-doc-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outsideDirectory);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(outsideDirectory, "leaked.md"),
+                Frontmatter("leaked", "Leaked") + "Should never be admitted.",
+                TestContext.Current.CancellationToken);
+            string link = ProjectRootResolver.ForgeDirectory(projectRoot);
+            try
+            {
+                Directory.CreateSymbolicLink(link, outsideDirectory);
+            }
+            catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
+            {
+                // Creating a symlink requires elevated privileges or Developer Mode on some
+                // Windows CI runners; the safe-path check under test cannot be exercised there.
+                // Assert.Skip reports this as skipped rather than silently passing, so lost
+                // coverage stays visible.
+                Assert.Skip("Symlink creation is not permitted in this environment.");
+                return;
+            }
+
+            ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+                projectRoot, TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(set.Documents, document => document.Id == "leaked");
+            ForgeDocumentError error = Assert.Single(set.Errors);
+            Assert.Equal(".forge/", error.RelativePath);
+            Assert.Equal(ForgeDocumentDiagnosticCodes.LocationUnsafe, error.DiagnosticCode);
+        }
+        finally
+        {
+            Directory.Delete(outsideDirectory, true);
+            Directory.Delete(projectRoot, true);
         }
     }
 
