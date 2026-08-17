@@ -15,9 +15,6 @@ public enum RubricCategory
 /// </summary>
 public sealed record RubricItem(string Id, RubricCategory Category, string Description);
 
-/// <summary>Whether one <see cref="RubricItem"/> applies to a specific change, and why.</summary>
-public sealed record RubricAssessment(string ItemId, bool Applicable, string Rationale);
-
 /// <summary>
 /// Forge's built-in `implementation-critical` threat/rule rubric. Nothing evaluates this against a
 /// real change yet — that needs an intake/planning node's executor, which lands with Stage 11's

@@ -78,14 +78,26 @@ change.
 `ConfirmationArtifact` (`Forge.Domain`, `confirmation-result.schema.json`)
 is a confirmation node's recorded judgment: an `Outcome`
 (`Confirmed`/`NotConfirmed`), the `DefinitionOfDone` or expectation text it
-was judged against, and a list of `ConfirmationEvidence`
+was judged against, a non-empty list of `ConfirmationEvidence`
 (`Inspection`/`Execution`/`ExistingCheck` — matching AGENTS.md's own
 "inspection and execution... existing checks may support confirmation"
-wording exactly). `SprintScheduler.RecordConfirmationAsync` persists it
-through the same state-independent, digest-free pattern
-`RecordHandoffAsync` already established — no attempt id, no required node
-state — so it can be recorded (or replayed) without racing the node's own
-transitions.
+wording exactly, schema-required the same way `finding.schema.json` already
+requires at least one evidence entry), and `RecordedAt`.
+`SprintScheduler.RecordConfirmationAsync` persists it through the same
+state-independent, digest-free pattern `RecordHandoffAsync` already
+established — no attempt id, no required node state — so it can be recorded
+(or replayed) without racing the node's own transitions. `nodeId` must name
+a node in the sprint's frozen graph tagged `Confirmation` (`node_not_found`/
+`node_kind_mismatch` otherwise); an unchecked node id would let an artifact
+gate nothing real, or block a sprint on an id nothing controls once a real
+change starts feeding this method from provider output.
+
+`RecordedAt` exists because a confirmation node is not write-once — it can
+be re-attempted (its own rejection, a retried node), producing more than one
+artifact for the same node id. Eligibility (below) always reads only the
+*most recently recorded* artifact per node, never "any `Confirmed` ever
+recorded": otherwise an early `Confirmed` verdict would permanently latch a
+gate open even after a later `NotConfirmed` verdict for the same node.
 
 What a test-work node then does with a `Confirmed` verdict — select tests,
 or record a justified no-new-test decision — is not modeled here. Nothing
@@ -98,9 +110,10 @@ as it does today.
 ### The test-work gate
 
 `SprintScheduler.IsTestWorkEligibleAsync` is the one new chokepoint: for a
-`TestWork`-role node, every `Confirmation`-role dependency must have a
-recorded `ConfirmationArtifact` with `Outcome == Confirmed` before the node
-is eligible. It is checked in exactly two places:
+`TestWork`-role node, every `Confirmation`-role dependency's *latest*
+recorded `ConfirmationArtifact` (ordered by `RecordedAt`) must have
+`Outcome == Confirmed` before the node is eligible. It is checked in exactly
+two places:
 
 - `AdvanceGraphAsync`'s promotion loop — a `TestWork` node's dependencies
   reaching `succeeded`/`skipped` is necessary but no longer sufficient; the
@@ -123,6 +136,13 @@ late open `Finding` already blocks one in `RecordFindingAsync` — a fourth
 `BlockedReasonArgument` value, `confirmation`, joins the existing `node`/
 `finding`/`gate` set, and, like those, requires the operator's explicit
 `resume_sprint`/`run_sprint` decision rather than recovering on its own.
+That blocking append is retried (bounded, five attempts, re-reading sprint
+state each time) rather than fired once: it is the sprint's only
+operator-visible signal that a `NotConfirmed` verdict landed, so a lost
+append here would leave the sprint silently `running` with nothing to draw
+attention to it — even though `IsTestWorkEligibleAsync` itself would still
+correctly deny eligibility either way, since it reads the artifact directly
+rather than the sprint's blocked state.
 
 ### Threat/rule rubric
 
@@ -131,13 +151,14 @@ five threat categories (secret exposure, destructive action, untrusted
 input, dependency risk, scope creep) and three rule categories drawn from
 AGENTS.md's own sections (portability, implementation-first testing, commit
 and version discipline) — each a plain `(Id, Category, Description)` triple,
-not a role or persona. `RubricAssessment` models what an intake or planning
-node will eventually record against it (`ItemId`, `Applicable`,
-`Rationale`). Nothing evaluates a real change against this catalog yet:
-that needs an intake/planning node's executor, the same later-stage
-dependency the confirmation artifact's own gap has. This is data and shape
-only, matching the exact "modeled now, produced later" precedent ADR 0009
-used for `Handoff` and ADR 0012 used for context-manifest layers 2 and 3.
+not a role or persona. Deliberately data only, with no assessment/evaluation
+type alongside it: unlike `ConfirmationArtifact` and `Handoff`, which at
+least have a full schema, store, and codec pipeline waiting for a producer,
+an assessment record would have had none of those — no producer, no
+consumer, no persistence, nothing to test beyond its own field names. That
+is speculative modeling the plan item does not ask for yet, not the "shape
+now, producer later" precedent ADR 0009 set; the catalog itself is what the
+item's "rubric data" phrase requires, and is added here on its own.
 
 ## Consequences
 
@@ -157,5 +178,7 @@ them one.
 |---|---|
 | promote a `TestWork` node whose confirmation is missing or `NotConfirmed` | node stays `pending`; no diagnostic (same as any other unmet dependency) |
 | start a `TestWork` node's attempt while ineligible | rejected with `workflow_blocked`; no state change |
-| record a `NotConfirmed` confirmation on a `Running`/`ReadyToFinalize` sprint | sprint moves to `Blocked` with reason `confirmation`; requires an explicit `resume_sprint`/`run_sprint` |
+| record a `NotConfirmed` confirmation on a `Running`/`ReadyToFinalize` sprint | sprint moves to `Blocked` with reason `confirmation` (retried up to 5 times on a version conflict); requires an explicit `resume_sprint`/`run_sprint` |
 | record a `Confirmed` confirmation | graph is re-advanced immediately; any now-eligible `TestWork` node promotes to `ready` in the same call |
+| record a `NotConfirmed` confirmation after an earlier `Confirmed` one for the same node | the later, `RecordedAt`-latest artifact governs; eligibility already granted is not itself revoked, but no further promotion or attempt start on that dependency succeeds |
+| record a confirmation against an unknown node id or a node not tagged `Confirmation` | rejected with `node_not_found`/`node_kind_mismatch`; nothing is persisted |

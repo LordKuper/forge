@@ -31,10 +31,18 @@ public sealed record ConfirmationEvidence(ConfirmationEvidenceKind Kind, string 
 /// constructs a test-work node's own result yet, the same "shape now, producer later" gap ADR
 /// 0009 left for <c>Handoff</c>.
 /// </summary>
+/// <summary>
+/// <see cref="RecordedAt"/> makes confirmations for the same <see cref="NodeId"/> orderable: a
+/// confirmation node can be re-attempted (a rejected human gate, a retried node), so more than one
+/// artifact can exist for it, and only the most recently recorded one governs eligibility — an
+/// earlier `Confirmed` artifact must never outlive a later `NotConfirmed` one. See
+/// <c>SprintScheduler.IsTestWorkEligibleAsync</c>.
+/// </summary>
 public sealed record ConfirmationArtifact(
     Guid ConfirmationId,
     SprintId SprintId,
     NodeId NodeId,
     ConfirmationOutcome Outcome,
     string DefinitionOfDone,
-    IReadOnlyList<ConfirmationEvidence> Evidence);
+    IReadOnlyList<ConfirmationEvidence> Evidence,
+    DateTimeOffset RecordedAt);

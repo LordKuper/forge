@@ -346,6 +346,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Outcome = WorkflowStateNames.ToSnakeCase(confirmation.Outcome),
             DefinitionOfDone = confirmation.DefinitionOfDone,
             Evidence = [.. confirmation.Evidence.Select(ToPersisted)],
+            RecordedAt = confirmation.RecordedAt,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{confirmation.ConfirmationId:N}.json"),
@@ -777,7 +778,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             new(confirmation.NodeId),
             WorkflowStateNames.Parse<ConfirmationOutcome>(confirmation.Outcome),
             confirmation.DefinitionOfDone,
-            [.. confirmation.Evidence.Select(FromPersisted)]);
+            [.. confirmation.Evidence.Select(FromPersisted)],
+            confirmation.RecordedAt);
 
     private static PersistedDependency ToPersisted(SprintDependency dependency) =>
         new()
@@ -1415,6 +1417,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string DefinitionOfDone { get; set; } = string.Empty;
 
         public List<PersistedEvidence> Evidence { get; set; } = [];
+
+        public DateTimeOffset RecordedAt { get; set; }
     }
 
     private sealed class PersistedEvidence

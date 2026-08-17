@@ -43,6 +43,11 @@ public static class DiagnosticCodes
     public const string SprintProviderCandidatesEmpty = "sprint_provider_candidates_empty";
     public const string SprintNotRunning = "sprint_not_running";
     public const string NodeNotFound = "node_not_found";
+
+    /// <summary>The named node exists but is not the <see cref="Forge.Domain.NodeKind"/> or
+    /// <see cref="Forge.Domain.NodeRole"/> the requested operation requires (e.g. starting an
+    /// attempt on a <see cref="Forge.Domain.NodeKind.HumanGate"/>, or recording a confirmation
+    /// against a node not tagged <see cref="Forge.Domain.NodeRole.Confirmation"/>).</summary>
     public const string NodeKindMismatch = "node_kind_mismatch";
     public const string NodeTransitionInvalid = "node_transition_invalid";
 

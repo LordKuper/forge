@@ -4,7 +4,7 @@
   "title": "Forge confirmation result v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "confirmation_id", "sprint_id", "node_id", "outcome", "definition_of_done", "evidence"],
+  "required": ["schema_version", "confirmation_id", "sprint_id", "node_id", "outcome", "definition_of_done", "evidence", "recorded_at"],
   "properties": {
     "schema_version": {"const": "1.0.0"},
     "confirmation_id": {"type": "string", "format": "uuid"},
@@ -12,7 +12,8 @@
     "node_id": {"type": "string", "minLength": 1},
     "outcome": {"enum": ["confirmed", "not_confirmed"]},
     "definition_of_done": {"type": "string", "minLength": 1},
-    "evidence": {"type": "array", "items": {"$ref": "#/$defs/evidence"}}
+    "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
+    "recorded_at": {"type": "string", "format": "date-time"}
   },
   "$defs": {
     "evidence": {

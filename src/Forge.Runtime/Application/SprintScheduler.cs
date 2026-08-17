@@ -964,11 +964,18 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// Records a confirmation node's judgment against its definition of done. Unlike a node
     /// result, this carries no attempt id and needs no particular node state — the same
     /// state-independence <see cref="RecordHandoffAsync"/> already has — so it can be replayed or
-    /// backfilled without racing the node's own transitions. A <see cref="ConfirmationOutcome.NotConfirmed"/>
-    /// verdict immediately blocks a running (or already ready-to-finalize) sprint, mirroring how a
-    /// late open <see cref="Finding"/> does in <see cref="RecordFindingAsync"/> — the operator must
-    /// explicitly resume it, since only a `Confirmed` artifact makes a dependent test-work node
-    /// eligible to run (see <see cref="IsTestWorkEligibleAsync"/>).
+    /// backfilled without racing the node's own transitions. <paramref name="nodeId"/> must name a
+    /// node in the sprint's frozen graph tagged <see cref="NodeRole.Confirmation"/>: an artifact
+    /// against an unknown or wrongly-tagged node can gate nothing real and, once a real change
+    /// feeds this from provider output, could otherwise block a sprint on an id an attacker
+    /// controls. A <see cref="ConfirmationOutcome.NotConfirmed"/> verdict immediately blocks a
+    /// running (or already ready-to-finalize) sprint, mirroring how a late open
+    /// <see cref="Finding"/> does in <see cref="RecordFindingAsync"/> — the operator must explicitly
+    /// resume it, since only the *most recently recorded* artifact for a confirmation node governs
+    /// eligibility (see <see cref="IsTestWorkEligibleAsync"/>): a `Confirmed` artifact can be
+    /// superseded by a later `NotConfirmed` one for the same node (a confirmation node re-attempted
+    /// after its own rejection), and must never keep a dependent test-work node eligible once that
+    /// happens.
     /// </summary>
     public async Task<RecordConfirmationResult> RecordConfirmationAsync(
         string projectRoot,
@@ -979,8 +986,21 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         IReadOnlyList<ConfirmationEvidence> evidence,
         CancellationToken cancellationToken)
     {
-        ConfirmationArtifact confirmation =
-            new(Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence);
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null)
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        if (definedNode.Role != NodeRole.Confirmation)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        ConfirmationArtifact confirmation = new(
+            Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence, clock.UtcNow);
         try
         {
             await store.SaveConfirmationAsync(projectRoot, confirmation, cancellationToken).ConfigureAwait(false);
@@ -992,11 +1012,21 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         if (outcome != ConfirmationOutcome.Confirmed)
         {
-            SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
-                .ConfigureAwait(false);
-            if (state.Sprint.State is SprintState.Running or SprintState.ReadyToFinalize)
+            // Retried on a version conflict rather than fired once: this append is the sprint's
+            // *only* durable, operator-visible signal that a `NotConfirmed` verdict landed (the
+            // artifact itself already blocks eligibility via `IsTestWorkEligibleAsync` regardless
+            // of whether this succeeds, but a lost append here would otherwise leave the sprint
+            // silently `running` with no indication anything needs attention).
+            for (int attempt = 0; attempt < 5; attempt++)
             {
-                await store.AppendTransitionAsync(
+                SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (state.Sprint.State is not (SprintState.Running or SprintState.ReadyToFinalize))
+                {
+                    break;
+                }
+
+                AppendOutcome blocked = await store.AppendTransitionAsync(
                     projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                     "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
                     state.Sprint.Version, Guid.NewGuid(), cancellationToken,
@@ -1004,6 +1034,10 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                     {
                         [WorkflowEvent.BlockedReasonArgument] = BlockedByConfirmation,
                     }).ConfigureAwait(false);
+                if (blocked.Succeeded)
+                {
+                    break;
+                }
             }
         }
         else
@@ -1025,10 +1059,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
     /// <summary>
     /// True once every <see cref="NodeRole.Confirmation"/>-role dependency of <paramref name="node"/>
-    /// has a recorded, <see cref="ConfirmationOutcome.Confirmed"/> <see cref="ConfirmationArtifact"/>
-    /// — the plan's "only its valid artifact makes recorded risk-based test selection and authoring
-    /// eligible." A node with no confirmation-role dependency (not the built-in graph's shape, but
-    /// nothing stops a caller-supplied one) is vacuously eligible: there is nothing to gate on.
+    /// has, as its *most recently recorded* <see cref="ConfirmationArtifact"/> (by
+    /// <see cref="ConfirmationArtifact.RecordedAt"/>), an outcome of
+    /// <see cref="ConfirmationOutcome.Confirmed"/> — the plan's "only its valid artifact makes
+    /// recorded risk-based test selection and authoring eligible." Using only the latest artifact
+    /// per node (never "any `Confirmed` artifact ever recorded") is what lets a later
+    /// `NotConfirmed` re-close a gate an earlier `Confirmed` opened. A node with no
+    /// confirmation-role dependency (not the built-in graph's shape, but nothing stops a
+    /// caller-supplied one) is vacuously eligible: there is nothing to gate on.
     /// </summary>
     private async Task<bool> IsTestWorkEligibleAsync(
         string projectRoot,
@@ -1046,8 +1084,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         IReadOnlyList<ConfirmationArtifact> confirmations =
             await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-        return confirmationDependencies.All(dependency => confirmations.Any(artifact =>
-            artifact.NodeId.Value == dependency && artifact.Outcome == ConfirmationOutcome.Confirmed));
+        return confirmationDependencies.All(dependency =>
+        {
+            ConfirmationArtifact? latest = confirmations
+                .Where(artifact => artifact.NodeId.Value == dependency)
+                .OrderByDescending(artifact => artifact.RecordedAt)
+                .FirstOrDefault();
+            return latest is { Outcome: ConfirmationOutcome.Confirmed };
+        });
     }
 
     private static Guid NodeActionKey(string actionId, SprintId sprintId, NodeSnapshot node) =>

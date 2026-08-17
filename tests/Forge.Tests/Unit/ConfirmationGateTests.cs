@@ -121,6 +121,100 @@ public sealed class ConfirmationGateTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ALaterNotConfirmedVerdictRevokesEligibilityGrantedByAnEarlierConfirmedOne()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await SucceedAsync(scheduler, environment.ProjectRoot, sprintId, "confirm", cancellationToken);
+        await scheduler.RecordConfirmationAsync(
+            environment.ProjectRoot, sprintId, "confirm", ConfirmationOutcome.Confirmed, "Met the DoD.",
+            [new(ConfirmationEvidenceKind.Execution, "Ran the suite.")], cancellationToken);
+
+        // The confirmation node is re-attempted (e.g. after a human gate rejection upstream) and
+        // this time is not confirmed -- the earlier `Confirmed` artifact must not keep eligibility
+        // latched open.
+        await scheduler.RecordConfirmationAsync(
+            environment.ProjectRoot, sprintId, "confirm", ConfirmationOutcome.NotConfirmed, "No longer meets the DoD.",
+            [new(ConfirmationEvidenceKind.Inspection, "Regression found on re-review.")], cancellationToken);
+
+        // `RecordConfirmationAsync` already moved the sprint to `Blocked` -- but the real exploit
+        // this closes is an operator resuming past that block (e.g. because a *different* stuck
+        // node was the reason they believed they fixed) without the test-work node itself having
+        // been re-validated: `ResumeSprintAsync` does not distinguish *why* a sprint was blocked.
+        SprintSnapshot blocked = (await orchestrator.GetSprintAsync(
+            environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult resumed = await orchestrator.ResumeSprintAsync(
+            new(environment.ProjectRoot, sprintId, blocked.Version, SprintOrchestrator.ResumeSprintKey(blocked)),
+            cancellationToken);
+        Assert.True(resumed.Succeeded);
+        Assert.Equal(SprintState.Ready, resumed.Sprint!.State);
+        SprintTransitionResult running = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, resumed.Sprint.Version, SprintOrchestrator.RunSprintKey(resumed.Sprint)),
+            cancellationToken);
+        Assert.True(running.Succeeded);
+        Assert.Equal(SprintState.Running, running.Sprint!.State);
+
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "test_work", state.Nodes["test_work"].Version, cancellationToken);
+        Assert.False(started.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowBlocked, started.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordingAConfirmationAgainstAnUnknownNodeIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        RecordConfirmationResult result = await scheduler.RecordConfirmationAsync(
+            environment.ProjectRoot, sprintId, "does_not_exist", ConfirmationOutcome.Confirmed, "n/a",
+            [new(ConfirmationEvidenceKind.Inspection, "n/a")], cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeNotFound, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordingAConfirmationAgainstANonConfirmationNodeIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        RecordConfirmationResult result = await scheduler.RecordConfirmationAsync(
+            environment.ProjectRoot, sprintId, "test_work", ConfirmationOutcome.Confirmed, "n/a",
+            [new(ConfirmationEvidenceKind.Inspection, "n/a")], cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeKindMismatch, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void ImplementationCriticalGraphBuilderProducesAValidGraphWithIsolatedRoles()
     {
         IReadOnlyList<NodeDefinition> graph = Forge.Compiler.ImplementationCriticalGraphBuilder.Build();

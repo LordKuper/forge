@@ -114,6 +114,7 @@ internal static class WorkflowRecordCodec
                     Kind = WorkflowStateNames.ToSnakeCase(item.Kind),
                     Description = item.Description,
                 })],
+            RecordedAt = confirmation.RecordedAt,
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), ConfirmationSchema, "confirmation result");
@@ -236,6 +237,8 @@ internal static class WorkflowRecordCodec
         public string DefinitionOfDone { get; set; } = string.Empty;
 
         public List<WireEvidence> Evidence { get; set; } = [];
+
+        public DateTimeOffset RecordedAt { get; set; }
     }
 
     private sealed class WireEvidence
