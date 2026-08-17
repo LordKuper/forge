@@ -129,6 +129,19 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     $"The frozen definition's graph for sprint '{id.Value}' is corrupt.");
             }
 
+            // A sprint frozen before execution profiles existed has none in its durable
+            // definition.json; treated as an empty set (no phase has a profile) rather than a
+            // corrupt-definition failure, matching `NodeRole`'s own backward-compatibility rule.
+            List<ExecutionProfile> executionProfiles = [.. persisted.ExecutionProfiles.Select(FromPersisted)];
+            if (executionProfiles.Select(profile => profile.Phase).Distinct().Count() != executionProfiles.Count)
+            {
+                // Same reasoning as the graph check above: an uncaught `ArgumentException` from a
+                // raw `ToDictionary` on a duplicate key would crash the whole Host process, not
+                // just this sprint.
+                throw new InvalidDataException(
+                    $"The frozen definition's execution profiles for sprint '{id.Value}' are corrupt.");
+            }
+
             return new(
                 id,
                 persisted.BaseCommit,
@@ -141,12 +154,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.ArtifactPolicySnapshotHash,
                 persisted.FrozenAt,
                 persisted.FrozenProviders,
-                // A sprint frozen before execution profiles existed has none in its durable
-                // definition.json; treated as an empty set (no phase has a profile) rather than a
-                // corrupt-definition failure, matching `NodeRole`'s own backward-compatibility rule.
-                persisted.ExecutionProfiles
-                    .Select(FromPersisted)
-                    .ToDictionary(profile => profile.Phase, profile => profile));
+                executionProfiles.ToDictionary(profile => profile.Phase, profile => profile));
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException)
         {

@@ -54,13 +54,12 @@ public sealed class ExecutionProfilePolicyTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public void IsCapabilityAllowedRejectsAHumanOnlyIdEvenIfPresentInTheAllowlist()
+    public void IsCapabilityAllowedChecksAllowlistContainment()
     {
         ExecutionProfile profile = new(
             ExecutionProfile.ContractVersion, ExecutionPhase.Review, "codex", "gpt-5", "high", "workspace-write",
-            "never", [ContextCapabilityIds.GitShow, "workflow.review"], 3600, 300);
+            "never", [ContextCapabilityIds.GitShow], 3600, 300);
 
-        Assert.False(ExecutionProfilePolicy.IsCapabilityAllowed(profile, "workflow.review"));
         Assert.True(ExecutionProfilePolicy.IsCapabilityAllowed(profile, ContextCapabilityIds.GitShow));
         Assert.False(ExecutionProfilePolicy.IsCapabilityAllowed(profile, ContextCapabilityIds.GitGrep));
     }
@@ -80,12 +79,16 @@ public sealed class ExecutionProfilePolicyTests
 
         Assert.Equal(3, profiles.Count);
         Assert.Equal("claude_code", profiles[ExecutionPhase.Planning].Provider);
+        Assert.Equal("claude_code-fake-model", profiles[ExecutionPhase.Planning].Model);
         Assert.Equal("claude_code", profiles[ExecutionPhase.Implementation].Provider);
+        Assert.Equal("claude_code-fake-model", profiles[ExecutionPhase.Implementation].Model);
         Assert.Equal("codex", profiles[ExecutionPhase.Review].Provider);
+        Assert.Equal("codex-fake-model", profiles[ExecutionPhase.Review].Model);
         Assert.Null(profiles[ExecutionPhase.Planning].Lineage);
         Assert.NotNull(profiles[ExecutionPhase.Review].Lineage);
         Assert.True(profiles[ExecutionPhase.Review].Lineage!.AchievedIndependence);
         Assert.Equal("claude_code", profiles[ExecutionPhase.Review].Lineage!.ImplementationProvider);
+        Assert.Equal("claude_code-fake-model", profiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
         Assert.All(
             profiles.Values,
             profile => Assert.Equal(

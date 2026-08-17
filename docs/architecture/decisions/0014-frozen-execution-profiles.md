@@ -131,20 +131,24 @@ other non-model role in the built-in graph. This is the join key a future
 node executor uses to look up which of a sprint's three frozen profiles
 governs a given node; nothing yet consumes it beyond that mapping itself.
 
-`ExecutionProfilePolicy.HumanOnlyCapabilityIds` names the two
-`capabilities.json` entries whose `permission` field already reads as
-human-only by that file's own naming convention (`workflow.review` =
-`human_gate_confirm`, `attempt.supersede` = `human_attempt_supersede_confirm`)
-— real, already-committed contract ids, not invented here.
-`IsCapabilityAllowed(profile, capabilityId)` is the "cannot widen them or
-invoke human-only commands" check as a pure, callable invariant: allowed
-only if present in the profile's allowlist *and* not human-only. Neither
-`capabilities.json` entry has an application-layer implementation behind it
-yet (`workflow.review`'s human decision is
-`SprintScheduler.ResolveHumanGateAsync`; `attempt.supersede` is
-P11.48-P11.55's own item) — the guard exists so a future executor cannot
-even construct a request for one through this allowlist, regardless of
-which of them lands an implementation first.
+`IsCapabilityAllowed(profile, capabilityId)` is the "cannot widen them"
+half of the plan item's rule as a pure, callable containment check a
+future node executor can enforce per request, not just at freeze time. The
+"or invoke human-only commands" half has no code to check yet, and
+deliberately adds none here: a model node's allowlist uses ADR 0012's
+`context.*` vocabulary (`ContextCapabilityIds`), while a Host-protocol
+human-only command uses a disjoint one
+(`docs/contracts/v1/capabilities.json`'s `workflow.review`/
+`attempt.supersede`) — no code today connects the two, so the rule is
+vacuously true, the same way "starts without a parent transcript" is true
+because no transcript concept exists yet. An earlier draft of this ADR
+added a `HumanOnlyCapabilityIds` set and checked it inside
+`IsCapabilityAllowed`; independent review found the check unreachable by
+construction (nothing can ever put a Host-protocol id in a node's
+`context.*`-only allowlist) and it was removed rather than kept as
+misleading dead code. Real enforcement needs a real check here once a node
+executor and command dispatch share one vocabulary to validate against —
+not before.
 
 ### What stays deferred
 
@@ -171,14 +175,16 @@ Every sprint now freezes a real, schema-validated, provider-grounded
 `ExecutionProfile` per model phase, deterministically derived from data
 Stage 11's own predecessor items already freeze — no new configuration
 surface, no executor, no invented vendor knowledge. `NodeRole`/
-`ExecutionPhase` and the capability-allowlist guard give a future executor
-exactly the join key and invariant it needs to enforce "no widening, no
-human-only commands" without this item having to build that executor
-itself.
+`ExecutionPhase` and the capability-allowlist containment check give a
+future executor exactly the join key and invariant it needs to enforce "no
+widening" without this item having to build that executor itself; "no
+human-only commands" stays vacuously true — by construction, not by an
+unreachable check — until a real vocabulary exists to validate against.
 
 | Action | Recovery |
 |---|---|
 | freeze a sprint with a single enabled provider | review profile uses the same provider; `Lineage.AchievedIndependence = false`; sprint creation still succeeds |
 | freeze a sprint with `frozenProviders` empty | never reached — `SprintOrchestrator.CreateSprintAsync` already fails earlier with `sprint_provider_candidates_empty` |
 | load a sprint frozen before this ADR | `ExecutionProfiles` defaults to empty; no crash |
+| load a sprint whose `execution_profiles` has two entries for the same phase | rejected as a corrupt definition, not an uncaught exception |
 | a frozen profile fails schema validation | `SaveDefinitionAsync` throws before anything is persisted |
