@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/context-manifest.schema.json",
+  "title": "Reproducible context manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "sprint_id",
+    "source_commit",
+    "workflow",
+    "workflow_version",
+    "token_budget",
+    "allocated_tokens",
+    "layers",
+    "truncated",
+    "manifest_digest"
+  ],
+  "$defs": {
+    "item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "digest", "estimated_tokens", "rationale"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "estimated_tokens": {"type": "integer", "minimum": 0},
+        "rationale": {"type": "string", "minLength": 1}
+      }
+    },
+    "truncated_item": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["relative_path", "estimated_tokens", "reason"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1},
+        "estimated_tokens": {"type": "integer", "minimum": 0},
+        "reason": {"type": "string", "minLength": 1}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "workflow": {"type": "string", "minLength": 1},
+    "workflow_version": {"type": "string", "minLength": 1},
+    "token_budget": {"type": "integer", "minimum": 1},
+    "allocated_tokens": {"type": "integer", "minimum": 0},
+    "layers": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rules", "sprint_specifications", "knowledge", "handoffs", "query_results"],
+      "properties": {
+        "rules": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+        "sprint_specifications": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+        "knowledge": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+        "handoffs": {"type": "array", "items": {"$ref": "#/$defs/item"}},
+        "query_results": {"type": "array", "items": {"$ref": "#/$defs/item"}}
+      }
+    },
+    "truncated": {"type": "array", "items": {"$ref": "#/$defs/truncated_item"}},
+    "manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

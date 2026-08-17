@@ -15,6 +15,7 @@
       "items": {"type": "string", "minLength": 1},
       "uniqueItems": true
     },
-    "context_limit_tokens": {"type": "integer", "minimum": 1, "maximum": 8000}
+    "context_limit_tokens": {"type": "integer", "minimum": 1, "maximum": 8000},
+    "status": {"enum": ["accepted", "proposed", "rejected", "superseded"]}
   }
 }

@@ -363,7 +363,8 @@ public sealed class ForgeDocumentCompilerTests
         string id,
         string title,
         IReadOnlyList<string>? references = null,
-        int? contextLimitTokens = null)
+        int? contextLimitTokens = null,
+        string? status = null)
     {
         StringBuilder builder = new();
         builder.Append("---\nschema_version: \"1.0.0\"\nid: ").Append(id)
@@ -383,7 +384,44 @@ public sealed class ForgeDocumentCompilerTests
             builder.Append("context_limit_tokens: ").Append(contextLimitTokens.Value).Append('\n');
         }
 
+        if (status is not null)
+        {
+            builder.Append("status: ").Append(status).Append('\n');
+        }
+
         builder.Append("---\n");
         return builder.ToString();
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("accepted", ForgeDocumentStatus.Accepted)]
+    [InlineData("proposed", ForgeDocumentStatus.Proposed)]
+    [InlineData("rejected", ForgeDocumentStatus.Rejected)]
+    [InlineData("superseded", ForgeDocumentStatus.Superseded)]
+    public async Task StatusFieldParsesToTheDeclaredValue(string rawStatus, ForgeDocumentStatus expected)
+    {
+        using TempForgeProject project = new();
+        project.WriteKnowledge("adr.md", Frontmatter("adr", "An ADR", status: rawStatus) + "Body.");
+
+        ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+            project.Root, TestContext.Current.CancellationToken);
+
+        Assert.Empty(set.Errors);
+        Assert.Equal(expected, Assert.Single(set.Documents).Status);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AbsentStatusFieldParsesToNull()
+    {
+        using TempForgeProject project = new();
+        project.WriteKnowledge("plain.md", Frontmatter("plain", "Plain knowledge") + "Body.");
+
+        ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+            project.Root, TestContext.Current.CancellationToken);
+
+        Assert.Empty(set.Errors);
+        Assert.Null(Assert.Single(set.Documents).Status);
     }
 }

@@ -268,7 +268,10 @@ public sealed class ForgeDocumentCompiler
             trimmedBody,
             estimatedTokens,
             effectiveLimit,
-            references), null);
+            references,
+            frontmatter.Status is null
+                ? null
+                : Enum.Parse<ForgeDocumentStatus>(frontmatter.Status, ignoreCase: true)), null);
     }
 
     private static (List<ForgeDocumentReference>, ForgeDocumentError?) ResolveReferences(
@@ -437,5 +440,7 @@ public sealed class ForgeDocumentCompiler
         public List<string>? References { get; set; }
 
         public int? ContextLimitTokens { get; set; }
+
+        public string? Status { get; set; }
     }
 }

@@ -17,6 +17,19 @@ public enum ForgeDocumentScope
     Project,
 }
 
+/// <summary>A knowledge document's acceptance state (ADR 0012). Meaningful only for a
+/// `.forge/knowledge/*.md` document that represents an ADR — ordinary project knowledge has no
+/// notion of acceptance and simply omits the frontmatter field, which parses as
+/// <see langword="null"/>. Never derived or defaulted by the compiler itself: filtering by status
+/// is `Forge.Compiler.ContextManifestCompiler`'s concern (ADR 0012), not this parser's.</summary>
+public enum ForgeDocumentStatus
+{
+    Accepted,
+    Proposed,
+    Rejected,
+    Superseded,
+}
+
 public static class ForgeDocumentDiagnosticCodes
 {
     /// <summary>The file is not valid UTF-8 Markdown with a `---`-delimited YAML frontmatter
@@ -59,7 +72,8 @@ public sealed record ForgeDocument(
     string Body,
     int EstimatedTokens,
     int ContextLimitTokens,
-    IReadOnlyList<ForgeDocumentReference> References);
+    IReadOnlyList<ForgeDocumentReference> References,
+    ForgeDocumentStatus? Status = null);
 
 /// <summary>One document that failed validation. Parsing collects these instead of throwing, so
 /// one malformed file never blocks the rest of the parse pass (ADR 0009).</summary>

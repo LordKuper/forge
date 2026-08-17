@@ -2,6 +2,23 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.33.0
+
+### Added
+
+- Forge can now build a reproducible context manifest for a sprint from its
+  always-on rules, accepted ADRs, and project knowledge -- ordered
+  deterministically, budgeted by token count, with dropped items recorded
+  rather than silently discarded. A knowledge document can now declare an
+  optional `status` (`accepted`, `proposed`, `rejected`, `superseded`); only
+  accepted or unstatused documents are admitted to the manifest.
+- Forge can now validate and run a bounded, read-only, declarative
+  context-query plan against one pinned Git commit -- reading a file's exact
+  content or searching for a pattern -- and return a reproducible result
+  bundle. A plan can never widen its own read access: every operation is
+  checked against an explicit capability allowlist before anything runs, and
+  one disallowed or malformed operation rejects the whole plan.
+
 ## v0.32.0
 
 ### Added

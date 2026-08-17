@@ -18,7 +18,7 @@
 - [x] Stages 0–7 — Foundation, solution, updater, startup, providers, durable workflow, Git isolation, and routing.
 - [x] Stage 8 — Cross-platform Host, local control plane, and modular providers.
 - [x] Stage 9 — `.forge/` compiler and agent integration.
-- [ ] Stage 10 — Reproducible context assembly.
+- [x] Stage 10 — Reproducible context assembly.
 - [ ] Stage 11 — `implementation-critical` workflow and UI parity.
 - [ ] Stage 12 — Diagnostics, evaluations, and hardening.
 - [ ] Stage 13 — MVP release and acceptance.
@@ -86,9 +86,9 @@
 
 ## Stage 10 — Reproducible context assembly
 
-- [ ] P10.1–P10.8 — Build a versioned context manifest from rules, sprint specifications/decisions, accepted ADRs, structured handoffs, exact Git/file/`rg` reads, and a token budget.
-- [ ] P10.9–P10.12 — Record source commit, selected paths, digests, truncation, and retrieval rationale; rebuild the same context without a transcript.
-- [ ] P10.13–P10.20 — Add a versioned declarative context-query plan for bounded read-only Git/file/`rg` operations. Validate paths, operation and result limits, source commit, and profile capabilities; return only a selected structured result bundle, never execute model-authored scripts or shell pipelines as a context engine.
+- [x] P10.1–P10.8 — Build a versioned context manifest from rules, sprint specifications/decisions, accepted ADRs, structured handoffs, exact Git/file/`rg` reads, and a token budget. **Closed 2026-08-17:** ADR 0012 adds `Forge.Compiler.ContextManifestCompiler`, which builds one `ContextManifest` (`context-manifest.schema.json`) per sprint from a `ForgeDocumentSet` (ADR 0009) plus the sprint's own already-frozen id/base commit/workflow/workflow version — no new source of that identity is invented. Layer 1 (rules) and layer 3's project-knowledge/accepted-ADR half admit real MVP content; layer 2 (sprint specifications/decisions) and layer 3's structured-handoff half stay explicitly, permanently empty in the manifest shape, the same "modeled shape, no producer yet" gap ADR 0009 already named for `Handoff` — confirmed again here by grep: `Handoff` still has zero real construction sites. `forge-document.schema.json` gains one additive optional `status` field (`accepted`/`proposed`/`rejected`/`superseded`) so a `.forge/knowledge/*.md` document can represent an ADR without a second directory or a frontmatter `kind` override; only an accepted-or-unstatused knowledge document is admitted.
+- [x] P10.9–P10.12 — Record source commit, selected paths, digests, truncation, and retrieval rationale; rebuild the same context without a transcript. **Closed 2026-08-17:** every admitted manifest item records its relative path, a `sha256:` content digest, its estimated token cost, and a rationale (`rule`, `knowledge:accepted`, or `query_result`); every dropped item is recorded in `truncated` with its token cost and an `over_budget` reason instead of silently vanishing. `ManifestDigest` is a pure function of every other field (never a timestamp or generator version, matching `IntegrationSourceCompiler`'s existing reproducibility rule), so an identical sprint state and token budget always rebuilds an identical digest with no transcript needed.
+- [x] P10.13–P10.20 — Add a versioned declarative context-query plan for bounded read-only Git/file/`rg` operations. Validate paths, operation and result limits, source commit, and profile capabilities; return only a selected structured result bundle, never execute model-authored scripts or shell pipelines as a context engine. **Closed 2026-08-17:** `ContextQueryPlan` (`context-query-plan.schema.json`) declares 1-20 bounded operations against one pinned commit: `git_show` (exact file content) and `git_grep` (pattern search), chosen over spawning an external `rg` process specifically to avoid materializing a working tree and adding a new binary dependency — both operations read directly from Git's own content-addressed object store instead. `Forge.Infrastructure.GitContextReader` validates the whole plan (schema shape, operation-id uniqueness, path/pattern safety, and every operation's required capability present in the caller's execution-profile capability allowlist) before executing anything; one invalid or unauthorized operation rejects the entire plan. The reproducible `ContextResultBundle` (`context-result-bundle.schema.json`) records only digests and metadata, never raw content, matching `handoff.schema.json`'s existing digest-only artifact shape — because both operations are pure functions of an immutable commit, replaying the same plan against the same commit always reproduces byte-identical results.
 
 **Gate:** context is bounded, sprint-scoped, reproducible, and based on exact source evidence; query plans cannot mutate the project or widen capabilities, and their result bundles rebuild byte-for-byte from recorded inputs. The MVP owns no full-text, Tree-sitter, LSP, graph, SCIP, or semantic index.
 
@@ -158,6 +158,7 @@
 | 7 | ADR 0004; Git/routing tests; PR #21 |
 | 8 architecture | ADRs 0005, 0007, and 0008; project snapshot capability; Stage 8 gate above |
 | 9 | ADRs 0009, 0010, and 0011; `docs/contracts/v1/schemas/forge-document.schema.json` and `generated-artifact.schema.json`; PRs #49 and #50, and the PR closing P9.17-24 |
+| 10 | ADR 0012; `docs/contracts/v1/schemas/context-manifest.schema.json`, `context-query-plan.schema.json`, and `context-result-bundle.schema.json`; the PR closing P10.1-20 |
 | 11 architecture | ADRs 0006 and 0008; supervised execution/review gate above |
 
 ## Resolved decisions

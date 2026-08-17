@@ -41,5 +41,14 @@
     <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\handoff.schema.json"
       LogicalName="Forge.Application.Schemas.handoff.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\context-manifest.schema.json"
+      LogicalName="Forge.Application.Schemas.context-manifest.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\context-query-plan.schema.json"
+      LogicalName="Forge.Application.Schemas.context-query-plan.schema.json" />
+    <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\context-result-bundle.schema.json"
+      LogicalName="Forge.Application.Schemas.context-result-bundle.schema.json" />
   </ItemGroup>
 </Project>
