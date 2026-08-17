@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.38.0
+
+### Added
+
+- Provider attempts now support two frozen deadlines -- an absolute
+  session limit and a sliding idle limit that resets on any activity --
+  with a distinct, durable outcome for an idle timeout versus a session
+  timeout versus an ordinary provider failure.
+- Process-tree cleanup on cancellation or a deadline is now verified to
+  terminate an entire multi-generation process tree (not just the directly
+  spawned child) on Windows, Linux, and macOS.
+
 ## v0.37.0
 
 ### Changed
