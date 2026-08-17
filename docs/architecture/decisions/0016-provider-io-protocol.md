@@ -140,7 +140,13 @@ propagating an `OperationCanceledException`. This bounds retained memory by
 kill latency, not by a hard byte cap — a true hard cap belongs in the
 generic, provider-agnostic `ProcessRunner` only if a future non-provider
 caller also needs one; today every other caller (git, installers) already
-relies on receiving its complete output.
+relies on receiving its complete output. Kill latency itself stays bounded
+even against a child that never emits a newline at all: `ReadStreamAsync`'s
+own `MaxBufferedLineChars` (4 MiB, generic — not a provider-specific
+constant) forcibly hands off a line mid-stream once it grows past that
+ceiling, so the sink's much smaller `MaxLineLengthBytes` always gets a
+chance to see and reject an oversized single line within a bounded amount
+of buffering, not only when a real newline eventually arrives.
 
 ### Stream reads preserve exact bytes; stdin writes are cancellable and pipe-safe
 

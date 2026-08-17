@@ -155,6 +155,36 @@ public sealed class ProcessRunnerTests
         Assert.Equal(["line1", "line2"], sink.StandardOutputLines);
     }
 
+    /// <summary>Regression test for the generic per-logical-line safety ceiling
+    /// (`MaxBufferedLineChars`): without it, a child that never emits a newline could grow the
+    /// line buffer handed to the output sink without limit, and a caller-owned per-line bound
+    /// (like `ProviderExecution.MaxLineLengthBytes`) would never get a chance to see and reject
+    /// it, since that check only runs on a line this read loop hands off.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AnUnterminatedLineIsFlushedToTheSinkInBoundedChunksInsteadOfBufferingForever()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        ProcessRunner runner = new();
+        RecordingSink sink = new();
+        string command = "$s = New-Object string('x', 5000000); [Console]::Out.Write($s)";
+        ProcessResult result = await runner.RunAsync(
+            new("powershell.exe", ["-NoProfile", "-Command", command], Path.GetTempPath()),
+            sink,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(5_000_000, result.StandardOutput.Length);
+        Assert.True(
+            sink.StandardOutputLines.Count > 1,
+            "A 5,000,000-character unterminated line should be flushed to the sink in more than one bounded chunk.");
+        Assert.Equal(5_000_000, sink.StandardOutputLines.Sum(line => line.Length));
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task ReplaceEnvironmentGivesTheChildOnlyTheSuppliedVariables()

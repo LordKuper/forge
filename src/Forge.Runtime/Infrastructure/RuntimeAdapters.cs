@@ -135,6 +135,14 @@ public sealed class ProcessRunner : IProcessRunner
             await error.ConfigureAwait(false));
     }
 
+    /// <summary>A generic per-logical-line safety ceiling, independent of any caller's own bound
+    /// policy: without it, a child that never emits a newline could grow the line buffer below
+    /// without limit, and no caller-owned bound (e.g. `ProviderExecution`'s much smaller
+    /// `MaxLineLengthBytes`) would ever get a chance to see and reject it, since that check only
+    /// runs on a line this read loop hands off. No legitimate caller today (git, installers,
+    /// provider adapters) ever needs a single unterminated line anywhere near this large.</summary>
+    private const int MaxBufferedLineChars = 4 * 1024 * 1024;
+
     /// <summary>
     /// Reads as data arrives in fixed chunks (ADR 0006: "Stdout and stderr are consumed
     /// concurrently as bounded streams") rather than the whole stream at once, notifying
@@ -144,7 +152,10 @@ public sealed class ProcessRunner : IProcessRunner
     /// 0012), so a line-splitting read (e.g. <c>ReadLineAsync</c>, which normalizes CRLF/bare CR
     /// to LF and drops a trailing newline) would silently change that digest for any CRLF or
     /// no-final-newline content; only the line-buffer used for sink notification strips `\r`, never
-    /// the returned raw text. Reads and sink notifications alike use a fixed, unconditional
+    /// the returned raw text. A line longer than <see cref="MaxBufferedLineChars"/> is forcibly
+    /// handed to the sink mid-line (as if it had ended) so a caller-owned per-line bound always
+    /// gets evaluated within a bounded amount of buffering, even against a child that never emits
+    /// a newline at all. Reads and sink notifications alike use a fixed, unconditional
     /// <see cref="CancellationToken.None"/>, for the same reason the prior buffered
     /// implementation's reads did: a cancellation here must never race the caller's own
     /// kill-then-drain sequence above, which is what actually stops the child (closing these pipes
@@ -167,10 +178,19 @@ public sealed class ProcessRunner : IProcessRunner
                 {
                     await NotifyLineAsync(line, sink, isError).ConfigureAwait(false);
                     line.Clear();
+                    continue;
                 }
-                else if (current != '\r')
+
+                if (current == '\r')
                 {
-                    line.Append(current);
+                    continue;
+                }
+
+                line.Append(current);
+                if (line.Length >= MaxBufferedLineChars)
+                {
+                    await NotifyLineAsync(line, sink, isError).ConfigureAwait(false);
+                    line.Clear();
                 }
             }
         }
