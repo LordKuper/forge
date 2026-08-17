@@ -249,6 +249,24 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task SaveReviewIterationAsync(
+            string projectRoot, ReviewIterationRecord record, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task SetReviewFloorPinnedAsync(
+            string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<bool> IsReviewFloorPinnedAsync(
+            string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

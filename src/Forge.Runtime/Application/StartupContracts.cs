@@ -56,6 +56,17 @@ public static class DiagnosticCodes
     /// node whose <see cref="Forge.Domain.NodeRole.Confirmation"/> dependency has not recorded a
     /// `Confirmed` <see cref="Forge.Domain.ConfirmationArtifact"/> yet.</summary>
     public const string WorkflowBlocked = "workflow_blocked";
+
+    /// <summary>Category 11: "Review requires a human convergence decision." Recording a review
+    /// iteration whose new iteration count would exceed the cumulative severity-floor budget
+    /// (ADR 0006: "an iteration-limit human gate before iteration 15") blocks the sprint with this
+    /// code instead of silently applying an ever-rising floor.</summary>
+    public const string ReviewIterationLimit = "review_iteration_limit";
+
+    /// <summary>Category 11: "External review repeated an identical normalized finding set."
+    /// ADR 0006: "Two consecutive identical [sets] by file, location, rule, and message
+    /// fingerprint create a review-convergence human gate."</summary>
+    public const string ReviewRepeatedFindings = "review_repeated_findings";
     public const string AttemptOwnershipMismatch = "attempt_ownership_mismatch";
     public const string AttemptTerminal = "attempt_terminal";
     public const string FindingNotFound = "finding_not_found";

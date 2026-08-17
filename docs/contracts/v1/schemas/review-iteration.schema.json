@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/review-iteration.schema.json",
+  "title": "Forge review iteration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "review_iteration_id", "sprint_id", "node_id", "dimension", "reviewer_kind", "iteration", "outcome", "external_findings", "recorded_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "review_iteration_id": {"type": "string", "format": "uuid"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "node_id": {"type": "string", "minLength": 1},
+    "dimension": {"enum": ["design", "implementation"]},
+    "reviewer_kind": {"enum": ["internal", "external"]},
+    "iteration": {"type": "integer", "minimum": 1},
+    "outcome": {"enum": ["approved", "changes_requested"]},
+    "external_findings": {"type": "array", "items": {"$ref": "#/$defs/normalized_finding_key"}},
+    "coverage": {"$ref": "#/$defs/coverage_ledger"},
+    "recorded_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "normalized_finding_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["rule", "message_fingerprint"],
+      "properties": {
+        "file": {"type": ["string", "null"]},
+        "line": {"type": ["integer", "null"]},
+        "rule": {"type": "string", "minLength": 1},
+        "message_fingerprint": {"type": "string", "minLength": 1}
+      }
+    },
+    "coverage_ledger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scoped_files", "rubric_item_ids", "covered_files", "covered_rubric_item_ids"],
+      "properties": {
+        "scoped_files": {"type": "array", "items": {"type": "string"}},
+        "rubric_item_ids": {"type": "array", "items": {"type": "string"}},
+        "covered_files": {"type": "array", "items": {"type": "string"}},
+        "covered_rubric_item_ids": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

@@ -48,6 +48,9 @@
       Include="..\..\docs\contracts\v1\schemas\execution-profile.schema.json"
       LogicalName="Forge.Application.Schemas.execution-profile.schema.json" />
     <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\review-iteration.schema.json"
+      LogicalName="Forge.Application.Schemas.review-iteration.schema.json" />
+    <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\context-manifest.schema.json"
       LogicalName="Forge.Application.Schemas.context-manifest.schema.json" />
     <EmbeddedResource

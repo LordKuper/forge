@@ -260,6 +260,32 @@ public interface ISprintStore
         SprintId sprintId,
         CancellationToken cancellationToken);
 
+    Task SaveReviewIterationAsync(string projectRoot, ReviewIterationRecord record, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
+    /// <summary>Whether an operator has already chosen to continue at the critical severity floor
+    /// for this (sprint, node, dimension) — see <c>SprintScheduler.PinReviewFloorAsync</c>.
+    /// ADR 0006: "User-approved continuation keeps the counter and pins the floor at critical; it
+    /// never resets or re-admits lower severities." A plain marker, not a versioned record: the
+    /// decision is a one-way pin, never revoked.</summary>
+    Task SetReviewFloorPinnedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        CancellationToken cancellationToken);
+
+    Task<bool> IsReviewFloorPinnedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ReviewDimension dimension,
+        CancellationToken cancellationToken);
+
     Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(

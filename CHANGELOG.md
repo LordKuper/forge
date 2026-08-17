@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.36.0
+
+### Added
+
+- Review can now record a design or implementation verdict per iteration,
+  with an independent counter per dimension and a rising severity floor
+  (all findings on iteration 1, then progressively only medium, high, and
+  finally critical-only). Findings below the current floor are still
+  recorded, just not left open. Two consecutive identical external finding
+  sets, or reaching the iteration budget, now blocks the sprint for an
+  explicit operator decision; choosing to continue pins the floor at
+  critical for the rest of that dimension's review.
+
 ## v0.35.0
 
 ### Added
