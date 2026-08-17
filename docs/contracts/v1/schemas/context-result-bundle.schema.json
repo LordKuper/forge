@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/context-result-bundle.schema.json",
+  "title": "Context-query result bundle v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_digest", "source_commit", "results"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "plan_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "source_commit": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operation_id", "diagnostic", "content_digest", "byte_count", "truncated"],
+        "properties": {
+          "operation_id": {"type": "string", "minLength": 1},
+          "diagnostic": {"enum": ["none", "not_found", "binary", "process_failed"]},
+          "content_digest": {"type": ["string", "null"], "pattern": "^sha256:[0-9a-f]{64}$"},
+          "byte_count": {"type": "integer", "minimum": 0},
+          "truncated": {"type": "boolean"}
+        }
+      }
+    }
+  }
+}

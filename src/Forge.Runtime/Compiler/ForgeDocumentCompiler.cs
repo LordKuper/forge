@@ -268,7 +268,10 @@ public sealed class ForgeDocumentCompiler
             trimmedBody,
             estimatedTokens,
             effectiveLimit,
-            references), null);
+            references,
+            frontmatter.Status is null
+                ? null
+                : Enum.Parse<ForgeDocumentStatus>(frontmatter.Status, ignoreCase: true)), null);
     }
 
     private static (List<ForgeDocumentReference>, ForgeDocumentError?) ResolveReferences(
@@ -313,20 +316,19 @@ public sealed class ForgeDocumentCompiler
             return false;
         }
 
-        if (raw.Contains('\\', StringComparison.Ordinal))
+        if (RelativePathShape.HasBackslash(raw))
         {
             reason = "it must use forward slashes";
             return false;
         }
 
-        if (raw.StartsWith('/') || raw.Contains(':', StringComparison.Ordinal))
+        if (RelativePathShape.HasDriveOrRootPrefix(raw))
         {
             reason = "it must be a relative path with no drive or scheme prefix";
             return false;
         }
 
-        string[] segments = raw.Split('/');
-        if (segments.Any(segment => segment.Length == 0 || segment is "." or ".."))
+        if (RelativePathShape.HasUnsafeSegment(raw))
         {
             reason = "it must not contain '.', '..', or empty segments";
             return false;
@@ -437,5 +439,7 @@ public sealed class ForgeDocumentCompiler
         public List<string>? References { get; set; }
 
         public int? ContextLimitTokens { get; set; }
+
+        public string? Status { get; set; }
     }
 }

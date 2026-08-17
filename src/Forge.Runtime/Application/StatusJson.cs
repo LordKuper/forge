@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Forge.Domain;
 using Forge.Providers;
 
 namespace Forge.Application;
@@ -32,6 +33,15 @@ public static class StatusJson
 
     public static string Serialize(IntegrationWriteResult result) =>
         JsonSerializer.Serialize(result, Options);
+
+    public static string Serialize(ContextManifest manifest) =>
+        JsonSerializer.Serialize(manifest, Options);
+
+    public static string Serialize(ContextQueryPlan plan) =>
+        JsonSerializer.Serialize(plan, Options);
+
+    public static string Serialize(ContextResultBundle bundle) =>
+        JsonSerializer.Serialize(bundle, Options);
 
     private static JsonSerializerOptions Create()
     {
