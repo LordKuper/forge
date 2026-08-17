@@ -54,18 +54,6 @@ public sealed class ExecutionProfilePolicyTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public void IsCapabilityAllowedChecksAllowlistContainment()
-    {
-        ExecutionProfile profile = new(
-            ExecutionProfile.ContractVersion, ExecutionPhase.Review, "codex", "gpt-5", "high", "workspace-write",
-            "never", [ContextCapabilityIds.GitShow], 3600, 300);
-
-        Assert.True(ExecutionProfilePolicy.IsCapabilityAllowed(profile, ContextCapabilityIds.GitShow));
-        Assert.False(ExecutionProfilePolicy.IsCapabilityAllowed(profile, ContextCapabilityIds.GitGrep));
-    }
-
-    [Fact]
-    [Trait("Category", "Unit")]
     public void FreezeProducesExactlyThreePhasesWithReviewLineageEvidence()
     {
         ProviderCatalog catalog = new(

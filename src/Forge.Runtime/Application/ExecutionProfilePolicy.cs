@@ -86,23 +86,6 @@ public static class ExecutionProfilePolicy
         _ => null,
     };
 
-    /// <summary>True when <paramref name="capabilityId"/> is present in <paramref name="profile"/>'s
-    /// allowlist — the "cannot widen them" half of the plan item's rule as a checkable invariant a
-    /// future node executor enforces per request, not just at freeze time. The "or invoke
-    /// human-only commands" half has no code to check yet: a model node's allowlist uses ADR 0012's
-    /// `context.*` vocabulary and a Host-protocol command uses a disjoint one
-    /// (`docs/contracts/v1/capabilities.json`'s `workflow.review`/`attempt.supersede`), so there is
-    /// no path today connecting the two — the rule is vacuously true, the same way "starts without
-    /// a parent transcript" is true because no transcript concept exists yet. It stops being
-    /// vacuous, and needs a real check here, once a node executor and command dispatch share one
-    /// vocabulary to validate against.</summary>
-    public static bool IsCapabilityAllowed(ExecutionProfile profile, string capabilityId)
-    {
-        ArgumentNullException.ThrowIfNull(profile);
-        ArgumentNullException.ThrowIfNull(capabilityId);
-        return profile.CapabilityAllowlist.Contains(capabilityId, StringComparer.Ordinal);
-    }
-
     private static ExecutionProfile BuildProfile(
         ExecutionPhase phase,
         string provider,

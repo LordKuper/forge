@@ -120,7 +120,7 @@ even if enablement or configuration changes while the sprint runs (ADR
 "shape now, tolerant of older data" rule `NodeRole` already established for
 this exact file.
 
-### `NodeRole` → `ExecutionPhase` and the capability guard
+### `NodeRole` → `ExecutionPhase`, and why no capability guard exists yet
 
 `ExecutionProfilePolicy.PhaseFor(NodeRole)` maps the three model-bearing
 roles (`Planning`/`Implementation`/`Review`) to their `ExecutionPhase` and
@@ -131,24 +131,27 @@ other non-model role in the built-in graph. This is the join key a future
 node executor uses to look up which of a sprint's three frozen profiles
 governs a given node; nothing yet consumes it beyond that mapping itself.
 
-`IsCapabilityAllowed(profile, capabilityId)` is the "cannot widen them"
-half of the plan item's rule as a pure, callable containment check a
-future node executor can enforce per request, not just at freeze time. The
-"or invoke human-only commands" half has no code to check yet, and
-deliberately adds none here: a model node's allowlist uses ADR 0012's
-`context.*` vocabulary (`ContextCapabilityIds`), while a Host-protocol
-human-only command uses a disjoint one
-(`docs/contracts/v1/capabilities.json`'s `workflow.review`/
-`attempt.supersede`) — no code today connects the two, so the rule is
-vacuously true, the same way "starts without a parent transcript" is true
-because no transcript concept exists yet. An earlier draft of this ADR
-added a `HumanOnlyCapabilityIds` set and checked it inside
-`IsCapabilityAllowed`; independent review found the check unreachable by
-construction (nothing can ever put a Host-protocol id in a node's
-`context.*`-only allowlist) and it was removed rather than kept as
-misleading dead code. Real enforcement needs a real check here once a node
-executor and command dispatch share one vocabulary to validate against —
-not before.
+Neither half of "a node cannot widen them or invoke human-only commands"
+has any enforcement code in this item, and deliberately so — both are
+vacuously true today, the same way "starts without a parent transcript" is
+true because no transcript concept exists yet: there is no node executor
+anywhere that makes a capability *request* for something to check against
+a frozen allowlist, so nothing could widen anything even if it tried. Two
+earlier drafts of this ADR each added a small guard function for this
+(first `IsCapabilityAllowed` with an internal human-only exclusion, then a
+version with the human-only clause removed but the plain-containment check
+kept); independent review found both versions had zero production callers
+and, in the first version's case, an unreachable branch (a model node's
+allowlist uses ADR 0012's `context.*` vocabulary while a Host-protocol
+human-only command — `docs/contracts/v1/capabilities.json`'s
+`workflow.review`/`attempt.supersede` — uses a disjoint one, so no code
+could ever route one into the other). Both were removed rather than kept
+as speculative, uncalled infrastructure: a one-line containment check has
+no real weight to preserve ahead of a caller that needs it, unlike
+`ConfirmationArtifact` or `Handoff`, which carry a real schema/store/codec
+pipeline worth keeping ahead of their own producers. Real enforcement — for
+both halves of the rule — lands once a node executor exists to make a
+capability request in the first place.
 
 ### What stays deferred
 
@@ -174,12 +177,13 @@ not before.
 Every sprint now freezes a real, schema-validated, provider-grounded
 `ExecutionProfile` per model phase, deterministically derived from data
 Stage 11's own predecessor items already freeze — no new configuration
-surface, no executor, no invented vendor knowledge. `NodeRole`/
-`ExecutionPhase` and the capability-allowlist containment check give a
-future executor exactly the join key and invariant it needs to enforce "no
-widening" without this item having to build that executor itself; "no
-human-only commands" stays vacuously true — by construction, not by an
-unreachable check — until a real vocabulary exists to validate against.
+surface, no executor, no invented vendor knowledge, and no speculative
+enforcement code with nothing yet to call it. `NodeRole`/`ExecutionPhase`
+gives a future executor the join key it needs to look up which frozen
+profile governs a given node; "cannot widen them or invoke human-only
+commands" stays honestly vacuous — true by construction, not by an
+unreachable or uncalled check — until a node executor exists to make a
+capability request for something to validate against.
 
 | Action | Recovery |
 |---|---|
