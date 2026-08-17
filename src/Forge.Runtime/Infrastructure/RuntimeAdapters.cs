@@ -22,6 +22,13 @@ public sealed class PhysicalFileSystem : IFileSystem
 
 public sealed class ProcessRunner : IProcessRunner
 {
+    /// <summary>Bare UTF-8, no byte-order mark. `Encoding.UTF8` emits a BOM preamble on a
+    /// `StreamWriter`'s first write, which would silently prepend three corrupting bytes
+    /// (`EF BB BF`) to every prompt sent to a provider's stdin -- exactly the byte-fidelity
+    /// boundary this class exists to protect (see <see cref="ReadStreamAsync"/>'s own doc comment
+    /// for the read-side half of that same guarantee).</summary>
+    private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
+
     public async Task<ProcessResult> RunAsync(
         ProcessRequest request,
         IProcessOutputSink? outputSink,
@@ -42,9 +49,9 @@ public sealed class ProcessRunner : IProcessRunner
             // writes -- silently corrupting non-ASCII content on a machine whose codepage isn't
             // UTF-8, which would then break `GitContextReader`'s byte-identical reproducibility
             // guarantee (ADR 0012).
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8,
-            StandardInputEncoding = request.StandardInput is not null ? Encoding.UTF8 : null,
+            StandardOutputEncoding = Utf8WithoutBom,
+            StandardErrorEncoding = Utf8WithoutBom,
+            StandardInputEncoding = request.StandardInput is not null ? Utf8WithoutBom : null,
             UseShellExecute = false,
         };
 

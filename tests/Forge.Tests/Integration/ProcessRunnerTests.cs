@@ -106,7 +106,13 @@ public sealed class ProcessRunnerTests
     /// <summary>Runs on every OS this repo targets (ADR 0007: neutral core, built and tested on
     /// Windows, Linux, and macOS) — the behavior under test (`ProcessRunner` stdin/environment/
     /// streaming) is entirely OS-neutral, so it must not be Windows-only coverage even though the
-    /// concrete child command differs per platform.</summary>
+    /// concrete child command differs per platform.
+    /// <para>Regression test: `StandardInputEncoding = Encoding.UTF8` makes `StreamWriter` emit a
+    /// UTF-8 byte-order-mark preamble on its first write, silently prepending a `U+FEFF` character
+    /// (`EF BB BF`) to every prompt — exactly the byte-fidelity boundary this stdin path exists to
+    /// protect. Asserting `StartsWith` (not just `Contains`) is what actually catches a leading
+    /// BOM; a POSIX `cat` echoes bytes exactly, so no OS-added prefix could mask one.</para>
+    /// </summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task StandardInputReachesTheChildProcess()
@@ -122,7 +128,7 @@ public sealed class ProcessRunnerTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(0, result.ExitCode);
-        Assert.Contains("hello from stdin", result.StandardOutput, StringComparison.Ordinal);
+        Assert.StartsWith("hello from stdin", result.StandardOutput, StringComparison.Ordinal);
     }
 
     /// <summary>Regression test: an earlier version of the streaming read rewrite reconstructed

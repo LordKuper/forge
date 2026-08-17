@@ -165,8 +165,8 @@ caller's cancellation token (previously unbreakable once the prompt
 exceeded the OS pipe buffer and the child stopped reading), tolerates the
 child closing or never opening its stdin pipe (`IOException`/
 `ObjectDisposedException` around the write, not surfaced as an unhandled
-exception out of `RunAsync`), and closes the stdin handle in a `finally` so
-a write failure can never leak it open.
+exception out of `RunAsync`), and closes the stdin handle only after a
+write that actually completed (see below for why not unconditionally).
 
 ### A misbehaving sink can never break the read loop itself
 
@@ -245,6 +245,20 @@ consumer to validate against; ADR 0006's "schema-valid terminal result" is
 satisfied at this stage by the sink's own JSON-object parsing and the
 adapter's documented event-shape classification (ADR 0002). A durable schema
 belongs with whichever future item actually persists a terminal result.
+
+### Stdin carries no byte-order mark
+
+`Encoding.UTF8` emits a UTF-8 byte-order-mark preamble the first time a
+`StreamWriter` built on it writes — `ProcessStartInfo.StandardInputEncoding
+= Encoding.UTF8` would therefore have silently prepended `U+FEFF` (`EF BB
+BF`) to every prompt sent to a provider's stdin, corrupting the exact
+boundary this item exists to protect. `ProcessRunner` now builds its own
+`UTF8Encoding` with `encoderShouldEmitUTF8Identifier: false` and uses it for
+stdin, stdout, and stderr alike, rather than the static `Encoding.UTF8`
+instance. Existing stdin tests could not have caught this: they asserted
+`Contains`, not `StartsWith`, so a leading BOM character would have passed
+unnoticed — `StandardInputReachesTheChildProcess` now asserts `StartsWith`
+specifically because of this.
 
 ## Consequences
 
