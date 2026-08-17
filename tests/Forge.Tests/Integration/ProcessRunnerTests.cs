@@ -103,6 +103,116 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task StandardInputReachesTheChildProcess()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        ProcessRunner runner = new();
+        ProcessResult result = await runner.RunAsync(
+            new(
+                "powershell.exe",
+                ["-NoProfile", "-Command", "[Console]::In.ReadToEnd()"],
+                Path.GetTempPath(),
+                StandardInput: "hello from stdin"),
+            null,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Contains("hello from stdin", result.StandardOutput, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression test: an earlier version of the streaming read rewrite reconstructed
+    /// `StandardOutput` by joining lines with `\n`, silently normalizing CRLF/bare-CR endings and
+    /// dropping a trailing newline. `GitContextReader` hashes this exact text into a content
+    /// digest (ADR 0012), so any such normalization is a silent compatibility break, not just a
+    /// cosmetic difference.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task StandardOutputPreservesExactLineEndingsForContentDigestFidelity()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        ProcessRunner runner = new();
+        RecordingSink sink = new();
+        ProcessResult result = await runner.RunAsync(
+            new(
+                "powershell.exe",
+                ["-NoProfile", "-Command", "[Console]::Out.Write(\"line1`r`nline2`r`n\")"],
+                Path.GetTempPath()),
+            sink,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("line1\r\nline2\r\n", result.StandardOutput);
+        Assert.Equal(["line1", "line2"], sink.StandardOutputLines);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ReplaceEnvironmentGivesTheChildOnlyTheSuppliedVariables()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        Environment.SetEnvironmentVariable("FORGE_TEST_HOST_ONLY", "leaked");
+        try
+        {
+            Dictionary<string, string> overrides = new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["FORGE_TEST_CHILD_ONLY"] = "present",
+            };
+            foreach (string name in new[] { "SystemRoot", "ComSpec", "PATH", "TEMP", "TMP", "USERPROFILE" })
+            {
+                string? value = Environment.GetEnvironmentVariable(name);
+                if (value is not null)
+                {
+                    overrides[name] = value;
+                }
+            }
+
+            ProcessRunner runner = new();
+            ProcessResult result = await runner.RunAsync(
+                new(
+                    "powershell.exe",
+                    ["-NoProfile", "-Command", "\"HOST=[$env:FORGE_TEST_HOST_ONLY] CHILD=[$env:FORGE_TEST_CHILD_ONLY]\""],
+                    Path.GetTempPath(),
+                    overrides,
+                    ReplaceEnvironment: true),
+                null,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, result.ExitCode);
+            Assert.Contains("HOST=[] CHILD=[present]", result.StandardOutput, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("FORGE_TEST_HOST_ONLY", null);
+        }
+    }
+
+    private sealed class RecordingSink : IProcessOutputSink
+    {
+        public List<string> StandardOutputLines { get; } = [];
+
+        public Task OnStandardOutputLineAsync(string line, CancellationToken cancellationToken)
+        {
+            StandardOutputLines.Add(line);
+            return Task.CompletedTask;
+        }
+
+        public Task OnStandardErrorLineAsync(string line, CancellationToken cancellationToken) => Task.CompletedTask;
+    }
+
     private static async Task DeleteDirectoryAsync(string directory)
     {
         for (int attempt = 0; Directory.Exists(directory); attempt++)

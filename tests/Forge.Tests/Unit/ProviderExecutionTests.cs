@@ -182,6 +182,34 @@ public sealed class ProviderExecutionTests
         }
     }
 
+    /// <summary>Regression test: an earlier version of <c>BoundedOutputSink</c> mutated its event
+    /// list, safe tail, and counters with no synchronization, even though the real
+    /// <c>ProcessRunner</c> genuinely calls a sink's stdout/stderr callbacks concurrently from two
+    /// independent read loops (not merely interleaved by `await`). Firing many concurrent calls
+    /// against one sink instance reliably reproduces the corruption (a lost event or a thrown
+    /// exception from the underlying non-thread-safe list) without the lock in place.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncToleratesTrulyConcurrentStdoutAndStderrDeliveryWithoutLosingEvents()
+    {
+        const int messageCount = 200;
+        ConcurrentProcessRunner runner = new(messageCount);
+
+        ProviderRunResult result = await ProviderExecution.RunAsync(
+            "provider.exe",
+            runner,
+            [],
+            "prompt",
+            "C:\\work",
+            Environment,
+            Classify,
+            _ => null,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(messageCount + 1, result.Events.Count);
+    }
+
     private static ProcessResult Result(string standardOutput) => new(0, standardOutput, string.Empty);
 
     private static ProviderEventKind Classify(JsonElement root) =>
@@ -199,6 +227,30 @@ public sealed class ProviderExecutionTests
         root.TryGetProperty("text", out JsonElement text) && text.ValueKind == JsonValueKind.String
             ? text.GetString()
             : null;
+
+    /// <summary>Fires many stdout and stderr sink calls genuinely concurrently via
+    /// <see cref="Task.WhenAll(IEnumerable{Task})"/> — the same concurrency shape the real
+    /// <c>ProcessRunner</c>'s two independent read loops produce — rather than the sequential
+    /// per-line awaiting <see cref="StreamingProcessRunner"/> uses.</summary>
+    private sealed class ConcurrentProcessRunner(int messageCount) : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
+        {
+            if (outputSink is not null)
+            {
+                IEnumerable<Task> stdout = Enumerable.Range(0, messageCount)
+                    .Select(_ => outputSink.OnStandardOutputLineAsync("""{"type":"message"}""", cancellationToken));
+                IEnumerable<Task> stderr = Enumerable.Range(0, 50)
+                    .Select(_ => outputSink.OnStandardErrorLineAsync("noise", cancellationToken));
+                await Task.WhenAll(stdout.Concat(stderr)).ConfigureAwait(false);
+                await outputSink.OnStandardOutputLineAsync("""{"type":"result"}""", cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
+            return new ProcessResult(0, string.Empty, string.Empty);
+        }
+    }
 
     /// <summary>Simulates the real <c>ProcessRunner</c>'s streaming contract (feeds the stubbed
     /// response to the output sink line by line) and captures the exact request it received, so

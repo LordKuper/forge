@@ -79,14 +79,35 @@ public sealed class ProcessRunner : IProcessRunner
         // buffer -- classic bidirectional-pipe ordering, not specific to any one provider.
         Task<string> output = ReadStreamAsync(process.StandardOutput, outputSink, isError: false);
         Task<string> error = ReadStreamAsync(process.StandardError, outputSink, isError: true);
-        if (request.StandardInput is not null)
-        {
-            await process.StandardInput.WriteAsync(request.StandardInput).ConfigureAwait(false);
-            process.StandardInput.Close();
-        }
 
         try
         {
+            if (request.StandardInput is not null)
+            {
+                try
+                {
+                    await process.StandardInput.WriteAsync(request.StandardInput.AsMemory(), cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception writeError) when (writeError is IOException or ObjectDisposedException)
+                {
+                    // The child closed or never opened its stdin before consuming the full input --
+                    // not Forge's error to raise; the child's own exit code/stderr already reflects
+                    // why.
+                }
+                finally
+                {
+                    try
+                    {
+                        process.StandardInput.Close();
+                    }
+                    catch (Exception closeError) when (closeError is IOException or ObjectDisposedException)
+                    {
+                        // Already closed or torn down by the child.
+                    }
+                }
+            }
+
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -115,39 +136,64 @@ public sealed class ProcessRunner : IProcessRunner
     }
 
     /// <summary>
-    /// Reads line-by-line as data arrives (ADR 0006: "Stdout and stderr are consumed concurrently
-    /// as bounded streams") rather than the whole stream at once, notifying <paramref name="sink"/>
-    /// per line while still building the complete joined text every caller of the buffered
-    /// two-argument overload already depends on. Reads and sink notifications alike use a fixed,
-    /// unconditional <see cref="CancellationToken.None"/>, for the same reason the prior buffered
+    /// Reads as data arrives in fixed chunks (ADR 0006: "Stdout and stderr are consumed
+    /// concurrently as bounded streams") rather than the whole stream at once, notifying
+    /// <paramref name="sink"/> once per logical line while separately returning every character
+    /// exactly as decoded -- including original line endings and a missing/present trailing
+    /// newline. `GitContextReader` hashes this exact returned text into a content digest (ADR
+    /// 0012), so a line-splitting read (e.g. <c>ReadLineAsync</c>, which normalizes CRLF/bare CR
+    /// to LF and drops a trailing newline) would silently change that digest for any CRLF or
+    /// no-final-newline content; only the line-buffer used for sink notification strips `\r`, never
+    /// the returned raw text. Reads and sink notifications alike use a fixed, unconditional
+    /// <see cref="CancellationToken.None"/>, for the same reason the prior buffered
     /// implementation's reads did: a cancellation here must never race the caller's own
     /// kill-then-drain sequence above, which is what actually stops the child (closing these pipes
-    /// and unblocking `ReadLineAsync` with a natural end-of-stream) and needs these same tasks to
+    /// and unblocking the read with a natural end-of-stream) and needs these same tasks to
     /// complete cleanly afterward, not fault independently mid-drain.
     /// </summary>
     private static async Task<string> ReadStreamAsync(StreamReader reader, IProcessOutputSink? sink, bool isError)
     {
-        StringBuilder buffer = new();
-        bool first = true;
-        while (await reader.ReadLineAsync(CancellationToken.None).ConfigureAwait(false) is { } line)
+        StringBuilder raw = new();
+        StringBuilder line = new();
+        char[] chunk = new char[8192];
+        int read;
+        while ((read = await reader.ReadAsync(chunk.AsMemory(), CancellationToken.None).ConfigureAwait(false)) > 0)
         {
-            if (!first)
+            raw.Append(chunk, 0, read);
+            for (int index = 0; index < read; index++)
             {
-                buffer.Append('\n');
-            }
-
-            buffer.Append(line);
-            first = false;
-            if (sink is not null)
-            {
-                Task notify = isError
-                    ? sink.OnStandardErrorLineAsync(line, CancellationToken.None)
-                    : sink.OnStandardOutputLineAsync(line, CancellationToken.None);
-                await notify.ConfigureAwait(false);
+                char current = chunk[index];
+                if (current == '\n')
+                {
+                    await NotifyLineAsync(line, sink, isError).ConfigureAwait(false);
+                    line.Clear();
+                }
+                else if (current != '\r')
+                {
+                    line.Append(current);
+                }
             }
         }
 
-        return buffer.ToString();
+        if (line.Length > 0)
+        {
+            await NotifyLineAsync(line, sink, isError).ConfigureAwait(false);
+        }
+
+        return raw.ToString();
+    }
+
+    private static Task NotifyLineAsync(StringBuilder line, IProcessOutputSink? sink, bool isError)
+    {
+        if (sink is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        string text = line.ToString();
+        return isError
+            ? sink.OnStandardErrorLineAsync(text, CancellationToken.None)
+            : sink.OnStandardOutputLineAsync(text, CancellationToken.None);
     }
 }
 

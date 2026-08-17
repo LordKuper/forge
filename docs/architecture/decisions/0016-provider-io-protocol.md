@@ -82,13 +82,15 @@ supplies a private `BoundedOutputSink` that:
 
 - Parses each stdout line as one JSON object, exactly as the old buffered
   code did, but incrementally instead of after exit.
-- Enforces four bounds: a single line's byte length (`MaxLineLengthBytes`,
+- Enforces three bounds: a single line's byte length (`MaxLineLengthBytes`,
   1 MiB — ADR 0006's "frame"), the number of parsed events retained
   (`MaxEventCount`, 20,000), and the combined stdout+stderr byte total
   (`MaxAggregateBytes`, 64 MiB — ADR 0006's "aggregate output"). A violation
   of any of these fails the run closed with `ProviderFailureKind
-  .MalformedOutput`, carrying a redacted `SafeTailBytes` (8 KiB) tail of raw
-  output as diagnostic detail (ADR 0006's "retained safe tail").
+  .MalformedOutput`, cancels the run so the child is actually terminated
+  rather than left running to natural exit, and carries a redacted
+  `SafeTailCharacters` (8,192-character) tail of raw output as diagnostic
+  detail (ADR 0006's "retained safe tail").
 - Redacts every event's extracted `Text` through `SecretRedactor.Redact`
   before it is added to the returned `ProviderEvent` — "applies redaction
   before any durable or presentation boundary" — since `ProviderEvent`
@@ -120,6 +122,46 @@ itself.
 `ILlmProvider.RunAsync` gains the same optional `onActivity` parameter,
 threaded straight through by both adapters.
 
+### The sink is genuinely concurrent, and a bound violation cancels the run
+
+`ProcessRunner` runs its stdout and stderr read loops side by side, both
+calling into the same `BoundedOutputSink` instance — "concurrently," not
+merely "interleaved by `await`." Every mutation (`events`, the safe tail,
+`aggregateBytes`, `Failure`) runs under one lock; only the resulting
+`onActivity` callback (itself async, and the caller's to await) runs outside
+it, so the lock is never held across an `await`. A bound violation both
+stops further parsing and cancels a `ProviderExecution`-owned linked
+`CancellationTokenSource` — distinct from the caller's own token — so
+`ProcessRunner` kills the child promptly instead of continuing to consume
+its output until natural exit; `ProviderExecution.RunAsync` recognizes this
+self-inflicted cancellation (checking `sink.Failure` alongside the caller's
+own token) and returns the already-classified failure rather than
+propagating an `OperationCanceledException`. This bounds retained memory by
+kill latency, not by a hard byte cap — a true hard cap belongs in the
+generic, provider-agnostic `ProcessRunner` only if a future non-provider
+caller also needs one; today every other caller (git, installers) already
+relies on receiving its complete output.
+
+### Stream reads preserve exact bytes; stdin writes are cancellable and pipe-safe
+
+`ProcessRunner.ReadStreamAsync` reads in fixed chunks rather than
+line-by-line, appending every decoded character verbatim to the string it
+returns — including original CRLF/bare-CR line endings and a missing or
+present trailing newline — while separately stripping `\r` only from the
+line buffer used for per-line sink notification. This matters beyond
+providers: `GitContextReader` (ADR 0012) hashes this exact returned text
+into a content digest, so a line-splitting read that normalized line
+endings or dropped a trailing newline (as `ReadLineAsync`-based reading
+would) would silently change that digest for any CRLF or no-final-newline
+file content — a compatibility break this item's own read-loop rewrite
+would otherwise have introduced. Separately, the stdin write now uses the
+caller's cancellation token (previously unbreakable once the prompt
+exceeded the OS pipe buffer and the child stopped reading), tolerates the
+child closing or never opening its stdin pipe (`IOException`/
+`ObjectDisposedException` around the write, not surfaced as an unhandled
+exception out of `RunAsync`), and closes the stdin handle in a `finally` so
+a write failure can never leak it open.
+
 ### Fixed the Codex terminal-event misclassification this item's own check surfaced
 
 The prior `Classify` matched any `type` starting with `"turn."`, so
@@ -148,8 +190,12 @@ belongs with whichever future item actually persists a terminal result.
   exists to depend on it.
 - A provider process can no longer see Forge's own session markers, another
   provider's credentials, or any variable outside the frozen allowlist.
-- A hung, runaway, or malformed provider process fails closed within a
-  bounded amount of memory and output instead of buffering without limit.
+- A hung, runaway, or malformed provider process fails closed and is
+  actually terminated (not merely stopped-from-being-retained), bounding
+  its resource use to kill latency instead of the process's full lifetime.
+- `GitContextReader`'s content digests (ADR 0012) remain byte-exact even
+  though `ProcessRunner`'s read path changed from whole-buffer to
+  chunked/streaming.
 - Every successful run now carries exactly one terminal result; a provider
   that exits zero without one, or emits more than one, is a recorded
   failure instead of a silently-accepted success.

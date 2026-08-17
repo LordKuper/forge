@@ -6,9 +6,11 @@ using Forge.Infrastructure;
 
 namespace Forge.Providers;
 
-/// <summary>A normalized view over a provider-specific JSON/JSONL event; `Raw` keeps full fidelity.
-/// `Text` is redacted before it reaches this record — see ADR 0006: "applies redaction before any
-/// durable or presentation boundary."</summary>
+/// <summary>A normalized view over a provider-specific JSON/JSONL event. `Text` is redacted before
+/// it reaches this record — see ADR 0006: "applies redaction before any durable or presentation
+/// boundary." There is deliberately no raw-JSON field: nothing in the repository consumes one
+/// today, and an unredacted copy of the event would defeat that same redaction guarantee the
+/// moment a future caller reads it.</summary>
 public enum ProviderEventKind
 {
     Message,
@@ -17,7 +19,7 @@ public enum ProviderEventKind
     Unknown,
 }
 
-public sealed record ProviderEvent(ProviderEventKind Kind, string? Text, JsonElement Raw);
+public sealed record ProviderEvent(ProviderEventKind Kind, string? Text);
 
 /// <summary>
 /// The one schema-valid terminal result ADR 0006 requires for a successful run: "An attempt
@@ -96,8 +98,9 @@ public static class ProviderExecution
     public const long MaxAggregateBytes = 64L * 1024 * 1024;
 
     /// <summary>The retained, redacted tail of raw output attached to a bound-violation failure's
-    /// detail — ADR 0006's "retained safe tail."</summary>
-    public const int SafeTailBytes = 8192;
+    /// detail — ADR 0006's "retained safe tail," measured in UTF-16 characters (this is an
+    /// in-memory diagnostic cap, not a wire-size guarantee).</summary>
+    public const int SafeTailCharacters = 8192;
 
     public static async Task<ProviderRunResult> RunAsync(
         string? executablePath,
@@ -118,19 +121,37 @@ public static class ProviderExecution
             return ProviderRunResult.Failed(ProviderFailureKind.NotReady, "The provider is not ready.");
         }
 
-        BoundedOutputSink sink = new(classify, extractText, onActivity);
-        ProcessResult result = await processRunner
-            .RunAsync(
-                new ProcessRequest(
-                    executablePath,
-                    arguments,
-                    workingDirectory,
-                    environmentVariables,
-                    StandardInput: prompt,
-                    ReplaceEnvironment: true),
-                sink,
-                cancellationToken)
-            .ConfigureAwait(false);
+        // Linked, not the caller's token directly: a bound violation must terminate the child
+        // promptly (ADR 0006 "fails closed", not "keeps running to natural exit"), which this
+        // helper triggers itself by cancelling its own token — never the caller's.
+        using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken);
+        BoundedOutputSink sink = new(classify, extractText, onActivity, linkedCancellation.Cancel);
+
+        ProcessResult result;
+        try
+        {
+            result = await processRunner
+                .RunAsync(
+                    new ProcessRequest(
+                        executablePath,
+                        arguments,
+                        workingDirectory,
+                        environmentVariables,
+                        StandardInput: prompt,
+                        ReplaceEnvironment: true),
+                    sink,
+                    linkedCancellation.Token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (sink.Failure is not null && !cancellationToken.IsCancellationRequested)
+        {
+            // This helper's own bound-violation cancellation raced (or preceded) the process's
+            // natural exit -- a self-inflicted, already-classified failure, not a real
+            // caller-requested cancellation to propagate.
+            (ProviderFailureKind Kind, string Detail) selfCancelled = sink.Failure.Value;
+            return ProviderRunResult.Failed(selfCancelled.Kind, selfCancelled.Detail);
+        }
 
         if (sink.Failure is { } boundFailure)
         {
@@ -194,21 +215,30 @@ public static class ProviderExecution
         needles.Any(needle => haystack.Contains(needle, StringComparison.Ordinal));
 
     /// <summary>
-    /// Consumes stdout/stderr line-by-line as they arrive (ADR 0006: "consumed concurrently as
-    /// bounded streams"), incrementally parsing documented JSONL from stdout while enforcing the
-    /// frame/event-count/aggregate-size bounds. <paramref name="onActivity"/> is invoked,
-    /// unthrottled, once per parsed stdout event; throttling the resulting attempt-activity writes
-    /// is the caller's policy to apply, not this shared execution helper's.
+    /// Consumes stdout/stderr as they arrive (ADR 0006: "consumed concurrently as bounded
+    /// streams") — genuinely concurrently: <see cref="Forge.Infrastructure.ProcessRunner"/> runs
+    /// both read loops side by side against this one sink instance, so every state mutation below
+    /// runs under <see cref="gate"/>. Incrementally parses documented JSONL from stdout while
+    /// enforcing the frame/event-count/aggregate-size bounds; a violation both stops further
+    /// parsing and requests the process be cancelled (<paramref name="requestCancellation"/>) so
+    /// the run fails closed by actually terminating the child, not merely by refusing to retain
+    /// any more of its output. <paramref name="onActivity"/> is invoked, unthrottled, once per
+    /// parsed stdout event; throttling the resulting attempt-activity writes is the caller's
+    /// policy to apply, not this shared execution helper's.
     /// </summary>
     private sealed class BoundedOutputSink(
         Func<JsonElement, ProviderEventKind> classify,
         Func<JsonElement, string?> extractText,
-        Func<AttemptActivityKind, CancellationToken, Task>? onActivity) : IProcessOutputSink
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity,
+        Action requestCancellation) : IProcessOutputSink
     {
+        private readonly object gate = new();
         private readonly List<ProviderEvent> events = [];
         private readonly StringBuilder safeTail = new();
         private long aggregateBytes;
 
+        /// <summary>Read only after both stream tasks have completed (ADR 0006 stream consumption
+        /// has finished by the time a caller inspects this), so no lock is needed here.</summary>
         public IReadOnlyList<ProviderEvent> Events => events;
 
         public int TerminalCount { get; private set; }
@@ -219,21 +249,63 @@ public static class ProviderExecution
 
         public async Task OnStandardOutputLineAsync(string line, CancellationToken cancellationToken)
         {
-            if (!Track(line))
+            ProviderEventKind? activityKind;
+            bool failed;
+            lock (gate)
             {
-                return;
+                activityKind = ProcessOutputLine(line, out failed);
+            }
+
+            if (failed)
+            {
+                requestCancellation();
+            }
+
+            if (activityKind is { } kind && onActivity is not null)
+            {
+                AttemptActivityKind activity =
+                    kind == ProviderEventKind.ToolUse ? AttemptActivityKind.ToolUse : AttemptActivityKind.Heartbeat;
+                await onActivity(activity, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public Task OnStandardErrorLineAsync(string line, CancellationToken cancellationToken)
+        {
+            bool failed;
+            lock (gate)
+            {
+                Track(line, out failed);
+            }
+
+            if (failed)
+            {
+                requestCancellation();
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <summary>Must run under <see cref="gate"/>. Returns the classified event kind when one
+        /// was parsed and an activity callback is registered for it, or <see langword="null"/>
+        /// otherwise (blank line, bound violation, or no callback).</summary>
+        private ProviderEventKind? ProcessOutputLine(string line, out bool failed)
+        {
+            if (!Track(line, out failed))
+            {
+                return null;
             }
 
             string trimmed = line.Trim();
             if (trimmed.Length == 0)
             {
-                return;
+                return null;
             }
 
             if (events.Count >= MaxEventCount)
             {
                 Fail(ProviderFailureKind.MalformedOutput, "The provider exceeded the maximum event count for one run.");
-                return;
+                failed = true;
+                return null;
             }
 
             JsonElement root;
@@ -245,7 +317,8 @@ public static class ProviderExecution
             catch (JsonException)
             {
                 Fail(ProviderFailureKind.MalformedOutput, $"The provider emitted a non-JSON output line: {trimmed}");
-                return;
+                failed = true;
+                return null;
             }
 
             if (root.ValueKind != JsonValueKind.Object)
@@ -253,13 +326,14 @@ public static class ProviderExecution
                 Fail(
                     ProviderFailureKind.MalformedOutput,
                     "The provider emitted a JSON output line that was not an object.");
-                return;
+                failed = true;
+                return null;
             }
 
             ProviderEventKind kind = classify(root);
             string? text = extractText(root);
             string? redactedText = text is null ? null : SecretRedactor.Redact(text);
-            events.Add(new(kind, redactedText, root));
+            events.Add(new(kind, redactedText));
 
             if (kind == ProviderEventKind.Result)
             {
@@ -267,52 +341,56 @@ public static class ProviderExecution
                 TerminalResult ??= new ProviderTerminalResult(redactedText);
             }
 
-            if (onActivity is not null)
-            {
-                AttemptActivityKind activityKind =
-                    kind == ProviderEventKind.ToolUse ? AttemptActivityKind.ToolUse : AttemptActivityKind.Heartbeat;
-                await onActivity(activityKind, cancellationToken).ConfigureAwait(false);
-            }
+            return onActivity is not null ? kind : null;
         }
 
-        public Task OnStandardErrorLineAsync(string line, CancellationToken cancellationToken)
-        {
-            Track(line);
-            return Task.CompletedTask;
-        }
-
-        /// <summary>Appends to the safe tail and enforces the frame/aggregate bounds shared by
-        /// both streams. Returns <see langword="false"/> once a bound has failed (or already had)
+        /// <summary>Must run under <see cref="gate"/>. Appends to the safe tail and enforces the
+        /// per-line/aggregate bounds shared by both streams. Returns <see langword="false"/> (and
+        /// sets <paramref name="failed"/>) once a bound has failed, whether just now or already,
         /// so the caller skips further, now-pointless work for this line.</summary>
-        private bool Track(string line)
+        private bool Track(string line, out bool failed)
         {
             safeTail.Append(line).Append('\n');
-            if (safeTail.Length > SafeTailBytes)
+            int excess = safeTail.Length - SafeTailCharacters;
+            if (excess > 0)
             {
-                safeTail.Remove(0, safeTail.Length - SafeTailBytes);
+                // Never split a surrogate pair: cutting between a high and low surrogate would
+                // leave an unpaired low surrogate at the start of the retained tail.
+                if (char.IsLowSurrogate(safeTail[excess]))
+                {
+                    excess++;
+                }
+
+                safeTail.Remove(0, excess);
             }
 
             if (Failure is not null)
             {
+                failed = true;
                 return false;
             }
 
-            aggregateBytes += Encoding.UTF8.GetByteCount(line);
+            long lineBytes = Encoding.UTF8.GetByteCount(line);
+            aggregateBytes += lineBytes;
             if (aggregateBytes > MaxAggregateBytes)
             {
                 Fail(ProviderFailureKind.MalformedOutput, "The provider exceeded the maximum aggregate output size.");
+                failed = true;
                 return false;
             }
 
-            if (Encoding.UTF8.GetByteCount(line) > MaxLineLengthBytes)
+            if (lineBytes > MaxLineLengthBytes)
             {
                 Fail(ProviderFailureKind.MalformedOutput, "The provider emitted an oversized output line.");
+                failed = true;
                 return false;
             }
 
+            failed = false;
             return true;
         }
 
+        /// <summary>Must run under <see cref="gate"/>.</summary>
         private void Fail(ProviderFailureKind kind, string detail)
         {
             if (Failure is not null)
