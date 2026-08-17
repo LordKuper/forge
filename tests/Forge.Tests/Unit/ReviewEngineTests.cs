@@ -230,6 +230,65 @@ public sealed class ReviewEngineTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task AnApprovedVerdictOnTheFifteenthIterationDoesNotBlock()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+
+        RecordReviewIterationResult? last = null;
+        for (int i = 0; i < 14; i++)
+        {
+            last = await scheduler.RecordReviewIterationAsync(
+                environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+                ReviewOutcome.ChangesRequested,
+                [new(FindingSeverity.Critical, $"review.finding_{i}", new Dictionary<string, string?>(), ["e"])],
+                CompleteCoverage, cancellationToken);
+        }
+
+        Assert.Equal(14, last!.Record!.Iteration);
+
+        // Review approves on what would be iteration 15 -- nothing is left to converge on, so this
+        // must not trip the iteration-limit gate the way a fifteenth ChangesRequested verdict does.
+        RecordReviewIterationResult fifteenth = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.Approved, [], CompleteCoverage, cancellationToken);
+
+        Assert.Equal(15, fifteenth.Record!.Iteration);
+        Assert.Equal(DiagnosticCodes.None, fifteenth.DiagnosticCode);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Running, state.Sprint.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AChangesRequestedFindingWithNoEvidenceIsRejectedAndConsumesNoIteration()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+
+        RecordReviewIterationResult rejected = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.ChangesRequested,
+            [new(FindingSeverity.Critical, "review.no_evidence", new Dictionary<string, string?>(), [])],
+            CompleteCoverage, cancellationToken);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, rejected.DiagnosticCode);
+
+        RecordReviewIterationResult accepted = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.Approved, [], CompleteCoverage, cancellationToken);
+        Assert.Equal(1, accepted.Record!.Iteration);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task PinningTheFloorSuppressesTheIterationLimitGateAndAppliesCriticalRegardless()
     {
         using TestEnvironment environment = await InitializedAsync();

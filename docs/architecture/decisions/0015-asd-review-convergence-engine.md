@@ -90,11 +90,17 @@ configuration exists to aggregate across.
 records one verdict: `Dimension`, `ReviewerKind`, `Iteration`, `Outcome`,
 `ExternalFindings` (populated only for `ReviewerKind.External`), and an
 optional `Coverage` ledger. `Iteration` is derived — the count of prior
-records for the same `(NodeId, Dimension)` plus one, the same pattern
-`StartAttemptAsync` already uses for attempt numbers — never
-caller-supplied, so a caller cannot skip or replay iteration numbers.
-Persisted through the same state-independent, digest-free pattern
-`RecordConfirmationAsync`/`RecordHandoffAsync` already established.
+records for the same `(NodeId, Dimension)` plus one — never caller-supplied,
+so a caller cannot skip or replay iteration numbers on its own. This is
+weaker than `StartAttemptAsync`'s own attempt numbering, which commits
+under an `expectedNodeVersion` compare: nothing here claims an iteration
+number atomically, so two genuinely concurrent calls for the same (node,
+dimension) could compute the same one. `ponytail:` — this matches the
+single-process assumption `SprintScheduler` already documents elsewhere
+(`AppendNodeAsync`'s own remarks); add a version-gated claim if this engine
+ever needs to run outside that assumption. Persisted through the same
+state-independent, digest-free pattern `RecordConfirmationAsync`/
+`RecordHandoffAsync` already established.
 
 An `Internal` call with a missing or incomplete `CoverageLedger`
 (`ReviewConvergencePolicy.IsCoverageComplete`: every scoped file and every
@@ -144,8 +150,11 @@ extracted from that method into a shared helper as part of this change,
 since both now need identical bounded-retry-on-conflict semantics — when
 either:
 
-- the new iteration would exceed the cumulative critical budget and the
-  floor is not already pinned (`review_iteration_limit`), or
+- this is a `ChangesRequested` verdict whose new iteration would exceed the
+  cumulative critical budget and the floor is not already pinned
+  (`review_iteration_limit`) — an `Approved` verdict never trips this,
+  however high its iteration number: review has already concluded, so
+  there is nothing left to converge on, or
 - this is an `External`, `ChangesRequested` verdict whose normalized finding
   set matches the *immediately preceding* `External` record's set exactly
   (`ReviewConvergencePolicy.HasRepeatedExternalFindingSet`,
@@ -201,8 +210,11 @@ later in Stage 11.
 | Action | Recovery |
 |---|---|
 | record an internal verdict with missing/incomplete coverage | rejected (`workflow_record_invalid`); nothing persisted, no iteration consumed |
+| record a `ChangesRequested` verdict where any finding has no evidence | rejected (`workflow_record_invalid`) before the iteration record itself is even saved; no iteration consumed, matching the coverage-ledger rejection |
 | record a verdict against an unknown node id or a node not tagged `Review` | rejected with `node_not_found`/`node_kind_mismatch` |
 | a `ChangesRequested` verdict's new iteration exceeds the cumulative budget, floor not pinned | sprint blocks with `review_iteration_limit`; requires `resume_sprint`/`run_sprint` |
+| an `Approved` verdict lands on what would be iteration 15+ | no gate — nothing left to converge on |
 | an external `ChangesRequested` verdict repeats the immediately preceding external verdict's exact finding set | sprint blocks with `review_repeated_findings` |
 | `PinReviewFloorAsync` is called for a dimension | every later iteration for that dimension floors at `Critical`, including one that would otherwise have exceeded the iteration limit |
 | the sprint-blocking append itself cannot land after retrying | the verdict is still durable; `RecordReviewIterationAsync` reports `Succeeded: false`/`workflow_event_conflict`, mirroring `RecordConfirmationAsync`'s own rule |
+| `RecordFindingAsync`/`SaveFindingAsync` itself fails while recording a `ChangesRequested` finding | the iteration record is already durable, but `RecordReviewIterationAsync` reports `Succeeded: false` with that call's own diagnostic rather than a silent success |

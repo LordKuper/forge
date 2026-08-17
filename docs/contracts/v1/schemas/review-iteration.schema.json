@@ -25,9 +25,9 @@
       "required": ["rule", "message_fingerprint"],
       "properties": {
         "file": {"type": ["string", "null"]},
-        "line": {"type": ["integer", "null"]},
-        "rule": {"type": "string", "minLength": 1},
-        "message_fingerprint": {"type": "string", "minLength": 1}
+        "line": {"type": ["integer", "null"], "minimum": 1},
+        "rule": {"type": "string", "pattern": "^[a-z0-9_.-]+$"},
+        "message_fingerprint": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     },
     "coverage_ledger": {

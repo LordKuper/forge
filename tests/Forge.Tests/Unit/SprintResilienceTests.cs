@@ -634,6 +634,49 @@ public sealed class SprintResilienceTests
         Assert.Equal(SprintState.Running, state.Sprint.State);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordReviewIterationReportsFailureWhenTheBlockingAppendNeverLands()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("review", NodeKind.Work, [], NodeRole.Review)]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        ReviewFindingDraft finding =
+            new(FindingSeverity.Critical, "review.finding", new Dictionary<string, string?>(), ["evidence"]);
+
+        // The first iteration has no prior external finding set to repeat, so it lands cleanly and
+        // establishes the history the second, identical iteration then repeats -- only the second
+        // call ever reaches the blocking append this test needs to fail.
+        await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+
+        // Same shared `TryBlockSprintAsync` path `RecordConfirmationAsync` uses -- 5 failed
+        // AppendTransitionAsync calls force the retry loop to exhaust.
+        for (int i = 1; i <= 5; i++)
+        {
+            store.FailAt[store.AppendCount + i] = AppendOutcome.Conflict;
+        }
+
+        RecordReviewIterationResult result = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowEventConflict, result.DiagnosticCode);
+        // The verdict itself is still durable even though the secondary block signal never landed.
+        Assert.NotNull(result.Record);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Running, state.Sprint.State);
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

@@ -1106,11 +1106,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// lost." The sprint is blocked (reason <c>review_convergence</c>, matching the
     /// <c>confirmation</c>/<c>node</c>/<c>gate</c> family — an explicit
     /// `resume_sprint`/`run_sprint` is always required afterward, nothing here auto-recovers) when
-    /// either: this iteration would exceed the cumulative severity-floor budget and the floor is
-    /// not already pinned (<see cref="DiagnosticCodes.ReviewIterationLimit"/>), or this is an
-    /// external reviewer's <see cref="ReviewOutcome.ChangesRequested"/> repeating the immediately
-    /// preceding external iteration's exact normalized finding set
-    /// (<see cref="DiagnosticCodes.ReviewRepeatedFindings"/>).
+    /// either: this is a <see cref="ReviewOutcome.ChangesRequested"/> verdict whose iteration would
+    /// exceed the cumulative severity-floor budget and the floor is not already pinned
+    /// (<see cref="DiagnosticCodes.ReviewIterationLimit"/> — an <see cref="ReviewOutcome.Approved"/>
+    /// verdict never trips this, however high its iteration number: nothing is left to converge
+    /// on once review has approved), or this is an external reviewer's
+    /// <see cref="ReviewOutcome.ChangesRequested"/> repeating the immediately preceding external
+    /// iteration's exact normalized finding set (<see cref="DiagnosticCodes.ReviewRepeatedFindings"/>).
     /// </summary>
     public async Task<RecordReviewIterationResult> RecordReviewIterationAsync(
         string projectRoot,
@@ -1142,10 +1144,27 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
 
+        // Every draft must already satisfy `finding.schema.json`'s own constraints (non-empty
+        // evidence, in particular) before anything is recorded — checked once, up front, so a
+        // malformed draft fails cleanly with no iteration consumed (the same "invalid input,
+        // nothing recorded" rule the coverage-ledger check above already enforces), rather than
+        // reaching `RecordFindingAsync`/`SaveFindingAsync` mid-loop with some findings already
+        // durable and others not.
+        if (outcome == ReviewOutcome.ChangesRequested && findings.Any(finding => finding.Evidence.Count == 0))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
         IReadOnlyList<ReviewIterationRecord> priorForDimension = [.. (await store
                 .GetReviewIterationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false))
             .Where(item => item.NodeId.Value == nodeId && item.Dimension == dimension)
             .OrderBy(item => item.Iteration)];
+        // ponytail: derived from a plain count, not committed under an expected-version compare
+        // like `StartAttemptAsync`'s attempt numbers — two genuinely concurrent calls for the same
+        // (node, dimension) could compute the same iteration number, since nothing here claims it
+        // atomically. Matches this class's own documented single-process assumption elsewhere
+        // (`AppendNodeAsync`'s remarks); add a version-gated claim if this engine ever needs to run
+        // outside that assumption.
         int iteration = priorForDimension.Count + 1;
         bool floorPinned = await store
             .IsReviewFloorPinnedAsync(projectRoot, sprintId, nodeId, dimension, cancellationToken)
@@ -1159,7 +1178,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         bool repeated = reviewerKind == ReviewerKind.External && outcome == ReviewOutcome.ChangesRequested &&
             ReviewConvergencePolicy.HasRepeatedExternalFindingSet(
                 [.. priorForDimension.Where(item => item.ReviewerKind == ReviewerKind.External)], externalKeys);
-        bool exceedsLimit = !floorPinned && ReviewConvergencePolicy.RequiresConvergenceGate(iteration);
+        // Only an unresolved `ChangesRequested` verdict has anything left to converge on — an
+        // *approving* verdict that happens to land on iteration 15 closed the review; gating it
+        // the same way as a real budget overrun would force a needless operator decision.
+        bool exceedsLimit = outcome == ReviewOutcome.ChangesRequested && !floorPinned &&
+            ReviewConvergencePolicy.RequiresConvergenceGate(iteration);
 
         ReviewIterationRecord record = new(
             Guid.NewGuid(), sprintId, new(nodeId), dimension, reviewerKind, iteration, outcome, externalKeys,
@@ -1182,19 +1205,33 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             {
                 if (ReviewConvergencePolicy.IsAtOrAboveFloor(finding.Severity, floor))
                 {
-                    await RecordFindingAsync(
+                    RecordFindingResult recorded = await RecordFindingAsync(
                         projectRoot, sprintId, finding.Severity, finding.MessageKey, finding.Arguments,
                         finding.Evidence, finding.Location, cancellationToken).ConfigureAwait(false);
+                    if (!recorded.Succeeded)
+                    {
+                        // The iteration record is already durable (it governs eligibility/counting
+                        // regardless), but a finding this verdict was supposed to leave open never
+                        // landed — that must not be reported as a clean success.
+                        return new(false, record, recorded.DiagnosticCode);
+                    }
                 }
                 else
                 {
-                    await store.SaveFindingAsync(
-                        projectRoot,
-                        new(
-                            Guid.NewGuid(), sprintId, Fingerprint(sprintId, finding.MessageKey, finding.Evidence),
-                            finding.Severity, FindingStatus.Dismissed, finding.MessageKey, finding.Arguments,
-                            finding.Evidence, finding.Location),
-                        cancellationToken).ConfigureAwait(false);
+                    try
+                    {
+                        await store.SaveFindingAsync(
+                            projectRoot,
+                            new(
+                                Guid.NewGuid(), sprintId, Fingerprint(sprintId, finding.MessageKey, finding.Evidence),
+                                finding.Severity, FindingStatus.Dismissed, finding.MessageKey, finding.Arguments,
+                                finding.Evidence, finding.Location),
+                            cancellationToken).ConfigureAwait(false);
+                    }
+                    catch (InvalidDataException)
+                    {
+                        return new(false, record, DiagnosticCodes.WorkflowRecordInvalid);
+                    }
                 }
             }
         }
