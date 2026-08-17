@@ -97,4 +97,6 @@ public static class MessageKeys
     public const string TreeDescription = "TreeDescription";
     public const string SprintDescription = "SprintDescription";
     public const string SprintInspectDescription = "SprintInspectDescription";
+    public const string IntegrationHeaderPreamble = "IntegrationHeaderPreamble";
+    public const string IntegrationTestingInvariant = "IntegrationTestingInvariant";
 }

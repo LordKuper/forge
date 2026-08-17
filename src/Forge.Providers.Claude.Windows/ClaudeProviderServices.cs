@@ -15,6 +15,7 @@ public static class ClaudeProviderServices
             provider.GetRequiredService<IProviderReleaseCache>(),
             provider.GetRequiredService<IProviderInstallLock>(),
             provider.GetRequiredService<IClock>()));
+        services.AddSingleton<IProviderIntegrationGenerator, ClaudeIntegrationGenerator>();
         return services;
     }
 }

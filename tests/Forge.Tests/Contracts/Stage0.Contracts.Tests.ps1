@@ -24,6 +24,7 @@ foreach ($file in $jsonFiles) {
 $requiredSchemas = @(
     'project-manifest',
     'forge-document',
+    'generated-artifact',
     'event',
     'handoff',
     'finding',

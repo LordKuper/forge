@@ -59,6 +59,38 @@
       }
     },
     {
+      "name": "generated artifact accepts an agent-facing Codex integration",
+      "schema": "generated-artifact",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "provider_id": "codex",
+        "relative_path": "AGENTS.md",
+        "media_type": "text/markdown",
+        "audience": "agent_facing",
+        "language": "en",
+        "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "policy_snapshot_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "generator_version": "0.30.0"
+      }
+    },
+    {
+      "name": "generated artifact rejects agent-facing without a language",
+      "schema": "generated-artifact",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "provider_id": "codex",
+        "relative_path": "AGENTS.md",
+        "media_type": "text/markdown",
+        "audience": "agent_facing",
+        "language": null,
+        "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "policy_snapshot_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "generator_version": "0.30.0"
+      }
+    },
+    {
       "name": "event accepts typed invariant data",
       "schema": "event",
       "valid": true,

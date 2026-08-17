@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.31.0
+
+### Added
+
+- Forge can now generate the native Claude Code (`CLAUDE.md`) and Codex
+  (`AGENTS.md`) integration files from a project's compiled rules and
+  knowledge documents. Both files carry a source-digest ownership marker so a
+  later step can tell whether the canonical `.forge/` content has changed
+  since generation, or whether an installed copy has drifted from what Forge
+  generated. Generation is refused (never silently degraded) when the
+  project's agent-facing language isn't one Forge's catalog supports. Nothing
+  installs these files into a project yet -- generation only.
+
 ## v0.30.0
 
 ### Added
