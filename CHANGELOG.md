@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.29.1
+
+### Changed
+
+- Internal: closed the Stage 8 implementation plan item for the Host's
+  `resume_not_before` resume scheduler. The timer, activity-update, and
+  snapshot-projection surfaces buildable without an attempt-execution
+  engine already existed; resuming a deferred attempt requires starting
+  one, which is Stage 11's attempt-execution engine, so that remaining
+  semantics are formally re-scoped there. No shipped behavior, contract,
+  or configuration changes.
+
 ## v0.29.0
 
 ### Added
