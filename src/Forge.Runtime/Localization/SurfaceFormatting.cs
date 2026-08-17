@@ -45,6 +45,27 @@ public static class SurfaceFormatting
                 $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
     }
 
+    /// <summary>One provider's row for `forge integration skill generate`'s preview, shared with
+    /// Desktop (ADR 0011) so the two never drift: provider id, target path, and whether installing
+    /// would write/no-op/refuse.</summary>
+    public static string IntegrationInspectionRow(IntegrationArtifactInspection inspection)
+    {
+        ArgumentNullException.ThrowIfNull(inspection);
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{inspection.Artifact.ProviderId.Value} {inspection.Artifact.RelativePath} {Machine(inspection.State)}");
+    }
+
+    /// <summary>One provider's row for `forge integration skill install|remove`'s result, shared
+    /// with Desktop (ADR 0011).</summary>
+    public static string IntegrationWriteRow(IntegrationArtifactResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{result.ProviderId.Value} {result.RelativePath} {Machine(result.Outcome)}");
+    }
+
     /// <summary>ADR 0005's `project -> sprint -> node -> attempt` hierarchy as one ordered line
     /// list, shared by `forge tree` and the Desktop sprint view so the two projections of the same
     /// snapshot can never drift. <paramref name="details"/> expands exactly the sprint it names;

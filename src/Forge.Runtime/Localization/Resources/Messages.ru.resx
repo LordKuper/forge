@@ -65,4 +65,11 @@
   <data name="SprintInspectDescription" xml:space="preserve"><value>Показать полные детали одного спринта.</value></data>
   <data name="IntegrationHeaderPreamble" xml:space="preserve"><value>Этот файл сгенерирован Forge из .forge/rules/ и .forge/knowledge/. Не редактируйте его напрямую; редактируйте эти источники и выполните повторную генерацию.</value></data>
   <data name="IntegrationTestingInvariant" xml:space="preserve"><value>Приоритет реализации перед тестированием: сначала реализуйте изменение в рамках задачи, затем подтвердите его соответствие определению готовности через проверку и выполнение, и только после этого выбирайте или пишите минимальный набор новых тестов на основе рисков, защищающих изменение. Не выбирайте и не пишите новые тесты до этого подтверждения.</value></data>
+  <data name="IntegrationDescription" xml:space="preserve"><value>Команды интеграции с провайдерами.</value></data>
+  <data name="IntegrationSkillDescription" xml:space="preserve"><value>Сгенерировать, установить или удалить файлы интеграции Claude Code/Codex.</value></data>
+  <data name="IntegrationGenerateDescription" xml:space="preserve"><value>Предпросмотр сгенерированной интеграции Claude Code/Codex без записи на диск.</value></data>
+  <data name="IntegrationInstallDescription" xml:space="preserve"><value>Записать файлы интеграции Claude Code/Codex.</value></data>
+  <data name="IntegrationRemoveDescription" xml:space="preserve"><value>Удалить принадлежащие Forge файлы интеграции Claude Code/Codex.</value></data>
+  <data name="IntegrationTitle" xml:space="preserve"><value>Интеграция:</value></data>
+  <data name="NoIntegrationArtifacts" xml:space="preserve"><value>Ни один включённый провайдер не имеет генератора интеграции.</value></data>
 </root>

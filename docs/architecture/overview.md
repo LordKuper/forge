@@ -23,6 +23,7 @@ Normative architecture decisions and machine contracts live in:
 - [`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md)
 - [`decisions/0009-forge-document-format.md`](decisions/0009-forge-document-format.md)
 - [`decisions/0010-provider-integration-generation.md`](decisions/0010-provider-integration-generation.md)
+- [`decisions/0011-provider-integration-install-and-removal.md`](decisions/0011-provider-integration-install-and-removal.md)
 - [`../contracts/v1/`](../contracts/v1/)
 - [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
@@ -412,7 +413,10 @@ Generation and optional installation are idempotent and never overwrite unknown
 user-owned files. See
 [`decisions/0010-provider-integration-generation.md`](decisions/0010-provider-integration-generation.md)
 for the canonical-source compiler, the ownership-marker/digest format, and the
-per-vendor generator adapter pattern.
+per-vendor generator adapter pattern, and
+[`decisions/0011-provider-integration-install-and-removal.md`](decisions/0011-provider-integration-install-and-removal.md)
+for `forge integration skill generate|install|remove`, ownership detection, and
+duplicate-installation refusal.
 
 Release, Debug, and tests use `forge`, `forge-dev`, and unique ephemeral instance
 ids respectively. They have distinct IPC endpoints, configuration, logs, caches,

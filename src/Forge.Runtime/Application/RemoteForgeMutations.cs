@@ -65,6 +65,34 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, DiagnosticCodes.HostUnavailable);
     }
 
+    public Task<IntegrationWriteResult> InstallIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        SendIntegrationRequestAsync(ControlProtocol.InstallIntegrationKind, confirmed, cancellationToken);
+
+    public Task<IntegrationWriteResult> RemoveIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        SendIntegrationRequestAsync(ControlProtocol.RemoveIntegrationKind, confirmed, cancellationToken);
+
+    private async Task<IntegrationWriteResult> SendIntegrationRequestAsync(
+        string kind,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new IntegrationWriteRequest(confirmed),
+            ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(kind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<IntegrationWriteResult>(ControlProtocol.JsonOptions) ??
+                IntegrationWriteResult.Empty(DiagnosticCodes.HostUnavailable)
+            : IntegrationWriteResult.Empty(DiagnosticCodes.HostUnavailable);
+    }
+
     private async Task<ControlResponse> SendAsync(
         string kind,
         JsonElement payload,

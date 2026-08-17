@@ -643,6 +643,85 @@ public sealed class CliTests
         Assert.NotEqual(environment.ProjectRoot, capturedRoot);
     }
 
+    [Theory]
+    [InlineData("install")]
+    [InlineData("remove")]
+    [Trait("Category", "Acceptance")]
+    public async Task IntegrationSkillWriteVerbsRouteThroughTheResolvedMutations(string verb)
+    {
+        // ADR 0011: install/remove are mutations and must never execute against the local
+        // ForgeApplication once a Host connection is available — matching config/doctor's own
+        // routing coverage above.
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await root
+            .Parse(["integration", "skill", verb, "--yes"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(verb == "install" ? 1 : 0, mutations.InstallIntegrationCalls);
+        Assert.Equal(verb == "remove" ? 1 : 0, mutations.RemoveIntegrationCalls);
+        Assert.True(mutations.LastIntegrationConfirmed);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task IntegrationSkillWriteVerbsForwardAnUnconfirmedRequestWithoutDefaultingToTrue()
+    {
+        // The CLI must forward exactly what --yes resolved to, never silently upgrade an omitted
+        // flag to "confirmed" — ForgeApplication.MutateIntegrationAsync owns the actual
+        // confirm_destructive gate, not this layer.
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await root
+            .Parse(["integration", "skill", "install"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.InstallIntegrationCalls);
+        Assert.False(mutations.LastIntegrationConfirmed);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task IntegrationSkillGenerateNeverRoutesThroughTheResolvedMutations()
+    {
+        // A plain read (ADR 0011) — like `forge status`, it always runs against the local
+        // ForgeApplication, never through a Host connection.
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        FakeForgeMutations mutations = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        int exitCode = await root
+            .Parse(["integration", "skill", "generate", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal(0, mutations.InstallIntegrationCalls);
+        Assert.Equal(0, mutations.RemoveIntegrationCalls);
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task TreeCommandNestsAnAttemptUnderItsOwningNode()

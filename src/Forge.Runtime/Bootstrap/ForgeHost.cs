@@ -65,6 +65,7 @@ public static class ForgeHost
         services.AddSingleton<StatusAdvisor>();
         services.AddSingleton<ForgeApplication>();
         services.AddSingleton<IntegrationGenerationService>();
+        services.AddSingleton<IntegrationInstallationService>();
         return services;
     }
 }

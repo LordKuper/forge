@@ -27,6 +27,12 @@ public static class StatusJson
     public static string Serialize(ExecutionProfile profile) =>
         JsonSerializer.Serialize(profile, Options);
 
+    public static string Serialize(IntegrationInspectionResult result) =>
+        JsonSerializer.Serialize(result, Options);
+
+    public static string Serialize(IntegrationWriteResult result) =>
+        JsonSerializer.Serialize(result, Options);
+
     private static JsonSerializerOptions Create()
     {
         JsonSerializerOptions options = new()
