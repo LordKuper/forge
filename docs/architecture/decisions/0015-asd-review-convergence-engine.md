@@ -124,6 +124,17 @@ start, never `Open`, so it never blocks anything. This is "dropped, not
 silently lost" using a status this repository's `Finding` contract already
 defines, rather than inventing a parallel "dropped findings" list.
 
+Every draft's `Evidence` (non-empty) and `MessageKey` (matching
+`finding.schema.json`'s own `^[a-z0-9_.-]+$` pattern) are validated once,
+up front, before the iteration record itself is even saved — the same
+"invalid input, nothing recorded, no iteration consumed" rule the
+coverage-ledger check already enforces, rather than discovering either
+constraint mid-loop via a schema-validation failure with some findings
+already durable and others not. `RecordFindingAsync`'s own result is still
+checked afterward (and the below-floor `SaveFindingAsync` call still
+guarded) as a backstop for any other unexpected persistence failure — but
+the common, reachable case is caught before anything is written at all.
+
 ### Pinning the floor at critical
 
 `SprintScheduler.PinReviewFloorAsync` is the one new mutating capability
@@ -161,6 +172,25 @@ either:
   `review_repeated_findings`) — a set that repeats only after an
   intervening `Approved` iteration does not count, matching ADR 0006's
   "two *consecutive* identical sets."
+
+This block, when either trigger fires, happens **before** the per-finding
+loop below records anything — not after. An at-or-above-floor finding is
+recorded through the ordinary, unmodified `RecordFindingAsync`, which can
+itself block a `ReadyToFinalize` sprint with reason `finding` — the one
+reason `TryAdvanceFindingsOnlyBlockedSprintAsync` recovers from
+automatically once every open finding clears. If the loop ran first, a
+convergence-triggering call against an otherwise-settled sprint would let
+`RecordFindingAsync` claim the block with reason `finding` first;
+`TryBlockSprintAsync` would then find the sprint already `Blocked` and
+no-op (returning success), leaving the durable reason `finding` instead of
+`review_convergence`. Resolving that finding alone would then silently
+clear a gate ADR 0006 requires an explicit operator decision for — exactly
+the class of reason-laundering bug ADR 0013's `BlockedByConfirmation`/
+`BlockedByGate`/`BlockedByNode` distinction exists to prevent. Blocking
+first closes it: by the time the loop's `RecordFindingAsync` call could
+reach `ReadyToFinalize`-triggered reblocking, the sprint is already
+`Blocked`/`review_convergence`, and that internal check only fires from
+`ReadyToFinalize`.
 
 `NormalizedFindingKey(File, Line, Rule, MessageFingerprint)` is built fresh
 per finding from a `ReviewFindingDraft` (never from `Finding.Fingerprint`,

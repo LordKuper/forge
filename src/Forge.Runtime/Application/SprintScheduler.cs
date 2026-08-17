@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Forge.Domain;
 
 namespace Forge.Application;
@@ -38,6 +39,11 @@ public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attem
 public sealed class SprintScheduler(ISprintStore store, IClock clock)
 {
     public const int MaxAutomaticRetries = 2;
+
+    // Matches `finding.schema.json`'s own `message_key` pattern — validated here too since
+    // `RecordReviewIterationAsync` must reject a malformed `ReviewFindingDraft` before persisting
+    // anything, not discover the same constraint mid-loop via a schema-validation exception.
+    private static readonly Regex MessageKeyPattern = new("^[a-z0-9_.-]+$", RegexOptions.Compiled);
 
     private static readonly AttemptState[] AttemptSucceededPath =
     [
@@ -1144,13 +1150,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
 
-        // Every draft must already satisfy `finding.schema.json`'s own constraints (non-empty
-        // evidence, in particular) before anything is recorded — checked once, up front, so a
-        // malformed draft fails cleanly with no iteration consumed (the same "invalid input,
-        // nothing recorded" rule the coverage-ledger check above already enforces), rather than
-        // reaching `RecordFindingAsync`/`SaveFindingAsync` mid-loop with some findings already
-        // durable and others not.
-        if (outcome == ReviewOutcome.ChangesRequested && findings.Any(finding => finding.Evidence.Count == 0))
+        // Every draft must already satisfy `finding.schema.json`'s own constraints — non-empty
+        // evidence and a message key matching its `^[a-z0-9_.-]+$` pattern — before anything is
+        // recorded, checked once, up front, so a malformed draft fails cleanly with no iteration
+        // consumed (the same "invalid input, nothing recorded" rule the coverage-ledger check
+        // above already enforces), rather than reaching `RecordFindingAsync`/`SaveFindingAsync`
+        // mid-loop with some findings already durable and others not.
+        if (outcome == ReviewOutcome.ChangesRequested &&
+            findings.Any(finding => finding.Evidence.Count == 0 || !MessageKeyPattern.IsMatch(finding.MessageKey)))
         {
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
@@ -1196,6 +1203,20 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
 
+        // Blocked *before* any finding is recorded below, deliberately: an at-or-above-floor
+        // finding recorded via `RecordFindingAsync` can itself block a `ReadyToFinalize` sprint
+        // with reason `finding` — the one reason that recovers automatically once every open
+        // finding clears. If that ran first, `TryBlockSprintAsync` below would find the sprint
+        // already `Blocked` and no-op, leaving the durable reason `finding` instead of
+        // `review_convergence` — silently laundering a gate that requires an explicit operator
+        // decision into one that resolving the findings alone would clear.
+        bool convergenceBlockLanded = true;
+        if (exceedsLimit || repeated)
+        {
+            convergenceBlockLanded = await TryBlockSprintAsync(
+                projectRoot, sprintId, BlockedByReviewConvergence, cancellationToken).ConfigureAwait(false);
+        }
+
         if (outcome == ReviewOutcome.ChangesRequested)
         {
             FindingSeverity floor = floorPinned
@@ -1238,14 +1259,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         if (exceedsLimit || repeated)
         {
-            string diagnostic = exceedsLimit ? DiagnosticCodes.ReviewIterationLimit : DiagnosticCodes.ReviewRepeatedFindings;
-            if (!await TryBlockSprintAsync(projectRoot, sprintId, BlockedByReviewConvergence, cancellationToken)
-                .ConfigureAwait(false))
+            if (!convergenceBlockLanded)
             {
                 return new(false, record, DiagnosticCodes.WorkflowEventConflict);
             }
 
-            return new(true, record, diagnostic);
+            return new(
+                true, record, exceedsLimit ? DiagnosticCodes.ReviewIterationLimit : DiagnosticCodes.ReviewRepeatedFindings);
         }
 
         return new(true, record, DiagnosticCodes.None);

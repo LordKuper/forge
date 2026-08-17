@@ -163,6 +163,60 @@ public sealed class ReviewEngineTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ConvergenceBlockReasonIsNotLaunderedByAFindingRecordedInTheSameCall()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "review", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "review", started.AttemptId!, true,
+            "sha256:" + new string('0', 64), [], [], cancellationToken);
+        ReviewFindingDraft finding = new(
+            FindingSeverity.Critical, "review.same_finding", new Dictionary<string, string?>(), ["evidence"],
+            new("src/a.cs", 1));
+
+        // The first iteration establishes the repeated-set history and, having no prior set to
+        // repeat, is not itself a convergence trigger -- but the finding it records at/above the
+        // floor blocks the (now node-complete, otherwise-settled) sprint with reason `finding`.
+        await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+        IReadOnlyList<Finding> openFindings =
+            await scheduler.GetFindingsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        foreach (Finding open in openFindings.Where(item => item.Status == FindingStatus.Open))
+        {
+            await scheduler.ResolveFindingAsync(
+                environment.ProjectRoot, sprintId, open.FindingId, FindingStatus.Resolved, cancellationToken);
+        }
+
+        // Resolving the last open finding walks the sprint back to `ReadyToFinalize` -- exactly
+        // the state a second, repeated-set call must not let its own re-recorded finding launder
+        // into an auto-recovering `finding` block.
+        SprintWorkflowState readyToFinalize =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.ReadyToFinalize, readyToFinalize.Sprint.State);
+
+        RecordReviewIterationResult second = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+
+        Assert.True(second.Succeeded);
+        Assert.Equal(DiagnosticCodes.ReviewRepeatedFindings, second.DiagnosticCode);
+        SprintWorkflowState blocked = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Blocked, blocked.Sprint.State);
+        // Must stay `review_convergence` -- not silently reverted to `finding` by the very
+        // finding this same call re-recorded, which would let resolving it alone (no explicit
+        // resume_sprint/run_sprint) clear a gate that requires an operator decision.
+        Assert.Equal("review_convergence", blocked.Sprint.BlockedReason);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task DifferentConsecutiveExternalFindingSetsDoNotBlock()
     {
         using TestEnvironment environment = await InitializedAsync();
@@ -277,6 +331,30 @@ public sealed class ReviewEngineTests
             environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
             ReviewOutcome.ChangesRequested,
             [new(FindingSeverity.Critical, "review.no_evidence", new Dictionary<string, string?>(), [])],
+            CompleteCoverage, cancellationToken);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, rejected.DiagnosticCode);
+
+        RecordReviewIterationResult accepted = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.Approved, [], CompleteCoverage, cancellationToken);
+        Assert.Equal(1, accepted.Record!.Iteration);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AChangesRequestedFindingWithAnInvalidMessageKeyIsRejectedAndConsumesNoIteration()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+
+        RecordReviewIterationResult rejected = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.ChangesRequested,
+            [new(FindingSeverity.Critical, "Review Finding!", new Dictionary<string, string?>(), ["evidence"])],
             CompleteCoverage, cancellationToken);
         Assert.False(rejected.Succeeded);
         Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, rejected.DiagnosticCode);

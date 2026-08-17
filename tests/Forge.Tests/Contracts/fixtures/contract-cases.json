@@ -1145,6 +1145,63 @@
         "external_findings": [],
         "recorded_at": "2026-08-17T00:00:00Z"
       }
+    },
+    {
+      "name": "review iteration rejects a normalized finding key rule with an uppercase letter",
+      "schema": "review-iteration",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "review_iteration_id": "66666666-6666-4666-8666-666666666666",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "review",
+        "dimension": "design",
+        "reviewer_kind": "external",
+        "iteration": 1,
+        "outcome": "changes_requested",
+        "external_findings": [
+          {"file": "src/a.cs", "line": 10, "rule": "Review.Finding", "message_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "review iteration rejects a normalized finding key message fingerprint that is not a sha256 digest",
+      "schema": "review-iteration",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "review_iteration_id": "66666666-6666-4666-8666-666666666666",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "review",
+        "dimension": "design",
+        "reviewer_kind": "external",
+        "iteration": 1,
+        "outcome": "changes_requested",
+        "external_findings": [
+          {"file": "src/a.cs", "line": 10, "rule": "review.finding", "message_fingerprint": "not-a-digest"}
+        ],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "review iteration rejects a normalized finding key line below one",
+      "schema": "review-iteration",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "review_iteration_id": "66666666-6666-4666-8666-666666666666",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "review",
+        "dimension": "design",
+        "reviewer_kind": "external",
+        "iteration": 1,
+        "outcome": "changes_requested",
+        "external_findings": [
+          {"file": "src/a.cs", "line": 0, "rule": "review.finding", "message_fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
+        ],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
     }
   ]
 }
