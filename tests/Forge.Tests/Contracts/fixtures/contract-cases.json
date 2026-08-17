@@ -967,7 +967,7 @@
         "effort": "high",
         "sandbox_policy": "workspace-write",
         "permission_policy": "never",
-        "capability_allowlist": ["read_file", "grep"],
+        "capability_allowlist": ["context.git_show", "context.git_grep"],
         "session_deadline_seconds": 3600,
         "idle_deadline_seconds": 300,
         "lineage": {

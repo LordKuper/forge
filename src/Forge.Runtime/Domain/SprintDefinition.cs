@@ -35,6 +35,13 @@ public sealed record SprintDependency(SprintDependencyKind Kind, string Referenc
 /// the user-enabled set, resolved once at creation and never re-read even if enablement changes
 /// while the sprint is running.
 /// </summary>
+/// <summary>
+/// <see cref="ExecutionProfiles"/> holds exactly the three model phases ADR 0006 freezes —
+/// <see cref="ExecutionPhase.Planning"/>, <see cref="ExecutionPhase.Implementation"/>, and
+/// <see cref="ExecutionPhase.Review"/> — resolved once from <see cref="FrozenProviders"/> at
+/// creation (ADR 0014). A node with no matching phase (intake, confirmation, test-work, human
+/// approval, finalization) has none; nothing widens or re-resolves an entry once frozen.
+/// </summary>
 public sealed record SprintDefinition(
     SprintId Id,
     string BaseCommit,
@@ -46,4 +53,5 @@ public sealed record SprintDefinition(
     string ConversationLanguage,
     string ArtifactPolicySnapshotHash,
     DateTimeOffset FrozenAt,
-    IReadOnlyList<string> FrozenProviders);
+    IReadOnlyList<string> FrozenProviders,
+    IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> ExecutionProfiles);

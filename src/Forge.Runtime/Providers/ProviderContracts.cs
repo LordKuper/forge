@@ -166,6 +166,12 @@ public interface ILlmProvider
 {
     ProviderId Id { get; }
 
+    /// <summary>The vendor's own default model id for an unattended, non-interactive run —
+    /// vendor-owned, like <see cref="Id"/>; never chosen by neutral code (ADR 0008). Used to
+    /// freeze an <c>ExecutionProfile.Model</c> for a sprint's chosen provider (Stage 11,
+    /// P11.13-P11.20) — a fixed MVP default until per-project model selection exists.</summary>
+    string DefaultModel { get; }
+
     /// <summary>
     /// Reads the fixed, vendor-owned install path and runs `--version`. When the local probe
     /// finds a usable install, also checks release-update availability: throttled to once per 24

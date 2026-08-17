@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.35.0
+
+### Added
+
+- Every sprint now freezes a planning, implementation, and review execution
+  profile at creation -- provider, model, effort, sandbox and permission
+  policy, capability allowlist, and deadlines. Review prefers a provider
+  different from implementation's when more than one is enabled, recording
+  whether that separation was achieved; a single enabled provider still
+  completes review.
+
 ## v0.34.0
 
 ### Added

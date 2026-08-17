@@ -218,7 +218,8 @@ public sealed class SprintOrchestrator(
                 await ConversationLanguageAsync(cancellationToken).ConfigureAwait(false),
                 ArtifactPolicySnapshotHash(configurationSnapshot),
                 clock.UtcNow,
-                frozenProviders);
+                frozenProviders,
+                ExecutionProfilePolicy.Freeze(frozenProviders, providerCatalog));
             await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
         }
 

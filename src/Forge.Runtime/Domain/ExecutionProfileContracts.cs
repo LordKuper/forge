@@ -1,12 +1,13 @@
 using System.Text.Json.Serialization;
 
-namespace Forge.Application;
+namespace Forge.Domain;
 
 /// <summary>
 /// The `execution-profile.schema.json` contract Stage 11 (P11.13-P11.20) freezes onto every
 /// sprint for its planning, implementation, and review phases (ADR 0006), including the reviewer
-/// provider/model lineage-independence evidence ADR 0008 assigns to a review verdict. This stage
-/// (P8.48-P8.54) only versions the contract shape; nothing constructs one yet.
+/// provider/model lineage-independence evidence ADR 0008 assigns to a review verdict. See
+/// <see cref="SprintDefinition.ExecutionProfiles"/> for where a sprint's three frozen profiles are
+/// recorded, and ADR 0014 for how they are resolved.
 /// </summary>
 public sealed record ExecutionProfile(
     string SchemaVersion,
