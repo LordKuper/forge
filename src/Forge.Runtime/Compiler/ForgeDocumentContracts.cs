@@ -24,9 +24,15 @@ public static class ForgeDocumentDiagnosticCodes
     public const string FrontmatterInvalid = "forge_document_frontmatter_invalid";
 
     /// <summary>A `references` entry is empty, absolute, contains `..`, contains a backslash or
-    /// drive/UNC prefix, resolves outside `.forge/` (directly or through a symlink target), or
-    /// does not name a document this parse pass discovered under `rules/` or `knowledge/`.</summary>
+    /// drive/UNC prefix, resolves outside `.forge/` (directly or through a symlink target), does
+    /// not name a document this parse pass discovered under `rules/` or `knowledge/`, or (after
+    /// duplicate-id rejection) no longer names a surviving document.</summary>
     public const string ReferenceUnsafe = "forge_document_reference_unsafe";
+
+    /// <summary>The document itself — not a `references` entry — resolves outside `.forge/`
+    /// through a symlink: either `rules/`/`knowledge/` is itself a symlink/junction escaping
+    /// `.forge/`, or the candidate `.md` file is a symlink whose final target escapes it.</summary>
+    public const string LocationUnsafe = "forge_document_location_unsafe";
 
     /// <summary>The document's estimated token count exceeds its effective
     /// <c>context_limit_tokens</c> (declared value, or the 4,000-token MVP default).</summary>

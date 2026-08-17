@@ -43,14 +43,14 @@ public sealed class ForgeDocumentCompiler
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
         string forgeRoot = ProjectRootResolver.ForgeDirectory(Path.GetFullPath(projectRoot));
 
+        List<ForgeDocumentError> errors = [];
         List<Candidate> candidates = [
-            .. Discover(forgeRoot, RulesDirectoryName, ForgeDocumentKind.Rule),
-            .. Discover(forgeRoot, KnowledgeDirectoryName, ForgeDocumentKind.Knowledge),
+            .. Discover(forgeRoot, RulesDirectoryName, ForgeDocumentKind.Rule, errors),
+            .. Discover(forgeRoot, KnowledgeDirectoryName, ForgeDocumentKind.Knowledge, errors),
         ];
         HashSet<string> knownFullPaths = new(candidates.Select(c => c.FullPath), Comparer());
 
         List<ForgeDocument> documents = [];
-        List<ForgeDocumentError> errors = [];
         foreach (Candidate candidate in candidates)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -70,16 +70,32 @@ public sealed class ForgeDocumentCompiler
             }
         }
 
-        return SplitDuplicateIds(documents, errors);
+        return Finalize(candidates, documents, errors);
     }
 
-    private static ForgeDocumentSet SplitDuplicateIds(
+    /// <summary>Rejects a duplicate id (removing every document that declares it), then removes
+    /// any surviving document whose reference no longer resolves to a surviving document — a
+    /// duplicate-id rejection can dangle a reference that was safe when first resolved. Repeats to
+    /// a fixed point so a cascade (A references B references a rejected C) is fully resolved;
+    /// each pass only shrinks the set, so it always terminates.</summary>
+    private static ForgeDocumentSet Finalize(
+        List<Candidate> candidates,
         List<ForgeDocument> documents,
         List<ForgeDocumentError> errors)
     {
-        List<IGrouping<string, ForgeDocument>> byId = [.. documents.GroupBy(d => d.Id, StringComparer.Ordinal)];
+        documents = RemoveDuplicateIds(documents, errors);
+        Dictionary<string, string> fullPathByRelativePath =
+            candidates.ToDictionary(c => c.RelativePath, c => c.FullPath, StringComparer.Ordinal);
+        documents = RemoveDanglingReferences(documents, errors, fullPathByRelativePath);
+        return new(documents, errors);
+    }
+
+    private static List<ForgeDocument> RemoveDuplicateIds(
+        List<ForgeDocument> documents,
+        List<ForgeDocumentError> errors)
+    {
         List<ForgeDocument> unique = [];
-        foreach (IGrouping<string, ForgeDocument> group in byId)
+        foreach (IGrouping<string, ForgeDocument> group in documents.GroupBy(d => d.Id, StringComparer.Ordinal))
         {
             if (group.Count() == 1)
             {
@@ -93,10 +109,55 @@ public sealed class ForgeDocumentCompiler
                 $"Document id '{document.Id}' is declared by more than one document.")));
         }
 
-        return new(unique, errors);
+        return unique;
     }
 
-    private static IEnumerable<Candidate> Discover(string forgeRoot, string directoryName, ForgeDocumentKind kind)
+    private static List<ForgeDocument> RemoveDanglingReferences(
+        List<ForgeDocument> documents,
+        List<ForgeDocumentError> errors,
+        Dictionary<string, string> fullPathByRelativePath)
+    {
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            HashSet<string> survivingFullPaths = new(
+                documents.Select(document => fullPathByRelativePath[document.RelativePath]),
+                Comparer());
+            List<ForgeDocument> next = [];
+            foreach (ForgeDocument document in documents)
+            {
+                ForgeDocumentReference? dangling = document.References.FirstOrDefault(
+                    reference => !survivingFullPaths.Contains(reference.ResolvedPath));
+                if (dangling is not null)
+                {
+                    errors.Add(new(
+                        document.RelativePath,
+                        ForgeDocumentDiagnosticCodes.ReferenceUnsafe,
+                        $"Reference '{dangling.RelativePath}' no longer resolves to a surviving document."));
+                    changed = true;
+                    continue;
+                }
+
+                next.Add(document);
+            }
+
+            documents = next;
+        }
+
+        return documents;
+    }
+
+    /// <summary>Yields only candidates whose own location is safe. `rules/`/`knowledge/` being a
+    /// symlink/junction that escapes `.forge/` would otherwise expose an arbitrary external
+    /// directory's `.md` files to full parsing — bypassing <see cref="TryResolveSafeReference"/>
+    /// entirely, since that check only ever runs on `references`, never on how a candidate was
+    /// discovered. An individual candidate file can be a symlink for the same reason.</summary>
+    private static IEnumerable<Candidate> Discover(
+        string forgeRoot,
+        string directoryName,
+        ForgeDocumentKind kind,
+        List<ForgeDocumentError> errors)
     {
         string directory = Path.Combine(forgeRoot, directoryName);
         if (!Directory.Exists(directory))
@@ -104,10 +165,32 @@ public sealed class ForgeDocumentCompiler
             yield break;
         }
 
+        string? directoryTarget = new DirectoryInfo(directory).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+        if (directoryTarget is not null && !IsWithin(forgeRoot, directoryTarget))
+        {
+            errors.Add(new(
+                $"{directoryName}/",
+                ForgeDocumentDiagnosticCodes.LocationUnsafe,
+                $"'{directoryName}/' is a symlink that resolves outside .forge/; no documents were parsed from it."));
+            yield break;
+        }
+
         foreach (string fullPath in Directory.EnumerateFiles(directory, "*.md", SearchOption.TopDirectoryOnly))
         {
             string fileName = Path.GetFileName(fullPath);
-            yield return new(kind, $"{directoryName}/{fileName}", Path.GetFullPath(fullPath));
+            string relativePath = $"{directoryName}/{fileName}";
+            string candidateFull = Path.GetFullPath(fullPath);
+            string? fileTarget = new FileInfo(candidateFull).ResolveLinkTarget(returnFinalTarget: true)?.FullName;
+            if (fileTarget is not null && !IsWithin(forgeRoot, fileTarget))
+            {
+                errors.Add(new(
+                    relativePath,
+                    ForgeDocumentDiagnosticCodes.LocationUnsafe,
+                    "The document is a symlink that resolves outside .forge/."));
+                continue;
+            }
+
+            yield return new(kind, relativePath, candidateFull);
         }
     }
 

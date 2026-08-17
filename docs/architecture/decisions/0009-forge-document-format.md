@@ -66,15 +66,22 @@ context_limit_tokens: 1200
 Markdown body content, admitted to model context verbatim...
 ```
 
-The frontmatter is deserialized with a bare YamlDotNet `Deserializer`
-(matching `YamlConfigurationStore`'s pattern: normalize to
-`Dictionary<string, object?>`, round-trip through `JsonSerializer` to a
-`JsonElement`, validate against `forge-document.schema.json` with
-JsonSchema.Net Draft 2020-12, `RequireFormatValidation = true`). The Markdown
-body is stored and admitted to context verbatim; the MVP compiler does not
-build a CommonMark AST. Heading-based chunking or link-graph extraction from
-the body is deferred to P9.9-P9.16 if generation ever measures a need for it
-— the MVP requires no new Markdown-parsing dependency.
+The frontmatter is deserialized directly into a typed DTO with YamlDotNet
+(`UnderscoredNamingConvention`, required fields nullable so an absent key
+stays absent rather than defaulting to an empty string), then re-serialized
+through `System.Text.Json` and validated against `forge-document.schema.json`
+with JsonSchema.Net Draft 2020-12. This is deliberately *not*
+`YamlConfigurationStore`'s bare-`Deserializer`-to-`object` pattern: that
+pattern was tried first and found to stringify every scalar during
+implementation — `context_limit_tokens: 5` came back as the JSON string
+`"5"`, silently failing the schema's `"type": "integer"`. Typed
+deserialization resolves ints/strings correctly and, by YamlDotNet's own
+default, throws on an unmapped frontmatter key — the same strictness
+`additionalProperties: false` gives the rest of the schema. The Markdown body
+is stored and admitted to context verbatim; the MVP compiler does not build a
+CommonMark AST. Heading-based chunking or link-graph extraction from the body
+is deferred to P9.9-P9.16 if generation ever measures a need for it — the MVP
+requires no new Markdown-parsing dependency.
 
 `forge-document.schema.json` requires `schema_version` (const `"1.0.0"`),
 `id` (a stable DNS-label-shaped slug, unique per document set), `title`, and
@@ -122,6 +129,23 @@ the referencing document is admitted:
 An unsafe or unresolved reference fails only the referencing document, as a
 typed parse error — it never throws and never blocks unrelated documents in
 the same parse pass.
+
+The same symlink-target containment check applies to how a document is
+*discovered*, not only to how it is *referenced*: `rules/` or `knowledge/`
+being itself a symlink/junction that escapes `.forge/` would otherwise expose
+an arbitrary external directory's `.md` files to full parsing without ever
+touching the reference-safety check above, and an individual candidate `.md`
+file can independently be a symlink for the same reason. Both are rejected
+the same way — the escaping directory yields no candidates, the escaping file
+is excluded from the candidate set — with a typed `forge_document_location_unsafe`
+error recorded so the gap is visible rather than silently empty.
+
+Rejecting a duplicate id can dangle a reference that was safe when first
+resolved (document A references document B, and B is later rejected because
+some document C also declared B's id). The compiler removes duplicate ids
+first, then removes any surviving document whose reference no longer resolves
+to a surviving document, repeating to a fixed point so a cascade resolves
+fully; each pass only shrinks the document set, so it always terminates.
 
 ### Context limits
 

@@ -189,6 +189,112 @@ public sealed class ForgeDocumentCompilerTests
         Assert.All(set.Errors, error => Assert.Equal(ForgeDocumentDiagnosticCodes.DuplicateId, error.DiagnosticCode));
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReferenceDangledByDuplicateIdRejectionIsAlsoRejected()
+    {
+        using TempForgeProject project = new();
+        project.WriteKnowledge("b.md", Frontmatter("dup", "B") + "Body B.");
+        project.WriteKnowledge("c.md", Frontmatter("dup", "C") + "Body C.");
+        project.WriteRule(
+            "a.md",
+            Frontmatter("referrer", "A", references: ["knowledge/b.md"]) + "References B.");
+
+        ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+            project.Root, TestContext.Current.CancellationToken);
+
+        Assert.Empty(set.Documents);
+        ForgeDocumentError duplicateOfB = Assert.Single(set.Errors, e => e.RelativePath == "knowledge/b.md");
+        Assert.Equal(ForgeDocumentDiagnosticCodes.DuplicateId, duplicateOfB.DiagnosticCode);
+        ForgeDocumentError dangling = Assert.Single(set.Errors, e => e.RelativePath == "rules/a.md");
+        Assert.Equal(ForgeDocumentDiagnosticCodes.ReferenceUnsafe, dangling.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SymlinkedKnowledgeDirectoryIsRejectedWithoutParsingItsContents()
+    {
+        using TempForgeProject project = new();
+        string outsideDirectory = Path.Combine(Path.GetTempPath(), $"forge-doc-outside-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(outsideDirectory);
+        try
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(outsideDirectory, "leaked.md"),
+                Frontmatter("leaked", "Leaked") + "Should never be admitted.",
+                TestContext.Current.CancellationToken);
+            string link = Path.Combine(project.ForgeRoot, "knowledge");
+            try
+            {
+                Directory.CreateSymbolicLink(link, outsideDirectory);
+            }
+            catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
+            {
+                // Creating a symlink requires elevated privileges or Developer Mode on some
+                // Windows CI runners; the safe-path check under test cannot be exercised there.
+                return;
+            }
+
+            project.WriteRule("ok.md", Frontmatter("ok-rule", "OK rule") + "Fine.");
+
+            ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+                project.Root, TestContext.Current.CancellationToken);
+
+            Assert.DoesNotContain(set.Documents, document => document.Id == "leaked");
+            ForgeDocumentError error = Assert.Single(set.Errors);
+            Assert.Equal("knowledge/", error.RelativePath);
+            Assert.Equal(ForgeDocumentDiagnosticCodes.LocationUnsafe, error.DiagnosticCode);
+            ForgeDocument ok = Assert.Single(set.Documents);
+            Assert.Equal("ok-rule", ok.Id);
+        }
+        finally
+        {
+            Directory.Delete(outsideDirectory, true);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SymlinkedCandidateFileIsRejectedAloneOthersStillParse()
+    {
+        using TempForgeProject project = new();
+        string outsideFile = Path.Combine(Path.GetTempPath(), $"forge-doc-outside-{Guid.NewGuid():N}.md");
+        await File.WriteAllTextAsync(
+            outsideFile,
+            Frontmatter("leaked", "Leaked") + "Should never be admitted.",
+            TestContext.Current.CancellationToken);
+        try
+        {
+            string link = Path.Combine(project.ForgeRoot, "rules", "leaked.md");
+            Directory.CreateDirectory(Path.GetDirectoryName(link)!);
+            try
+            {
+                File.CreateSymbolicLink(link, outsideFile);
+            }
+            catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
+            {
+                // Creating a symlink requires elevated privileges or Developer Mode on some
+                // Windows CI runners; the safe-path check under test cannot be exercised there.
+                return;
+            }
+
+            project.WriteRule("ok.md", Frontmatter("ok-rule", "OK rule") + "Fine.");
+
+            ForgeDocumentSet set = await new ForgeDocumentCompiler().ParseAsync(
+                project.Root, TestContext.Current.CancellationToken);
+
+            ForgeDocumentError error = Assert.Single(set.Errors);
+            Assert.Equal("rules/leaked.md", error.RelativePath);
+            Assert.Equal(ForgeDocumentDiagnosticCodes.LocationUnsafe, error.DiagnosticCode);
+            ForgeDocument ok = Assert.Single(set.Documents);
+            Assert.Equal("ok-rule", ok.Id);
+        }
+        finally
+        {
+            File.Delete(outsideFile);
+        }
+    }
+
     private static string Frontmatter(
         string id,
         string title,
