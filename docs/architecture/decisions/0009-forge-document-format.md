@@ -131,14 +131,17 @@ typed parse error — it never throws and never blocks unrelated documents in
 the same parse pass.
 
 The same symlink-target containment check applies to how a document is
-*discovered*, not only to how it is *referenced*: `rules/` or `knowledge/`
-being itself a symlink/junction that escapes `.forge/` would otherwise expose
-an arbitrary external directory's `.md` files to full parsing without ever
-touching the reference-safety check above, and an individual candidate `.md`
-file can independently be a symlink for the same reason. Both are rejected
-the same way — the escaping directory yields no candidates, the escaping file
-is excluded from the candidate set — with a typed `forge_document_location_unsafe`
-error recorded so the gap is visible rather than silently empty.
+*discovered*, not only to how it is *referenced*, at every level of the
+`.forge/` tree: `.forge/` itself can be a symlink/junction that escapes the
+project root, `rules/` or `knowledge/` can independently be a symlink that
+escapes `.forge/`, and an individual candidate `.md` file can independently be
+a symlink that escapes `.forge/` — any one of the three would otherwise expose
+arbitrary external content to full parsing without ever touching the
+reference-safety check above. All three are rejected the same way — an
+escaping `.forge/` stops the parse pass before discovery starts, an escaping
+directory yields no candidates from it, an escaping file is excluded from the
+candidate set — with a typed `forge_document_location_unsafe` error recorded
+so the gap is visible rather than silently empty.
 
 Rejecting a duplicate id can dangle a reference that was safe when first
 resolved (document A references document B, and B is later rejected because
