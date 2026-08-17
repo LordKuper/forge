@@ -1,3 +1,5 @@
+using System.ComponentModel;
+using Forge.Application;
 using Forge.Domain;
 using Forge.Infrastructure;
 using Forge.Tests.Support;
@@ -157,6 +159,79 @@ public sealed class GitContextReaderTests
 
         Assert.Equal(first.Bundle!.PlanDigest, second.Bundle!.PlanDigest);
         Assert.Equal(first.Bundle.Results[0].ContentDigest, second.Bundle.Results[0].ContentDigest);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task NonAsciiContentRoundTripsExactlyRegardlessOfConsoleCodepage()
+    {
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(TestContext.Current.CancellationToken);
+        const string nonAsciiContent = "café \u6587\u5b57 \u0441\u0438\u043c\u0432\u043e\u043b\u044b";
+        string commit = await repository.CommitFileAsync(
+            "notes.md", nonAsciiContent, "add non-ascii notes", TestContext.Current.CancellationToken);
+        ContextQueryPlan plan = Plan(commit, ShowOperation("read-notes", "notes.md"));
+
+        ContextQueryPlanResult result = await new GitContextReader(new ProcessRunner()).ExecuteAsync(
+            repository.Root, plan, GitShowCapability, TestContext.Current.CancellationToken);
+
+        ContextQueryResult operation = Assert.Single(result.Bundle!.Results);
+        Assert.Equal(ContextQueryOperationDiagnostic.None, operation.Diagnostic);
+        Assert.Equal(nonAsciiContent, operation.Content);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task BinaryContentWithAnEmbeddedNulByteIsDetectedAndNotReturned()
+    {
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(TestContext.Current.CancellationToken);
+        string binaryPath = System.IO.Path.Combine(repository.Root, "binary.dat");
+        await System.IO.File.WriteAllBytesAsync(
+            binaryPath, [0x01, 0x00, 0x02], TestContext.Current.CancellationToken);
+        await repository.RunAsync(repository.Root, ["add", "binary.dat"], TestContext.Current.CancellationToken);
+        await repository.RunAsync(repository.Root, ["commit", "-m", "add binary"], TestContext.Current.CancellationToken);
+        string commit = await repository.HeadAsync(TestContext.Current.CancellationToken);
+        ContextQueryPlan plan = Plan(commit, ShowOperation("read-binary", "binary.dat"));
+
+        ContextQueryPlanResult result = await new GitContextReader(new ProcessRunner()).ExecuteAsync(
+            repository.Root, plan, GitShowCapability, TestContext.Current.CancellationToken);
+
+        ContextQueryResult operation = Assert.Single(result.Bundle!.Results);
+        Assert.Equal(ContextQueryOperationDiagnostic.Binary, operation.Diagnostic);
+        Assert.Null(operation.Content);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ANullOperationsListRejectsThePlanInsteadOfThrowing()
+    {
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(TestContext.Current.CancellationToken);
+        string commit = await repository.HeadAsync(TestContext.Current.CancellationToken);
+        ContextQueryPlan plan = new(ContextQueryPlan.ContractVersion, commit, null!);
+
+        ContextQueryPlanResult result = await new GitContextReader(new ProcessRunner()).ExecuteAsync(
+            repository.Root, plan, GitShowCapability, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ContextQueryPlanDiagnostic.SchemaInvalid, result.Diagnostic);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AProcessLaunchFailureReportsProcessFailedInsteadOfThrowing()
+    {
+        ContextQueryPlan plan = Plan("a".PadRight(40, 'a'), ShowOperation("read", "notes.md"));
+
+        ContextQueryPlanResult result = await new GitContextReader(new ThrowingProcessRunner()).ExecuteAsync(
+            "C:\\does-not-matter", plan, GitShowCapability, TestContext.Current.CancellationToken);
+
+        ContextQueryResult operation = Assert.Single(result.Bundle!.Results);
+        Assert.Equal(ContextQueryOperationDiagnostic.ProcessFailed, operation.Diagnostic);
+        Assert.Null(operation.Content);
+    }
+
+    private sealed class ThrowingProcessRunner : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+            throw new Win32Exception("git.exe was not found.");
     }
 
     private static ContextQueryPlan Plan(string commit, params ContextQueryOperation[] operations) =>

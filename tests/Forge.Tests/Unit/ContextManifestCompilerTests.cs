@@ -123,6 +123,30 @@ public sealed class ContextManifestCompilerTests
         Assert.NotEqual(manifest.ManifestDigest, withResults.ManifestDigest);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void QueryResultsThatDoNotFitTheRemainingBudgetAreTruncatedNotSilentlyAdmitted()
+    {
+        ForgeDocumentSet documents = new([Document("rules/a.md", ForgeDocumentKind.Rule, tokens: 90)], []);
+        ContextManifest manifest = ContextManifestCompiler.Compile(
+            SprintId, SourceCommit, "implementation-critical", "1.0.0", documents, tokenBudget: 100);
+        string oversizedContent = new('x', 1000);
+        ContextResultBundle bundle = new(
+            ContextResultBundle.ContractVersion,
+            "sha256:" + new string('a', 64),
+            SourceCommit,
+            [new("op-1", ContextQueryOperationDiagnostic.None, oversizedContent, "sha256:" + new string('b', 64), 1000, false)]);
+
+        ContextManifest withResults = ContextManifestCompiler.WithQueryResults(manifest, bundle);
+
+        Assert.Empty(withResults.Layers.QueryResults);
+        Assert.Equal(90, withResults.AllocatedTokens);
+        ContextManifestTruncatedItem truncated = Assert.Single(withResults.Truncated);
+        Assert.Equal("op-1", truncated.RelativePath);
+        Assert.Equal("over_budget", truncated.Reason);
+        Assert.True(withResults.AllocatedTokens <= withResults.TokenBudget);
+    }
+
     private static ForgeDocument Document(
         string relativePath, ForgeDocumentKind kind, int tokens, ForgeDocumentStatus? status = null) =>
         new(

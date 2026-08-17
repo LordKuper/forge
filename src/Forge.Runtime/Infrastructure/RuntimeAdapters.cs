@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using Forge.Application;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -34,6 +35,13 @@ public sealed class ProcessRunner : IProcessRunner
             WorkingDirectory = request.WorkingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            // Without an explicit encoding, redirected output decodes with the OS/console
+            // codepage rather than the UTF-8 bytes the child process (always `git` today) actually
+            // writes -- silently corrupting non-ASCII content on a machine whose codepage isn't
+            // UTF-8, which would then break `GitContextReader`'s byte-identical reproducibility
+            // guarantee (ADR 0012).
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
             UseShellExecute = false,
         };
 

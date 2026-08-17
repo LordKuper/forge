@@ -1,7 +1,9 @@
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Domain;
 
 namespace Forge.Infrastructure;
@@ -67,7 +69,10 @@ public sealed partial class GitContextReader(IProcessRunner processRunner)
             return (ContextQueryPlanDiagnostic.SchemaInvalid, "source_commit is not a canonical full-length hex object id.");
         }
 
-        if (plan.Operations.Count is < MinOperations or > MaxOperations)
+        // A schema-valid plan always has `operations` (`minItems: 1`); a plan built by hand or
+        // deserialized without going through schema validation first could still leave it null —
+        // treated the same as too few entries rather than left to throw on `.Count` below.
+        if (plan.Operations is not { Count: >= MinOperations and <= MaxOperations })
         {
             return (ContextQueryPlanDiagnostic.SchemaInvalid, $"operations must contain {MinOperations}-{MaxOperations} entries.");
         }
@@ -139,9 +144,19 @@ public sealed partial class GitContextReader(IProcessRunner processRunner)
         CancellationToken cancellationToken)
     {
         int maxBytes = operation.MaxResultBytes ?? DefaultMaxResultBytes;
-        ProcessResult result = operation.Kind == ContextQueryOperationKind.GitShow
-            ? await RunAsync(projectRoot, ["show", $"{sourceCommit}:{operation.Path}"], cancellationToken).ConfigureAwait(false)
-            : await RunAsync(projectRoot, GrepArguments(sourceCommit, operation), cancellationToken).ConfigureAwait(false);
+        ProcessResult result;
+        try
+        {
+            result = operation.Kind == ContextQueryOperationKind.GitShow
+                ? await RunAsync(projectRoot, ["show", $"{sourceCommit}:{operation.Path}"], cancellationToken).ConfigureAwait(false)
+                : await RunAsync(projectRoot, GrepArguments(sourceCommit, operation), cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception error) when (error is Win32Exception or IOException)
+        {
+            // The process itself never launched (e.g. `git` is not on PATH) — distinct from `git`
+            // launching and exiting non-zero, which is `NotFound` below.
+            return new(operation.OperationId, ContextQueryOperationDiagnostic.ProcessFailed, null, null, 0, false);
+        }
 
         // `git grep` exits 1 for "no matches" — a valid empty result, not a failure.
         bool noMatches = operation.Kind == ContextQueryOperationKind.GitGrep && result.ExitCode == 1;
@@ -150,14 +165,16 @@ public sealed partial class GitContextReader(IProcessRunner processRunner)
             return new(operation.OperationId, ContextQueryOperationDiagnostic.NotFound, null, null, 0, false);
         }
 
-        byte[] raw = Encoding.UTF8.GetBytes(result.StandardOutput);
-        // A NUL byte is not producible by any valid UTF-8 text `git show`/`git grep -I` would
-        // otherwise return — its presence means the blob is binary content that slipped through.
-        if (Array.IndexOf(raw, (byte)0) >= 0)
+        // Checked directly on the decoded string, before any byte-encoding work: a NUL character
+        // is not producible by any valid UTF-8 text `git show`/`git grep -I` would otherwise
+        // return, so its presence means the blob is binary content that slipped through — no need
+        // to spend an encode pass on content this check is about to discard.
+        if (result.StandardOutput.Contains('\0', StringComparison.Ordinal))
         {
             return new(operation.OperationId, ContextQueryOperationDiagnostic.Binary, null, null, 0, false);
         }
 
+        byte[] raw = Encoding.UTF8.GetBytes(result.StandardOutput);
         bool truncated = raw.Length > maxBytes;
         byte[] admitted = truncated ? raw[..maxBytes] : raw;
         // A byte-boundary truncation may split a multi-byte character; `Encoding.UTF8.GetString`
@@ -181,21 +198,7 @@ public sealed partial class GitContextReader(IProcessRunner processRunner)
     private Task<ProcessResult> RunAsync(string projectRoot, IReadOnlyList<string> arguments, CancellationToken cancellationToken) =>
         processRunner.RunAsync(new("git", arguments, projectRoot), cancellationToken);
 
-    private static bool IsSafeRelativePath(string raw)
-    {
-        if (string.IsNullOrWhiteSpace(raw) || raw.Contains('\\', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        if (raw.StartsWith('/') || raw.Contains(':', StringComparison.Ordinal))
-        {
-            return false;
-        }
-
-        string[] segments = raw.Split('/');
-        return !segments.Any(segment => segment.Length == 0 || segment is "." or "..");
-    }
+    private static bool IsSafeRelativePath(string raw) => RelativePathShape.IsSyntacticallySafe(raw);
 
     /// <summary>Orders operations by <see cref="ContextQueryOperation.OperationId"/> regardless of
     /// the plan's own authored order, so semantically identical plans always digest identically —

@@ -36,10 +36,7 @@ public sealed record ContextManifestLayers(
     IReadOnlyList<ContextManifestItem> SprintSpecifications,
     IReadOnlyList<ContextManifestItem> Knowledge,
     IReadOnlyList<ContextManifestItem> Handoffs,
-    IReadOnlyList<ContextManifestItem> QueryResults)
-{
-    public static ContextManifestLayers Empty { get; } = new([], [], [], [], []);
-}
+    IReadOnlyList<ContextManifestItem> QueryResults);
 
 /// <summary>A frozen, content-addressed, reproducible context manifest for one sprint (ADR 0012,
 /// `context-manifest.schema.json`). <see cref="ManifestDigest"/> is a pure function of every other
@@ -47,6 +44,12 @@ public sealed record ContextManifestLayers(
 /// always rebuilds the identical digest.</summary>
 public sealed record ContextManifest(
     string SchemaVersion,
+    // Raw `Guid`, not the strongly-typed `SprintId` wrapper every sprint-scoped domain record
+    // (`NodeResult`, `Handoff`, `Finding`) otherwise uses — `ContextManifest` is serialized
+    // directly via `StatusJson` rather than through a hand-written wire DTO, and `SprintId` has no
+    // JSON converter registered, so the bare wrapper would serialize as a nested object instead of
+    // the plain string `context-manifest.schema.json` expects. Matches `ProjectSnapshot.SprintId`'s
+    // own precedent for a directly-serialized contract type.
     Guid SprintId,
     string SourceCommit,
     string Workflow,
