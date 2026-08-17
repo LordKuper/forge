@@ -55,6 +55,11 @@ public sealed class IntegrationGenerationTests
         Assert.Contains("ADR 0006 summary", codex.Content, StringComparison.Ordinal);
         Assert.Contains("@AGENTS.md", claude.Content, StringComparison.Ordinal);
         Assert.DoesNotContain("Testing invariant", claude.Content, StringComparison.Ordinal);
+
+        // Claude's own marker must carry the same fields as Codex's (via the shared
+        // IntegrationSourceCompiler.Marker), not a hand-rolled copy that can drift from it.
+        Assert.Contains($"source_digest={codex.SourceDigest}", claude.Content, StringComparison.Ordinal);
+        Assert.Contains($"schema_version={IntegrationSourceCompiler.ContractVersion}", claude.Content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -95,6 +100,25 @@ public sealed class IntegrationGenerationTests
 
         Assert.Equal(first.Artifacts.Single().SourceDigest, second.Artifacts.Single().SourceDigest);
         Assert.Equal(first.Artifacts.Single().Content, second.Artifacts.Single().Content);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GeneratedContentUsesLfLineEndingsRegardlessOfHostOperatingSystem()
+    {
+        // StringBuilder.AppendLine() appends Environment.NewLine (\r\n on Windows, \n on
+        // Linux/macOS), which would make an identical .forge/ tree digest differently per host OS
+        // and break reproducibility. Asserting no '\r' anywhere proves '\n' was used explicitly
+        // throughout, on whichever OS this test itself happens to run on.
+        using TempForgeProject project = new();
+        project.WriteRule("testing.md", Rule("testing-invariant", "Testing invariant", "Body text."));
+        IntegrationGenerationService service = new(Generators, Catalog);
+
+        IntegrationGenerationResult result = await service.GenerateAsync(
+            project.Root, [CodexLlmProvider.Codex, ClaudeLlmProvider.ClaudeCode], "en", "en", "0.31.0",
+            TestContext.Current.CancellationToken);
+
+        Assert.All(result.Artifacts, artifact => Assert.DoesNotContain('\r', artifact.Content));
     }
 
     [Fact]
