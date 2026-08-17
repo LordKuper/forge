@@ -136,12 +136,14 @@ policy they encode would run identically on any OS. They still live in
 `Forge.Providers.Claude.Windows`/`Forge.Providers.Codex.Windows` rather than
 a portable location, matching where `ClaudeReleaseSource`/`CodexReleaseSource`
 (also largely OS-agnostic) already live and where Stage 8's own ADR 0007
-adapter-boundary audit already accepted them. ADR 0008 frames this
-placement as vendor ownership, not OS-call translation: "One `ILlmProvider`
-represents one complete integration"; each adapter project "exclusively
-owns its vendor's paths, scripts, commands, authentication, environment, and
-output normalization." A generated file's name and shape is exactly that
-kind of vendor-owned knowledge. Splitting it into a third, portable
+adapter-boundary audit already accepted them. ADR 0008 frames this placement
+as vendor ownership, not OS-call translation: "One `ILlmProvider` represents
+one complete integration," and `Forge.Providers.Codex.Windows` specifically
+"owns all Codex paths, install/update scripts and endpoints, commands,
+authentication, environment, and output normalization" (`Forge.Providers.Claude.Windows`
+owns "the equivalent Claude Code behavior"). A generated file's name and
+shape is exactly that kind of vendor-owned knowledge. Splitting it into a
+third, portable
 "provider-neutral-but-vendor-specific" location ahead of an actual
 non-Windows provider adapter would add structure nothing consumes yet
 (ADR 0009's own bias against building unused structure). Extraction remains
