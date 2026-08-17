@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Application;
+using Forge.Domain;
 
 namespace Forge.Providers.Claude;
 
@@ -29,6 +30,12 @@ public sealed class ClaudeLlmProvider(
     /// DISABLE_UPDATES.</summary>
     private static readonly IReadOnlyDictionary<string, string> ExecutionEnvironmentVariables =
         new Dictionary<string, string> { ["DISABLE_AUTOUPDATER"] = "1" };
+
+    /// <summary>Claude Code authenticates through its own local credential store (`claude auth
+    /// status`), not an environment variable Forge reads or writes today — so this adapter's
+    /// authentication-variable allowlist category (ADR 0006) is currently empty rather than
+    /// guessing an unverified vendor variable name.</summary>
+    private static readonly IReadOnlyList<string> AuthenticationVariableNames = [];
 
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
     /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
@@ -138,22 +145,25 @@ public sealed class ClaudeLlmProvider(
     public async Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(prompt);
         string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
         // `--verbose` is required by `claude -p` whenever `--output-format stream-json` is used.
-        // `--` marks the end of options so a prompt starting with `-` can never be parsed as a
-        // flag (for example a prompt beginning with `--dangerously-skip-permissions`).
+        // The prompt travels on stdin, never a command-line argument (ADR 0006) — `claude -p`
+        // with no positional prompt reads it from stdin.
         return await ProviderExecution.RunAsync(
             executable,
             processRunner,
-            ["-p", "--output-format", "stream-json", "--verbose", "--", prompt],
+            ["-p", "--output-format", "stream-json", "--verbose"],
+            prompt,
             workingDirectory,
+            ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames, ExecutionEnvironmentVariables),
             Classify,
             ExtractText,
             cancellationToken,
-            ExecutionEnvironmentVariables).ConfigureAwait(false);
+            onActivity).ConfigureAwait(false);
     }
 
     private static ProviderAuthenticationStatus ParseAuthenticationStatus(ProcessResult result)

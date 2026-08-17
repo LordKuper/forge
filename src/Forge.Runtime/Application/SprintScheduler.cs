@@ -457,12 +457,15 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// the attempt's state, node state, or version-gated transition history; a caller repeats this
     /// as often as it likes while the attempt is owned. Rejected once the attempt has reached a
     /// terminal state, so a heartbeat racing a real completion never resurrects a settled attempt.
+    /// <paramref name="kind"/> is a fixed, typed classification of what the activity was about
+    /// (Stage 11, P11.32-P11.40) — still never provider content itself.
     /// </summary>
     public async Task<RecordActivityResult> RecordAttemptActivityAsync(
         string projectRoot,
         SprintId sprintId,
         AttemptId attemptId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AttemptActivityKind kind = AttemptActivityKind.Heartbeat)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
@@ -477,7 +480,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, attempt, DiagnosticCodes.AttemptTerminal);
         }
 
-        await store.AppendAttemptActivityAsync(projectRoot, sprintId, attemptId, cancellationToken)
+        await store.AppendAttemptActivityAsync(projectRoot, sprintId, attemptId, cancellationToken, kind)
             .ConfigureAwait(false);
         SprintWorkflowState updated = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);

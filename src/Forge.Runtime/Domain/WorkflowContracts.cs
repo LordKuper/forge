@@ -49,6 +49,23 @@ public enum AttemptState
 }
 
 /// <summary>
+/// A fixed, typed classification of what an <see cref="WorkflowEvent.AttemptActivityRecordedType"/>
+/// heartbeat is *about*, never provider content itself (Stage 11, P11.32-P11.40). A single fixed
+/// enum, not a free-form vendor event type — ADR 0006's "provider prose... never determine
+/// workflow state" applies just as much to activity classification as to terminal results.
+/// </summary>
+public enum AttemptActivityKind
+{
+    /// <summary>A plain keep-alive with no more specific classification — the only kind every
+    /// activity event recorded before this enum existed durably had, by omission.</summary>
+    Heartbeat,
+
+    /// <summary>The provider reported using a tool (<c>ProviderEventKind.ToolUse</c>) — never which
+    /// tool or with what arguments, only that activity of this kind occurred.</summary>
+    ToolUse,
+}
+
+/// <summary>
 /// A node's identity is the stable, workflow-assigned string a graph declares it with (e.g.
 /// "spec", "adr") — not a random value — so the same workflow always produces the same node
 /// identities across sprints and a node result can name it without a lookup.
@@ -74,4 +91,5 @@ public sealed record AttemptSnapshot(
     DateTimeOffset UpdatedAt,
     string? NodeId = null,
     string? TargetOutcome = null,
-    DateTimeOffset? LastActivityAt = null);
+    DateTimeOffset? LastActivityAt = null,
+    AttemptActivityKind? LastActivityKind = null);

@@ -34,9 +34,16 @@ public sealed record WorkflowEvent(
 
     /// <summary>An attempt heartbeat: ADR 0006's "safe, throttled activity events" that bump
     /// <see cref="AttemptSnapshot.LastActivityAt"/> without persisting provider content or moving
-    /// the attempt through its state machine. Carries no arguments; <see cref="OccurredAt"/> is
-    /// itself the activity timestamp.</summary>
+    /// the attempt through its state machine. Never carries <see cref="ToStateArgument"/>;
+    /// <see cref="OccurredAt"/> is itself the activity timestamp. May carry
+    /// <see cref="AttemptActivityKindArgument"/> (Stage 11, P11.32-P11.40) — still never provider
+    /// content, only a fixed, typed classification of what kind of activity occurred.</summary>
     public const string AttemptActivityRecordedType = "AttemptActivityRecorded";
+
+    /// <summary>Carried on an <see cref="AttemptActivityRecordedType"/> event — see
+    /// <see cref="AttemptActivityKind"/>. Optional: an event without it is a plain, untyped
+    /// heartbeat, matching every activity event recorded before Stage 11 P11.32-P11.40.</summary>
+    public const string AttemptActivityKindArgument = "activity_kind";
 
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
@@ -116,7 +123,13 @@ public static class WorkflowFold
                 if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? activeAttempt) &&
                     !WorkflowStateMachines.IsTerminal(activeAttempt.State))
                 {
-                    attempts[current.Aggregate.Id] = activeAttempt with { LastActivityAt = current.OccurredAt };
+                    AttemptActivityKind? kind =
+                        current.Arguments.TryGetValue(WorkflowEvent.AttemptActivityKindArgument, out string? kindText) &&
+                            kindText is not null
+                            ? WorkflowStateNames.Parse<AttemptActivityKind>(kindText)
+                            : null;
+                    attempts[current.Aggregate.Id] =
+                        activeAttempt with { LastActivityAt = current.OccurredAt, LastActivityKind = kind };
                 }
 
                 continue;
@@ -180,7 +193,8 @@ public static class WorkflowFold
                         current.OccurredAt,
                         nodeId,
                         targetOutcome,
-                        previousAttempt?.LastActivityAt);
+                        previousAttempt?.LastActivityAt,
+                        previousAttempt?.LastActivityKind);
                     break;
                 default:
                     throw new InvalidDataException(

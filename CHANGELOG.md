@@ -2,6 +2,23 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.37.0
+
+### Changed
+
+- Provider execution now sends the prompt over standard input instead of a
+  command-line argument, runs each provider child in a minimal Forge-owned
+  environment instead of the host's own, and reads provider output as a
+  bounded, concurrently-consumed stream instead of buffering it fully after
+  the process exits. A run now requires exactly one valid terminal result:
+  a process that exits cleanly without emitting one, or emits more than
+  one, is reported as a failure instead of a silent success.
+
+### Fixed
+
+- The Codex adapter no longer misclassifies its `turn.started` progress
+  marker as a completed result.
+
 ## v0.36.0
 
 ### Added

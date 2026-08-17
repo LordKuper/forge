@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Application;
+using Forge.Domain;
 
 namespace Forge.Providers.Codex;
 
@@ -20,6 +21,12 @@ public sealed class CodexLlmProvider(
     TimeSpan? authenticationProbeTimeout = null) : ILlmProvider
 {
     public static readonly ProviderId Codex = new("codex");
+
+    /// <summary>Codex authenticates through its own local credential store (`codex login
+    /// status`), not an environment variable Forge reads or writes today — so this adapter's
+    /// authentication-variable allowlist category (ADR 0006) is currently empty rather than
+    /// guessing an unverified vendor variable name.</summary>
+    private static readonly IReadOnlyList<string> AuthenticationVariableNames = [];
 
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
     /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
@@ -123,26 +130,36 @@ public sealed class CodexLlmProvider(
     public async Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(prompt);
         string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
-        // `--` marks the end of options so a prompt starting with `-` (or `--`) can never be
-        // parsed as a flag by the vendor CLI.
+        // The prompt travels on stdin, never a command-line argument (ADR 0006): `codex exec
+        // --json` has no positional prompt argument at all (ADR 0002).
         return await ProviderExecution.RunAsync(
             executable,
             processRunner,
-            ["exec", "--json", "--", prompt],
+            ["exec", "--json"],
+            prompt,
             workingDirectory,
+            ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames),
             Classify,
             _ => null,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            onActivity).ConfigureAwait(false);
     }
 
+    /// <summary>
+    /// Only `turn.completed`/`turn.failed` are genuinely terminal; `turn.started` is a lifecycle
+    /// marker mid-run. An earlier version of this classifier matched any `turn.*` type, which
+    /// misclassified `turn.started` as a terminal result and would have broken the "exactly one
+    /// terminal result" uniqueness check (ADR 0006) on every normal run.
+    /// </summary>
     private static ProviderEventKind Classify(JsonElement root)
     {
         string type = TypeOf(root);
-        if (type.StartsWith("turn.", StringComparison.Ordinal))
+        if (type is "turn.completed" or "turn.failed")
         {
             return ProviderEventKind.Result;
         }

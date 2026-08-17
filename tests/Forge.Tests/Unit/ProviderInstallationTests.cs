@@ -460,7 +460,8 @@ public sealed class ProviderInstallationTests
 
     private sealed class StubProcessRunner(string? version) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken) =>
             Task.FromResult(new ProcessResult(0, version ?? string.Empty, string.Empty));
     }
 
@@ -471,7 +472,8 @@ public sealed class ProviderInstallationTests
 
         public int CallCount { get; private set; }
 
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             CallCount++;
             int position = Math.Min(index, responses.Length - 1);
@@ -482,7 +484,8 @@ public sealed class ProviderInstallationTests
 
     private sealed class RecordingProcessRunner(Func<ProcessRequest, ProcessResult> respond) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken) =>
             Task.FromResult(respond(request));
     }
 

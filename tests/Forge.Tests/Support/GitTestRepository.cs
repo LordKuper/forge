@@ -131,7 +131,7 @@ internal sealed class GitTestRepository : IDisposable
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken) =>
         Directory.Exists(workingDirectory)
-            ? runner.RunAsync(new("git", arguments, workingDirectory, IsolatedEnvironment), cancellationToken)
+            ? runner.RunAsync(new("git", arguments, workingDirectory, IsolatedEnvironment), null, cancellationToken)
             : Task.FromResult(new ProcessResult(-1, string.Empty, $"'{workingDirectory}' does not exist."));
 
     public void Dispose()

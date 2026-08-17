@@ -275,7 +275,8 @@ public sealed class ControlEventsReaderTests
             throw new NotSupportedException();
 
         public Task AppendAttemptActivityAsync(
-            string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
+            string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken,
+            AttemptActivityKind kind = AttemptActivityKind.Heartbeat) =>
             throw new NotSupportedException();
     }
 
