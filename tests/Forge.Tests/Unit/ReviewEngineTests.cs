@@ -217,6 +217,80 @@ public sealed class ReviewEngineTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task AConvergenceTriggerWhileAlreadyBlockedForAnotherReasonReportsFailureRatherThanFalseSuccess()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "review", 2, cancellationToken);
+        await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "review", started.AttemptId!, true,
+            "sha256:" + new string('0', 64), [], [], cancellationToken);
+        ReviewFindingDraft finding = new(
+            FindingSeverity.Critical, "review.same_finding", new Dictionary<string, string?>(), ["evidence"],
+            new("src/a.cs", 1));
+
+        // Unlike `ConvergenceBlockReasonIsNotLaunderedByAFindingRecordedInTheSameCall`, the first
+        // iteration's finding is deliberately left unresolved -- the sprint is still `Blocked`/
+        // `finding` (not `ReadyToFinalize`) when the second, repeated-set call arrives. There is
+        // no legal `Blocked -> Blocked` sprint transition to durably re-tag the reason, so this
+        // must not silently report success while leaving the wrong, auto-recovering reason in
+        // place (ADR 0015's documented limitation).
+        await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+        SprintWorkflowState blockedOnFinding =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Blocked, blockedOnFinding.Sprint.State);
+        Assert.Equal("finding", blockedOnFinding.Sprint.BlockedReason);
+
+        RecordReviewIterationResult second = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.External,
+            ReviewOutcome.ChangesRequested, [finding], null, cancellationToken);
+
+        Assert.False(second.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowEventConflict, second.DiagnosticCode);
+        // The verdict itself is still durable (it governs the repeated-set history regardless).
+        Assert.NotNull(second.Record);
+        SprintWorkflowState stillBlockedOnFinding =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal("finding", stillBlockedOnFinding.Sprint.BlockedReason);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AChangesRequestedFindingWithAnInvalidLocationLineIsRejectedAndConsumesNoIteration()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = await CreateRunningSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken);
+
+        RecordReviewIterationResult rejected = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.ChangesRequested,
+            [
+                new(
+                    FindingSeverity.Critical, "review.bad_line", new Dictionary<string, string?>(), ["evidence"],
+                    new("src/a.cs", 0)),
+            ],
+            CompleteCoverage, cancellationToken);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, rejected.DiagnosticCode);
+
+        RecordReviewIterationResult accepted = await scheduler.RecordReviewIterationAsync(
+            environment.ProjectRoot, sprintId, "review", ReviewDimension.Implementation, ReviewerKind.Internal,
+            ReviewOutcome.Approved, [], CompleteCoverage, cancellationToken);
+        Assert.Equal(1, accepted.Record!.Iteration);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task DifferentConsecutiveExternalFindingSetsDoNotBlock()
     {
         using TestEnvironment environment = await InitializedAsync();

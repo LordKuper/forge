@@ -1151,13 +1151,16 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
 
         // Every draft must already satisfy `finding.schema.json`'s own constraints — non-empty
-        // evidence and a message key matching its `^[a-z0-9_.-]+$` pattern — before anything is
-        // recorded, checked once, up front, so a malformed draft fails cleanly with no iteration
-        // consumed (the same "invalid input, nothing recorded" rule the coverage-ledger check
-        // above already enforces), rather than reaching `RecordFindingAsync`/`SaveFindingAsync`
-        // mid-loop with some findings already durable and others not.
+        // evidence, a message key matching its `^[a-z0-9_.-]+$` pattern, and a location line of at
+        // least 1 when a location is given — before anything is recorded, checked once, up front,
+        // so a malformed draft fails cleanly with no iteration consumed (the same "invalid input,
+        // nothing recorded" rule the coverage-ledger check above already enforces), rather than
+        // reaching `RecordFindingAsync`/`SaveFindingAsync` mid-loop with some findings already
+        // durable and others not.
         if (outcome == ReviewOutcome.ChangesRequested &&
-            findings.Any(finding => finding.Evidence.Count == 0 || !MessageKeyPattern.IsMatch(finding.MessageKey)))
+            findings.Any(finding =>
+                finding.Evidence.Count == 0 || !MessageKeyPattern.IsMatch(finding.MessageKey) ||
+                finding.Location?.Line < 1))
         {
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
@@ -1213,8 +1216,20 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         bool convergenceBlockLanded = true;
         if (exceedsLimit || repeated)
         {
-            convergenceBlockLanded = await TryBlockSprintAsync(
-                projectRoot, sprintId, BlockedByReviewConvergence, cancellationToken).ConfigureAwait(false);
+            // `TryBlockSprintAsync` itself only appends from `Running`/`ReadyToFinalize` — if the
+            // sprint is *already* `Blocked` for some other, possibly auto-recovering reason (e.g.
+            // a still-open finding from an earlier, unresolved call), it would otherwise return
+            // `true` as a harmless-looking no-op, silently discarding this trigger instead of
+            // durably recording it. `Blocked -> Blocked` is not a legal sprint transition (this
+            // class's `IsLegalTransition` check would reject it), so there is no way to durably
+            // re-tag the block reason while already blocked. Checked explicitly here so that case
+            // reports a real failure instead of a false success — see ADR 0015's "known
+            // limitation" note for what a complete fix would need.
+            SprintWorkflowState currentState = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            convergenceBlockLanded = currentState.Sprint.State is SprintState.Running or SprintState.ReadyToFinalize &&
+                await TryBlockSprintAsync(projectRoot, sprintId, BlockedByReviewConvergence, cancellationToken)
+                    .ConfigureAwait(false);
         }
 
         if (outcome == ReviewOutcome.ChangesRequested)

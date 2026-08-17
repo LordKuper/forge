@@ -221,6 +221,28 @@ closest existing concept this codebase has to "the rule that fired."
 - **Fresh-context enforcement.** "Starts without a parent transcript" is
   vacuously true today the same way ADR 0014 already recorded for its own
   "no widening" rule — no transcript concept exists anywhere yet.
+- **Known limitation: a convergence trigger arriving while the sprint is
+  already `Blocked` for a different, weaker reason cannot be durably
+  re-tagged.** `Blocked -> Blocked` is not a legal sprint transition (this
+  class's own `IsLegalTransition` check would reject it), so
+  `RecordReviewIterationAsync` cannot force the durable `blocked_reason`
+  from, say, `finding` to `review_convergence` once the sprint is already
+  sitting in `Blocked`. Rather than silently report success while leaving
+  the wrong, auto-recovering reason in place (the actual bug an earlier
+  draft of this ADR had — independent review proved it reachable and it was
+  fixed by moving the block *before* the per-finding loop, closing the
+  same-call race), the method now reports `Succeeded: false`/
+  `workflow_event_conflict` whenever the sprint is not `Running`/
+  `ReadyToFinalize` at the moment a trigger fires — the verdict itself is
+  still recorded, so the trigger is not lost from history, but the
+  operator-facing gate itself is not guaranteed durable in this narrower,
+  cross-call race. Closing this completely would need a mechanism
+  independent of the sprint's own `blocked_reason` — e.g. a per-dimension
+  "convergence pending" marker (the same file-marker shape
+  `SetReviewFloorPinnedAsync` already uses) that a new explicit
+  acknowledgment verb clears, checked by `TryAdvanceFindingsOnlyBlockedSprintAsync`
+  before any `finding`-reason auto-recovery — which is real new
+  cross-cutting scope this item does not take on.
 
 ## Consequences
 
