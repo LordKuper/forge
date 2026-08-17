@@ -19,6 +19,8 @@ internal static class WorkflowRecordCodec
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.finding.schema.json");
     private static readonly JsonSchema HandoffSchema =
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.handoff.schema.json");
+    private static readonly JsonSchema ConfirmationSchema =
+        SchemaValidation.LoadEmbedded("Forge.Application.Schemas.confirmation-result.schema.json");
     private static readonly JsonSerializerOptions JsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static void ValidateNodeResult(NodeResult result)
@@ -94,6 +96,28 @@ internal static class WorkflowRecordCodec
             NextNodeIds = handoff.NextNodeIds is null ? null : [.. handoff.NextNodeIds],
         };
         SchemaValidation.Validate(JsonSerializer.SerializeToElement(wire, JsonOptions), HandoffSchema, "handoff");
+    }
+
+    public static void ValidateConfirmation(ConfirmationArtifact confirmation)
+    {
+        ArgumentNullException.ThrowIfNull(confirmation);
+        WireConfirmation wire = new()
+        {
+            ConfirmationId = confirmation.ConfirmationId.ToString("D"),
+            SprintId = confirmation.SprintId.Value.ToString("D"),
+            NodeId = confirmation.NodeId.Value,
+            Outcome = WorkflowStateNames.ToSnakeCase(confirmation.Outcome),
+            DefinitionOfDone = confirmation.DefinitionOfDone,
+            Evidence = [.. confirmation.Evidence.Select(
+                item => new WireEvidence
+                {
+                    Kind = WorkflowStateNames.ToSnakeCase(item.Kind),
+                    Description = item.Description,
+                })],
+            RecordedAt = confirmation.RecordedAt,
+        };
+        SchemaValidation.Validate(
+            JsonSerializer.SerializeToElement(wire, JsonOptions), ConfirmationSchema, "confirmation result");
     }
 
     private sealed class WireNodeResult
@@ -196,5 +220,31 @@ internal static class WorkflowRecordCodec
         public string PolicySnapshotHash { get; set; } = string.Empty;
 
         public string GeneratorVersion { get; set; } = string.Empty;
+    }
+
+    private sealed class WireConfirmation
+    {
+        public string SchemaVersion { get; set; } = "1.0.0";
+
+        public string ConfirmationId { get; set; } = string.Empty;
+
+        public string SprintId { get; set; } = string.Empty;
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public string DefinitionOfDone { get; set; } = string.Empty;
+
+        public List<WireEvidence> Evidence { get; set; } = [];
+
+        public DateTimeOffset RecordedAt { get; set; }
+    }
+
+    private sealed class WireEvidence
+    {
+        public string Kind { get; set; } = string.Empty;
+
+        public string Description { get; set; } = string.Empty;
     }
 }

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/confirmation-result.schema.json",
+  "title": "Forge confirmation result v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "confirmation_id", "sprint_id", "node_id", "outcome", "definition_of_done", "evidence", "recorded_at"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "confirmation_id": {"type": "string", "format": "uuid"},
+    "sprint_id": {"type": "string", "format": "uuid"},
+    "node_id": {"type": "string", "minLength": 1},
+    "outcome": {"enum": ["confirmed", "not_confirmed"]},
+    "definition_of_done": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evidence"}},
+    "recorded_at": {"type": "string", "format": "date-time"}
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "description"],
+      "properties": {
+        "kind": {"enum": ["inspection", "execution", "existing_check"]},
+        "description": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

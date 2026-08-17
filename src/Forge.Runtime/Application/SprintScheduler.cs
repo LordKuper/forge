@@ -15,6 +15,8 @@ public sealed record RecordFindingResult(bool Succeeded, Finding? Finding, strin
 
 public sealed record RecordHandoffResult(bool Succeeded, Handoff? Handoff, string DiagnosticCode);
 
+public sealed record RecordConfirmationResult(bool Succeeded, ConfirmationArtifact? Confirmation, string DiagnosticCode);
+
 public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attempt, string DiagnosticCode);
 
 /// <summary>
@@ -114,6 +116,16 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             bool satisfied = node.DependsOn.All(dependency =>
                 state.Nodes.TryGetValue(dependency, out NodeSnapshot? upstream) &&
                 upstream.State is NodeState.Succeeded or NodeState.Skipped);
+            if (satisfied && node.Role == NodeRole.TestWork)
+            {
+                // Dependency completion alone is not enough for a test-work node: the plan's own
+                // gate ("Host state transitions must reject premature test work") requires a
+                // recorded, `Confirmed` artifact from every confirmation-role dependency, not just
+                // that dependency having run.
+                satisfied = await IsTestWorkEligibleAsync(projectRoot, sprintId, definition, node, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (!satisfied)
             {
                 continue;
@@ -209,6 +221,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         if (definedNode is null || definedNode.Kind != NodeKind.Work)
         {
             return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        if (definedNode.Role == NodeRole.TestWork &&
+            !await IsTestWorkEligibleAsync(projectRoot, sprintId, definition, definedNode, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowBlocked);
         }
 
         // `running` with the node's *current* attempt number is a legitimate resume point: a prior
@@ -747,11 +766,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     }
 
     /// <summary>A durable <see cref="WorkflowEvent.BlockedReasonArgument"/> tag for each of the
-    /// three sites that can append a sprint's `blocked` transition — a stuck/failed node
+    /// four sites that can append a sprint's `blocked` transition — a stuck/failed node
     /// (<see cref="EvaluateCompletionAsync"/>), a late-arriving open finding
-    /// (<see cref="RecordFindingAsync"/>), and a rejected human gate
-    /// (<see cref="SynchronizeSprintGateStateAsync"/>). Only <see cref="BlockedByFinding"/> may ever
-    /// recover automatically; the other two require the operator's explicit
+    /// (<see cref="RecordFindingAsync"/>), a rejected human gate
+    /// (<see cref="SynchronizeSprintGateStateAsync"/>), and a `NotConfirmed` confirmation
+    /// (<see cref="RecordConfirmationAsync"/>). Only <see cref="BlockedByFinding"/> may ever
+    /// recover automatically; the other three require the operator's explicit
     /// `resume_sprint`/`run_sprint` decision, and nothing here may blur that distinction by treating
     /// "every node happens to be settled good right now" as proof of *why* it got that way.</summary>
     private const string BlockedByNode = "node";
@@ -759,6 +779,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     private const string BlockedByFinding = "finding";
 
     private const string BlockedByGate = "gate";
+
+    private const string BlockedByConfirmation = "confirmation";
 
     /// <summary>
     /// The one narrow, explicit path that may resume a finding-blocked sprint automatically:
@@ -937,6 +959,172 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         SprintId sprintId,
         CancellationToken cancellationToken) =>
         store.GetHandoffsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// Records a confirmation node's judgment against its definition of done. Unlike a node
+    /// result, this carries no attempt id and needs no particular node state — the same
+    /// state-independence <see cref="RecordHandoffAsync"/> already has — so it can be replayed or
+    /// backfilled without racing the node's own transitions. <paramref name="nodeId"/> must name a
+    /// node in the sprint's frozen graph tagged <see cref="NodeRole.Confirmation"/>: an artifact
+    /// against an unknown or wrongly-tagged node can gate nothing real and, once a real change
+    /// feeds this from provider output, could otherwise block a sprint on an id an attacker
+    /// controls. A <see cref="ConfirmationOutcome.NotConfirmed"/> verdict immediately blocks a
+    /// running (or already ready-to-finalize) sprint, mirroring how a late open
+    /// <see cref="Finding"/> does in <see cref="RecordFindingAsync"/> — the operator must explicitly
+    /// resume it, since only the *most recently recorded* artifact for a confirmation node governs
+    /// eligibility (see <see cref="IsTestWorkEligibleAsync"/>): a `Confirmed` artifact can be
+    /// superseded by a later `NotConfirmed` one for the same node (a confirmation node re-attempted
+    /// after its own rejection), and must never keep a dependent test-work node eligible once that
+    /// happens. The returned result can report <c>Succeeded: false</c> even though the artifact
+    /// itself was durably recorded, if the sprint needed blocking and the append that blocks it
+    /// could not be made to land after retrying — the artifact is still returned in that case so a
+    /// caller is not left wondering whether anything happened at all.
+    /// </summary>
+    public async Task<RecordConfirmationResult> RecordConfirmationAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        CancellationToken cancellationToken)
+    {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null)
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        if (definedNode.Role != NodeRole.Confirmation)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        ConfirmationArtifact confirmation = new(
+            Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence, clock.UtcNow);
+        try
+        {
+            await store.SaveConfirmationAsync(projectRoot, confirmation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
+        if (outcome != ConfirmationOutcome.Confirmed)
+        {
+            // Retried on a version conflict rather than fired once: this append is the sprint's
+            // *only* durable, operator-visible signal that a `NotConfirmed` verdict landed (the
+            // artifact itself already blocks eligibility via `IsTestWorkEligibleAsync` regardless
+            // of whether this succeeds, but a lost append here would otherwise leave the sprint
+            // silently `running` with no indication anything needs attention). `blockNeeded` stays
+            // false (and this reports success) when the sprint was not even in a blockable state to
+            // begin with — that is not a failure to surface, since there is nothing this call could
+            // have done.
+            bool blockNeeded = false;
+            bool blockLanded = false;
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (state.Sprint.State is not (SprintState.Running or SprintState.ReadyToFinalize))
+                {
+                    break;
+                }
+
+                blockNeeded = true;
+                AppendOutcome blocked = await store.AppendTransitionAsync(
+                    projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+                    "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
+                    state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                    new Dictionary<string, string?>(StringComparer.Ordinal)
+                    {
+                        [WorkflowEvent.BlockedReasonArgument] = BlockedByConfirmation,
+                    }).ConfigureAwait(false);
+                if (blocked.Succeeded)
+                {
+                    blockLanded = true;
+                    break;
+                }
+            }
+
+            if (blockNeeded && !blockLanded)
+            {
+                // The artifact itself is already durable and already governs eligibility — only the
+                // secondary, operator-visible block signal failed to land, so the caller is told
+                // that specifically rather than losing it silently.
+                return new(false, confirmation, DiagnosticCodes.WorkflowEventConflict);
+            }
+        }
+        else
+        {
+            // A dependent test-work node may already be sitting `pending` on this exact
+            // confirmation — see `IsTestWorkEligibleAsync` — so a `Confirmed` verdict must itself
+            // re-drive the graph, the same way completing any other node's attempt does.
+            await AdvanceGraphAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new(true, confirmation, DiagnosticCodes.None);
+    }
+
+    public Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken) =>
+        store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// True once every <see cref="NodeRole.Confirmation"/>-role dependency of <paramref name="node"/>
+    /// has every artifact recorded at its own latest <see cref="ConfirmationArtifact.RecordedAt"/>
+    /// — there can be more than one on an exact tie — carrying an outcome of
+    /// <see cref="ConfirmationOutcome.Confirmed"/>, the plan's "only its valid artifact makes
+    /// recorded risk-based test selection and authoring eligible." Using only the latest instant
+    /// per node (never "any `Confirmed` artifact ever recorded") is what lets a later
+    /// `NotConfirmed` re-close a gate an earlier `Confirmed` opened; requiring *every* artifact at
+    /// that instant to be `Confirmed`, rather than picking one arbitrarily, is what keeps a tie
+    /// failing closed instead of depending on an unspecified ordering. A node with no
+    /// confirmation-role dependency (not the built-in graph's shape, but nothing stops a
+    /// caller-supplied one) is vacuously eligible: there is nothing to gate on.
+    /// </summary>
+    private async Task<bool> IsTestWorkEligibleAsync(
+        string projectRoot,
+        SprintId sprintId,
+        SprintDefinition definition,
+        NodeDefinition node,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> confirmationDependencies = [.. node.DependsOn.Where(dependency =>
+            definition.Graph.FirstOrDefault(candidate => candidate.Id == dependency)?.Role == NodeRole.Confirmation)];
+        if (confirmationDependencies.Count == 0)
+        {
+            return true;
+        }
+
+        IReadOnlyList<ConfirmationArtifact> confirmations =
+            await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return confirmationDependencies.All(dependency =>
+        {
+            List<ConfirmationArtifact> forNode = [.. confirmations.Where(artifact => artifact.NodeId.Value == dependency)];
+            if (forNode.Count == 0)
+            {
+                return false;
+            }
+
+            // Fails closed on a tie: `RecordedAt` comes from `IClock.UtcNow`, whose resolution is
+            // not guaranteed finer than two calls made moments apart (and the API is documented as
+            // replayable, so a tie is reachable in practice, not just in theory). Picking a single
+            // "latest" via ordering alone would make the winner depend on `GetConfirmationsAsync`'s
+            // enumeration order for ties — undefined here, since confirmations are stored one file
+            // per artifact under random ids. Requiring every artifact at the max `RecordedAt` to be
+            // `Confirmed` means a tied `NotConfirmed` always wins the gate, never loses it.
+            DateTimeOffset latestRecordedAt = forNode.Max(artifact => artifact.RecordedAt);
+            return forNode
+                .Where(artifact => artifact.RecordedAt == latestRecordedAt)
+                .All(artifact => artifact.Outcome == ConfirmationOutcome.Confirmed);
+        });
+    }
 
     private static Guid NodeActionKey(string actionId, SprintId sprintId, NodeSnapshot node) =>
         StatusAdvisor.IdempotencyKey(

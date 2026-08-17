@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.34.0
+
+### Added
+
+- Every managed project's sprint now gets Forge's canonical
+  `implementation-critical` graph by default -- intake, planning,
+  implementation, confirmation, test-work, review, human approval, and
+  finalization as separate, isolated nodes.
+- A confirmation node can now record a judgment against its definition of
+  done, with evidence from inspection, execution, or existing checks. A
+  test-work node can never become eligible to run until its confirmation
+  dependency has recorded a confirmed judgment; an attempt to start it early
+  is rejected, and a not-confirmed judgment blocks the sprint until an
+  operator explicitly resumes it.
+
 ## v0.33.0
 
 ### Added

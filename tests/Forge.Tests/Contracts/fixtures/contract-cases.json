@@ -1010,6 +1010,65 @@
         "session_deadline_seconds": 1800,
         "idle_deadline_seconds": 180
       }
+    },
+    {
+      "name": "confirmation result accepts a confirmed verdict with evidence",
+      "schema": "confirmation-result",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "confirmation_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "confirmation",
+        "outcome": "confirmed",
+        "definition_of_done": "Feature X matches its agreed definition of done.",
+        "evidence": [{"kind": "execution", "description": "Ran the full test suite locally; all green."}],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "confirmation result rejects empty evidence",
+      "schema": "confirmation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "confirmation_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "confirmation",
+        "outcome": "confirmed",
+        "definition_of_done": "Feature X matches its agreed definition of done.",
+        "evidence": [],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "confirmation result rejects a missing recorded_at",
+      "schema": "confirmation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "confirmation_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "confirmation",
+        "outcome": "not_confirmed",
+        "definition_of_done": "Feature X does not yet match its agreed definition of done.",
+        "evidence": [{"kind": "inspection", "description": "Acceptance criterion 2 is not met."}]
+      }
+    },
+    {
+      "name": "confirmation result rejects an unknown outcome",
+      "schema": "confirmation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "confirmation_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "confirmation",
+        "outcome": "partially_confirmed",
+        "definition_of_done": "Feature X matches its agreed definition of done.",
+        "evidence": [{"kind": "inspection", "description": "Reviewed the diff."}],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
     }
   ]
 }

@@ -14,11 +14,39 @@ public enum NodeKind
 }
 
 /// <summary>
+/// The workflow-level part a <see cref="NodeKind.Work"/> node plays, distinct from its mechanical
+/// <see cref="NodeKind"/>. <see cref="TestWork"/> is the one role the scheduler treats specially
+/// (see <see cref="SprintGraphValidator"/>'s caller, <c>SprintScheduler.AdvanceGraphAsync</c>): it
+/// never becomes `ready` on dependency completion alone, only once every dependency with role
+/// <see cref="Confirmation"/> has a recorded, `Confirmed` <c>Forge.Domain.ConfirmationArtifact</c>.
+/// Every other role is descriptive only today — a behavior tag for the built-in
+/// `implementation-critical` graph (see <c>Forge.Compiler.ImplementationCriticalGraphBuilder</c>),
+/// not a distinct code path, matching the plan's "behavior nodes and rubric data, not a seven-role
+/// catalog."
+/// </summary>
+public enum NodeRole
+{
+    Generic,
+    Intake,
+    Planning,
+    Implementation,
+    Confirmation,
+    TestWork,
+    Review,
+    HumanApproval,
+    Finalization,
+}
+
+/// <summary>
 /// One node in a sprint's frozen graph. <see cref="Id"/> is the stable, workflow-assigned string
 /// identity (see <see cref="NodeId"/>); <see cref="DependsOn"/> names other nodes in the same
 /// graph that must reach `succeeded` or `skipped` before this one can become `ready`.
 /// </summary>
-public sealed record NodeDefinition(string Id, NodeKind Kind, IReadOnlyList<string> DependsOn);
+public sealed record NodeDefinition(
+    string Id,
+    NodeKind Kind,
+    IReadOnlyList<string> DependsOn,
+    NodeRole Role = NodeRole.Generic);
 
 /// <summary>
 /// Validates a graph before it is ever frozen into a sprint: every dependency must name a node

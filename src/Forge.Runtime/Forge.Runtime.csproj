@@ -42,6 +42,9 @@
       Include="..\..\docs\contracts\v1\schemas\handoff.schema.json"
       LogicalName="Forge.Application.Schemas.handoff.schema.json" />
     <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\confirmation-result.schema.json"
+      LogicalName="Forge.Application.Schemas.confirmation-result.schema.json" />
+    <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\context-manifest.schema.json"
       LogicalName="Forge.Application.Schemas.context-manifest.schema.json" />
     <EmbeddedResource
