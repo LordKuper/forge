@@ -160,7 +160,7 @@
 | 9 | ADRs 0009, 0010, and 0011; `docs/contracts/v1/schemas/forge-document.schema.json` and `generated-artifact.schema.json`; PRs #49 and #50, and the PR closing P9.17-24 |
 | 10 | ADR 0012; `docs/contracts/v1/schemas/context-manifest.schema.json`, `context-query-plan.schema.json`, and `context-result-bundle.schema.json`; PR #52 |
 | 11 architecture | ADRs 0006 and 0008; supervised execution/review gate above |
-| 11 (P11.1-12) | ADR 0013; `docs/contracts/v1/schemas/confirmation-result.schema.json`; the PR closing P11.1-12 |
+| 11 (P11.1-12) | ADR 0013; `docs/contracts/v1/schemas/confirmation-result.schema.json`; PR #53 |
 
 ## Resolved decisions
 
