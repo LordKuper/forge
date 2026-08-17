@@ -146,6 +146,93 @@ public sealed class SprintEventStoreTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task AnActivityEventCarryingAToolUseKindFoldsIntoTheAttemptSnapshot()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+
+        await log.AppendAttemptActivityAsync(
+            root.Path, sprintId, attemptId, cancellationToken, AttemptActivityKind.ToolUse);
+
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptActivityKind.ToolUse, state!.Attempts[attemptKey].LastActivityKind);
+    }
+
+    /// <summary>An event recorded before this argument existed (pre-v0.37) never carried
+    /// `activity_kind` at all -- replay must fold it to a `null` kind, not throw, so historical
+    /// journals stay loadable.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnActivityEventWithNoActivityKindArgumentFoldsToANullKindForBackwardCompatibility()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendAttemptActivityAsync(root.Path, sprintId, attemptId, cancellationToken);
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        string[] lines = await File.ReadAllLinesAsync(eventsPath, cancellationToken);
+        JsonNode activityEvent = JsonNode.Parse(lines[^1])!;
+        Assert.Equal("AttemptActivityRecorded", activityEvent["type"]!.GetValue<string>());
+        ((JsonObject)activityEvent["arguments"]!).Remove("activity_kind");
+        lines[^1] = activityEvent.ToJsonString();
+        await File.WriteAllLinesAsync(eventsPath, lines, cancellationToken);
+
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Null(state!.Attempts[attemptKey].LastActivityKind);
+    }
+
+    /// <summary>Forge is the sole writer of its own event log, so an unrecognized `activity_kind`
+    /// value means the journal was corrupted or written by an incompatible version -- this must
+    /// fail loudly on replay, the same convention every other snake_case-encoded enum argument in
+    /// the fold already follows (see <see cref="AnActivityEventCarryingAToStateArgumentIsRejectedAsCorrupt"/>).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnActivityEventWithAnUnknownActivityKindValueFailsLoudlyOnReplay()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendAttemptActivityAsync(root.Path, sprintId, attemptId, cancellationToken);
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        string[] lines = await File.ReadAllLinesAsync(eventsPath, cancellationToken);
+        JsonNode activityEvent = JsonNode.Parse(lines[^1])!;
+        activityEvent["arguments"]!["activity_kind"] = "from_the_future";
+        lines[^1] = activityEvent.ToJsonString();
+        await File.WriteAllLinesAsync(eventsPath, lines, cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => log.LoadAsync(root.Path, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task AnActivityEventCarryingAToStateArgumentIsRejectedAsCorrupt()
     {
         using TestRoot root = new();

@@ -203,17 +203,38 @@ public sealed class ProcessRunner : IProcessRunner
         return raw.ToString();
     }
 
-    private static Task NotifyLineAsync(StringBuilder line, IProcessOutputSink? sink, bool isError)
+    /// <summary>A caller-supplied sink (e.g. a provider's activity-recording callback) must never
+    /// be able to break this loop's own pipe draining -- an unhandled fault or an indefinite hang
+    /// here would stop stdout/stderr from ever being consumed, which can starve the child's writes
+    /// and make even the caller's own cancellation kill-then-drain sequence (which awaits this same
+    /// task) hang forever. A bounded wait plus a broad catch means a misbehaving sink is simply
+    /// treated as "nothing more to notify," never as a reason this read loop itself stops making
+    /// progress.</summary>
+    private static readonly TimeSpan SinkNotificationTimeout = TimeSpan.FromSeconds(30);
+
+    private static async Task NotifyLineAsync(StringBuilder line, IProcessOutputSink? sink, bool isError)
     {
         if (sink is null)
         {
-            return Task.CompletedTask;
+            return;
         }
 
-        string text = line.ToString();
-        return isError
-            ? sink.OnStandardErrorLineAsync(text, CancellationToken.None)
-            : sink.OnStandardOutputLineAsync(text, CancellationToken.None);
+        try
+        {
+            string text = line.ToString();
+            Task notify = isError
+                ? sink.OnStandardErrorLineAsync(text, CancellationToken.None)
+                : sink.OnStandardOutputLineAsync(text, CancellationToken.None);
+            Task completed = await Task.WhenAny(notify, Task.Delay(SinkNotificationTimeout)).ConfigureAwait(false);
+            if (completed == notify)
+            {
+                await notify.ConfigureAwait(false);
+            }
+        }
+        catch (Exception)
+        {
+            // See the summary above: a sink's own failure is never allowed to fault this loop.
+        }
     }
 }
 

@@ -316,7 +316,11 @@ public static class ProviderExecution
             }
             catch (JsonException)
             {
-                Fail(ProviderFailureKind.MalformedOutput, $"The provider emitted a non-JSON output line: {trimmed}");
+                // Never interpolate the offending line into the message itself: `trimmed` can be
+                // up to `MaxLineLengthBytes` (1 MiB), far past what the safe tail bounds. The
+                // already-appended (redacted, `SafeTailCharacters`-bounded) safe tail carries this
+                // same content for diagnostics without defeating that bound.
+                Fail(ProviderFailureKind.MalformedOutput, "The provider emitted a non-JSON output line.");
                 failed = true;
                 return null;
             }

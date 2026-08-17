@@ -103,22 +103,21 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    /// <summary>Runs on every OS this repo targets (ADR 0007: neutral core, built and tested on
+    /// Windows, Linux, and macOS) — the behavior under test (`ProcessRunner` stdin/environment/
+    /// streaming) is entirely OS-neutral, so it must not be Windows-only coverage even though the
+    /// concrete child command differs per platform.</summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task StandardInputReachesTheChildProcess()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "[Console]::In.ReadToEnd()" })
+            : ("/bin/sh", new[] { "-c", "cat" });
 
         ProcessRunner runner = new();
         ProcessResult result = await runner.RunAsync(
-            new(
-                "powershell.exe",
-                ["-NoProfile", "-Command", "[Console]::In.ReadToEnd()"],
-                Path.GetTempPath(),
-                StandardInput: "hello from stdin"),
+            new(fileName, arguments, Path.GetTempPath(), StandardInput: "hello from stdin"),
             null,
             TestContext.Current.CancellationToken);
 
@@ -130,23 +129,20 @@ public sealed class ProcessRunnerTests
     /// `StandardOutput` by joining lines with `\n`, silently normalizing CRLF/bare-CR endings and
     /// dropping a trailing newline. `GitContextReader` hashes this exact text into a content
     /// digest (ADR 0012), so any such normalization is a silent compatibility break, not just a
-    /// cosmetic difference.</summary>
+    /// cosmetic difference. Cross-platform per ADR 0007 (see
+    /// <see cref="StandardInputReachesTheChildProcess"/>).</summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task StandardOutputPreservesExactLineEndingsForContentDigestFidelity()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "[Console]::Out.Write(\"line1`r`nline2`r`n\")" })
+            : ("/bin/sh", new[] { "-c", @"printf 'line1\r\nline2\r\n'" });
 
         ProcessRunner runner = new();
         RecordingSink sink = new();
         ProcessResult result = await runner.RunAsync(
-            new(
-                "powershell.exe",
-                ["-NoProfile", "-Command", "[Console]::Out.Write(\"line1`r`nline2`r`n\")"],
-                Path.GetTempPath()),
+            new(fileName, arguments, Path.GetTempPath()),
             sink,
             TestContext.Current.CancellationToken);
 
@@ -159,21 +155,21 @@ public sealed class ProcessRunnerTests
     /// (`MaxBufferedLineChars`): without it, a child that never emits a newline could grow the
     /// line buffer handed to the output sink without limit, and a caller-owned per-line bound
     /// (like `ProviderExecution.MaxLineLengthBytes`) would never get a chance to see and reject
-    /// it, since that check only runs on a line this read loop hands off.</summary>
+    /// it, since that check only runs on a line this read loop hands off. Cross-platform per ADR
+    /// 0007 (see <see cref="StandardInputReachesTheChildProcess"/>).</summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task AnUnterminatedLineIsFlushedToTheSinkInBoundedChunksInsteadOfBufferingForever()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe",
+                new[] { "-NoProfile", "-Command", "$s = New-Object string('x', 5000000); [Console]::Out.Write($s)" })
+            : ("/bin/sh", new[] { "-c", "head -c 5000000 /dev/zero | tr '\\0' 'x'" });
 
         ProcessRunner runner = new();
         RecordingSink sink = new();
-        string command = "$s = New-Object string('x', 5000000); [Console]::Out.Write($s)";
         ProcessResult result = await runner.RunAsync(
-            new("powershell.exe", ["-NoProfile", "-Command", command], Path.GetTempPath()),
+            new(fileName, arguments, Path.GetTempPath()),
             sink,
             TestContext.Current.CancellationToken);
 
@@ -185,15 +181,12 @@ public sealed class ProcessRunnerTests
         Assert.Equal(5_000_000, sink.StandardOutputLines.Sum(line => line.Length));
     }
 
+    /// <summary>Cross-platform per ADR 0007 (see <see cref="StandardInputReachesTheChildProcess"/>);
+    /// this is the security-relevant half of the item, so it must not be Windows-only coverage.</summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task ReplaceEnvironmentGivesTheChildOnlyTheSuppliedVariables()
     {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         Environment.SetEnvironmentVariable("FORGE_TEST_HOST_ONLY", "leaked");
         try
         {
@@ -201,7 +194,15 @@ public sealed class ProcessRunnerTests
             {
                 ["FORGE_TEST_CHILD_ONLY"] = "present",
             };
-            foreach (string name in new[] { "SystemRoot", "ComSpec", "PATH", "TEMP", "TMP", "USERPROFILE" })
+            (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+                ? ("powershell.exe",
+                    new[]
+                    {
+                        "-NoProfile", "-Command",
+                        "\"HOST=[$env:FORGE_TEST_HOST_ONLY] CHILD=[$env:FORGE_TEST_CHILD_ONLY]\"",
+                    })
+                : ("/bin/sh", new[] { "-c", "echo \"HOST=[$FORGE_TEST_HOST_ONLY] CHILD=[$FORGE_TEST_CHILD_ONLY]\"" });
+            foreach (string name in new[] { "SystemRoot", "ComSpec", "PATH", "TEMP", "TMP", "USERPROFILE", "HOME" })
             {
                 string? value = Environment.GetEnvironmentVariable(name);
                 if (value is not null)
@@ -212,12 +213,7 @@ public sealed class ProcessRunnerTests
 
             ProcessRunner runner = new();
             ProcessResult result = await runner.RunAsync(
-                new(
-                    "powershell.exe",
-                    ["-NoProfile", "-Command", "\"HOST=[$env:FORGE_TEST_HOST_ONLY] CHILD=[$env:FORGE_TEST_CHILD_ONLY]\""],
-                    Path.GetTempPath(),
-                    overrides,
-                    ReplaceEnvironment: true),
+                new(fileName, arguments, Path.GetTempPath(), overrides, ReplaceEnvironment: true),
                 null,
                 TestContext.Current.CancellationToken);
 

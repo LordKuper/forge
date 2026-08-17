@@ -40,6 +40,35 @@ public sealed class ProviderExecutionTests
         Assert.DoesNotContain("the prompt", runner.LastRequest.Arguments);
     }
 
+    /// <summary>The stub-driven tests below (via <c>StreamingProcessRunner</c>) exercise only the
+    /// post-hoc <c>sink.Failure</c> check after a normal return -- never the
+    /// <c>catch (OperationCanceledException) when (...)</c> branch that recognizes this helper's
+    /// own bound-violation self-cancellation, since that stub ignores its cancellation token
+    /// entirely. This test uses a runner that actually observes the token (as the real
+    /// <c>ProcessRunner</c> does once <c>Fail</c> calls <c>requestCancellation</c>), so it throws
+    /// <see cref="OperationCanceledException"/> the same way, exercising the catch branch for
+    /// real.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncTranslatesItsOwnBoundViolationCancellationIntoTheClassifiedFailure()
+    {
+        CancelAwareProcessRunner runner = new();
+
+        ProviderRunResult result = await ProviderExecution.RunAsync(
+            "provider.exe",
+            runner,
+            [],
+            "prompt",
+            "C:\\work",
+            Environment,
+            Classify,
+            _ => null,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ProviderFailureKind.MalformedOutput, result.Failure);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RunAsyncFailsClosedOnAnOversizedLine()
@@ -248,6 +277,23 @@ public sealed class ProviderExecutionTests
                     .ConfigureAwait(false);
             }
 
+            return new ProcessResult(0, string.Empty, string.Empty);
+        }
+    }
+
+    /// <summary>Actually observes its own <see cref="CancellationToken"/> after delivering an
+    /// oversized line to the sink, throwing <see cref="OperationCanceledException"/> the same way
+    /// the real <c>ProcessRunner</c> would once <c>BoundedOutputSink.Fail</c> cancels the linked
+    /// token it was given -- unlike <see cref="StreamingProcessRunner"/>, which ignores
+    /// cancellation entirely and always returns normally.</summary>
+    private sealed class CancelAwareProcessRunner : IProcessRunner
+    {
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
+        {
+            string oversized = new('x', ProviderExecution.MaxLineLengthBytes + 1);
+            await outputSink!.OnStandardOutputLineAsync(oversized, cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             return new ProcessResult(0, string.Empty, string.Empty);
         }
     }

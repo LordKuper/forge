@@ -168,6 +168,36 @@ child closing or never opening its stdin pipe (`IOException`/
 exception out of `RunAsync`), and closes the stdin handle in a `finally` so
 a write failure can never leak it open.
 
+### A misbehaving sink can never break the read loop itself
+
+`ReadStreamAsync`'s per-line sink notification is wrapped with a 30-second
+bounded wait and a broad catch: a sink call (in practice, a caller-supplied
+`onActivity` callback with no production implementation yet) that throws or
+simply hangs is treated as "nothing more to notify" rather than faulting
+the read loop or leaving it stuck. This matters specifically because the
+same read loop is what a cancellation's kill-then-drain sequence awaits to
+finish — an unbounded sink call would have made that supposedly-bounded
+cleanup path itself unbounded.
+
+### Diagnostic detail stays within the safe-tail bound
+
+The malformed-JSON failure message no longer interpolates the offending
+line itself (previously up to `MaxLineLengthBytes`, 1 MiB — far past what
+`SafeTailCharacters` bounds); it states the fact only, since the
+already-appended, already-redacted, `SafeTailCharacters`-bounded safe tail
+carries the same content for diagnostics without defeating that bound.
+
+### New durable activity-kind fold behavior is directly tested
+
+The `activity_kind` event argument, its fold into `AttemptSnapshot
+.LastActivityKind`, backward compatibility with a pre-v0.37 event that
+never carried the argument (folds to `null`, not an error), and an
+unrecognized value on replay (fails loudly as `InvalidDataException`,
+wrapping the same `FormatException` every other snake_case-encoded enum
+argument in the fold already throws for corruption) are now each pinned by
+a dedicated test in `SprintEventStoreTests`, rather than only exercised
+incidentally by the rest of the suite continuing to pass.
+
 ### Fixed the Codex terminal-event misclassification this item's own check surfaced
 
 The prior `Classify` matched any `type` starting with `"turn."`, so
