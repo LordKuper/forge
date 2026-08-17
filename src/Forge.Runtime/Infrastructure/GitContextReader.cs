@@ -151,10 +151,15 @@ public sealed partial class GitContextReader(IProcessRunner processRunner)
                 ? await RunAsync(projectRoot, ["show", $"{sourceCommit}:{operation.Path}"], cancellationToken).ConfigureAwait(false)
                 : await RunAsync(projectRoot, GrepArguments(sourceCommit, operation), cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception error) when (error is Win32Exception or IOException)
+        catch (Exception error) when (error is (Win32Exception or IOException) && !cancellationToken.IsCancellationRequested)
         {
             // The process itself never launched (e.g. `git` is not on PATH) — distinct from `git`
-            // launching and exiting non-zero, which is `NotFound` below.
+            // launching and exiting non-zero, which is `NotFound` below. Excluded whenever
+            // cancellation was actually requested: `ProcessRunner.RunAsync` can surface a broken-pipe
+            // `IOException` while unwinding a killed process instead of its intended
+            // `OperationCanceledException` (its own `Task.WhenAll` pipe-drain can fault before its
+            // `throw;` runs) — that must propagate as a real failure, never be silently reported as
+            // a normal-looking `ProcessFailed` result for an operation nothing actually tried to run.
             return new(operation.OperationId, ContextQueryOperationDiagnostic.ProcessFailed, null, null, 0, false);
         }
 

@@ -228,10 +228,35 @@ public sealed class GitContextReaderTests
         Assert.Null(operation.Content);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnIoExceptionThatCoincidesWithRealCancellationIsNotMisreportedAsProcessFailed()
+    {
+        using CancellationTokenSource cancellationSource = new();
+        ContextQueryPlan plan = Plan("a".PadRight(40, 'a'), ShowOperation("read", "notes.md"));
+        GitContextReader reader = new(new CancelingProcessRunner(cancellationSource));
+
+        await Assert.ThrowsAsync<IOException>(() => reader.ExecuteAsync(
+            "C:\\does-not-matter", plan, GitShowCapability, cancellationSource.Token));
+    }
+
     private sealed class ThrowingProcessRunner : IProcessRunner
     {
         public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
             throw new Win32Exception("git.exe was not found.");
+    }
+
+    /// <summary>Simulates <c>ProcessRunner.RunAsync</c> surfacing a broken-pipe <see cref="IOException"/>
+    /// while draining a killed process's output during real cancellation, instead of its intended
+    /// <see cref="OperationCanceledException"/> — the exact race <see cref="GitContextReader"/>'s
+    /// exception filter must not mistake for an ordinary process-launch failure.</summary>
+    private sealed class CancelingProcessRunner(CancellationTokenSource cancellationSource) : IProcessRunner
+    {
+        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        {
+            cancellationSource.Cancel();
+            throw new IOException("The pipe has been ended.");
+        }
     }
 
     private static ContextQueryPlan Plan(string commit, params ContextQueryOperation[] operations) =>

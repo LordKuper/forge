@@ -67,7 +67,12 @@ public static class ContextManifestCompiler
     /// <see cref="ContextManifest.TokenBudget"/>. A query result's estimated token cost is its
     /// content's chars/4 estimate — the same heuristic <c>ForgeDocumentCompiler</c> uses on a
     /// document's char length, not its byte count, so every layer counts tokens the same way for
-    /// non-ASCII content too.</summary>
+    /// non-ASCII content too. Call at most once per manifest: this replaces
+    /// <see cref="ContextManifest.Layers"/>'s whole <see cref="ContextManifestLayers.QueryResults"/>
+    /// rather than appending to it, but still treats the input <paramref name="manifest"/>'s
+    /// <see cref="ContextManifest.AllocatedTokens"/> as already-spent budget — a second call on its
+    /// own prior output would double-subtract the first call's now-discarded results from the
+    /// remaining budget.</summary>
     public static ContextManifest WithQueryResults(ContextManifest manifest, ContextResultBundle bundle)
     {
         ArgumentNullException.ThrowIfNull(manifest);
