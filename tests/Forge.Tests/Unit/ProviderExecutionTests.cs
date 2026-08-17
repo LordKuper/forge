@@ -65,6 +65,13 @@ public sealed class ProviderExecutionTests
             _ => null,
             TestContext.Current.CancellationToken);
 
+        // The post-hoc `sink.Failure` check alone would produce this exact same result even if
+        // `requestCancellation` were never called -- so the assertion that actually distinguishes
+        // "the catch branch ran" from "only the post-hoc check ran" is `ObservedCancellation`,
+        // recorded by the runner itself at the moment it checked its token.
+        Assert.True(
+            runner.ObservedCancellation,
+            "ProviderExecution's bound-violation Fail() should have cancelled the linked token before the runner checked it.");
         Assert.False(result.Succeeded);
         Assert.Equal(ProviderFailureKind.MalformedOutput, result.Failure);
     }
@@ -141,6 +148,35 @@ public sealed class ProviderExecutionTests
         Assert.NotNull(text);
         Assert.DoesNotContain("sk-live-abcdef1234567890", text, StringComparison.Ordinal);
         Assert.Contains("[REDACTED:", text, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression test: the non-zero-exit failure path previously embedded the complete,
+    /// unbounded stderr text (up to `MaxAggregateBytes`) into `Detail` — 8,000x past the
+    /// `SafeTailCharacters` bound every other failure detail respects.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncTrimsAnOversizedStderrDetailToTheSafeTailBound()
+    {
+        string hugeStderr = new string('e', ProviderExecution.SafeTailCharacters * 4) + "final marker at the end";
+        StreamingProcessRunner runner = new(_ => new ProcessResult(1, string.Empty, hugeStderr));
+
+        ProviderRunResult result = await ProviderExecution.RunAsync(
+            "provider.exe",
+            runner,
+            [],
+            "prompt",
+            "C:\\work",
+            Environment,
+            Classify,
+            _ => null,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.NotNull(result.Detail);
+        Assert.True(
+            result.Detail!.Length < hugeStderr.Length,
+            "The stored detail should be trimmed well below the full stderr length.");
+        Assert.Contains("final marker at the end", result.Detail, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -257,10 +293,14 @@ public sealed class ProviderExecutionTests
             ? text.GetString()
             : null;
 
-    /// <summary>Fires many stdout and stderr sink calls genuinely concurrently via
-    /// <see cref="Task.WhenAll(IEnumerable{Task})"/> — the same concurrency shape the real
-    /// <c>ProcessRunner</c>'s two independent read loops produce — rather than the sequential
-    /// per-line awaiting <see cref="StreamingProcessRunner"/> uses.</summary>
+    /// <summary>Fires many stdout and stderr sink calls genuinely concurrently — each on its own
+    /// thread-pool thread via <see cref="Task.Run(Func{Task})"/>, the same concurrency shape the
+    /// real <c>ProcessRunner</c>'s two independent read loops produce. Without a callback
+    /// registered, <c>BoundedOutputSink.OnStandardOutputLineAsync</c> never actually awaits
+    /// anything (it only awaits when <c>onActivity</c> is non-null), so merely projecting each call
+    /// through <c>Task.WhenAll(IEnumerable{Task})</c> would run every call synchronously, one at a
+    /// time, on the single thread that enumerates the source sequence -- not concurrently at all,
+    /// and so unable to reproduce the pre-fix race this test regresses against.</summary>
     private sealed class ConcurrentProcessRunner(int messageCount) : IProcessRunner
     {
         public async Task<ProcessResult> RunAsync(
@@ -269,9 +309,12 @@ public sealed class ProviderExecutionTests
             if (outputSink is not null)
             {
                 IEnumerable<Task> stdout = Enumerable.Range(0, messageCount)
-                    .Select(_ => outputSink.OnStandardOutputLineAsync("""{"type":"message"}""", cancellationToken));
+                    .Select(_ => Task.Run(
+                        () => outputSink.OnStandardOutputLineAsync("""{"type":"message"}""", cancellationToken),
+                        cancellationToken));
                 IEnumerable<Task> stderr = Enumerable.Range(0, 50)
-                    .Select(_ => outputSink.OnStandardErrorLineAsync("noise", cancellationToken));
+                    .Select(_ => Task.Run(
+                        () => outputSink.OnStandardErrorLineAsync("noise", cancellationToken), cancellationToken));
                 await Task.WhenAll(stdout.Concat(stderr)).ConfigureAwait(false);
                 await outputSink.OnStandardOutputLineAsync("""{"type":"result"}""", cancellationToken)
                     .ConfigureAwait(false);
@@ -285,14 +328,20 @@ public sealed class ProviderExecutionTests
     /// oversized line to the sink, throwing <see cref="OperationCanceledException"/> the same way
     /// the real <c>ProcessRunner</c> would once <c>BoundedOutputSink.Fail</c> cancels the linked
     /// token it was given -- unlike <see cref="StreamingProcessRunner"/>, which ignores
-    /// cancellation entirely and always returns normally.</summary>
+    /// cancellation entirely and always returns normally. Records whether the token was actually
+    /// observed as cancelled, since a caller that only checks the final <c>ProviderRunResult</c>
+    /// cannot otherwise tell "the catch branch ran" apart from "only the post-hoc check ran" --
+    /// both produce the identical classified failure.</summary>
     private sealed class CancelAwareProcessRunner : IProcessRunner
     {
+        public bool ObservedCancellation { get; private set; }
+
         public async Task<ProcessResult> RunAsync(
             ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             string oversized = new('x', ProviderExecution.MaxLineLengthBytes + 1);
             await outputSink!.OnStandardOutputLineAsync(oversized, cancellationToken).ConfigureAwait(false);
+            ObservedCancellation = cancellationToken.IsCancellationRequested;
             cancellationToken.ThrowIfCancellationRequested();
             return new ProcessResult(0, string.Empty, string.Empty);
         }

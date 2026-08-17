@@ -193,7 +193,8 @@ public static class WorkflowFold
                         current.OccurredAt,
                         nodeId,
                         targetOutcome,
-                        previousAttempt?.LastActivityAt);
+                        previousAttempt?.LastActivityAt,
+                        previousAttempt?.LastActivityKind);
                     break;
                 default:
                     throw new InvalidDataException(

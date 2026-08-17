@@ -88,23 +88,19 @@ public sealed class ProcessRunner : IProcessRunner
                 {
                     await process.StandardInput.WriteAsync(request.StandardInput.AsMemory(), cancellationToken)
                         .ConfigureAwait(false);
+                    // Close() only after a write that actually completed: it flushes synchronously
+                    // and uncancellably, which could itself hang against the same full,
+                    // nobody-reading pipe that a cancelled write above would indicate. A
+                    // cancellation is deliberately NOT caught here -- it falls straight through to
+                    // the outer catch's process.Kill(true), which tears down the child (and every
+                    // one of its pipes, stdin included) without needing a graceful close at all.
+                    process.StandardInput.Close();
                 }
                 catch (Exception writeError) when (writeError is IOException or ObjectDisposedException)
                 {
                     // The child closed or never opened its stdin before consuming the full input --
                     // not Forge's error to raise; the child's own exit code/stderr already reflects
-                    // why.
-                }
-                finally
-                {
-                    try
-                    {
-                        process.StandardInput.Close();
-                    }
-                    catch (Exception closeError) when (closeError is IOException or ObjectDisposedException)
-                    {
-                        // Already closed or torn down by the child.
-                    }
+                    // why. The pipe is already broken/torn down, so no close is needed here either.
                 }
             }
 
@@ -225,10 +221,30 @@ public sealed class ProcessRunner : IProcessRunner
             Task notify = isError
                 ? sink.OnStandardErrorLineAsync(text, CancellationToken.None)
                 : sink.OnStandardOutputLineAsync(text, CancellationToken.None);
-            Task completed = await Task.WhenAny(notify, Task.Delay(SinkNotificationTimeout)).ConfigureAwait(false);
+
+            using CancellationTokenSource timeoutCancellation = new();
+            Task timeout = Task.Delay(SinkNotificationTimeout, timeoutCancellation.Token);
+            Task completed = await Task.WhenAny(notify, timeout).ConfigureAwait(false);
             if (completed == notify)
             {
+                // Cancel the still-pending delay immediately: on a stream permitting up to
+                // MaxEventCount lines, leaving one live 30-second timer per line until it expires
+                // on its own would otherwise pile up.
+                await timeoutCancellation.CancelAsync().ConfigureAwait(false);
                 await notify.ConfigureAwait(false);
+            }
+            else
+            {
+                // The sink call is stuck; give up waiting on it rather than let a caller (e.g. a
+                // cancellation's kill-then-drain sequence, which also awaits this same read loop)
+                // block on it too. Observe whatever it eventually does so a later fault can never
+                // escape as an unhandled UnobservedTaskException instead of being swallowed here,
+                // as every other sink failure already is.
+                _ = notify.ContinueWith(
+                    static faulted => _ = faulted.Exception,
+                    CancellationToken.None,
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
             }
         }
         catch (Exception)

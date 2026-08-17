@@ -168,6 +168,40 @@ public sealed class SprintEventStoreTests
         Assert.Equal(AttemptActivityKind.ToolUse, state!.Attempts[attemptKey].LastActivityKind);
     }
 
+    /// <summary>Regression test: an earlier version of the fold's attempt-transition branch
+    /// rebuilt <c>AttemptSnapshot</c> carrying forward <c>NodeId</c>/<c>TargetOutcome</c>/
+    /// <c>LastActivityAt</c> but silently omitted <c>LastActivityKind</c>, resetting it to
+    /// <see langword="null"/> on every subsequent transition -- a wrong classification (plain
+    /// heartbeat), not merely a missing one.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LastActivityKindSurvivesASubsequentAttemptTransition()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendAttemptActivityAsync(
+            root.Path, sprintId, attemptId, cancellationToken, AttemptActivityKind.ToolUse);
+
+        AppendOutcome transitioned = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_preparing", "preparing", 1, Guid.NewGuid(), cancellationToken);
+        Assert.True(transitioned.Succeeded, "Created -> Preparing must be a valid attempt transition.");
+
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptState.Preparing, state!.Attempts[attemptKey].State);
+        Assert.Equal(AttemptActivityKind.ToolUse, state.Attempts[attemptKey].LastActivityKind);
+    }
+
     /// <summary>An event recorded before this argument existed (pre-v0.37) never carried
     /// `activity_kind` at all -- replay must fold it to a `null` kind, not throw, so historical
     /// journals stay loadable.</summary>

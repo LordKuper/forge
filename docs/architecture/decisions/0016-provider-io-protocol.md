@@ -177,7 +177,21 @@ simply hangs is treated as "nothing more to notify" rather than faulting
 the read loop or leaving it stuck. This matters specifically because the
 same read loop is what a cancellation's kill-then-drain sequence awaits to
 finish — an unbounded sink call would have made that supposedly-bounded
-cleanup path itself unbounded.
+cleanup path itself unbounded. The losing side of that race is cleaned up
+rather than left dangling: the timer is cancelled immediately once the
+sink call wins, and if the sink call times out instead, its eventual fault
+(if any) is observed through a continuation so it can never surface as an
+unhandled `UnobservedTaskException` later.
+
+Separately, the stdin write's own `Close()` (the graceful end-of-input
+signal a normal run needs) now only runs after a write that actually
+completed. `Close()` performs a blocking, uncancellable flush; running it
+unconditionally in a `finally` — including when the write itself had just
+been cancelled because the pipe was already backed up — could hang before
+the outer `catch`'s `process.Kill(true)` (the actual fix for that backed-up
+pipe) ever got a chance to run. A cancelled write now falls straight
+through to that outer catch instead, which tears the whole child down
+without needing a graceful stdin close at all.
 
 ### Diagnostic detail stays within the safe-tail bound
 
@@ -185,7 +199,20 @@ The malformed-JSON failure message no longer interpolates the offending
 line itself (previously up to `MaxLineLengthBytes`, 1 MiB — far past what
 `SafeTailCharacters` bounds); it states the fact only, since the
 already-appended, already-redacted, `SafeTailCharacters`-bounded safe tail
-carries the same content for diagnostics without defeating that bound.
+carries the same content for diagnostics without defeating that bound. The
+non-zero-exit failure path (pre-existing, not new to this item, but
+rewritten here) is trimmed the same way: classification still scans the
+complete stderr text, but only the trimmed tail is stored as `Detail`.
+
+### The fold now carries `LastActivityKind` through every subsequent transition
+
+The attempt-transition branch of `WorkflowFold.Apply` rebuilds
+`AttemptSnapshot` on every transition; it already carried `NodeId`,
+`TargetOutcome`, and `LastActivityAt` forward from the previous snapshot but
+omitted `LastActivityKind`, silently resetting a `ToolUse`/`Heartbeat`
+classification to `null` (a wrong classification, not merely a missing one)
+on the very next transition after any activity event. Now carried forward
+identically to the other fields.
 
 ### New durable activity-kind fold behavior is directly tested
 

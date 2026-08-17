@@ -160,7 +160,13 @@ public static class ProviderExecution
 
         if (result.ExitCode != 0)
         {
-            return ProviderRunResult.Failed(ClassifyFailure(result.StandardError), result.StandardError);
+            // Classification scans the complete text (an error keyword could appear anywhere in
+            // a large blob), but the detail actually stored is trimmed to the same
+            // SafeTailCharacters bound the bounded-stream failures above already carry -- stderr
+            // is otherwise unbounded (up to MaxAggregateBytes) and this is a durable/presentation
+            // boundary the same as any other failure detail (ADR 0006).
+            return ProviderRunResult.Failed(
+                ClassifyFailure(result.StandardError), TrimToSafeTail(result.StandardError));
         }
 
         return sink.TerminalCount switch
@@ -213,6 +219,25 @@ public static class ProviderExecution
 
     private static bool ContainsAny(string haystack, params string[] needles) =>
         needles.Any(needle => haystack.Contains(needle, StringComparison.Ordinal));
+
+    /// <summary>Keeps only the last <see cref="SafeTailCharacters"/> characters, never splitting a
+    /// surrogate pair -- the same bound and safety rule <see cref="BoundedOutputSink"/>'s own safe
+    /// tail applies, reused here for the one-shot (not incrementally built) non-zero-exit path.</summary>
+    private static string TrimToSafeTail(string text)
+    {
+        if (text.Length <= SafeTailCharacters)
+        {
+            return text;
+        }
+
+        int start = text.Length - SafeTailCharacters;
+        if (char.IsLowSurrogate(text[start]))
+        {
+            start++;
+        }
+
+        return text[start..];
+    }
 
     /// <summary>
     /// Consumes stdout/stderr as they arrive (ADR 0006: "consumed concurrently as bounded
