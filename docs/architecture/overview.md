@@ -21,6 +21,7 @@ Normative architecture decisions and machine contracts live in:
 - [`decisions/0006-supervised-execution-and-review-convergence.md`](decisions/0006-supervised-execution-and-review-convergence.md)
 - [`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md)
 - [`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md)
+- [`decisions/0009-forge-document-format.md`](decisions/0009-forge-document-format.md)
 - [`../contracts/v1/`](../contracts/v1/)
 - [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
@@ -336,8 +337,12 @@ Forge does not infer review stagnation from HEAD or diff changes.
 
 ## Context assembly
 
-Durable state does not live in transcripts. MVP context is assembled through
-progressive disclosure:
+Durable state does not live in transcripts. Always-on rules and project
+knowledge/ADRs are authored as Markdown-with-YAML-frontmatter documents under
+`.forge/rules/` and `.forge/knowledge/`; see
+[`decisions/0009-forge-document-format.md`](decisions/0009-forge-document-format.md)
+for the format, safe-path reference rules, and per-document context limits.
+MVP context is assembled through progressive disclosure:
 
 1. always-on rules and workflow contracts;
 2. sprint-scoped specifications and decisions;
