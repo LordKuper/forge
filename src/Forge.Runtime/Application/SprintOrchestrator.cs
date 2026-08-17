@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Providers;
@@ -124,7 +125,12 @@ public sealed class SprintOrchestrator(
             return new(false, null, dependencyDiagnostic);
         }
 
-        IReadOnlyList<NodeDefinition> graph = command.Graph ?? [];
+        // ADR 0001: `implementation-critical` is the only enabled workflow, so a caller with no
+        // opinion of its own (`Graph: null`) gets that workflow's canonical DAG for free instead of
+        // an empty one — every managed project's sprint starts from the same frozen shape. A
+        // caller that does supply a graph (including an explicitly empty one) keeps full control,
+        // which existing tests rely on to exercise minimal/custom graphs.
+        IReadOnlyList<NodeDefinition> graph = command.Graph ?? ImplementationCriticalGraphBuilder.Build();
         if (!SprintGraphValidator.IsValid(graph))
         {
             return new(false, null, DiagnosticCodes.SprintGraphInvalid);

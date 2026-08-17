@@ -330,6 +330,53 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         return handoffs;
     }
 
+    public async Task SaveConfirmationAsync(
+        string projectRoot,
+        ConfirmationArtifact confirmation,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(confirmation);
+        WorkflowRecordCodec.ValidateConfirmation(confirmation);
+        string directory = ConfirmationsDirectory(SprintDirectory(projectRoot, confirmation.SprintId));
+        Directory.CreateDirectory(directory);
+        PersistedConfirmation persisted = new()
+        {
+            ConfirmationId = confirmation.ConfirmationId,
+            NodeId = confirmation.NodeId.Value,
+            Outcome = WorkflowStateNames.ToSnakeCase(confirmation.Outcome),
+            DefinitionOfDone = confirmation.DefinitionOfDone,
+            Evidence = [.. confirmation.Evidence.Select(ToPersisted)],
+        };
+        await AtomicConfigurationFile.WriteAsync(
+            Path.Combine(directory, $"{confirmation.ConfirmationId:N}.json"),
+            JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        string directory = ConfirmationsDirectory(SprintDirectory(projectRoot, sprintId));
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        List<ConfirmationArtifact> confirmations = [];
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json"))
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedConfirmation persisted =
+                JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The confirmation at '{path}' is empty.");
+            confirmations.Add(FromPersisted(sprintId, persisted));
+        }
+
+        return confirmations;
+    }
+
     public async Task AppendRouteDecisionAsync(
         string projectRoot,
         RouteDecision decision,
@@ -590,6 +637,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
     private static string HandoffsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "handoffs");
 
+    private static string ConfirmationsDirectory(string sprintDirectory) =>
+        Path.Combine(sprintDirectory, "confirmations");
+
     private static string FindingsDirectory(string sprintDirectory) => Path.Combine(sprintDirectory, "findings");
 
     /// <summary>
@@ -714,6 +764,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             handoff.OpenRisks,
             handoff.NextNodeIds);
 
+    private static PersistedEvidence ToPersisted(ConfirmationEvidence evidence) =>
+        new() { Kind = WorkflowStateNames.ToSnakeCase(evidence.Kind), Description = evidence.Description };
+
+    private static ConfirmationEvidence FromPersisted(PersistedEvidence evidence) =>
+        new(WorkflowStateNames.Parse<ConfirmationEvidenceKind>(evidence.Kind), evidence.Description);
+
+    private static ConfirmationArtifact FromPersisted(SprintId sprintId, PersistedConfirmation confirmation) =>
+        new(
+            confirmation.ConfirmationId,
+            sprintId,
+            new(confirmation.NodeId),
+            WorkflowStateNames.Parse<ConfirmationOutcome>(confirmation.Outcome),
+            confirmation.DefinitionOfDone,
+            [.. confirmation.Evidence.Select(FromPersisted)]);
+
     private static PersistedDependency ToPersisted(SprintDependency dependency) =>
         new()
         {
@@ -734,10 +799,18 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Id = node.Id,
             Kind = WorkflowStateNames.ToSnakeCase(node.Kind),
             DependsOn = [.. node.DependsOn],
+            Role = WorkflowStateNames.ToSnakeCase(node.Role),
         };
 
+    // A sprint frozen before this field existed has no `Role` in its durable definition.json;
+    // treated as `Generic` rather than a corrupt-definition failure, since `Generic` was every
+    // node's implicit role before Stage 11 introduced the enum.
     private static NodeDefinition FromPersisted(PersistedNode node) =>
-        new(node.Id, WorkflowStateNames.Parse<NodeKind>(node.Kind), node.DependsOn);
+        new(
+            node.Id,
+            WorkflowStateNames.Parse<NodeKind>(node.Kind),
+            node.DependsOn,
+            string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
 
     private static long CurrentVersion(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
@@ -1242,6 +1315,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string Kind { get; set; } = string.Empty;
 
         public List<string> DependsOn { get; set; } = [];
+
+        public string? Role { get; set; }
     }
 
     private sealed class PersistedNodeResult
@@ -1327,5 +1402,25 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string PolicySnapshotHash { get; set; } = string.Empty;
 
         public string GeneratorVersion { get; set; } = string.Empty;
+    }
+
+    private sealed class PersistedConfirmation
+    {
+        public Guid ConfirmationId { get; set; }
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public string DefinitionOfDone { get; set; } = string.Empty;
+
+        public List<PersistedEvidence> Evidence { get; set; } = [];
+    }
+
+    private sealed class PersistedEvidence
+    {
+        public string Kind { get; set; } = string.Empty;
+
+        public string Description { get; set; } = string.Empty;
     }
 }

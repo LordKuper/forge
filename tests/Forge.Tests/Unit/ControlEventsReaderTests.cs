@@ -241,6 +241,14 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task SaveConfirmationAsync(
+            string projectRoot, ConfirmationArtifact confirmation, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

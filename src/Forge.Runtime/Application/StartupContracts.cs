@@ -45,6 +45,12 @@ public static class DiagnosticCodes
     public const string NodeNotFound = "node_not_found";
     public const string NodeKindMismatch = "node_kind_mismatch";
     public const string NodeTransitionInvalid = "node_transition_invalid";
+
+    /// <summary>Category 11 (docs/contracts/v1/README.md): "Durable workflow cannot safely
+    /// advance." Returned when a caller tries to start a <see cref="Forge.Domain.NodeRole.TestWork"/>
+    /// node whose <see cref="Forge.Domain.NodeRole.Confirmation"/> dependency has not recorded a
+    /// `Confirmed` <see cref="Forge.Domain.ConfirmationArtifact"/> yet.</summary>
+    public const string WorkflowBlocked = "workflow_blocked";
     public const string AttemptOwnershipMismatch = "attempt_ownership_mismatch";
     public const string AttemptTerminal = "attempt_terminal";
     public const string FindingNotFound = "finding_not_found";

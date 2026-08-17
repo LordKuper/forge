@@ -15,6 +15,8 @@ public sealed record RecordFindingResult(bool Succeeded, Finding? Finding, strin
 
 public sealed record RecordHandoffResult(bool Succeeded, Handoff? Handoff, string DiagnosticCode);
 
+public sealed record RecordConfirmationResult(bool Succeeded, ConfirmationArtifact? Confirmation, string DiagnosticCode);
+
 public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attempt, string DiagnosticCode);
 
 /// <summary>
@@ -114,6 +116,16 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             bool satisfied = node.DependsOn.All(dependency =>
                 state.Nodes.TryGetValue(dependency, out NodeSnapshot? upstream) &&
                 upstream.State is NodeState.Succeeded or NodeState.Skipped);
+            if (satisfied && node.Role == NodeRole.TestWork)
+            {
+                // Dependency completion alone is not enough for a test-work node: the plan's own
+                // gate ("Host state transitions must reject premature test work") requires a
+                // recorded, `Confirmed` artifact from every confirmation-role dependency, not just
+                // that dependency having run.
+                satisfied = await IsTestWorkEligibleAsync(projectRoot, sprintId, definition, node, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+
             if (!satisfied)
             {
                 continue;
@@ -209,6 +221,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         if (definedNode is null || definedNode.Kind != NodeKind.Work)
         {
             return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        if (definedNode.Role == NodeRole.TestWork &&
+            !await IsTestWorkEligibleAsync(projectRoot, sprintId, definition, definedNode, cancellationToken)
+                .ConfigureAwait(false))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowBlocked);
         }
 
         // `running` with the node's *current* attempt number is a legitimate resume point: a prior
@@ -747,11 +766,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     }
 
     /// <summary>A durable <see cref="WorkflowEvent.BlockedReasonArgument"/> tag for each of the
-    /// three sites that can append a sprint's `blocked` transition — a stuck/failed node
+    /// four sites that can append a sprint's `blocked` transition — a stuck/failed node
     /// (<see cref="EvaluateCompletionAsync"/>), a late-arriving open finding
-    /// (<see cref="RecordFindingAsync"/>), and a rejected human gate
-    /// (<see cref="SynchronizeSprintGateStateAsync"/>). Only <see cref="BlockedByFinding"/> may ever
-    /// recover automatically; the other two require the operator's explicit
+    /// (<see cref="RecordFindingAsync"/>), a rejected human gate
+    /// (<see cref="SynchronizeSprintGateStateAsync"/>), and a `NotConfirmed` confirmation
+    /// (<see cref="RecordConfirmationAsync"/>). Only <see cref="BlockedByFinding"/> may ever
+    /// recover automatically; the other three require the operator's explicit
     /// `resume_sprint`/`run_sprint` decision, and nothing here may blur that distinction by treating
     /// "every node happens to be settled good right now" as proof of *why* it got that way.</summary>
     private const string BlockedByNode = "node";
@@ -759,6 +779,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     private const string BlockedByFinding = "finding";
 
     private const string BlockedByGate = "gate";
+
+    private const string BlockedByConfirmation = "confirmation";
 
     /// <summary>
     /// The one narrow, explicit path that may resume a finding-blocked sprint automatically:
@@ -937,6 +959,96 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         SprintId sprintId,
         CancellationToken cancellationToken) =>
         store.GetHandoffsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// Records a confirmation node's judgment against its definition of done. Unlike a node
+    /// result, this carries no attempt id and needs no particular node state — the same
+    /// state-independence <see cref="RecordHandoffAsync"/> already has — so it can be replayed or
+    /// backfilled without racing the node's own transitions. A <see cref="ConfirmationOutcome.NotConfirmed"/>
+    /// verdict immediately blocks a running (or already ready-to-finalize) sprint, mirroring how a
+    /// late open <see cref="Finding"/> does in <see cref="RecordFindingAsync"/> — the operator must
+    /// explicitly resume it, since only a `Confirmed` artifact makes a dependent test-work node
+    /// eligible to run (see <see cref="IsTestWorkEligibleAsync"/>).
+    /// </summary>
+    public async Task<RecordConfirmationResult> RecordConfirmationAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        CancellationToken cancellationToken)
+    {
+        ConfirmationArtifact confirmation =
+            new(Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence);
+        try
+        {
+            await store.SaveConfirmationAsync(projectRoot, confirmation, cancellationToken).ConfigureAwait(false);
+        }
+        catch (InvalidDataException)
+        {
+            return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+        }
+
+        if (outcome != ConfirmationOutcome.Confirmed)
+        {
+            SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            if (state.Sprint.State is SprintState.Running or SprintState.ReadyToFinalize)
+            {
+                await store.AppendTransitionAsync(
+                    projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+                    "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
+                    state.Sprint.Version, Guid.NewGuid(), cancellationToken,
+                    new Dictionary<string, string?>(StringComparer.Ordinal)
+                    {
+                        [WorkflowEvent.BlockedReasonArgument] = BlockedByConfirmation,
+                    }).ConfigureAwait(false);
+            }
+        }
+        else
+        {
+            // A dependent test-work node may already be sitting `pending` on this exact
+            // confirmation — see `IsTestWorkEligibleAsync` — so a `Confirmed` verdict must itself
+            // re-drive the graph, the same way completing any other node's attempt does.
+            await AdvanceGraphAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        }
+
+        return new(true, confirmation, DiagnosticCodes.None);
+    }
+
+    public Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken) =>
+        store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// True once every <see cref="NodeRole.Confirmation"/>-role dependency of <paramref name="node"/>
+    /// has a recorded, <see cref="ConfirmationOutcome.Confirmed"/> <see cref="ConfirmationArtifact"/>
+    /// — the plan's "only its valid artifact makes recorded risk-based test selection and authoring
+    /// eligible." A node with no confirmation-role dependency (not the built-in graph's shape, but
+    /// nothing stops a caller-supplied one) is vacuously eligible: there is nothing to gate on.
+    /// </summary>
+    private async Task<bool> IsTestWorkEligibleAsync(
+        string projectRoot,
+        SprintId sprintId,
+        SprintDefinition definition,
+        NodeDefinition node,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<string> confirmationDependencies = [.. node.DependsOn.Where(dependency =>
+            definition.Graph.FirstOrDefault(candidate => candidate.Id == dependency)?.Role == NodeRole.Confirmation)];
+        if (confirmationDependencies.Count == 0)
+        {
+            return true;
+        }
+
+        IReadOnlyList<ConfirmationArtifact> confirmations =
+            await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return confirmationDependencies.All(dependency => confirmations.Any(artifact =>
+            artifact.NodeId.Value == dependency && artifact.Outcome == ConfirmationOutcome.Confirmed));
+    }
 
     private static Guid NodeActionKey(string actionId, SprintId sprintId, NodeSnapshot node) =>
         StatusAdvisor.IdempotencyKey(

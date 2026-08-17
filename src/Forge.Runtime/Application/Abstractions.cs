@@ -253,6 +253,13 @@ public interface ISprintStore
         SprintId sprintId,
         CancellationToken cancellationToken);
 
+    Task SaveConfirmationAsync(string projectRoot, ConfirmationArtifact confirmation, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
     Task AppendRouteDecisionAsync(string projectRoot, RouteDecision decision, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
