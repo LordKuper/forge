@@ -975,7 +975,10 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// eligibility (see <see cref="IsTestWorkEligibleAsync"/>): a `Confirmed` artifact can be
     /// superseded by a later `NotConfirmed` one for the same node (a confirmation node re-attempted
     /// after its own rejection), and must never keep a dependent test-work node eligible once that
-    /// happens.
+    /// happens. The returned result can report <c>Succeeded: false</c> even though the artifact
+    /// itself was durably recorded, if the sprint needed blocking and the append that blocks it
+    /// could not be made to land after retrying — the artifact is still returned in that case so a
+    /// caller is not left wondering whether anything happened at all.
     /// </summary>
     public async Task<RecordConfirmationResult> RecordConfirmationAsync(
         string projectRoot,
@@ -1016,7 +1019,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             // *only* durable, operator-visible signal that a `NotConfirmed` verdict landed (the
             // artifact itself already blocks eligibility via `IsTestWorkEligibleAsync` regardless
             // of whether this succeeds, but a lost append here would otherwise leave the sprint
-            // silently `running` with no indication anything needs attention).
+            // silently `running` with no indication anything needs attention). `blockNeeded` stays
+            // false (and this reports success) when the sprint was not even in a blockable state to
+            // begin with — that is not a failure to surface, since there is nothing this call could
+            // have done.
+            bool blockNeeded = false;
+            bool blockLanded = false;
             for (int attempt = 0; attempt < 5; attempt++)
             {
                 SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
@@ -1026,6 +1034,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                     break;
                 }
 
+                blockNeeded = true;
                 AppendOutcome blocked = await store.AppendTransitionAsync(
                     projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
                     "workflow.sprint_blocked", WorkflowStateNames.ToSnakeCase(SprintState.Blocked),
@@ -1036,8 +1045,17 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                     }).ConfigureAwait(false);
                 if (blocked.Succeeded)
                 {
+                    blockLanded = true;
                     break;
                 }
+            }
+
+            if (blockNeeded && !blockLanded)
+            {
+                // The artifact itself is already durable and already governs eligibility — only the
+                // secondary, operator-visible block signal failed to land, so the caller is told
+                // that specifically rather than losing it silently.
+                return new(false, confirmation, DiagnosticCodes.WorkflowEventConflict);
             }
         }
         else
@@ -1059,12 +1077,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
     /// <summary>
     /// True once every <see cref="NodeRole.Confirmation"/>-role dependency of <paramref name="node"/>
-    /// has, as its *most recently recorded* <see cref="ConfirmationArtifact"/> (by
-    /// <see cref="ConfirmationArtifact.RecordedAt"/>), an outcome of
-    /// <see cref="ConfirmationOutcome.Confirmed"/> — the plan's "only its valid artifact makes
-    /// recorded risk-based test selection and authoring eligible." Using only the latest artifact
+    /// has every artifact recorded at its own latest <see cref="ConfirmationArtifact.RecordedAt"/>
+    /// — there can be more than one on an exact tie — carrying an outcome of
+    /// <see cref="ConfirmationOutcome.Confirmed"/>, the plan's "only its valid artifact makes
+    /// recorded risk-based test selection and authoring eligible." Using only the latest instant
     /// per node (never "any `Confirmed` artifact ever recorded") is what lets a later
-    /// `NotConfirmed` re-close a gate an earlier `Confirmed` opened. A node with no
+    /// `NotConfirmed` re-close a gate an earlier `Confirmed` opened; requiring *every* artifact at
+    /// that instant to be `Confirmed`, rather than picking one arbitrarily, is what keeps a tie
+    /// failing closed instead of depending on an unspecified ordering. A node with no
     /// confirmation-role dependency (not the built-in graph's shape, but nothing stops a
     /// caller-supplied one) is vacuously eligible: there is nothing to gate on.
     /// </summary>
@@ -1086,11 +1106,23 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
         return confirmationDependencies.All(dependency =>
         {
-            ConfirmationArtifact? latest = confirmations
-                .Where(artifact => artifact.NodeId.Value == dependency)
-                .OrderByDescending(artifact => artifact.RecordedAt)
-                .FirstOrDefault();
-            return latest is { Outcome: ConfirmationOutcome.Confirmed };
+            List<ConfirmationArtifact> forNode = [.. confirmations.Where(artifact => artifact.NodeId.Value == dependency)];
+            if (forNode.Count == 0)
+            {
+                return false;
+            }
+
+            // Fails closed on a tie: `RecordedAt` comes from `IClock.UtcNow`, whose resolution is
+            // not guaranteed finer than two calls made moments apart (and the API is documented as
+            // replayable, so a tie is reachable in practice, not just in theory). Picking a single
+            // "latest" via ordering alone would make the winner depend on `GetConfirmationsAsync`'s
+            // enumeration order for ties — undefined here, since confirmations are stored one file
+            // per artifact under random ids. Requiring every artifact at the max `RecordedAt` to be
+            // `Confirmed` means a tied `NotConfirmed` always wins the gate, never loses it.
+            DateTimeOffset latestRecordedAt = forNode.Max(artifact => artifact.RecordedAt);
+            return forNode
+                .Where(artifact => artifact.RecordedAt == latestRecordedAt)
+                .All(artifact => artifact.Outcome == ConfirmationOutcome.Confirmed);
         });
     }
 

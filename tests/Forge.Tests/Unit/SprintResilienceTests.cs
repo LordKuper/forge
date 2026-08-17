@@ -593,6 +593,47 @@ public sealed class SprintResilienceTests
         Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordConfirmationReportsFailureWhenTheBlockingAppendNeverLands()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("confirm", NodeKind.Work, [], NodeRole.Confirmation)]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        // Every retry attempt (`RecordConfirmationAsync`'s bounded loop) makes exactly one
+        // `AppendTransitionAsync` call for the blocking transition; failing all 5 forces the loop
+        // to exhaust rather than eventually land.
+        for (int i = 1; i <= 5; i++)
+        {
+            store.FailAt[store.AppendCount + i] = AppendOutcome.Conflict;
+        }
+
+        RecordConfirmationResult result = await scheduler.RecordConfirmationAsync(
+            environment.ProjectRoot,
+            sprintId,
+            "confirm",
+            ConfirmationOutcome.NotConfirmed,
+            "Does not meet the DoD.",
+            [new(ConfirmationEvidenceKind.Inspection, "Acceptance criterion 2 is not met.")],
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowEventConflict, result.DiagnosticCode);
+        // The artifact itself is still durable (and already governs eligibility) even though the
+        // secondary block signal never landed.
+        Assert.NotNull(result.Confirmation);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Running, state.Sprint.State);
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

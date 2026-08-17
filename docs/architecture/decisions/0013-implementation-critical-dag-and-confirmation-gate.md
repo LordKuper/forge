@@ -110,10 +110,16 @@ as it does today.
 ### The test-work gate
 
 `SprintScheduler.IsTestWorkEligibleAsync` is the one new chokepoint: for a
-`TestWork`-role node, every `Confirmation`-role dependency's *latest*
-recorded `ConfirmationArtifact` (ordered by `RecordedAt`) must have
-`Outcome == Confirmed` before the node is eligible. It is checked in exactly
-two places:
+`TestWork`-role node, every `Confirmation`-role dependency's artifacts *at
+their own latest `RecordedAt`* must all be `Outcome == Confirmed` before the
+node is eligible. "All at the latest instant," not "the one latest
+artifact," on purpose: `RecordedAt` comes from `IClock.UtcNow`, whose
+resolution is not guaranteed finer than two calls made moments apart, and
+confirmations are stored one file per artifact under random ids with no
+guaranteed enumeration order — picking a single winner on a tie would make
+the outcome depend on that unspecified order. Requiring every tied artifact
+to be `Confirmed` fails closed instead: a tied `NotConfirmed` always wins.
+It is checked in exactly two places:
 
 - `AdvanceGraphAsync`'s promotion loop — a `TestWork` node's dependencies
   reaching `succeeded`/`skipped` is necessary but no longer sufficient; the
@@ -142,7 +148,11 @@ operator-visible signal that a `NotConfirmed` verdict landed, so a lost
 append here would leave the sprint silently `running` with nothing to draw
 attention to it — even though `IsTestWorkEligibleAsync` itself would still
 correctly deny eligibility either way, since it reads the artifact directly
-rather than the sprint's blocked state.
+rather than the sprint's blocked state. If all five attempts fail,
+`RecordConfirmationAsync` itself reports `Succeeded: false` with
+`workflow_event_conflict` (still returning the artifact, which was and stays
+durable) rather than silently reporting success for a blocking signal that
+never landed.
 
 ### Threat/rule rubric
 
@@ -178,7 +188,9 @@ them one.
 |---|---|
 | promote a `TestWork` node whose confirmation is missing or `NotConfirmed` | node stays `pending`; no diagnostic (same as any other unmet dependency) |
 | start a `TestWork` node's attempt while ineligible | rejected with `workflow_blocked`; no state change |
-| record a `NotConfirmed` confirmation on a `Running`/`ReadyToFinalize` sprint | sprint moves to `Blocked` with reason `confirmation` (retried up to 5 times on a version conflict); requires an explicit `resume_sprint`/`run_sprint` |
+| record a `NotConfirmed` confirmation on a `Running`/`ReadyToFinalize` sprint | sprint moves to `Blocked` with reason `confirmation` (retried up to 5 times on a version conflict) |
+| the block-sprint append exhausts all 5 retries | `RecordConfirmationAsync` reports `Succeeded: false`/`workflow_event_conflict`, still returning the (already durable) artifact |
 | record a `Confirmed` confirmation | graph is re-advanced immediately; any now-eligible `TestWork` node promotes to `ready` in the same call |
-| record a `NotConfirmed` confirmation after an earlier `Confirmed` one for the same node | the later, `RecordedAt`-latest artifact governs; eligibility already granted is not itself revoked, but no further promotion or attempt start on that dependency succeeds |
+| record a `NotConfirmed` confirmation after an earlier `Confirmed` one for the same node | the later, `RecordedAt`-latest artifact governs; eligibility already granted is not itself revoked, but no further promotion or attempt start on that dependency succeeds; requires an explicit `resume_sprint`/`run_sprint`, which does not itself re-open eligibility |
+| two artifacts for the same node share the exact same `RecordedAt` | fails closed: eligible only if every artifact at that instant is `Confirmed` |
 | record a confirmation against an unknown node id or a node not tagged `Confirmation` | rejected with `node_not_found`/`node_kind_mismatch`; nothing is persisted |

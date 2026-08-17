@@ -171,6 +171,45 @@ public sealed class ConfirmationGateTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ATieBetweenConfirmedAndNotConfirmedAtTheSameRecordedAtFailsClosed()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        // Written directly through the store (bypassing `RecordConfirmationAsync`'s own clock) so
+        // both artifacts share the exact same `RecordedAt` regardless of the real clock's
+        // resolution -- proving the tie-break itself, not just that ties are rare in practice.
+        DateTimeOffset tie = DateTimeOffset.UnixEpoch;
+        await store.SaveConfirmationAsync(
+            environment.ProjectRoot,
+            new(
+                Guid.NewGuid(), sprintId, new("confirm"), ConfirmationOutcome.Confirmed, "Met the DoD.",
+                [new(ConfirmationEvidenceKind.Execution, "Ran the suite.")], tie),
+            cancellationToken);
+        await store.SaveConfirmationAsync(
+            environment.ProjectRoot,
+            new(
+                Guid.NewGuid(), sprintId, new("confirm"), ConfirmationOutcome.NotConfirmed, "Actually does not.",
+                [new(ConfirmationEvidenceKind.Inspection, "Found a regression on closer review.")], tie),
+            cancellationToken);
+
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "test_work", 1, cancellationToken);
+
+        Assert.False(started.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowBlocked, started.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RecordingAConfirmationAgainstAnUnknownNodeIsRejected()
     {
         using TestEnvironment environment = await InitializedAsync();

@@ -366,7 +366,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
 
         List<ConfirmationArtifact> confirmations = [];
-        foreach (string path in Directory.EnumerateFiles(directory, "*.json"))
+        // Deterministic enumeration order (matches `GetFindingsAsync`'s own ordering, same reason):
+        // callers must never depend on filesystem enumeration order for anything, even though
+        // `SprintScheduler.IsTestWorkEligibleAsync` no longer needs it for correctness (it fails
+        // closed on a `RecordedAt` tie regardless of the order artifacts arrive in).
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
         {
             byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
             PersistedConfirmation persisted =
