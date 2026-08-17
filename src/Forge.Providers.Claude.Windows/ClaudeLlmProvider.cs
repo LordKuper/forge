@@ -61,6 +61,10 @@ public sealed class ClaudeLlmProvider(
 
     public ProviderId Id => ClaudeCode;
 
+    // ponytail: fixed MVP default, not a per-project model choice — nothing selects a model yet
+    // (Stage 11, P11.13-P11.20). Revisit once real per-project model configuration exists.
+    public string DefaultModel => "sonnet";
+
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.DiscoverAsync(
             Id,

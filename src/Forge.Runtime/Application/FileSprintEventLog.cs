@@ -72,6 +72,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(definition);
+        foreach (ExecutionProfile profile in definition.ExecutionProfiles.Values)
+        {
+            WorkflowRecordCodec.ValidateExecutionProfile(profile);
+        }
+
         string directory = SprintDirectory(projectRoot, definition.Id);
         Directory.CreateDirectory(directory);
         PersistedDefinition persisted = new()
@@ -86,6 +91,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ArtifactPolicySnapshotHash = definition.ArtifactPolicySnapshotHash,
             FrozenAt = definition.FrozenAt,
             FrozenProviders = [.. definition.FrozenProviders],
+            ExecutionProfiles = [.. definition.ExecutionProfiles.Values.Select(ToPersisted)],
         };
         await AtomicConfigurationFile.WriteAsync(
             DefinitionPath(directory),
@@ -134,7 +140,13 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.ConversationLanguage,
                 persisted.ArtifactPolicySnapshotHash,
                 persisted.FrozenAt,
-                persisted.FrozenProviders);
+                persisted.FrozenProviders,
+                // A sprint frozen before execution profiles existed has none in its durable
+                // definition.json; treated as an empty set (no phase has a profile) rather than a
+                // corrupt-definition failure, matching `NodeRole`'s own backward-compatibility rule.
+                persisted.ExecutionProfiles
+                    .Select(FromPersisted)
+                    .ToDictionary(profile => profile.Phase, profile => profile));
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException)
         {
@@ -818,6 +830,44 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             node.DependsOn,
             string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
 
+    private static PersistedExecutionProfile ToPersisted(ExecutionProfile profile) =>
+        new()
+        {
+            Phase = WorkflowStateNames.ToSnakeCase(profile.Phase),
+            Provider = profile.Provider,
+            Model = profile.Model,
+            Effort = profile.Effort,
+            SandboxPolicy = profile.SandboxPolicy,
+            PermissionPolicy = profile.PermissionPolicy,
+            CapabilityAllowlist = [.. profile.CapabilityAllowlist],
+            SessionDeadlineSeconds = profile.SessionDeadlineSeconds,
+            IdleDeadlineSeconds = profile.IdleDeadlineSeconds,
+            Lineage = profile.Lineage is { } lineage
+                ? new()
+                {
+                    ImplementationProvider = lineage.ImplementationProvider,
+                    ImplementationModel = lineage.ImplementationModel,
+                    AchievedIndependence = lineage.AchievedIndependence,
+                }
+                : null,
+        };
+
+    private static ExecutionProfile FromPersisted(PersistedExecutionProfile profile) =>
+        new(
+            ExecutionProfile.ContractVersion,
+            WorkflowStateNames.Parse<ExecutionPhase>(profile.Phase),
+            profile.Provider,
+            profile.Model,
+            profile.Effort,
+            profile.SandboxPolicy,
+            profile.PermissionPolicy,
+            profile.CapabilityAllowlist,
+            profile.SessionDeadlineSeconds,
+            profile.IdleDeadlineSeconds,
+            profile.Lineage is { } lineage
+                ? new(lineage.ImplementationProvider, lineage.ImplementationModel, lineage.AchievedIndependence)
+                : null);
+
     private static long CurrentVersion(IReadOnlyList<WorkflowEvent> events, AggregateKind kind, string id) =>
         events
             .Where(item => item.Aggregate.Kind == kind && item.Aggregate.Id == id &&
@@ -1303,6 +1353,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public DateTimeOffset FrozenAt { get; set; }
 
         public List<string> FrozenProviders { get; set; } = [];
+
+        public List<PersistedExecutionProfile> ExecutionProfiles { get; set; } = [];
     }
 
     private sealed class PersistedDependency
@@ -1430,5 +1482,37 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string Kind { get; set; } = string.Empty;
 
         public string Description { get; set; } = string.Empty;
+    }
+
+    private sealed class PersistedExecutionProfile
+    {
+        public string Phase { get; set; } = string.Empty;
+
+        public string Provider { get; set; } = string.Empty;
+
+        public string Model { get; set; } = string.Empty;
+
+        public string Effort { get; set; } = string.Empty;
+
+        public string SandboxPolicy { get; set; } = string.Empty;
+
+        public string PermissionPolicy { get; set; } = string.Empty;
+
+        public List<string> CapabilityAllowlist { get; set; } = [];
+
+        public int SessionDeadlineSeconds { get; set; }
+
+        public int IdleDeadlineSeconds { get; set; }
+
+        public PersistedLineage? Lineage { get; set; }
+    }
+
+    private sealed class PersistedLineage
+    {
+        public string ImplementationProvider { get; set; } = string.Empty;
+
+        public string ImplementationModel { get; set; } = string.Empty;
+
+        public bool AchievedIndependence { get; set; }
     }
 }

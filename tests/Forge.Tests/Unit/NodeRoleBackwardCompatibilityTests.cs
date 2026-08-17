@@ -5,16 +5,17 @@ using Forge.Domain;
 namespace Forge.UnitTests;
 
 /// <summary>
-/// A sprint frozen before <see cref="NodeRole"/> existed has no `role` field in its durable
-/// `definition.json`. Reading it back must default the node to <see cref="NodeRole.Generic"/>
-/// rather than fail — the same tolerant-of-older-data expectation
-/// <c>LegacyFindingsMigrationTests</c> already sets for the pre-per-file findings layout.
+/// A sprint frozen before <see cref="NodeRole"/> or <see cref="ExecutionPhase"/> profiles existed
+/// has no `role` field on its nodes and no `execution_profiles` at all in its durable
+/// `definition.json`. Reading it back must default rather than fail — the same
+/// tolerant-of-older-data expectation <c>LegacyFindingsMigrationTests</c> already sets for the
+/// pre-per-file findings layout.
 /// </summary>
 public sealed class NodeRoleBackwardCompatibilityTests
 {
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task LoadingADefinitionWithNoRoleFieldDefaultsEveryNodeToGeneric()
+    public async Task LoadingALegacyDefinitionDefaultsMissingRoleAndExecutionProfileFields()
     {
         using TestRoot root = new();
         FileSprintEventLog log = new(new FakeClock());
@@ -26,6 +27,7 @@ public sealed class NodeRoleBackwardCompatibilityTests
 
         Assert.NotNull(definition);
         Assert.Equal(NodeRole.Generic, definition.Graph.Single(node => node.Id == "a").Role);
+        Assert.Empty(definition.ExecutionProfiles);
     }
 
     private static void WriteLegacyDefinitionFile(string root, SprintId sprintId)

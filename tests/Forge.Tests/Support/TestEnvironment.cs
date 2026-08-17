@@ -215,6 +215,8 @@ internal sealed class FakeLlmProvider(
 
     public ProviderId Id => id;
 
+    public string DefaultModel => $"{id.Value}-fake-model";
+
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
         DiscoverCalls++;

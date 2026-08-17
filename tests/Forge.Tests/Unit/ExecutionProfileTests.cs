@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Application;
+using Forge.Domain;
 using Forge.Tests.Support;
 using Json.Schema;
 
@@ -19,7 +20,7 @@ public sealed class ExecutionProfileTests
             "high",
             "workspace-write",
             "never",
-            ["read_file", "grep"],
+            [ContextCapabilityIds.GitShow, ContextCapabilityIds.GitGrep],
             3600,
             300,
             new("claude_code", "sonnet", true));

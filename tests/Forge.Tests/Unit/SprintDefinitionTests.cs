@@ -39,6 +39,63 @@ public sealed class SprintDefinitionTests
         Assert.Equal(["claude_code", "codex"], definition.FrozenProviders);
     }
 
+    // ADR 0006/0014: "The sprint snapshot resolves one profile for planning, implementation, and
+    // review." Two candidates exist, so review must prefer the one implementation does not use.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationFreezesThreeExecutionProfilesWithAnIndependentReviewLineage()
+    {
+        using TestEnvironment environment = new(
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "1.0.0"),
+            ],
+            providerEnablement: new FakeProviderEnablementSource(["claude_code", "codex"]));
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.NotNull(definition);
+        Assert.Equal(3, definition.ExecutionProfiles.Count);
+        Assert.Equal("claude_code", definition.ExecutionProfiles[ExecutionPhase.Implementation].Provider);
+        Assert.Equal("codex", definition.ExecutionProfiles[ExecutionPhase.Review].Provider);
+        Assert.True(definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.AchievedIndependence);
+    }
+
+    // A single enabled provider must still complete a sprint -- ADR 0006: "A single-provider
+    // configuration can complete review while Forge still prefers a distinct provider/model
+    // lineage whenever one is available." Reduced separation is recorded, never a gate.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationFreezesAReviewProfileWithoutIndependenceWhenOnlyOneProviderIsEnabled()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "1.0.0")],
+            providerEnablement: new FakeProviderEnablementSource(["claude_code"]));
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.NotNull(definition);
+        Assert.Equal("claude_code", definition.ExecutionProfiles[ExecutionPhase.Review].Provider);
+        Assert.False(definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.AchievedIndependence);
+    }
+
     // ADR 0008: "An empty intersection blocks execution with a stable diagnostic rather than
     // silently selecting another provider."
     [Fact]

@@ -21,6 +21,8 @@ internal static class WorkflowRecordCodec
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.handoff.schema.json");
     private static readonly JsonSchema ConfirmationSchema =
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.confirmation-result.schema.json");
+    private static readonly JsonSchema ExecutionProfileSchema =
+        SchemaValidation.LoadEmbedded("Forge.Application.Schemas.execution-profile.schema.json");
     private static readonly JsonSerializerOptions JsonOptions = ConfigurationSchemaCodec.SerializerOptions;
 
     public static void ValidateNodeResult(NodeResult result)
@@ -118,6 +120,33 @@ internal static class WorkflowRecordCodec
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), ConfirmationSchema, "confirmation result");
+    }
+
+    public static void ValidateExecutionProfile(ExecutionProfile profile)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        WireExecutionProfile wire = new()
+        {
+            Phase = WorkflowStateNames.ToSnakeCase(profile.Phase),
+            Provider = profile.Provider,
+            Model = profile.Model,
+            Effort = profile.Effort,
+            SandboxPolicy = profile.SandboxPolicy,
+            PermissionPolicy = profile.PermissionPolicy,
+            CapabilityAllowlist = [.. profile.CapabilityAllowlist],
+            SessionDeadlineSeconds = profile.SessionDeadlineSeconds,
+            IdleDeadlineSeconds = profile.IdleDeadlineSeconds,
+            Lineage = profile.Lineage is { } lineage
+                ? new()
+                {
+                    ImplementationProvider = lineage.ImplementationProvider,
+                    ImplementationModel = lineage.ImplementationModel,
+                    AchievedIndependence = lineage.AchievedIndependence,
+                }
+                : null,
+        };
+        SchemaValidation.Validate(
+            JsonSerializer.SerializeToElement(wire, JsonOptions), ExecutionProfileSchema, "execution profile");
     }
 
     private sealed class WireNodeResult
@@ -246,5 +275,39 @@ internal static class WorkflowRecordCodec
         public string Kind { get; set; } = string.Empty;
 
         public string Description { get; set; } = string.Empty;
+    }
+
+    private sealed class WireExecutionProfile
+    {
+        public string SchemaVersion { get; set; } = "1.0.0";
+
+        public string Phase { get; set; } = string.Empty;
+
+        public string Provider { get; set; } = string.Empty;
+
+        public string Model { get; set; } = string.Empty;
+
+        public string Effort { get; set; } = string.Empty;
+
+        public string SandboxPolicy { get; set; } = string.Empty;
+
+        public string PermissionPolicy { get; set; } = string.Empty;
+
+        public List<string> CapabilityAllowlist { get; set; } = [];
+
+        public int SessionDeadlineSeconds { get; set; }
+
+        public int IdleDeadlineSeconds { get; set; }
+
+        public WireLineage? Lineage { get; set; }
+    }
+
+    private sealed class WireLineage
+    {
+        public string ImplementationProvider { get; set; } = string.Empty;
+
+        public string ImplementationModel { get; set; } = string.Empty;
+
+        public bool AchievedIndependence { get; set; }
     }
 }
