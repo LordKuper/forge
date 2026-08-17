@@ -16,17 +16,48 @@ public interface IFileSystem
     Task WriteAllTextAsync(string path, string contents, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// <paramref name="StandardInput"/>, when non-null, is written to the child's stdin and the pipe
+/// then closed — ADR 0006: "Forge sends prompts through redirected standard input, never a
+/// command-line argument." <paramref name="ReplaceEnvironment"/> selects between this request's two
+/// legal environment shapes: <see langword="false"/> (the default, used by every pre-Stage-11
+/// caller — git plumbing, provider install/version/auth probes) merges <see cref="EnvironmentVariables"/>
+/// onto the full inherited process environment; <see langword="true"/> (ADR 0006: "Provider children
+/// receive a minimal environment assembled by Forge") starts from nothing and uses
+/// <see cref="EnvironmentVariables"/> as the complete child environment.
+/// </summary>
 public sealed record ProcessRequest(
     string FileName,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
-    IReadOnlyDictionary<string, string>? EnvironmentVariables = null);
+    IReadOnlyDictionary<string, string>? EnvironmentVariables = null,
+    string? StandardInput = null,
+    bool ReplaceEnvironment = false);
 
 public sealed record ProcessResult(int ExitCode, string StandardOutput, string StandardError);
 
+/// <summary>
+/// Notified as a running child's stdout/stderr lines arrive, not after it exits — ADR 0006:
+/// "Stdout and stderr are consumed concurrently as bounded streams." A caller with no interest in
+/// incremental delivery passes no sink at all (<see cref="IProcessRunner"/>'s two-argument
+/// overload); <see cref="ProcessResult"/> still carries the complete joined output either way, so a
+/// sink is purely an additional, non-exclusive delivery path.
+/// </summary>
+public interface IProcessOutputSink
+{
+    Task OnStandardOutputLineAsync(string line, CancellationToken cancellationToken);
+
+    Task OnStandardErrorLineAsync(string line, CancellationToken cancellationToken);
+}
+
 public interface IProcessRunner
 {
-    Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken);
+    Task<ProcessResult> RunAsync(ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken);
+
+    /// <summary>Every call site before Stage 11 P11.32-P11.40 — no incremental delivery, matching
+    /// this method's original, still-unchanged behavior exactly.</summary>
+    Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+        RunAsync(request, null, cancellationToken);
 }
 
 public interface INetworkClient
@@ -296,12 +327,15 @@ public interface ISprintStore
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptActivityRecordedType"/> heartbeat for
     /// <paramref name="attemptId"/>. Not gated by <see cref="AppendTransitionAsync"/>'s optimistic
     /// concurrency or state-machine legality — a caller repeats this freely while the attempt runs;
-    /// it never competes with or blocks a real transition.</summary>
+    /// it never competes with or blocks a real transition. <paramref name="kind"/> defaults to
+    /// <see cref="AttemptActivityKind.Heartbeat"/>, matching every activity event recorded before
+    /// Stage 11 P11.32-P11.40 introduced typed activity.</summary>
     Task AppendAttemptActivityAsync(
         string projectRoot,
         SprintId sprintId,
         AttemptId attemptId,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        AttemptActivityKind kind = AttemptActivityKind.Heartbeat);
 
     /// <summary>
     /// Every durable transition and routing record for one sprint, in append order, including the

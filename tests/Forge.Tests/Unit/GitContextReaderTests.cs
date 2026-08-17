@@ -242,7 +242,8 @@ public sealed class GitContextReaderTests
 
     private sealed class ThrowingProcessRunner : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken) =>
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken) =>
             throw new Win32Exception("git.exe was not found.");
     }
 
@@ -252,7 +253,8 @@ public sealed class GitContextReaderTests
     /// exception filter must not mistake for an ordinary process-launch failure.</summary>
     private sealed class CancelingProcessRunner(CancellationTokenSource cancellationSource) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             cancellationSource.Cancel();
             throw new IOException("The pipe has been ended.");

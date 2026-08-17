@@ -34,6 +34,7 @@ public sealed class ProcessRunnerTests
                     "powershell.exe",
                     ["-NoProfile", "-Command", command],
                     directory),
+                null,
                 cancellation.Token);
 
             for (int attempt = 0; attempt < 100 && !File.Exists(readyPath); attempt++)
@@ -88,6 +89,7 @@ public sealed class ProcessRunnerTests
                             $"[IO.File]::WriteAllText('{marker}','started')",
                         ],
                         Path.GetTempPath()),
+                    null,
                     cancellation.Token));
 
             Assert.False(File.Exists(marker));

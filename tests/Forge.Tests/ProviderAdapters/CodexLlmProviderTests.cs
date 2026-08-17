@@ -329,7 +329,8 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, request =>
         {
             Assert.Equal("codex.exe", Path.GetFileName(request.FileName));
-            Assert.Equal(["exec", "--json", "--", "list open bugs"], request.Arguments);
+            Assert.Equal(["exec", "--json"], request.Arguments);
+            Assert.Equal("list open bugs", request.StandardInput);
             return new(0, jsonl, string.Empty);
         });
 
@@ -341,8 +342,26 @@ public sealed class CodexLlmProviderTests
         Assert.True(result.Succeeded);
         Assert.Equal(4, result.Events.Count);
         Assert.Equal(ProviderEventKind.Unknown, result.Events[0].Kind);
+        Assert.Equal(ProviderEventKind.Unknown, result.Events[1].Kind);
         Assert.Equal(ProviderEventKind.ToolUse, result.Events[2].Kind);
         Assert.Equal(ProviderEventKind.Result, result.Events[3].Kind);
+        Assert.NotNull(result.TerminalResult);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncFailsClosedWhenNoTerminalResultEventIsEmitted()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(
+            0, """{"type":"thread.started","thread_id":"t1"}""" + "\n", string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ProviderFailureKind.MissingTerminalResult, result.Failure);
     }
 
     [Fact]
@@ -487,12 +506,31 @@ public sealed class CodexLlmProviderTests
         }
     }
 
+    /// <summary>Simulates the real <c>ProcessRunner</c>'s streaming contract: feeds the stubbed
+    /// response's output to the output sink line by line, the way the actual process pipe reader
+    /// does, so <c>ProviderExecution</c>'s sink-driven parsing sees the same events a real run
+    /// would.</summary>
     private sealed class StubProcessRunner(Func<ProcessRequest, ProcessResult> respond) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(respond(request));
+            ProcessResult result = respond(request);
+            if (outputSink is not null)
+            {
+                foreach (string line in result.StandardOutput.Split('\n'))
+                {
+                    await outputSink.OnStandardOutputLineAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+
+                foreach (string line in result.StandardError.Split('\n'))
+                {
+                    await outputSink.OnStandardErrorLineAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return result;
         }
     }
 
@@ -502,7 +540,8 @@ public sealed class CodexLlmProviderTests
     /// </summary>
     private sealed class HangingProcessRunner : IProcessRunner
     {
-        public async Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
             throw new InvalidOperationException("Unreachable: Task.Delay(Infinite) only returns via cancellation.");

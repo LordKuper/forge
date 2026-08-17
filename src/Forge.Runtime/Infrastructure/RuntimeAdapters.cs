@@ -24,6 +24,7 @@ public sealed class ProcessRunner : IProcessRunner
 {
     public async Task<ProcessResult> RunAsync(
         ProcessRequest request,
+        IProcessOutputSink? outputSink,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -35,6 +36,7 @@ public sealed class ProcessRunner : IProcessRunner
             WorkingDirectory = request.WorkingDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = request.StandardInput is not null,
             // Without an explicit encoding, redirected output decodes with the OS/console
             // codepage rather than the UTF-8 bytes the child process (always `git` today) actually
             // writes -- silently corrupting non-ASCII content on a machine whose codepage isn't
@@ -42,8 +44,19 @@ public sealed class ProcessRunner : IProcessRunner
             // guarantee (ADR 0012).
             StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8,
+            StandardInputEncoding = request.StandardInput is not null ? Encoding.UTF8 : null,
             UseShellExecute = false,
         };
+
+        if (request.ReplaceEnvironment)
+        {
+            // ADR 0006: "Provider children receive a minimal environment assembled by Forge" --
+            // `ProcessStartInfo.EnvironmentVariables` is pre-populated from this process's own
+            // full environment by default; starting from nothing is what makes the child's
+            // environment exactly `request.EnvironmentVariables`, not that plus everything Forge
+            // itself happened to inherit.
+            startInfo.EnvironmentVariables.Clear();
+        }
 
         if (request.EnvironmentVariables is not null)
         {
@@ -60,8 +73,18 @@ public sealed class ProcessRunner : IProcessRunner
 
         using Process process = new() { StartInfo = startInfo };
         process.Start();
-        Task<string> output = process.StandardOutput.ReadToEndAsync(CancellationToken.None);
-        Task<string> error = process.StandardError.ReadToEndAsync(CancellationToken.None);
+
+        // Read loops are started before stdin is written so a child that begins writing output
+        // before it has fully consumed stdin can never deadlock against Forge's own unread pipe
+        // buffer -- classic bidirectional-pipe ordering, not specific to any one provider.
+        Task<string> output = ReadStreamAsync(process.StandardOutput, outputSink, isError: false);
+        Task<string> error = ReadStreamAsync(process.StandardError, outputSink, isError: true);
+        if (request.StandardInput is not null)
+        {
+            await process.StandardInput.WriteAsync(request.StandardInput).ConfigureAwait(false);
+            process.StandardInput.Close();
+        }
+
         try
         {
             await process.WaitForExitAsync(cancellationToken).ConfigureAwait(false);
@@ -89,6 +112,42 @@ public sealed class ProcessRunner : IProcessRunner
             process.ExitCode,
             await output.ConfigureAwait(false),
             await error.ConfigureAwait(false));
+    }
+
+    /// <summary>
+    /// Reads line-by-line as data arrives (ADR 0006: "Stdout and stderr are consumed concurrently
+    /// as bounded streams") rather than the whole stream at once, notifying <paramref name="sink"/>
+    /// per line while still building the complete joined text every caller of the buffered
+    /// two-argument overload already depends on. Reads and sink notifications alike use a fixed,
+    /// unconditional <see cref="CancellationToken.None"/>, for the same reason the prior buffered
+    /// implementation's reads did: a cancellation here must never race the caller's own
+    /// kill-then-drain sequence above, which is what actually stops the child (closing these pipes
+    /// and unblocking `ReadLineAsync` with a natural end-of-stream) and needs these same tasks to
+    /// complete cleanly afterward, not fault independently mid-drain.
+    /// </summary>
+    private static async Task<string> ReadStreamAsync(StreamReader reader, IProcessOutputSink? sink, bool isError)
+    {
+        StringBuilder buffer = new();
+        bool first = true;
+        while (await reader.ReadLineAsync(CancellationToken.None).ConfigureAwait(false) is { } line)
+        {
+            if (!first)
+            {
+                buffer.Append('\n');
+            }
+
+            buffer.Append(line);
+            first = false;
+            if (sink is not null)
+            {
+                Task notify = isError
+                    ? sink.OnStandardErrorLineAsync(line, CancellationToken.None)
+                    : sink.OnStandardOutputLineAsync(line, CancellationToken.None);
+                await notify.ConfigureAwait(false);
+            }
+        }
+
+        return buffer.ToString();
     }
 }
 

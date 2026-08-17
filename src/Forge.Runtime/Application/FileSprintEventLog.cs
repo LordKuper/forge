@@ -504,7 +504,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         string projectRoot,
         SprintId sprintId,
         AttemptId attemptId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        AttemptActivityKind kind = AttemptActivityKind.Heartbeat)
     {
         string directory = SprintDirectory(projectRoot, sprintId);
         Directory.CreateDirectory(directory);
@@ -525,7 +526,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 WorkflowEvent.AttemptActivityRecordedType,
                 new(AggregateKind.Attempt, attemptKey, attemptVersion),
                 "workflow.attempt_activity",
-                new Dictionary<string, string?>(StringComparer.Ordinal));
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.AttemptActivityKindArgument] = WorkflowStateNames.ToSnakeCase(kind),
+                });
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(activity), cancellationToken)
                 .ConfigureAwait(false);
         }

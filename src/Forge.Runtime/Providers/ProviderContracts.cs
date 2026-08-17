@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Forge.Application;
 using Forge.Compiler;
+using Forge.Domain;
 
 namespace Forge.Providers;
 
@@ -206,8 +207,17 @@ public interface ILlmProvider
     /// </summary>
     Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken);
 
-    /// <summary>Runs one bounded, non-interactive prompt and returns its parsed, redacted result.</summary>
-    Task<ProviderRunResult> RunAsync(string prompt, string workingDirectory, CancellationToken cancellationToken);
+    /// <summary>
+    /// Runs one bounded, non-interactive prompt and returns its parsed, redacted result.
+    /// <paramref name="onActivity"/>, when supplied, is invoked once per parsed provider event so
+    /// the caller can record a safe, throttled attempt-activity update (ADR 0006) without this
+    /// contract depending on how or how often that update is persisted.
+    /// </summary>
+    Task<ProviderRunResult> RunAsync(
+        string prompt,
+        string workingDirectory,
+        CancellationToken cancellationToken,
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null);
 }
 
 /// <summary>Aggregates every enabled provider into one toolchain-wide status (ADR 0008: a

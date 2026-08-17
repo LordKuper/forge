@@ -189,9 +189,8 @@ public sealed class ClaudeLlmProviderTests
         string jsonl = ReadFixture("claude-stream-json.jsonl");
         ClaudeLlmProvider provider = CreateProvider(paths, request =>
         {
-            Assert.Equal(
-                ["-p", "--output-format", "stream-json", "--verbose", "--", "say hi"],
-                request.Arguments);
+            Assert.Equal(["-p", "--output-format", "stream-json", "--verbose"], request.Arguments);
+            Assert.Equal("say hi", request.StandardInput);
             return new(0, jsonl, string.Empty);
         });
 
@@ -206,19 +205,19 @@ public sealed class ClaudeLlmProviderTests
         Assert.Equal(ProviderEventKind.Message, result.Events[1].Kind);
         Assert.Equal("Hello world", result.Events[1].Text);
         Assert.Equal(ProviderEventKind.Result, result.Events[2].Kind);
+        Assert.NotNull(result.TerminalResult);
     }
 
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task RunAsyncPassesAPromptStartingWithADoubleDashAfterTheEndOfOptionsMarker()
+    public async Task RunAsyncPassesThePromptOnStandardInputNeverAsACommandLineArgument()
     {
         using TestPaths paths = new();
         WriteClaudeExecutable(paths);
         ClaudeLlmProvider provider = CreateProvider(paths, request =>
         {
-            int separatorIndex = request.Arguments.ToList().IndexOf("--");
-            Assert.True(separatorIndex >= 0 && separatorIndex == request.Arguments.Count - 2);
-            Assert.Equal("--dangerously-skip-permissions", request.Arguments[^1]);
+            Assert.Equal("--dangerously-skip-permissions", request.StandardInput);
+            Assert.DoesNotContain("--dangerously-skip-permissions", request.Arguments);
             return new(0, string.Empty, string.Empty);
         });
 
@@ -226,6 +225,41 @@ public sealed class ClaudeLlmProviderTests
             "--dangerously-skip-permissions",
             "C:\\work",
             TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncFailsClosedWhenNoTerminalResultEventIsEmitted()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, string.Empty, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ProviderFailureKind.MissingTerminalResult, result.Failure);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncFailsClosedWhenTwoTerminalResultEventsAreEmitted()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        string jsonl = """
+            {"type":"result","subtype":"success","result":"first"}
+            {"type":"result","subtype":"success","result":"second"}
+
+            """;
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(ProviderFailureKind.DuplicateTerminalResult, result.Failure);
     }
 
     private static string ReadFixture(string name) => File.ReadAllText(
@@ -279,12 +313,31 @@ public sealed class ClaudeLlmProviderTests
         }
     }
 
+    /// <summary>Simulates the real <c>ProcessRunner</c>'s streaming contract: feeds the stubbed
+    /// response's output to the output sink line by line, the way the actual process pipe reader
+    /// does, so <c>ProviderExecution</c>'s sink-driven parsing sees the same events a real run
+    /// would.</summary>
     private sealed class StubProcessRunner(Func<ProcessRequest, ProcessResult> respond) : IProcessRunner
     {
-        public Task<ProcessResult> RunAsync(ProcessRequest request, CancellationToken cancellationToken)
+        public async Task<ProcessResult> RunAsync(
+            ProcessRequest request, IProcessOutputSink? outputSink, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(respond(request));
+            ProcessResult result = respond(request);
+            if (outputSink is not null)
+            {
+                foreach (string line in result.StandardOutput.Split('\n'))
+                {
+                    await outputSink.OnStandardOutputLineAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+
+                foreach (string line in result.StandardError.Split('\n'))
+                {
+                    await outputSink.OnStandardErrorLineAsync(line, cancellationToken).ConfigureAwait(false);
+                }
+            }
+
+            return result;
         }
     }
 

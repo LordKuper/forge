@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Providers;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -250,7 +251,8 @@ internal sealed class FakeLlmProvider(
     public Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null) =>
         throw new NotSupportedException("This fake only exercises discovery/install orchestration.");
 }
 
