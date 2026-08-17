@@ -22,6 +22,7 @@ Normative architecture decisions and machine contracts live in:
 - [`decisions/0007-cross-platform-core-and-minimal-os-adapters.md`](decisions/0007-cross-platform-core-and-minimal-os-adapters.md)
 - [`decisions/0008-modular-provider-runtime.md`](decisions/0008-modular-provider-runtime.md)
 - [`decisions/0009-forge-document-format.md`](decisions/0009-forge-document-format.md)
+- [`decisions/0010-provider-integration-generation.md`](decisions/0010-provider-integration-generation.md)
 - [`../contracts/v1/`](../contracts/v1/)
 - [`../plans/implementation-plan.md`](../plans/implementation-plan.md)
 
@@ -408,7 +409,10 @@ minimum Forge/protocol versions, the built-in workflow invariants including the
 implementation-first testing order, and no human-only authority. Generated
 instructions describe that order, while Forge Host owns its enforcement.
 Generation and optional installation are idempotent and never overwrite unknown
-user-owned files.
+user-owned files. See
+[`decisions/0010-provider-integration-generation.md`](decisions/0010-provider-integration-generation.md)
+for the canonical-source compiler, the ownership-marker/digest format, and the
+per-vendor generator adapter pattern.
 
 Release, Debug, and tests use `forge`, `forge-dev`, and unique ephemeral instance
 ids respectively. They have distinct IPC endpoints, configuration, logs, caches,

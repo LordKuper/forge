@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Forge.Application;
+using Forge.Compiler;
 
 namespace Forge.Providers;
 
@@ -265,6 +266,43 @@ public interface IProviderReleaseCache
     Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);
 
     Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken);
+}
+
+/// <summary>One generated provider-native integration file's content and metadata (ADR 0010).
+/// <paramref name="SourceDigest"/> and <paramref name="PolicySnapshotHash"/> are copied verbatim
+/// from the <see cref="Forge.Compiler.CanonicalIntegrationSource"/> that produced this artifact —
+/// every provider's artifact for one generation pass shares the same two hashes, since they
+/// describe the canonical source, not this vendor's specific file.</summary>
+public sealed record GeneratedArtifact(
+    ProviderId ProviderId,
+    string RelativePath,
+    string Content,
+    string MediaType,
+    string Audience,
+    string? Language,
+    string SourceDigest,
+    string PolicySnapshotHash,
+    string GeneratorVersion)
+{
+    /// <summary>Drift detection (ADR 0010): content-addressing already gives an exact answer, so
+    /// this is the only comparison needed — unequal digests mean the canonical `.forge/` content
+    /// or resolved policy changed since <paramref name="previousSourceDigest"/> was recorded.</summary>
+    public bool HasDrifted(string previousSourceDigest) =>
+        !string.Equals(SourceDigest, previousSourceDigest, StringComparison.Ordinal);
+}
+
+/// <summary>
+/// Generates one vendor's native integration file from the provider-agnostic
+/// <see cref="Forge.Compiler.CanonicalIntegrationSource"/> (ADR 0010). Each adapter owns exactly
+/// one fact the core must not know: its vendor's well-known instructions-file name and whether
+/// that file embeds the full canonical content or imports it — the same "core knows only the
+/// neutral contract" split ADR 0008 established for <see cref="ILlmProvider"/>.
+/// </summary>
+public interface IProviderIntegrationGenerator
+{
+    ProviderId ProviderId { get; }
+
+    GeneratedArtifact Generate(CanonicalIntegrationSource source);
 }
 
 /// <summary>A held install/update lock lease. Disposing releases it.</summary>

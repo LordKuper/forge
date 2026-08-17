@@ -27,6 +27,9 @@
       Include="..\..\docs\contracts\v1\schemas\forge-document.schema.json"
       LogicalName="Forge.Compiler.Schemas.forge-document.schema.json" />
     <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\generated-artifact.schema.json"
+      LogicalName="Forge.Providers.Schemas.generated-artifact.schema.json" />
+    <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\event.schema.json"
       LogicalName="Forge.Application.Schemas.event.schema.json" />
     <EmbeddedResource
