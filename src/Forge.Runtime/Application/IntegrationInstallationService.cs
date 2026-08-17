@@ -46,9 +46,10 @@ public sealed record IntegrationArtifactResult(
 
 public sealed record IntegrationWriteResult(
     IReadOnlyList<IntegrationArtifactResult> Artifacts,
+    IReadOnlyList<ForgeDocumentError> DocumentErrors,
     string DiagnosticCode)
 {
-    public static IntegrationWriteResult Empty(string diagnosticCode) => new([], diagnosticCode);
+    public static IntegrationWriteResult Empty(string diagnosticCode) => new([], [], diagnosticCode);
 }
 
 /// <summary>
@@ -129,7 +130,10 @@ public sealed class IntegrationInstallationService(IntegrationGenerationService 
             results.Add(new(item.Artifact.ProviderId, item.Artifact.RelativePath, outcome));
         }
 
-        return new(results, anyRefused ? DiagnosticCodes.IntegrationPartiallyRefused : DiagnosticCodes.None);
+        return new(
+            results,
+            inspection.DocumentErrors,
+            anyRefused ? DiagnosticCodes.IntegrationPartiallyRefused : DiagnosticCodes.None);
     }
 
     public async Task<IntegrationWriteResult> RemoveAsync(
@@ -171,7 +175,10 @@ public sealed class IntegrationInstallationService(IntegrationGenerationService 
             results.Add(new(item.Artifact.ProviderId, item.Artifact.RelativePath, outcome));
         }
 
-        return new(results, anyRefused ? DiagnosticCodes.IntegrationPartiallyRefused : DiagnosticCodes.None);
+        return new(
+            results,
+            inspection.DocumentErrors,
+            anyRefused ? DiagnosticCodes.IntegrationPartiallyRefused : DiagnosticCodes.None);
     }
 
     private static async Task<IntegrationArtifactState> InspectFileAsync(
@@ -182,6 +189,15 @@ public sealed class IntegrationInstallationService(IntegrationGenerationService 
         if (!File.Exists(path))
         {
             return IntegrationArtifactState.Missing;
+        }
+
+        if (new FileInfo(path).LinkTarget is not null)
+        {
+            // No legitimate installed integration file is ever a symlink — reading through one
+            // would judge Current/Stale/Foreign against whatever it points at, and writing/deleting
+            // through one would mutate that target instead of a plain file at this path (ADR 0011).
+            // Conservatively foreign, the same as an unrecognized marker.
+            return IntegrationArtifactState.Foreign;
         }
 
         string existing;

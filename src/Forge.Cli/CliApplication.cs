@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Globalization;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Localization;
 using Forge.Providers;
@@ -601,9 +602,24 @@ public static class CliApplication
                     $"  {SurfaceFormatting.IntegrationInspectionRow(inspection)}"));
             }
 
+            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
             return Report(diagnostics, result.DiagnosticCode);
         });
         return command;
+    }
+
+    /// <summary>Surfaces `.forge/rules`/`knowledge` parse failures (ADR 0009) alongside the
+    /// artifact rows, in every output mode — a document error silently degrades what generation
+    /// compiled, and dropping it from plain-text output left a user with no indication why some
+    /// content was missing.</summary>
+    private static void WriteIntegrationDocumentErrors(TextWriter output, IReadOnlyList<ForgeDocumentError> errors)
+    {
+        foreach (ForgeDocumentError error in errors)
+        {
+            output.WriteLine(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  ! {error.RelativePath} {error.DiagnosticCode}"));
+        }
     }
 
     private static Command CreateIntegrationWriteCommand(
@@ -635,6 +651,7 @@ public static class CliApplication
                     $"  {SurfaceFormatting.IntegrationWriteRow(artifact)}"));
             }
 
+            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
             return Report(diagnostics, result.DiagnosticCode);
         });
         return command;

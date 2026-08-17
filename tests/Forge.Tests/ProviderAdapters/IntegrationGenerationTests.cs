@@ -60,6 +60,15 @@ public sealed class IntegrationGenerationTests
         // IntegrationSourceCompiler.Marker), not a hand-rolled copy that can drift from it.
         Assert.Contains($"source_digest={codex.SourceDigest}", claude.Content, StringComparison.Ordinal);
         Assert.Contains($"schema_version={IntegrationSourceCompiler.ContractVersion}", claude.Content, StringComparison.Ordinal);
+
+        // Both files' markers must self-verify (ADR 0011's tamper-detection check) even though
+        // Claude's own body ("@AGENTS.md\n") is nothing like the canonical content its
+        // source_digest cross-references — content_digest is computed over each file's own actual
+        // body, not the shared canonical one.
+        Assert.True(IntegrationSourceCompiler.TryParseSourceDigest(codex.Content, out string? codexParsed));
+        Assert.Equal(codex.SourceDigest, codexParsed);
+        Assert.True(IntegrationSourceCompiler.TryParseSourceDigest(claude.Content, out string? claudeParsed));
+        Assert.Equal(claude.SourceDigest, claudeParsed);
     }
 
     [Fact]

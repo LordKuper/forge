@@ -67,16 +67,42 @@ silently omitting them:
 
 ### Ownership is decided by the marker, not by best-effort heuristics
 
-`IntegrationSourceCompiler.Marker` already embeds `source_digest=sha256:...`
-as the first line of every generated file (ADR 0010). Whether an existing
-file is Forge-owned is decided by parsing that exact prefix back out — a
-paired `IntegrationSourceCompiler.TryParseSourceDigest(content, out digest)`
-sharing the same `MarkerPrefix` constant the writer uses, so the two can
-never drift apart the way `ClaudeIntegrationGenerator`'s hand-rolled marker
-copy briefly did during ADR 0010's own review. A file without a
-recognizable marker is foreign, full stop — there is no secondary heuristic
-(file size, a content snippet, a "looks like ours" guess) that could turn a
-foreign file into a false-Current/Stale read.
+`IntegrationSourceCompiler.Marker` embeds two digests as the first line of
+every generated file (ADR 0010 originally shipped only the first of these;
+review here found the gap the second one closes):
+
+- `source_digest` — which canonical generation produced this file, shared
+  across every provider's artifact from the same pass (ADR 0010's drift
+  detection: compare against a fresh generation's `SourceDigest`).
+- `content_digest` — a digest of *this file's own* actual body (everything
+  after the marker line), computed the same way for every provider. For
+  Codex, whose body *is* the canonical content, this equals `source_digest`.
+  For Claude, whose body is always the fixed string `"@AGENTS.md\n"`
+  regardless of canonical content, it is a fixed value independent of
+  `source_digest` — the two digests measure different things on purpose.
+
+Whether an existing file is Forge-owned is decided by
+`IntegrationSourceCompiler.TryParseSourceDigest(content, out digest)`,
+sharing the same `MarkerPrefix`/field-parsing logic the writer uses so the
+two can never drift apart the way `ClaudeIntegrationGenerator`'s hand-rolled
+marker copy briefly did during ADR 0010's own review. Beyond parsing the
+marker, it recomputes a digest over the file's own *current* body and
+requires it to still equal the embedded `content_digest` — without this
+self-check, a user hand-editing content below an otherwise-untouched marker
+line would be indistinguishable from an unmodified Forge output whenever
+`.forge/` itself happened not to have changed since, and a later
+`install`/`remove` would silently overwrite or delete the edit. A file
+failing either check — no recognizable marker, or a marker whose
+`content_digest` no longer matches — is foreign, full stop; there is no
+secondary heuristic (file size, a content snippet, a "looks like ours"
+guess) that could turn a foreign file into a false-Current/Stale read.
+
+A target path that is itself a symlink is treated the same way — foreign,
+whatever it resolves to — rather than read through, written through, or
+deleted through: no legitimate installed integration file is ever a
+symlink, and `File.ReadAllTextAsync`/`AtomicConfigurationFile.WriteAsync`
+give no other structural guarantee that a symlinked path stays confined to
+the file it appears to name.
 
 ### The install/remove target path is a trusted constant, not untrusted input
 

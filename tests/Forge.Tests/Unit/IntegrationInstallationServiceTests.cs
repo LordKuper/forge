@@ -91,6 +91,77 @@ public sealed class IntegrationInstallationServiceTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task InstallRefusesAFileHandEditedBelowAnOtherwiseIntactMarker()
+    {
+        // The marker's embedded source_digest alone cannot detect this: a user could hand-edit the
+        // body while .forge/ itself stays unchanged, leaving source_digest still matching what a
+        // fresh generation would expect. Only re-verifying content_digest against the file's actual
+        // current body (ADR 0011) catches it — without that check this file would misread as
+        // Current and a later install/remove could silently clobber the user's edit.
+        using TempForgeProject project = new();
+        project.WriteRule("rule.md", Rule("rule", "Rule", "Body."));
+        IntegrationInstallationService service = CreateService();
+        await service.InstallAsync(project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+        string targetPath = Path.Combine(project.Root, ArtifactName);
+        string written = await File.ReadAllTextAsync(targetPath, TestContext.Current.CancellationToken);
+        string tampered = written + "\nHand-added line, marker untouched.";
+        await File.WriteAllTextAsync(targetPath, tampered, TestContext.Current.CancellationToken);
+
+        IntegrationInspectionResult inspection = await service.InspectAsync(
+            project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+        Assert.Equal(IntegrationArtifactState.Foreign, Assert.Single(inspection.Artifacts).State);
+
+        IntegrationWriteResult install = await service.InstallAsync(
+            project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+        Assert.Equal(IntegrationArtifactOutcome.Refused, Assert.Single(install.Artifacts).Outcome);
+        Assert.Equal(tampered, await File.ReadAllTextAsync(targetPath, TestContext.Current.CancellationToken));
+
+        IntegrationWriteResult remove = await service.RemoveAsync(
+            project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+        Assert.Equal(IntegrationArtifactOutcome.Refused, Assert.Single(remove.Artifacts).Outcome);
+        Assert.True(File.Exists(targetPath));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InstallRefusesASymlinkedTargetPath()
+    {
+        using TempForgeProject project = new();
+        string outsideFile = Path.Combine(Path.GetTempPath(), $"forge-integration-outside-{Guid.NewGuid():N}.md");
+        await File.WriteAllTextAsync(outsideFile, "Whatever this contains is irrelevant.", TestContext.Current.CancellationToken);
+        try
+        {
+            string targetPath = Path.Combine(project.Root, ArtifactName);
+            try
+            {
+                File.CreateSymbolicLink(targetPath, outsideFile);
+            }
+            catch (Exception symlinkError) when (symlinkError is UnauthorizedAccessException or IOException)
+            {
+                // Creating a symlink requires elevated privileges or Developer Mode on some Windows
+                // CI runners; the safe-path check under test cannot be exercised there.
+                Assert.Skip("Symlink creation is not permitted in this environment.");
+                return;
+            }
+
+            IntegrationInstallationService service = CreateService();
+
+            IntegrationWriteResult result = await service.InstallAsync(
+                project.Root, [TestProviderId], "en", "en", "0.31.0", TestContext.Current.CancellationToken);
+
+            Assert.Equal(IntegrationArtifactOutcome.Refused, Assert.Single(result.Artifacts).Outcome);
+            Assert.Equal(
+                "Whatever this contains is irrelevant.",
+                await File.ReadAllTextAsync(outsideFile, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            File.Delete(outsideFile);
+        }
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task RemoveDeletesAForgeOwnedArtifact()
     {
         using TempForgeProject project = new();
