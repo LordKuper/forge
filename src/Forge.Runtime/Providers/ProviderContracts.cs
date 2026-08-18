@@ -62,6 +62,16 @@ public static class ProviderDiagnosticCodes
     /// <see cref="ProviderToolchainStatus.Providers"/> — never by <see cref="ILlmProvider"/> itself,
     /// since a disabled provider is never probed.</summary>
     public const string Disabled = "provider_disabled";
+
+    /// <summary>ADR 0006: "The durable outcome distinguishes provider_idle_timeout,
+    /// provider_session_timeout, user cancellation, and ordinary provider failure." Produced when
+    /// an <see cref="Forge.Application.AttemptSupervisor"/>'s idle deadline fires -- reserved in
+    /// `docs/contracts/v1/README.md` since Stage 8, implemented here.</summary>
+    public const string IdleTimeout = "provider_idle_timeout";
+
+    /// <summary>See <see cref="IdleTimeout"/>; produced when the absolute session deadline fires
+    /// instead.</summary>
+    public const string SessionTimeout = "provider_session_timeout";
 }
 
 /// <summary>

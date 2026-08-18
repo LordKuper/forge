@@ -232,6 +232,224 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    /// <summary>ADR 0006: "Windows, Linux, and macOS tests launch a child and grandchild and prove
+    /// none survives cancellation, timeout, or normal parent exit." Cross-platform per ADR 0007.
+    /// Each process writes its own process id to a marker file (rather than relying on file-lock
+    /// semantics, which differ enough across platforms to be a weaker cross-platform proof) so the
+    /// test can positively confirm both are gone afterward, not merely infer it.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild()
+    {
+        string directory = CreateTestDirectory();
+        try
+        {
+            string childPidPath = Path.Combine(directory, "child.pid");
+            string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
+            string readyPath = Path.Combine(directory, "ready");
+            (string fileName, string[] arguments) = TreeSpawningCommand(
+                directory, childPidPath, grandchildPidPath, readyPath, sleepSeconds: 30);
+
+            ProcessRunner runner = new();
+            using CancellationTokenSource cancellation = new();
+            Task<ProcessResult> run = runner.RunAsync(new(fileName, arguments, directory), null, cancellation.Token);
+
+            await WaitForFileAsync(readyPath);
+            int childPid = await ReadPidAsync(childPidPath);
+            int grandchildPid = await ReadPidAsync(grandchildPidPath);
+            // The one assertion that would have caught either shape of the "same process twice"
+            // bug this test regresses against (a POSIX `$$`-in-subshell quirk, then a POSIX
+            // exec-in-tail-position quirk): a genuine grandchild never shares the child's pid.
+            Assert.NotEqual(childPid, grandchildPid);
+            Assert.True(IsProcessAlive(childPid), "The child process should still be running before cancellation.");
+            Assert.True(
+                IsProcessAlive(grandchildPid), "The grandchild process should still be running before cancellation.");
+            // Captured while confirmed alive, so death can be verified against this exact process
+            // instance rather than merely an OS-reassignable pid.
+            DateTime childStartedAt = GetProcessStartTimeUtc(childPid);
+            DateTime grandchildStartedAt = GetProcessStartTimeUtc(grandchildPid);
+
+            cancellation.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+
+            await AssertProcessDiesAsync(childPid, childStartedAt);
+            await AssertProcessDiesAsync(grandchildPid, grandchildStartedAt);
+        }
+        finally
+        {
+            await DeleteDirectoryAsync(directory);
+        }
+    }
+
+    /// <summary>The companion baseline to the cancellation test above: a well-behaved parent that
+    /// waits for its own grandchild before exiting leaves nothing running once `RunAsync` returns
+    /// normally -- no cancellation or forced kill involved at all.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task NormalParentExitLeavesNoOrphanedGrandchildRunning()
+    {
+        string directory = CreateTestDirectory();
+        try
+        {
+            string childPidPath = Path.Combine(directory, "child.pid");
+            string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
+            string readyPath = Path.Combine(directory, "ready");
+            // No sleep: both processes exit on their own almost immediately, and the parent script
+            // waits for the grandchild before it exits.
+            (string fileName, string[] arguments) = TreeSpawningCommand(
+                directory, childPidPath, grandchildPidPath, readyPath, sleepSeconds: 0);
+
+            ProcessRunner runner = new();
+            ProcessResult result = await runner.RunAsync(
+                new(fileName, arguments, directory), null, TestContext.Current.CancellationToken);
+
+            Assert.Equal(0, result.ExitCode);
+            int childPid = await ReadPidAsync(childPidPath);
+            int grandchildPid = await ReadPidAsync(grandchildPidPath);
+            Assert.NotEqual(childPid, grandchildPid);
+            await AssertProcessDiesAsync(childPid);
+            await AssertProcessDiesAsync(grandchildPid);
+        }
+        finally
+        {
+            await DeleteDirectoryAsync(directory);
+        }
+    }
+
+    private static string CreateTestDirectory()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-process-tree-tests-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    /// <summary>Builds a per-OS command that: writes the running (child) process's own id to
+    /// <paramref name="childPidPath"/>, spawns a grandchild that writes its own id to
+    /// <paramref name="grandchildPidPath"/> and then signals <paramref name="readyPath"/>, and has
+    /// both processes sleep for <paramref name="sleepSeconds"/> (0 for an immediate, well-behaved
+    /// exit -- the parent script still waits for the grandchild before exiting itself). The
+    /// grandchild's own PowerShell script is written to a `.ps1` file (rather than nested inline in
+    /// the parent's `-Command` string) so its own single-quoted path literals never have to be
+    /// re-escaped to survive being embedded inside the parent script's own quoting.</summary>
+    private static (string FileName, string[] Arguments) TreeSpawningCommand(
+        string directory, string childPidPath, string grandchildPidPath, string readyPath, int sleepSeconds)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            string grandchildScriptPath = Path.Combine(directory, "grandchild.ps1");
+            string grandchildScript = string.Join(
+                Environment.NewLine,
+                $"[IO.File]::WriteAllText('{grandchildPidPath}', $PID)",
+                $"[IO.File]::WriteAllText('{readyPath}','ready')",
+                sleepSeconds > 0 ? $"Start-Sleep -Seconds {sleepSeconds}" : string.Empty);
+            File.WriteAllText(grandchildScriptPath, grandchildScript);
+
+            string parentScript =
+                $"[IO.File]::WriteAllText('{childPidPath}', $PID); " +
+                "$grandchild = Start-Process powershell.exe " +
+                $"-ArgumentList '-NoProfile','-File','{grandchildScriptPath}' " +
+                "-WindowStyle Hidden -PassThru; " +
+                (sleepSeconds > 0
+                    ? $"Start-Sleep -Seconds {sleepSeconds}"
+                    : "$grandchild.WaitForExit()");
+            return ("powershell.exe", ["-NoProfile", "-Command", parentScript]);
+        }
+
+        // `$$` inside a `(...)` subshell still reports the *invoking* shell's own pid in POSIX
+        // sh/dash/bash, not the subshell's -- it is fixed at shell startup, not re-evaluated per
+        // fork. Spawning the grandchild as a genuinely separate `sh` invocation (its own process,
+        // exec'd fresh) is what gives it its own, correctly-reported `$$`; a script file sidesteps
+        // nested-quoting the same way the Windows `.ps1` file does above.
+        string posixGrandchildScriptPath = Path.Combine(directory, "grandchild.sh");
+        string posixGrandchildScript = string.Join(
+            "\n",
+            $"echo $$ > '{grandchildPidPath}'",
+            $"touch '{readyPath}'",
+            sleepSeconds > 0 ? $"sleep {sleepSeconds}" : "true");
+        File.WriteAllText(posixGrandchildScriptPath, posixGrandchildScript);
+
+        // Never a bare trailing `sh '<script>'` with nothing after it: several POSIX shells
+        // (including dash and bash's script-final-command path) replace the current process image
+        // in place (`exec`) for a simple command in tail position, so the "grandchild" would
+        // become the *same* process as the parent instead of a genuine child of it -- silently
+        // testing one process twice. Backgrounding with `&` always forks, never exec-replaces, so
+        // both branches use it; the no-sleep branch adds `wait` to still block for it.
+        string posixScript = sleepSeconds > 0
+            ? $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}' & sleep {sleepSeconds}"
+            : $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}' & wait";
+        return ("/bin/sh", ["-c", posixScript]);
+    }
+
+    private static async Task WaitForFileAsync(string path)
+    {
+        for (int attempt = 0; attempt < 100 && !File.Exists(path); attempt++)
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.True(File.Exists(path), $"'{path}' was never created.");
+    }
+
+    private static async Task<int> ReadPidAsync(string path)
+    {
+        string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+        return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    private static bool IsProcessAlive(int processId)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited;
+        }
+        catch (Exception error) when (
+            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    private static DateTime GetProcessStartTimeUtc(int processId)
+    {
+        using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
+        return process.StartTime.ToUniversalTime();
+    }
+
+    /// <summary>Matches on start time too, not just the pid alone: an OS can reassign a just-freed
+    /// pid to an unrelated process before this check runs, which a pid-only liveness check would
+    /// misreport as "still alive."</summary>
+    private static bool IsSameProcessStillAlive(int processId, DateTime expectedStartTimeUtc)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited && process.StartTime.ToUniversalTime() == expectedStartTimeUtc;
+        }
+        catch (Exception error) when (
+            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>When <paramref name="expectedStartTimeUtc"/> is supplied (the process was
+    /// previously confirmed alive at that instant), death is checked against that exact process
+    /// instance rather than the pid alone -- see <see cref="IsSameProcessStillAlive"/>.</summary>
+    private static async Task AssertProcessDiesAsync(int processId, DateTime? expectedStartTimeUtc = null)
+    {
+        bool StillAlive() => expectedStartTimeUtc is { } startTime
+            ? IsSameProcessStillAlive(processId, startTime)
+            : IsProcessAlive(processId);
+
+        for (int attempt = 0; attempt < 100 && StillAlive(); attempt++)
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.False(StillAlive(), $"Process {processId} should no longer be running.");
+    }
+
     private sealed class RecordingSink : IProcessOutputSink
     {
         public List<string> StandardOutputLines { get; } = [];

@@ -1,0 +1,240 @@
+using System.Diagnostics;
+using Forge.Domain;
+
+namespace Forge.Application;
+
+/// <summary>ADR 0006: "The durable outcome distinguishes provider_idle_timeout,
+/// provider_session_timeout, user cancellation, and ordinary provider failure."</summary>
+public enum AttemptTerminationReason
+{
+    /// <summary>Neither deadline fired and the caller's own token was never cancelled; whatever
+    /// outcome the supervised work itself produced (success or an ordinary provider failure)
+    /// stands as-is.</summary>
+    None,
+    IdleTimeout,
+    SessionTimeout,
+    Cancelled,
+}
+
+/// <summary><paramref name="Value"/> is only meaningful when <paramref name="Reason"/> is
+/// <see cref="AttemptTerminationReason.None"/> -- the supervised work completed (successfully or
+/// not) on its own. Any other reason means the work was forcibly cancelled mid-flight and its own
+/// result (if it produced one at all) is not the authoritative outcome; <paramref name="Reason"/>
+/// is.</summary>
+public sealed record AttemptSupervisionResult<T>(AttemptTerminationReason Reason, T? Value);
+
+/// <summary>
+/// ADR 0006's two frozen per-attempt deadlines: "an absolute session deadline and an idle
+/// deadline. Any bounded stream activity resets the idle deadline; model wording does not...
+/// Cancellation or either deadline terminates the entire owned process tree." The actual
+/// process-tree termination is already <see cref="Forge.Infrastructure.ProcessRunner"/>'s own
+/// `Process.Kill(entireProcessTree: true)`, reached the same way any other cancellation reaches
+/// it: through <see cref="Token"/>. This class only decides *why* a run was terminated, distinctly
+/// from an ordinary provider failure that never involved either deadline or the caller's own
+/// cancellation -- first cause wins.
+/// </summary>
+public sealed class AttemptSupervisor : IDisposable
+{
+    /// <summary><see cref="Timer"/>'s due time is internally a `uint` millisecond count, capped
+    /// just under `uint.MaxValue` -- a deadline above this throws from inside the constructor
+    /// after other disposable resources already exist, which would otherwise leak them.</summary>
+    private static readonly TimeSpan MaxTimerDueTime = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
+    private readonly object gate = new();
+    private readonly CancellationTokenSource linkedCancellation;
+    private readonly CancellationTokenRegistration callerRegistration;
+    private readonly Timer sessionTimer;
+    private readonly Timer idleTimer;
+    private readonly TimeSpan idleDeadline;
+    private long lastActivityTimestamp;
+    private AttemptTerminationReason reason = AttemptTerminationReason.None;
+    private bool disposed;
+
+    public AttemptSupervisor(TimeSpan sessionDeadline, TimeSpan idleDeadline, CancellationToken cancellationToken)
+    {
+        // Validated before any disposable resource is created: a rejected constructor must leak
+        // nothing.
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(sessionDeadline, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(idleDeadline, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(sessionDeadline, MaxTimerDueTime);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(idleDeadline, MaxTimerDueTime);
+
+        this.idleDeadline = idleDeadline;
+        lastActivityTimestamp = Stopwatch.GetTimestamp();
+        // Deliberately a standalone source, not `CreateLinkedTokenSource(cancellationToken)`:
+        // that would register its own internal propagation callback on `cancellationToken`
+        // *before* `callerRegistration` below, so the caller-cancellation classification would
+        // depend on which of the two registered callbacks the BCL happens to invoke first (an
+        // undocumented ordering detail) rather than on this class's own code. `callerRegistration`
+        // alone already fully propagates caller cancellation into `Token`, and does so with the
+        // latch-then-cancel ordering `FireUnderLock` guarantees explicitly.
+        linkedCancellation = new CancellationTokenSource();
+        callerRegistration = cancellationToken.Register(() => FireUnderLock(AttemptTerminationReason.Cancelled));
+        sessionTimer = new Timer(
+            _ => FireUnderLock(AttemptTerminationReason.SessionTimeout),
+            null, sessionDeadline, Timeout.InfiniteTimeSpan);
+        // Self-rescheduling rather than reset-via-Change from OnActivityAsync: a `Timer.Change`
+        // call can never recall a callback the runtime has already dispatched, so resetting on
+        // every activity would still leave a window where activity arriving right as the timer
+        // fires produces a spurious idle timeout. Re-deriving the remaining time from an
+        // authoritative last-activity timestamp on every tick closes that window instead of
+        // merely narrowing it. Created disarmed and armed only after the `idleTimer` field is
+        // fully assigned: `CheckIdle` (the callback) reads that same field, so starting the
+        // countdown as part of construction itself would risk the callback observing an
+        // unpublished field if it ever fired before the assignment completed.
+        idleTimer = new Timer(_ => CheckIdle(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        idleTimer.Change(idleDeadline, Timeout.InfiniteTimeSpan);
+    }
+
+    /// <summary>The token to hand to the supervised work in place of the caller's own token.
+    /// Cancelling the caller's token also cancels this one, through <see cref="callerRegistration"/>
+    /// -- a genuinely cancellation-aware piece of work needs only ever look at this single token.
+    /// <see cref="LatchAndCancel"/> calls <see cref="CancellationTokenSource.Cancel()"/> while
+    /// holding <see cref="gate"/>, which synchronously runs every callback registered on this
+    /// token (including ones registered by the supervised work itself, or by anything further
+    /// linked to it): a callback that calls back into <see cref="Dispose"/> from that same thread
+    /// would reenter this class mid-`Cancel()` -- reentering <see cref="gate"/> itself is safe
+    /// (`lock` is per-thread reentrant), but disposing <see cref="linkedCancellation"/> while its
+    /// own `Cancel()` is still unwinding is not a pattern any registration on this token should
+    /// rely on.</summary>
+    public CancellationToken Token => linkedCancellation.Token;
+
+    /// <summary><see cref="AttemptTerminationReason.None"/> until a deadline fires or the caller's
+    /// token is cancelled; latched permanently to whichever cause happened first.</summary>
+    public AttemptTerminationReason Reason
+    {
+        get
+        {
+            lock (gate)
+            {
+                return reason;
+            }
+        }
+    }
+
+    /// <summary>Pass as the supervised work's activity callback (e.g. `ILlmProvider.RunAsync`'s
+    /// `onActivity`): "any bounded stream activity resets the idle deadline" -- every parsed
+    /// provider event, regardless of kind, counts; this deliberately never inspects
+    /// <paramref name="kind"/> or any event text, matching "model wording does not" reset it. A
+    /// single atomic timestamp write, never blocked by (or blocking) the timer lock.</summary>
+    public Task OnActivityAsync(AttemptActivityKind kind, CancellationToken cancellationToken)
+    {
+        Interlocked.Exchange(ref lastActivityTimestamp, Stopwatch.GetTimestamp());
+        return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="work"/> with <see cref="Token"/> and <see cref="OnActivityAsync"/>,
+    /// translating a cancellation this supervisor itself caused (either deadline, or the caller's
+    /// own token) into a classified result instead of letting <see cref="OperationCanceledException"/>
+    /// propagate -- the same self-cancellation pattern <see cref="Forge.Providers.ProviderExecution"/>
+    /// already uses for its own bound violations. Classification keys on <see cref="Reason"/> alone,
+    /// not on matching the thrown exception's own
+    /// <see cref="OperationCanceledException.CancellationToken"/> against <see cref="Token"/>: a
+    /// well-behaved callee legitimately re-links <see cref="Token"/> into its own nested
+    /// <see cref="CancellationTokenSource"/> (exactly what `ProviderExecution.RunAsync` -- this
+    /// class's own primary intended caller -- does), so the exception that actually escapes almost
+    /// never carries <see cref="Token"/> itself, only a descendant of it. Requiring exact identity
+    /// (an earlier version of this method did) made every real deadline throw uncaught instead of
+    /// classifying, since the one caller this class exists for never satisfies it. The residual
+    /// risk -- a callee that throws an unrelated cancellation coincidentally while
+    /// <see cref="Reason"/> happens to already be latched -- is accepted as lower-severity than
+    /// silently failing the primary use case entirely.
+    /// </summary>
+    public async Task<AttemptSupervisionResult<T>> SuperviseAsync<T>(
+        Func<CancellationToken, Func<AttemptActivityKind, CancellationToken, Task>, Task<T>> work)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+        try
+        {
+            T value = await work(Token, OnActivityAsync).ConfigureAwait(false);
+            return new(Reason, value);
+        }
+        catch (OperationCanceledException) when (Reason != AttemptTerminationReason.None)
+        {
+            return new(Reason, default);
+        }
+    }
+
+    private void CheckIdle()
+    {
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            TimeSpan elapsed = Stopwatch.GetElapsedTime(Interlocked.Read(ref lastActivityTimestamp));
+            TimeSpan remaining = idleDeadline - elapsed;
+            if (remaining <= TimeSpan.Zero)
+            {
+                LatchAndCancel(AttemptTerminationReason.IdleTimeout);
+                return;
+            }
+
+            idleTimer.Change(remaining, Timeout.InfiniteTimeSpan);
+        }
+    }
+
+    /// <summary>Acquires <see cref="gate"/> for the whole check-disposed-then-cancel sequence, so
+    /// this can never run concurrently with <see cref="Dispose"/> disposing
+    /// <see cref="linkedCancellation"/> out from under it -- a
+    /// <see cref="CancellationTokenSource"/> otherwise documents concurrent
+    /// <c>Cancel</c>/<c>Dispose</c> as unsupported.</summary>
+    private void FireUnderLock(AttemptTerminationReason candidate)
+    {
+        lock (gate)
+        {
+            if (!disposed)
+            {
+                LatchAndCancel(candidate);
+            }
+        }
+    }
+
+    /// <summary>Must run under <see cref="gate"/>.</summary>
+    private void LatchAndCancel(AttemptTerminationReason candidate)
+    {
+        if (reason == AttemptTerminationReason.None)
+        {
+            reason = candidate;
+        }
+
+        try
+        {
+            linkedCancellation.Cancel();
+        }
+        catch (Exception)
+        {
+            // Token is public: an arbitrary third-party registration on it (or on a token further
+            // linked to it) throwing must never crash this timer callback -- this supervisor's own
+            // job here is only to signal cancellation, not to own every other registration's
+            // behavior.
+        }
+    }
+
+    public void Dispose()
+    {
+        lock (gate)
+        {
+            if (disposed)
+            {
+                return;
+            }
+
+            disposed = true;
+            // `Unregister`, not `Dispose`, on the registration: `CancellationTokenRegistration
+            // .Dispose()` blocks until any concurrently-executing callback finishes -- but that
+            // callback is `FireUnderLock`, itself blocked waiting for this very `gate` we are
+            // holding right now, which would deadlock. `Unregister` does not wait, and no wait is
+            // needed here: `FireUnderLock`/`CheckIdle` both re-check `disposed` immediately after
+            // acquiring `gate`, so once they can finally proceed (after this method releases the
+            // lock) they will see `disposed == true` and touch nothing below.
+            callerRegistration.Unregister();
+            sessionTimer.Dispose();
+            idleTimer.Dispose();
+            linkedCancellation.Dispose();
+        }
+    }
+}
