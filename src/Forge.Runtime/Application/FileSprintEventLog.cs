@@ -557,6 +557,20 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
+
+            // An attempt is superseded at most once (it is terminal-cancelled by the same call that
+            // requests this), so a second call for the same attempt id is always a replay of the
+            // first, not a distinct supersession -- recorded once, here, rather than by an
+            // idempotency key the caller would otherwise have to thread through. Skipping the append
+            // outright (instead of comparing instruction text) means the durably recorded instruction
+            // is always whichever one actually won the race to append first, never silently
+            // overwritten by a replay that happens to carry different text.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptSupersededType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
             long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
             WorkflowEvent superseded = new(
                 Guid.NewGuid(),

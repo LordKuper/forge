@@ -49,6 +49,23 @@ with no execution profile (Intake, Confirmation, TestWork, Finalization,
 HumanApproval, Generic) skip the check entirely, matching how they were
 already exempt from every other profile-driven behavior.
 
+An independent review round found that consulting the ledger on *every*
+attempt start — including a node's very first one — turns
+`RoutingLedger.DefaultRetryBudget` into an unrecoverable lifetime cap on
+ordinary sprint progress: `BuildBudget` (Stage 8's own tested contract)
+consumes one unit per `Routed` decision and had refunded only `Excluded`
+(auth/policy) failures, never a success. A sprint with more model-bearing
+nodes and review iterations than the budget has units — entirely ordinary
+usage — would permanently exhaust it with no caller wiring left to clear it,
+since ADR 0006 frames the budget around bounding retry/deferral loops, not
+capping total one-pass throughput. The fix keeps the ledger consulted on
+every attempt (so `DeferAttemptAsync` always has a `Routed` decision to defer
+against, including on a first attempt) and instead has `CompleteAttemptAsync`
+refund the unit on a genuinely new success (see below) — `BuildBudget` now
+treats `Succeeded` the same as `Excluded`. Caught by a new regression test
+(`CompleteAttemptAsyncRefundsTheRoutingBudgetOnSuccessSoOrdinaryProgressNeverExhaustsIt`)
+before it could reach a real caller.
+
 ### `DeferAttemptAsync` is the rate-limit-abandonment path
 
 New `SprintScheduler.DeferAttemptAsync(projectRoot, sprintId, nodeId,
@@ -81,6 +98,16 @@ fallback policy" half of ADR 0006's `resume_not_before` sentence —
 a real per-provider reset time from provider output is deferred to whichever
 future executor actually parses provider responses.
 
+Review also found that `RecordDeferralAsync` ran *before* the
+`CompleteAttemptAsync` call it rides on, so a completion that failed for a
+reason `DeferAttemptAsync`'s own checks do not already cover (a node/attempt
+version conflict, an illegal transition) still left the durable routing
+block in place for an attempt that was never actually abandoned. Fixed by
+recording the deferral only after `CompleteAttemptAsync` reports success,
+covered by a new regression test
+(`DeferAttemptAsyncDoesNotRecordADeferralWhenTheUnderlyingCompletionFails`
+via `FlakySprintStore`).
+
 ### `SupersedeAttemptAsync` cancels, links, and re-arms in one call
 
 New `SprintScheduler.SupersedeAttemptAsync(projectRoot, sprintId, attemptId,
@@ -101,7 +128,18 @@ non-transition `AttemptSuperseded` event carrying the bounded instruction
 `AppendAttemptActivityAsync`'s own pattern — validated in
 `WorkflowFold.IsTransitionRecord` to require the instruction argument and
 never itself projected into a snapshot field, matching how
-`AttemptActivityRecordedType` is handled); creates a fresh attempt at the
+`AttemptActivityRecordedType` is handled). An attempt can be superseded at
+most once — it is terminal-`cancelled` by the same call — so
+`AppendAttemptSupersededAsync` itself is idempotent by attempt id: a second
+call for the same attempt is always a replay, recognized by whether an
+`AttemptSuperseded` event for that attempt already exists, and skipped
+outright rather than appended again. Review found the earlier, unconditional
+append meant a replay carrying different instruction text (a caller bug, but
+nothing prevented it) silently produced a second, contradictory record; the
+durably recorded instruction is now always whichever one actually won the
+race to append first — caught by a new regression test
+(`SupersedeAttemptAsyncReplayWithDifferentInstructionTextKeepsTheOriginallyRecordedInstruction`).
+It then creates a fresh attempt at the
 node's next deterministic attempt id, carrying `SupersedesAttemptId` (the
 new linkage) and, when the superseded attempt recorded one, the same
 `BaseCommit` ("creates a fresh attempt for the same node from the superseded
@@ -140,13 +178,31 @@ pre-supersession snapshot expected. Checking the caller's stale
 `expectedAttemptVersion` against that already-advanced state before
 recognizing the replay would reject a genuine retry with `SuggestionStale`,
 defeating resumability. The fix, mirroring `ResolveHumanGateAsync`'s own
-documented pattern: an `alreadySuperseded` check (target attempt is
-`Cancelled` and some other attempt records it as `SupersedesAttemptId`) runs
-*before* the version/terminal checks; when true, those checks are skipped
-entirely and the call falls straight through to the store's own
-idempotency-key-based replay detection in `AppendTransitionAsync`, which
-correctly short-circuits the cancel transition as already-applied. This was
-also found by a failing test before it could reach a real caller.
+documented pattern: an `alreadySuperseded` check runs *before* the
+version/terminal checks; when true, those checks are skipped entirely and
+the call falls straight through to the store's own idempotency-key-based
+replay detection in `AppendTransitionAsync`, which correctly short-circuits
+the cancel transition as already-applied (or legitimately rejects a
+different, non-replay call against an already-`cancelled` attempt as an
+illegal `cancelled -> cancelled` transition — either way, correctly). This
+was found by a failing test before it could reach a real caller.
+
+`alreadySuperseded` deliberately checks only `attempt.State ==
+AttemptState.Cancelled`, not also "and a replacement attempt already
+exists." A first review round used the stricter combined check; a second,
+adversarial round found it still left a gap: a retry landing between the
+cancel transition and replacement creation (the exact durable state a crash
+right there would leave) saw the attempt already `Cancelled` but no
+replacement yet, so the stricter check evaluated to false, fell into the
+version/terminal pre-check, and was rejected with `SuggestionStale` against
+a version the attempt had already legitimately moved past — the node stuck
+`running` with a `cancelled` attempt and no way to finish short of aborting
+the sprint. Checking `Cancelled` alone closes this: the append below is safe
+to call unconditionally either way, since a genuine replay short-circuits
+inside the store before any version check runs, and a call this permissive
+check lets through for the wrong reason still lands on an illegal
+transition there. Caught by a new regression test
+(`SupersedeAttemptAsyncResumesAfterACrashBetweenCancellationAndReplacementCreation`).
 
 ### Deliberately deferred
 
@@ -167,12 +223,16 @@ also found by a failing test before it could reach a real caller.
   command surfaces expose `attempt.supersede` and to whom), not a scheduler
   concern — `SprintScheduler` exposes the primitive; P11.56-P11.66 (CLI/TUI
   commands) is where a human-only gate on this specific command belongs.
-- **`RecordOutcomeAsync`/circuit-breaker wiring for ordinary completions.**
-  `StartAttemptAsync` only calls `RoutingLedger.DecideAsync` (budget/circuit
-  admission) and `DeferAttemptAsync` only calls `RecordDeferralAsync`.
-  Recording ordinary success/failure outcomes into the ledger's health
-  tracking is a separate concern from rate-limit deferral and was not
-  required to make deferral itself durable or budget-bounded.
+- **Circuit-breaker wiring for ordinary failures.** `CompleteAttemptAsync`
+  calls `RecordOutcomeAsync(succeeded: true, ...)` on a genuinely new success
+  (required to keep the shared budget from becoming a lifetime cap, see
+  above), but an ordinary failure completion still does not call
+  `RecordOutcomeAsync(succeeded: false, ...)` — only `DeferAttemptAsync`'s
+  own `RecordDeferralAsync` records anything for a failure, and it
+  deliberately never trips the breaker (a rate limit says nothing about
+  provider health). Feeding ordinary, non-rate-limit failures into the
+  breaker is a separate concern from durable rate-limit deferral and budget
+  sanity, both of which this item now fully covers without it.
 
 ## Consequences
 
@@ -188,6 +248,15 @@ also found by a failing test before it could reach a real caller.
   item in ADR 0017.
 - `attempt.supersede`'s reserved event pair (`AttemptSuperseded`,
   `AttemptChanged`) is now implemented exactly as reserved.
+- The five new diagnostic codes this item adds are registered in
+  `docs/contracts/v1/README.md`'s diagnostics/exit-code table, per this
+  repo's existing precedent for every prior new code. `Forge.Cli.ExitCodes.For`
+  does not yet map any of them to a specific exit category (they fall
+  through to `internal_error`) — this gap already predates this item for
+  several other registered codes (`workflow_blocked`,
+  `review_iteration_limit`, `review_repeated_findings`, `attempt_terminal`,
+  and others), so closing it project-wide is left out of this item's scope
+  rather than fixed piecemeal for only the five codes added here.
 
 ## References
 

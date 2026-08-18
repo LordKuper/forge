@@ -80,6 +80,72 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
     // advance real wall-clock time past each one's DefaultRateLimitBackoff between iterations,
     // which the clock this scheduler is wired to in these tests cannot do.
 
+    /// <summary>Regression: an earlier version consulted <c>RoutingLedger</c> on every attempt start
+    /// but never refunded a successful one, turning the shared 10-unit budget into an unrecoverable
+    /// lifetime cap on ordinary progress (proven here with more model-bearing nodes than the budget
+    /// has units, each of which starts and completes cleanly on its first attempt).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CompleteAttemptAsyncRefundsTheRoutingBudgetOnSuccessSoOrdinaryProgressNeverExhaustsIt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        int nodeCount = RoutingLedger.DefaultRetryBudget + 2;
+        List<NodeDefinition> graph = [];
+        for (int i = 0; i < nodeCount; i++)
+        {
+            graph.Add(new($"n{i}", NodeKind.Work, [], NodeRole.Implementation));
+        }
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: graph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        for (int i = 0; i < nodeCount; i++)
+        {
+            string nodeId = $"n{i}";
+            StartAttemptResult started = await scheduler.StartAttemptAsync(
+                environment.ProjectRoot, sprintId, nodeId, 2, cancellationToken);
+            Assert.True(started.Succeeded, $"node {nodeId} failed to start: {started.DiagnosticCode}");
+            CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
+                environment.ProjectRoot, sprintId, nodeId, started.AttemptId!, true, SampleDigest, [], [],
+                cancellationToken);
+            Assert.True(completed.Succeeded, $"node {nodeId} failed to complete: {completed.DiagnosticCode}");
+        }
+    }
+
+    /// <summary>Regression: an earlier version recorded the durable routing deferral before
+    /// confirming the completion it rides on actually succeeded, so a completion that failed for an
+    /// unrelated reason still left the provider/model key blocked.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DeferAttemptAsyncDoesNotRecordADeferralWhenTheUnderlyingCompletionFails()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ImplementationNodeGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded);
+
+        store.FailAt[store.AppendCount + 1] = AppendOutcome.Conflict;
+
+        CompleteAttemptResult result = await scheduler.DeferAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, SampleDigest, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        IReadOnlyList<RouteDecision> decisions =
+            await store.GetRouteDecisionsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.DoesNotContain(decisions, decision => decision.Outcome == RouteOutcome.Deferred);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SupersedeAttemptAsyncRequiresConfirmation()
@@ -224,6 +290,74 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         // Still exactly one replacement attempt -- a replay never creates a second one.
         Assert.Single(finalState.Attempts.Values, candidate => candidate.Id != attempt.Id);
+    }
+
+    /// <summary>Regression: an earlier version only recognized a replay once the fresh replacement
+    /// attempt already existed, so a retry landing between the cancel transition and replacement
+    /// creation (the exact durable state a crash right there would leave) fell through to the
+    /// stale-version pre-check instead — the attempt was stuck `cancelled` under a `running` node
+    /// with no way to finish, short of aborting the sprint.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncResumesAfterACrashBetweenCancellationAndReplacementCreation()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Guid key = SprintScheduler.SupersedeAttemptKey(sprintId, attempt);
+
+        // The exact append `SupersedeAttemptAsync` itself would make first -- simulating a crash
+        // right after it durably landed, before anything else in that call ran.
+        AppendOutcome cancelOutcome = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Attempt, attempt.Id.Value.ToString("D"), "AttemptChanged",
+            "workflow.attempt_superseded", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled), attempt.Version,
+            key, cancellationToken);
+        Assert.True(cancelOutcome.Succeeded);
+
+        CompleteAttemptResult resumed = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Try a different approach.", cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, resumed.Node!.State);
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot fresh = Assert.Single(finalState.Attempts.Values, candidate => candidate.Id != attempt.Id);
+        Assert.Equal(attempt.Id, fresh.SupersedesAttemptId);
+    }
+
+    /// <summary>Regression: an earlier version appended a new <c>AttemptSuperseded</c> event on every
+    /// call, so a replay carrying different instruction text (a caller bug, but nothing prevented
+    /// it) silently produced a second, contradictory record instead of being ignored like every
+    /// other part of a replayed call.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReplayWithDifferentInstructionTextKeepsTheOriginallyRecordedInstruction()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Guid key = SprintScheduler.SupersedeAttemptKey(sprintId, attempt);
+
+        CompleteAttemptResult first = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Original instruction.", cancellationToken);
+        Assert.True(first.Succeeded);
+
+        CompleteAttemptResult second = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Different instruction text.", cancellationToken);
+        Assert.True(second.Succeeded);
+
+        IReadOnlyList<WorkflowEvent> events =
+            await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        WorkflowEvent supersededEvent = Assert.Single(
+            events,
+            item => item.Type == WorkflowEvent.AttemptSupersededType &&
+                item.Aggregate.Id == attempt.Id.Value.ToString("D"));
+        Assert.Equal(
+            "Original instruction.", supersededEvent.Arguments[WorkflowEvent.SupersessionInstructionArgument]);
     }
 
     private static async Task<(SprintScheduler Scheduler, ISprintStore Store, SprintId SprintId, AttemptSnapshot Attempt)>

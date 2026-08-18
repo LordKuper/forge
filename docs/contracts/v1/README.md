@@ -36,6 +36,7 @@ gate on workstations and CI.
 |---:|---|---|---|
 | 0 | success | `ok` | Command completed |
 | 2 | usage | `invalid_arguments` | Syntax or validation error |
+| 2 | usage | `supersession_instruction_too_long` | Supersession instruction exceeds the maximum bounded length |
 | 3 | configuration | `configuration_scope_violation` | Key belongs to another scope |
 | 4 | project | `project_not_initialized` | Confirmed root lacks valid `.forge/` |
 | 5 | platform | `platform_not_supported` | No registered platform strategy |
@@ -47,6 +48,7 @@ gate on workstations and CI.
 | 7 | provider | `provider_authentication_check_failed` | Provider authentication probe itself failed |
 | 7 | provider | `integration_language_unsupported` | Project agent-facing language has no localization capability |
 | 7 | provider | `integration_partially_refused` | An enabled provider's integration file exists and is not Forge-owned |
+| 7 | provider | `provider_rate_limited` | Provider attempt was abandoned after a retryable rate limit |
 | 8 | authorization | `permission_denied` | Policy denied the command |
 | 9 | confirmation | `confirmation_required` | Required human confirmation absent |
 | 10 | concurrency | `suggestion_stale` | Expected state version no longer matches |
@@ -55,6 +57,9 @@ gate on workstations and CI.
 | 11 | workflow | `workflow_blocked` | Durable workflow cannot safely advance |
 | 11 | workflow | `review_iteration_limit` | Review requires a human convergence decision |
 | 11 | workflow | `review_repeated_findings` | External review repeated an identical normalized finding set |
+| 11 | workflow | `routing_deferred` | Node's provider/model key is still unroutable through a recorded resume time |
+| 11 | workflow | `routing_budget_exhausted` | Sprint's shared routing retry budget is exhausted |
+| 11 | workflow | `routing_circuit_open` | Node's provider/model key circuit breaker is currently open |
 | 12 | dependency | `dependency_unavailable` | Required immutable input is unavailable |
 | 13 | internal | `internal_error` | Sanitized unexpected failure |
 | 14 | compatibility | `host_protocol_incompatible` | Client and Host protocol majors cannot communicate |

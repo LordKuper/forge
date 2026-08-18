@@ -293,7 +293,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             // Only a model-bearing role (ADR 0014's Planning/Implementation/Review) has a frozen
             // execution profile to route by — every other Work role (intake, confirmation,
             // test-work's own eligibility gate, finalization) invokes no provider and is never
-            // subject to ADR 0006's rate-limit/circuit-breaker/budget policy at all.
+            // subject to ADR 0006's rate-limit/circuit-breaker/budget policy at all. Every routed
+            // decision here is later refunded by `CompleteAttemptAsync` on success (see there) so
+            // the shared budget bounds only genuinely unresolved retry/deferral/failure loops, not
+            // ordinary one-pass progress through however many model-bearing nodes and review
+            // iterations a sprint happens to have.
             ExecutionPhase? modelPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
             if (modelPhase is { } phase &&
                 definition.ExecutionProfiles.TryGetValue(phase, out ExecutionProfile? profile))
@@ -458,6 +462,23 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 // is a defensive backstop against corruption rather than the expected path here.
                 return new(false, node, DiagnosticCodes.WorkflowEventConflict);
             }
+
+            // A genuinely new success refunds the shared routing budget unit `StartAttemptAsync`
+            // consumed for this attempt (`RoutingLedger.BuildBudget` never refunds a `Routed`
+            // decision on its own) — gated on `existingResult is null` exactly like the result save
+            // above, so a resumed/replayed call never refunds twice for the same attempt.
+            if (succeeded)
+            {
+                IReadOnlyList<RouteDecision> decisions = await routingLedger
+                    .GetRouteDecisionsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+                RouteDecision? routed = decisions.LastOrDefault(
+                    item => item.AttemptId == attemptId && item.Outcome == RouteOutcome.Routed);
+                if (routed is not null)
+                {
+                    await routingLedger.RecordOutcomeAsync(projectRoot, sprintId, routed, true, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
         }
 
         if (node.State == NodeState.Running)
@@ -553,11 +574,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, node, DiagnosticCodes.WorkflowEventConflict);
         }
 
-        await routingLedger.RecordDeferralAsync(
-            projectRoot, sprintId, routed, clock.UtcNow + DefaultRateLimitBackoff, cancellationToken)
-            .ConfigureAwait(false);
-
-        return await CompleteAttemptAsync(
+        // Recorded only once the completion this deferral rides on actually lands: `CompleteAttemptAsync`
+        // can still reject this call for reasons `DeferAttemptAsync`'s own checks above do not cover
+        // (a node/attempt version conflict, an illegal transition). Recording the durable routing
+        // block first would leave the provider/model key blocked from a defer call that never
+        // actually abandoned the attempt.
+        CompleteAttemptResult result = await CompleteAttemptAsync(
             projectRoot,
             sprintId,
             nodeId,
@@ -574,6 +596,15 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                     new Dictionary<string, string?>(StringComparer.Ordinal)),
             ],
             cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            return result;
+        }
+
+        await routingLedger.RecordDeferralAsync(
+            projectRoot, sprintId, routed, clock.UtcNow + DefaultRateLimitBackoff, cancellationToken)
+            .ConfigureAwait(false);
+        return result;
     }
 
     /// <summary>
@@ -622,15 +653,20 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowEventConflict);
         }
 
-        // A replay of an already-completed supersession is recognized the same way
-        // `ResolveHumanGateAsync` recognizes its own resumed calls: by whether the outcome this
-        // exact call would produce already exists, not by re-checking a version the attempt has
-        // since legitimately advanced past (it is now `cancelled`, one version ahead of whatever
-        // the caller's original, pre-supersession expectation was) -- re-checking that stale
-        // version here would defeat resumability entirely, since it was already validated once,
-        // the first time this exact idempotency key drove this exact append.
-        bool alreadySuperseded = attempt.State == AttemptState.Cancelled &&
-            state.Attempts.Values.Any(candidate => candidate.SupersedesAttemptId == attemptId);
+        // A replay of an already-completed (or partially-completed, crash-interrupted) supersession
+        // is recognized the same way `ResolveHumanGateAsync` recognizes its own resumed calls: by
+        // whether the target attempt already reflects this call's outcome, not by re-checking a
+        // version it has since legitimately advanced past (it is now `cancelled`, one version ahead
+        // of whatever the caller's original, pre-supersession expectation was). This deliberately
+        // does not also require a replacement attempt to already exist: gating on that too would
+        // reject a retry that lands between the cancel transition and replacement creation (the
+        // cancel already committed; nothing about it is redone), leaving the node stuck `running`
+        // with a `cancelled` attempt and no path to recover except aborting the sprint. Once
+        // `cancelled`, the append below is safe to call unconditionally either way -- a genuine
+        // replay (same idempotency key) short-circuits inside the store before any version check
+        // runs; a call this permissive check lets through for the wrong reason still lands on an
+        // illegal `cancelled` -> `cancelled` transition there and is rejected all the same.
+        bool alreadySuperseded = attempt.State == AttemptState.Cancelled;
         if (!alreadySuperseded)
         {
             if (attempt.Version != expectedAttemptVersion || idempotencyKey != SupersedeAttemptKey(sprintId, attempt))
