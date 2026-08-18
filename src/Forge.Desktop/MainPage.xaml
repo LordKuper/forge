@@ -37,6 +37,13 @@
       <Label x:Name="AttemptSupersedeResultLabel" />
       <Button x:Name="EventsPollButton" Clicked="OnEventsPollClicked" />
       <Label x:Name="EventsLabel" />
+      <Button x:Name="IntegrationGenerateButton" Clicked="OnIntegrationGenerateClicked" />
+      <Label x:Name="IntegrationLabel" />
+      <HorizontalStackLayout Spacing="8">
+        <Button x:Name="IntegrationInstallButton" Clicked="OnIntegrationInstallClicked" />
+        <Button x:Name="IntegrationRemoveButton" Clicked="OnIntegrationRemoveClicked" />
+      </HorizontalStackLayout>
+      <Label x:Name="IntegrationWriteResultLabel" />
       <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />

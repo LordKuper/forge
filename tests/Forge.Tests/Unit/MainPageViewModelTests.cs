@@ -202,6 +202,70 @@ public sealed class MainPageViewModelTests
         Assert.Equal(1, mutations.RecoverStartupCalls);
     }
 
+    /// <summary>ADR 0026's `integration.skill` install/remove verbs -- same routing property as
+    /// <see cref="RecoverAsyncRoutesThroughTheResolvedMutations"/>, and the same shared
+    /// <see cref="FakeForgeMutations"/> double the CLI's own
+    /// `IntegrationSkillWriteVerbsRouteThroughTheResolvedMutations` test uses.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Unit")]
+    public async Task IntegrationInstallAsyncRoutesThroughTheResolvedMutationsAndForwardsConfirmed(bool confirmed)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.InstallIntegrationAsync(
+            environment.ProjectRoot, confirmed, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.InstallIntegrationCalls);
+        Assert.Equal(0, mutations.RemoveIntegrationCalls);
+        Assert.Equal(confirmed, mutations.LastIntegrationConfirmed);
+    }
+
+    /// <summary>Same shape as <see cref="IntegrationInstallAsyncRoutesThroughTheResolvedMutationsAndForwardsConfirmed"/>
+    /// for the remove verb.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Unit")]
+    public async Task IntegrationRemoveAsyncRoutesThroughTheResolvedMutationsAndForwardsConfirmed(bool confirmed)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.RemoveIntegrationAsync(
+            environment.ProjectRoot, confirmed, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.InstallIntegrationCalls);
+        Assert.Equal(1, mutations.RemoveIntegrationCalls);
+        Assert.Equal(confirmed, mutations.LastIntegrationConfirmed);
+    }
+
+    /// <summary>ADR 0011/0026: a plain read must never route through a Host connection, matching
+    /// the CLI's own `IntegrationSkillGenerateNeverRoutesThroughTheResolvedMutations` test.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GenerateIntegrationPreviewAsyncNeverRoutesThroughTheResolvedMutations()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel
+            .GenerateIntegrationPreviewAsync(environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.InstallIntegrationCalls);
+        Assert.Equal(0, mutations.RemoveIntegrationCalls);
+        Assert.Contains(Text().Resolve(MessageKeys.IntegrationTitle), message, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RecoverAsyncResolvesMutationsUsingTheSuppliedProjectRoot()

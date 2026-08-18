@@ -43,6 +43,14 @@ public sealed class SurfaceParityTests
             "AttemptSupersedeResultLabel",
         ],
         [CapabilityIds.ControlEvents] = ["EventsPollButton", "EventsLabel"],
+        [CapabilityIds.IntegrationSkill] =
+        [
+            "IntegrationGenerateButton",
+            "IntegrationLabel",
+            "IntegrationInstallButton",
+            "IntegrationRemoveButton",
+            "IntegrationWriteResultLabel",
+        ],
     };
 
     [Fact]
@@ -410,6 +418,32 @@ public sealed class SurfaceParityTests
         // really carries this sprint's own event -- an empty page on both sides would pass too.
         Assert.Contains(
             sprintId.Value.ToString("D", CultureInfo.InvariantCulture), desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
+    /// for `SurfaceFormatting.IntegrationInspectionLines` (ADR 0026).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameIntegrationPreviewForOneSnapshot()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["integration", "skill", "generate", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, environment.Application)
+            .GenerateIntegrationPreviewAsync(environment.ProjectRoot, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
     }
 
     [Fact]

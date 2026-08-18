@@ -110,4 +110,7 @@
   <data name="NotificationCompletedTitle" xml:space="preserve"><value>Forge: спринт завершён</value></data>
   <data name="NotificationSprintLabel" xml:space="preserve"><value>Спринт:</value></data>
   <data name="EventsPollAction" xml:space="preserve"><value>Опросить события</value></data>
+  <data name="IntegrationGenerateAction" xml:space="preserve"><value>Предпросмотр интеграции</value></data>
+  <data name="IntegrationInstallAction" xml:space="preserve"><value>Установить интеграцию</value></data>
+  <data name="IntegrationRemoveAction" xml:space="preserve"><value>Удалить интеграцию</value></data>
 </root>

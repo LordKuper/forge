@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.47.0
+
+### Added
+
+- The Desktop app can now preview, install, and remove the AI-provider
+  agent integration ("Preview integration", "Install integration",
+  "Remove integration"), matching `forge integration skill
+  generate|install|remove`.
+
 ## v0.46.0
 
 ### Added
