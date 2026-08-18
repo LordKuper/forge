@@ -61,10 +61,21 @@ A cursor that fails to decode (`ReadControlEvents`'s own `ControlCursorStale`
 diagnostic) is not retried forever with the same broken token — this
 service's own cursor should never actually become unreadable except a rare
 partial-write race, and retrying the same broken token indefinitely would
-permanently wedge that project's notifications. It resets to the fresh
-anchor `ReadControlEvents` itself already returns and resumes cleanly from
-now, skipping only that one tick's delivery — never replaying the
-project's full history as "new."
+permanently wedge that project's notifications. It resets and resumes
+cleanly from now, skipping only that one tick's delivery — never replaying
+the project's full history as "new." Getting this right needs one more step
+than it first appears: `ControlEventsPage.Empty`'s own fresh-anchor token
+has *empty* watermarks, and an empty watermark does not itself mean "skip
+everything already delivered" — it means "nothing has been seen yet,"
+which is the opposite of "resume from now." Persisting that token as-is
+(the first version of this ADR's own mistake, found in round 1 review — see
+below) makes every historical event look unseen again, replaying the
+project's entire history as new notifications on the very next tick.
+`CatchUpToNowAsync` is the actual fix: it reads forward from a fresh anchor,
+bounded to `MaxCatchUpReads` reads, discarding every event without
+delivering it, until a page returns fewer than `ControlEventsReader
+.MaxEventsPerRead` results — i.e., the journal's current tip — and only
+that caught-up cursor is what gets persisted.
 
 ### `notifications.enabled` gates delivery, but the cursor advances regardless
 
@@ -188,14 +199,69 @@ defensively: if a future change ever composes a richer body (a finding
 summary, an instruction excerpt), it is protected automatically rather
 than requiring someone to remember to add redaction later.
 
-### Title text is localized through the same startup-status language resolution every surface uses
+### Title text is localized through the same resolved `language.ui` every surface reads
 
-`NotificationDeliveryHostedService` calls the project's own
-`ForgeApplication.GetStartupStatusAsync` and reads `status.Language.Ui` —
-the exact resolved `language.ui` value `forge doctor`/`forge status`
-already compute — rather than re-deriving culture resolution a second time.
-Five new message keys (four titles, one `NotificationSprintLabel`) are
-added to `MessageKeys`/`Messages.resx`/`Messages.ru.resx`.
+`ReadNotificationSettingsAsync` reads both `notifications.enabled` and
+`language.ui` from one `ForgeApplication.GetUserConfigurationAsync` call —
+the same resolved, default-applied `ConfigurationView` every other surface
+already uses to read a user setting. The first version of this ADR instead
+called `ForgeApplication.GetStartupStatusAsync` just for its `Language.Ui`
+field, which round 1 review found ran the Host's entire startup pipeline
+(platform, provider, and project-root checks included) on every tick with
+something to deliver, purely to reach one already-resolved value one line
+away in `GetUserConfigurationAsync`'s own result. Fixed by reading it from
+there directly instead — no separate call, and no full startup pipeline
+run just for a language tag. Five new message keys (four titles, one
+`NotificationSprintLabel`) are added to `MessageKeys`/`Messages.resx`/
+`Messages.ru.resx`.
+
+### Round 1 review: one high-severity defect, four further fixes
+
+Independent review found five issues, all fixed:
+
+1. **(High) The stale-cursor recovery replayed the project's full
+   history**, described above under "the cursor advances regardless" —
+   the single most serious finding in this ADR's own history. Reproduced
+   with a temporary probe (deliver once, corrupt the cursor, restart,
+   confirm the same event redelivers) before the fix, then confirmed fixed
+   after it; a permanent regression test
+   (`AStaleCursorRecoversWithoutReplayingAnAlreadyDeliveredEvent`) proves
+   it the same way — verified to fail against the pre-fix code and pass
+   against the fix.
+2. **`docs/contracts/v1/configuration.json` was never updated** for the
+   new `notifications.enabled` key, and its own `contract_version` stayed
+   at `1.1.0` — an omission nothing in the test suite caught. Fixed by
+   adding the key and bumping to `1.2.0` (matching `UserContractVersion`),
+   and by closing the enforcement gap itself: a new
+   `ConfigurationRegistryMatchesTheContractsKeyList` test now proves, in
+   both directions, that every key `ConfigurationRegistry` registers is
+   documented here and every key documented here is registered — with
+   matching scope, session-override, inheritance, and default value — so
+   this specific drift cannot recur silently.
+3. **`NotificationDeliveryCursorStore.SaveAsync` leaked its own `.tmp`
+   file** on a write or rename failure — one per failed tick, forever,
+   under a persistent failure. Fixed with a try/catch that deletes the
+   temp file before rethrowing the original exception unchanged.
+4. **Reading settings via `GetStartupStatusAsync` sat outside this
+   service's own tick-level failure isolation** — an escaping exception
+   there would have faulted `ExecuteTask` silently and permanently, since
+   this service is a plain singleton `BackgroundService`, not registered
+   via `AddHostedService`, so nothing observes that fault the way the
+   generic host would. Fixed by folding settings-reading into the same
+   try/catch that already wraps the cursor load and events read (see the
+   language-resolution fix above, which also removed the call entirely).
+5. **Two of the six original tests proved less than their names claimed.**
+   The delivery-failure-isolation test used one event and asserted only
+   `File.Exists` on the cursor path — neither proves per-item isolation
+   (a single event can't) nor that the cursor genuinely advanced (a file
+   existing says nothing about its content). Fixed by rewriting it with
+   two sprints, one whose delivery is made to fail and one that succeeds,
+   asserting the failing one is skipped, the succeeding one still
+   delivers, and the cursor's own decoded watermark advances past *both*.
+   The original stale-cursor test (superseded by finding 1's own
+   regression test, which proves the stronger, actually-meaningful
+   property) was removed rather than kept alongside a strictly weaker
+   duplicate.
 
 ## Consequences
 
@@ -213,7 +279,11 @@ added to `MessageKeys`/`Messages.resx`/`Messages.ru.resx`.
   `ConfigurationRegistry`; `UserConfiguration.Notifications` (optional,
   nullable) added to `ConfigurationSchemaCodec`; `user-config.schema.json`
   gains an optional `notifications` object and a `1.2.0` `schema_version`
-  entry (`UserContractVersion` bumped to match).
+  entry (`UserContractVersion` bumped to match). `docs/contracts/v1
+  /configuration.json` gains the matching key entry and its own
+  `contract_version` bump to `1.2.0`, with a new test
+  (`ConfigurationRegistryMatchesTheContractsKeyList`) now enforcing the two
+  never drift apart again.
 - `Forge.Runtime.Windows` gains `WindowsNotificationService`
   (`INotificationService` via `NotifyIcon.ShowBalloonTip`) and
   `AddForgeRuntimeWindowsNotifications` (an `IServiceCollection` extension
@@ -226,15 +296,21 @@ added to `MessageKeys`/`Messages.resx`/`Messages.ru.resx`.
   `NotificationCompletedTitle`, `NotificationSprintLabel`), en/ru.
 - `NotificationDeliveryHostedServiceTests` (6 tests): exactly-once delivery
   across ticks, redacted title/body composition, config-gated skip with
-  cursor still advancing (and no backlog burst on re-enable), per-delivery
-  failure isolation (`ExecuteTask.Exception` stays `null`), a no-op tick
-  over an empty project, and stale-cursor recovery. `ControlPlaneTests`'s
+  the cursor's own decoded watermark still advancing (and no backlog burst
+  on re-enable), delivery-failure isolation across two events proven by
+  both surviving delivery and both watermarks advancing, a no-op tick over
+  an empty project, and stale-cursor recovery proven against a genuinely
+  already-delivered event (not merely "the file changed"). `ControlPlaneTests`'s
   own in-test Host builder (`ControlPlaneHost.StartAsync`) gained the same
   `NotificationDeliveryOptions`/`NotificationDeliveryHostedService`
   registrations `ForgeHostApplication.RunAsync` now has, matching the
   parallel registration `ResumeSchedulerHostedService` already required —
   missing this broke every test that starts a real in-process Host via
   dependency injection, caught immediately by the full suite run.
+- `ContractTests.ConfigurationRegistryMatchesTheContractsKeyList` (1 test,
+  round 1 review): closes the "documented but never enforced" gap the
+  new `notifications.enabled` key exposed in `docs/contracts/v1
+  /configuration.json`.
 
 ## Deliberately deferred
 

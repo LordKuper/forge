@@ -61,7 +61,23 @@ public static class NotificationDeliveryCursorStore
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         string temp = string.Create(
             System.Globalization.CultureInfo.InvariantCulture, $"{path}.{Guid.NewGuid():N}.tmp");
-        await File.WriteAllTextAsync(temp, cursor, cancellationToken).ConfigureAwait(false);
-        File.Move(temp, path, overwrite: true);
+        try
+        {
+            await File.WriteAllTextAsync(temp, cursor, cancellationToken).ConfigureAwait(false);
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            // A failed write or rename must not leave a `.tmp` file behind -- this runs on a
+            // recurring timer, so a persistent failure would otherwise leak one file per tick
+            // forever. The original exception (including cancellation) still propagates to the
+            // caller's own handling unchanged.
+            if (File.Exists(temp))
+            {
+                File.Delete(temp);
+            }
+
+            throw;
+        }
     }
 }

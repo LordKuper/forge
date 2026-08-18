@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
-using Forge.Configuration;
 using Forge.Infrastructure;
 using Forge.Localization;
 using Microsoft.Extensions.Hosting;
@@ -42,7 +41,14 @@ public sealed class NotificationDeliveryHostedService(
     ILocalizationCatalog catalog,
     ILogger<NotificationDeliveryHostedService> logger) : BackgroundService
 {
+    /// <summary>Bounds <see cref="CatchUpToNowAsync"/>'s loop -- 500,000 events (500 per read) is
+    /// far past any realistic project, so hitting it only ever happens against a pathologically
+    /// large one; logged and left for later ticks to keep advancing through rather than blocking
+    /// this tick indefinitely.</summary>
+    private const int MaxCatchUpReads = 1_000;
+
     private const string EnabledKey = "notifications.enabled";
+    private const string LanguageKey = "language.ui";
 
     private static readonly Action<ILogger, Exception> LogTickFailed = LoggerMessage.Define(
         LogLevel.Warning,
@@ -53,6 +59,12 @@ public sealed class NotificationDeliveryHostedService(
         LogLevel.Warning,
         new EventId(2021, "NotificationDeliveryFailed"),
         "Delivering a notification failed for sprint {SprintId}; continuing with the rest.");
+
+    private static readonly Action<ILogger, Exception?> LogCatchUpBoundReached = LoggerMessage.Define(
+        LogLevel.Warning,
+        new EventId(2022, "NotificationDeliveryCatchUpBoundReached"),
+        "Stale-cursor recovery reached its read bound before catching up to the current journal " +
+            "tip; the remainder will be caught up on by later ticks.");
 
     /// <summary>Unlike <see cref="ResumeSchedulerHostedService"/>'s own immediate-first-tick
     /// design — where promptly promoting a stuck node is a real correctness concern — a "best-
@@ -73,6 +85,8 @@ public sealed class NotificationDeliveryHostedService(
     private async Task TickAsync(CancellationToken cancellationToken)
     {
         ControlEventsPage page;
+        IReadOnlyList<NotificationProjection> projections;
+        NotificationSettings? settings;
         try
         {
             string? cursorToken = await NotificationDeliveryCursorStore
@@ -80,6 +94,15 @@ public sealed class NotificationDeliveryHostedService(
                 .ConfigureAwait(false);
             page = await eventsReader.ReadAsync(options.ProjectRoot, cursorToken, cancellationToken)
                 .ConfigureAwait(false);
+            projections = page.DiagnosticCode == DiagnosticCodes.None
+                ? NotificationProjector.Project(page.Events)
+                : [];
+            // Reading settings shares this tick's own failure isolation: an escaping exception here
+            // must never permanently fault ExecuteTask the way it would for a plain BackgroundService
+            // not registered via AddHostedService (nothing else observes that fault).
+            settings = projections.Count > 0
+                ? await ReadNotificationSettingsAsync(cancellationToken).ConfigureAwait(false)
+                : null;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -93,22 +116,22 @@ public sealed class NotificationDeliveryHostedService(
         }
 
         // A stale/corrupted cursor (this service's own write, so expected only in a genuine
-        // partial-write race) cannot be safely retried with the same token forever -- persist the
-        // fresh anchor ReadControlEvents already returned and resume cleanly from now, skipping
-        // delivery for this tick only rather than replaying the project's full history as "new".
+        // partial-write race) cannot be safely retried with the same token forever. It also cannot
+        // simply persist ReadControlEvents' own fresh-anchor token as-is: that token's watermarks
+        // are empty, which does not itself skip the project's existing events -- it only makes them
+        // look unseen again, replaying the full history as "new" on the very next tick. Catching up
+        // to the journal's current tip first, then persisting THAT cursor, is what actually resumes
+        // "from now."
         if (page.DiagnosticCode != DiagnosticCodes.None)
         {
-            await SaveCursorAsync(page.Cursor, cancellationToken).ConfigureAwait(false);
+            string caughtUpCursor = await CatchUpToNowAsync(cancellationToken).ConfigureAwait(false);
+            await SaveCursorAsync(caughtUpCursor, cancellationToken).ConfigureAwait(false);
             return;
         }
 
-        IReadOnlyList<NotificationProjection> projections = NotificationProjector.Project(page.Events);
-        if (projections.Count > 0 && await IsEnabledAsync(cancellationToken).ConfigureAwait(false))
+        if (settings is { Enabled: true })
         {
-            StartupStatus status = await application
-                .GetStartupStatusAsync(options.ProjectRoot, cancellationToken)
-                .ConfigureAwait(false);
-            SurfaceText text = SurfaceText.For(catalog, status.Language.Ui);
+            SurfaceText text = SurfaceText.For(catalog, settings.LanguageTag);
             foreach (NotificationProjection projection in projections)
             {
                 await DeliverAsync(text, projection, cancellationToken).ConfigureAwait(false);
@@ -116,6 +139,28 @@ public sealed class NotificationDeliveryHostedService(
         }
 
         await SaveCursorAsync(page.Cursor, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Advances through every currently-durable event without delivering any of them, so
+    /// stale-cursor recovery resumes cleanly "from now" instead of the naive fresh-anchor token
+    /// replaying the project's full history as new on the next tick.</summary>
+    private async Task<string> CatchUpToNowAsync(CancellationToken cancellationToken)
+    {
+        string cursor = ControlEventsCursorCodec.Encode(ControlEventsCursor.Empty);
+        for (int read = 0; read < MaxCatchUpReads; read++)
+        {
+            ControlEventsPage page = await eventsReader
+                .ReadAsync(options.ProjectRoot, cursor, cancellationToken)
+                .ConfigureAwait(false);
+            cursor = page.Cursor;
+            if (page.Events.Count < ControlEventsReader.MaxEventsPerRead)
+            {
+                return cursor;
+            }
+        }
+
+        LogCatchUpBoundReached(logger, null);
+        return cursor;
     }
 
     private async Task DeliverAsync(
@@ -145,13 +190,17 @@ public sealed class NotificationDeliveryHostedService(
         }
     }
 
-    private async Task<bool> IsEnabledAsync(CancellationToken cancellationToken)
+    private async Task<NotificationSettings> ReadNotificationSettingsAsync(CancellationToken cancellationToken)
     {
         ConfigurationView user =
             await application.GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false);
-        EffectiveConfigurationValue? value =
-            user.Values.FirstOrDefault(item => item.Key == EnabledKey);
-        return value?.Value.ValueKind != JsonValueKind.False;
+        bool enabled = user.Values.FirstOrDefault(item => item.Key == EnabledKey)?.Value.ValueKind !=
+            JsonValueKind.False;
+        string? languageTag = user.Values.FirstOrDefault(item => item.Key == LanguageKey) is { } language &&
+            language.Value.ValueKind == JsonValueKind.String
+            ? language.Value.GetString()
+            : null;
+        return new(enabled, string.IsNullOrEmpty(languageTag) ? "en" : languageTag);
     }
 
     private async Task SaveCursorAsync(string cursor, CancellationToken cancellationToken)
@@ -180,4 +229,9 @@ public sealed class NotificationDeliveryHostedService(
         NotificationKind.Completed => MessageKeys.NotificationCompletedTitle,
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, null),
     };
+
+    /// <summary>Read once per tick, only when there is at least one projection to potentially
+    /// deliver -- avoids <see cref="ForgeApplication.GetUserConfigurationAsync"/> entirely on the
+    /// (typical) tick with nothing new.</summary>
+    private sealed record NotificationSettings(bool Enabled, string LanguageTag);
 }

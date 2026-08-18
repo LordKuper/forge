@@ -11,10 +11,10 @@ namespace Forge.IntegrationTests;
 /// <summary>ADR 0024: the delivery pipeline that projects durable sprint transitions onto
 /// best-effort local notifications. <c>Forge.UnitTests.NotificationProjectorTests</c> already
 /// fully proves kind-mapping correctness; these tests instead cover this service's own
-/// responsibilities —
-/// cursor-based dedup across ticks, `notifications.enabled` gating, per-notification failure
-/// isolation, and body composition/redaction — using a fake <see cref="INotificationService"/>
-/// so no real OS call is ever made.</summary>
+/// responsibilities — cursor-based dedup across ticks (including stale-cursor recovery),
+/// `notifications.enabled` gating, per-notification failure isolation, and body composition/
+/// redaction — using a fake <see cref="INotificationService"/> so no real OS call is ever made.
+/// </summary>
 public sealed class NotificationDeliveryHostedServiceTests
 {
     [Fact]
@@ -111,7 +111,13 @@ public sealed class NotificationDeliveryHostedServiceTests
             await service.StopAsync(cancellationToken);
         }
 
-        Assert.True(File.Exists(NotificationDeliveryCursorStore.CursorFilePath(environment.ProjectRoot)));
+        // Not just "a cursor file exists" -- the watermark for THIS sprint must have genuinely
+        // advanced past its awaiting_human event, proving the disabled-delivery tick still moved
+        // the cursor forward rather than merely writing an empty/unrelated one.
+        ControlEventsCursor cursorWhileDisabled =
+            await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
+        Assert.True(cursorWhileDisabled.Watermarks.TryGetValue(
+            sprintId.Value.ToString("D"), out long watermarkWhileDisabled) && watermarkWhileDisabled >= 0);
 
         ConfigurationWriteResult enabled = await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User, environment.ProjectRoot, "notifications.enabled", "true", cancellationToken);
@@ -131,12 +137,69 @@ public sealed class NotificationDeliveryHostedServiceTests
     }
 
     /// <summary>ADR 0005: "A notification is never the authoritative record and a delivery failure
-    /// never changes workflow state" — an OS adapter's own exception must never fault this service's
-    /// BackgroundService.ExecuteTask, matching ResumeSchedulerHostedService's own per-item isolation.
-    /// </summary>
+    /// never changes workflow state" — an OS adapter's own exception for ONE event must never fault
+    /// this service's BackgroundService.ExecuteTask or prevent a DIFFERENT event from being
+    /// delivered, matching ResumeSchedulerHostedService's own per-item isolation. Two sprints, not
+    /// one, so isolation is actually exercised rather than merely "the one call didn't crash the
+    /// test."</summary>
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task ADeliveryFailureDoesNotCrashTheServiceOrBlockTheCursorFromAdvancing()
+    public async Task ADeliveryFailureIsIsolatedAndTheCursorStillAdvancesPastBothEvents()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId failingSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, failingSprintId, cancellationToken);
+        SprintId succeedingSprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, succeedingSprintId, cancellationToken);
+
+        string failingIdText = failingSprintId.Value.ToString("D");
+        string succeedingIdText = succeedingSprintId.Value.ToString("D");
+        FakeNotificationService fake = new()
+        {
+            ShouldThrow = (_, body) => body.Contains(failingIdText, StringComparison.Ordinal),
+        };
+        using NotificationDeliveryHostedService service = CreateService(environment, fake);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForDeliveryAsync(fake, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Null(service.ExecuteTask!.Exception);
+        (string Title, string Body) delivered = Assert.Single(fake.Delivered);
+        Assert.Contains(succeedingIdText, delivered.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain(fake.Delivered, item => item.Body.Contains(failingIdText, StringComparison.Ordinal));
+
+        // The cursor must have advanced past BOTH events, not just the one that delivered
+        // successfully -- a delivery failure isolates that one notification, not the sweep's own
+        // progress through the journal.
+        ControlEventsCursor cursor = await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
+        Assert.True(cursor.Watermarks.TryGetValue(failingIdText, out long failingWatermark) && failingWatermark >= 0);
+        Assert.True(
+            cursor.Watermarks.TryGetValue(succeedingIdText, out long succeedingWatermark) &&
+            succeedingWatermark >= 0);
+    }
+
+    /// <summary>Round 1 review of PR #64 found the ORIGINAL stale-cursor recovery replayed the
+    /// project's full history: <see cref="ControlEventsPage.Empty"/>'s own fresh-anchor token has
+    /// empty watermarks, which does not itself skip already-delivered events, only makes them look
+    /// unseen again. This test proves the actual fix (<c>CatchUpToNowAsync</c>) rather than only
+    /// the weaker "the file changed" claim the original version of this test made: an event
+    /// genuinely delivered once, followed by cursor corruption and a restart, must never be
+    /// delivered again.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AStaleCursorRecoversWithoutReplayingAnAlreadyDeliveredEvent()
     {
         using TestEnvironment environment = await InitializedAsync();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -146,21 +209,40 @@ public sealed class NotificationDeliveryHostedServiceTests
             cancellationToken)).SprintId!;
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
 
-        FakeNotificationService throwing = new() { ThrowOnNotify = true };
-        using NotificationDeliveryHostedService service = CreateService(environment, throwing);
-        await service.StartAsync(cancellationToken);
+        FakeNotificationService first = new();
+        using (NotificationDeliveryHostedService firstService = CreateService(environment, first))
+        {
+            await firstService.StartAsync(cancellationToken);
+            try
+            {
+                await WaitForDeliveryAsync(first, cancellationToken);
+            }
+            finally
+            {
+                await firstService.StopAsync(cancellationToken);
+            }
+        }
+
+        string cursorPath = NotificationDeliveryCursorStore.CursorFilePath(environment.ProjectRoot);
+        await File.WriteAllTextAsync(cursorPath, "not a valid cursor token", cancellationToken);
+
+        FakeNotificationService second = new();
+        using NotificationDeliveryHostedService secondService = CreateService(environment, second);
+        await secondService.StartAsync(cancellationToken);
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            // No new notification-worthy event exists after recovery, so nothing should ever be
+            // delivered -- several ticks' worth of delay proves it stays empty, not merely that
+            // redelivery "hasn't happened yet."
+            await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
         }
         finally
         {
-            await service.StopAsync(cancellationToken);
+            await secondService.StopAsync(cancellationToken);
         }
 
-        Assert.Empty(throwing.Delivered);
-        Assert.Null(service.ExecuteTask!.Exception);
-        Assert.True(File.Exists(NotificationDeliveryCursorStore.CursorFilePath(environment.ProjectRoot)));
+        Assert.Null(secondService.ExecuteTask!.Exception);
+        Assert.Empty(second.Delivered);
     }
 
     [Fact]
@@ -180,36 +262,6 @@ public sealed class NotificationDeliveryHostedServiceTests
         Assert.Null(service.ExecuteTask!.Exception);
     }
 
-    /// <summary>A stale/corrupted cursor (this service's own write, so only reachable via direct
-    /// tampering in a test) must not permanently wedge delivery -- see ADR 0024's "resume cleanly
-    /// from now" recovery choice.</summary>
-    [Fact]
-    [Trait("Category", "Integration")]
-    public async Task AStaleCursorFileIsReplacedRatherThanRetriedForever()
-    {
-        using TestEnvironment environment = await InitializedAsync();
-        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        string cursorPath = NotificationDeliveryCursorStore.CursorFilePath(environment.ProjectRoot);
-        Directory.CreateDirectory(Path.GetDirectoryName(cursorPath)!);
-        await File.WriteAllTextAsync(cursorPath, "not a valid cursor token", cancellationToken);
-
-        FakeNotificationService fake = new();
-        using NotificationDeliveryHostedService service = CreateService(environment, fake);
-        await service.StartAsync(cancellationToken);
-        try
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
-        }
-        finally
-        {
-            await service.StopAsync(cancellationToken);
-        }
-
-        Assert.Null(service.ExecuteTask!.Exception);
-        string replaced = await File.ReadAllTextAsync(cursorPath, cancellationToken);
-        Assert.NotEqual("not a valid cursor token", replaced);
-    }
-
     private static NotificationDeliveryHostedService CreateService(
         TestEnvironment environment, INotificationService notifications) =>
         new(
@@ -219,6 +271,14 @@ public sealed class NotificationDeliveryHostedServiceTests
             notifications,
             new ResourceLocalizationCatalog(),
             NullLogger<NotificationDeliveryHostedService>.Instance);
+
+    private static async Task<ControlEventsCursor> ReadCursorAsync(string projectRoot, CancellationToken cancellationToken)
+    {
+        string content = await File.ReadAllTextAsync(
+            NotificationDeliveryCursorStore.CursorFilePath(projectRoot), cancellationToken);
+        Assert.True(ControlEventsCursorCodec.TryDecode(content, out ControlEventsCursor cursor));
+        return cursor;
+    }
 
     private static async Task WaitForDeliveryAsync(FakeNotificationService fake, CancellationToken cancellationToken)
     {
@@ -258,11 +318,11 @@ public sealed class NotificationDeliveryHostedServiceTests
     {
         public List<(string Title, string Body)> Delivered { get; } = [];
 
-        public bool ThrowOnNotify { get; init; }
+        public Func<string, string, bool>? ShouldThrow { get; init; }
 
         public Task NotifyAsync(string title, string body, CancellationToken cancellationToken)
         {
-            if (ThrowOnNotify)
+            if (ShouldThrow?.Invoke(title, body) == true)
             {
                 throw new InvalidOperationException("Simulated OS notification delivery failure.");
             }

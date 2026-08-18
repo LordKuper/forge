@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "stores": {
     "user": {
       "path": "%LOCALAPPDATA%/Forge/config.json",
@@ -21,7 +21,8 @@
     {"key":"interaction.confirm_destructive","scope":"user","default":true,"session_override":false,"inherits":null,"sensitive":false},
     {"key":"providers.enabled","scope":"user","default":null,"session_override":false,"inherits":null,"sensitive":false,"default_is_dynamic":true},
     {"key":"artifacts.language.user_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false},
-    {"key":"artifacts.language.agent_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false}
+    {"key":"artifacts.language.agent_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false},
+    {"key":"notifications.enabled","scope":"user","default":true,"session_override":false,"inherits":null,"sensitive":false}
   ],
   "provenance": ["session", "user", "project", "inherited", "built_in_default"],
   "resolution": {
