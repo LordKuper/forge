@@ -684,6 +684,66 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task SprintLifecycleCommandsRoundTripThroughTheHost()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        // `create_sprint`'s own success path needs a real, registered `ILlmProvider` to freeze into
+        // the sprint's routing profile — this harness's real Host composition (`ForgeHost.AddForgeCore`,
+        // via `ControlPlaneHost` below) registers none, unlike the in-process `TestEnvironment` DI
+        // container the other tests in this fixture use. `run`/`resume`/`cancel` have no such
+        // dependency, so the sprint they exercise is created in-process first, matching
+        // `ResolveGateRoundTripsThroughTheHostAndSettlesTheNode`'s own precedent.
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        // `create_sprint`'s wire mechanics (kind constant, dispatch, request/response serialization)
+        // are still proven here, on its natural failure path in this harness rather than its success
+        // one: a transport/serialization bug would surface as `HostUnavailable`/a thrown exception, not
+        // this specific business-logic diagnostic.
+        CreateSprintResult created = await mutations.CreateSprintAsync(environment.ProjectRoot, cancellationToken);
+        Assert.False(created.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintProviderCandidatesEmpty, created.DiagnosticCode);
+
+        SprintTransitionResult toReady =
+            await mutations.RunSprintAsync(environment.ProjectRoot, sprintId.Value, cancellationToken);
+        Assert.True(toReady.Succeeded, $"diag={toReady.DiagnosticCode}");
+        Assert.Equal(SprintState.Ready, toReady.Sprint!.State);
+
+        SprintTransitionResult toRunning =
+            await mutations.RunSprintAsync(environment.ProjectRoot, sprintId.Value, cancellationToken);
+        Assert.True(toRunning.Succeeded, $"diag={toRunning.DiagnosticCode}");
+        Assert.Equal(SprintState.Running, toRunning.Sprint!.State);
+
+        SprintTransitionResult resumeWhileRunningIsRefused =
+            await mutations.ResumeSprintAsync(environment.ProjectRoot, sprintId.Value, cancellationToken);
+        Assert.False(resumeWhileRunningIsRefused.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintTransitionInvalid, resumeWhileRunningIsRefused.DiagnosticCode);
+
+        SprintTransitionResult cancelled = await mutations
+            .CancelSprintAsync(environment.ProjectRoot, sprintId.Value, confirmed: true, cancellationToken);
+        Assert.True(cancelled.Succeeded, $"diag={cancelled.DiagnosticCode}");
+        Assert.Equal(SprintState.Cancelled, cancelled.Sprint!.State);
+
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Cancelled, state.Sprint.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task RemoteMutationsReportHostUnavailableInsteadOfThrowingWhenNoHostIsRunning()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;

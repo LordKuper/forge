@@ -89,6 +89,50 @@ up) before this landed, fixed by threading a `successKey`/
 `includeResultingState` pair through the shared builder instead of
 hard-coding `run`'s framing for both.
 
+### Independent review found `RunSprintAsync` itself never actually reported the settled state
+
+The paragraph above describes the *intended* behavior; `SprintOrchestrator.RunSprintAsync`'s
+own implementation did not match it. It captured its `SprintTransitionResult`
+*before* calling `AdvanceGraphAsync`, then returned that same pre-advance
+instance regardless of what the side effect did — so a graph that promotes
+past `running` into `awaiting_human` within the same call still reported
+`running` (and a stale `Sprint.Version`) to every caller. This was always
+true, but had no caller before this slice to expose it — the same "first
+real caller reveals a latent bug" pattern ADR 0019's own review rounds hit
+repeatedly for `SprintScheduler`. Fixed by having `RunSprintAsync` return
+`AdvanceGraphAsync`'s own result (`result with { Sprint = advanced.Sprint }`)
+instead of the pre-advance snapshot — no extra read needed, since
+`AdvanceGraphAsync` already returns the current `SprintWorkflowState`.
+Regression test: `SprintOrchestrationTests.RunReportsTheStateAfterItsOwnAdvanceGraphSideEffectNotTheStaleSnapshot`.
+
+### Independent review found `resume` could silently bypass a pending human gate
+
+`SprintOrchestrator.ResumeTarget` mapped `SprintState.AwaitingHuman` to
+`SprintState.Running`, not just `Blocked`/`Failed` to `Ready` — and
+`WorkflowStateMachines` legally allows that specific sprint-level edge
+(it's how `SynchronizeSprintGateStateAsync` itself drives the sprint out of
+`awaiting_human` once every gate resolves). `ResumeSprintAsync` had zero
+callers before this slice, so nothing had ever exercised `resume` against a
+gate-pending sprint: `forge sprint resume` on one succeeded (exit 0, no
+diagnostic) and flipped the sprint straight to `running` while the gate
+*node* itself stayed `awaiting_human` forever — precisely the
+sprint/node disagreement `AdvanceGraphAsync`'s own comment declares must
+never be observable, and `StartAttemptAsync` gates on `Sprint.State ==
+Running`, so this made a `Work` node's attempt startable while a human
+decision was still pending, reachable without ever touching `forge gate
+approve|reject`. A pending gate is only ever meant to be resolved through
+`ResolveHumanGateAsync`; resuming past it is not a legitimate operator
+action the way resuming a `blocked`/`failed` sprint is. Fixed by removing
+the `AwaitingHuman` case from `ResumeTarget` entirely — a `resume` call
+against an `awaiting_human` sprint now falls through to `_ => current`,
+which `TransitionAsync`'s own `target == state.Sprint.State` check refuses
+as `DiagnosticCodes.SprintTransitionInvalid`. `WorkflowStateMachines`'s
+`AwaitingHuman -> Running` edge stays legal, since
+`SynchronizeSprintGateStateAsync`'s own internal use of it is legitimate;
+only `ResumeTarget`'s own mapping — what a raw operator `resume` call is
+allowed to target — changed. Regression test:
+`SprintOrchestrationTests.ResumingASprintAwaitingAHumanGateIsRefusedRatherThanBypassingTheGate`.
+
 ### The shared builder defends against a `null` `Sprint` on success
 
 `IForgeMutations` is implemented by more than one concrete type (the local
@@ -119,6 +163,23 @@ the plain `successKey` text otherwise — the same defensive shape
   accessibility work** — out of scope for this slice, matching ADR 0019.
 - **A real technical human-only control** — unrelated to this slice (no
   command here is human-only), still open from ADR 0019.
+- **`forge sprint cancel` does not cascade to live nodes/attempts.**
+  `CancelSprintAsync` appends exactly one `SprintChanged` event; nothing
+  drives an in-flight node or attempt to a terminal state when the sprint
+  itself becomes `cancelled` (`AttemptState.Cancelled` is written only by
+  `SupersedeAttemptAsync`, for a different reason). Cancelling a sprint with
+  a `running` node/attempt leaves both aggregates non-terminal permanently,
+  and — since `AdvanceGraphAsync`'s `Pending`-to-`Ready` promotion loop is
+  not itself gated on sprint state — a later, unrelated call that happens to
+  invoke `AdvanceGraphAsync` (e.g. completing that still-live attempt) can
+  still promote downstream nodes to `ready` inside an already-cancelled
+  sprint. Independent review found this and flagged it as a real gap this
+  ADR had not named; explicitly deferred here rather than attempted in this
+  slice, since a correct fix needs its own design (which nodes/attempts are
+  "live" enough to cascade to, how to interrupt a not-yet-existent executor,
+  and whether `AdvanceGraphAsync`'s promotion loop should be gated on sprint
+  state generally, not just for this one caller) rather than a narrow patch
+  bolted onto `CancelSprintAsync` alone.
 
 ## Consequences
 
@@ -134,6 +195,20 @@ the plain `successKey` text otherwise — the same defensive shape
   `ForgeApplication`, never through `IForgeMutations`).
 - New diagnostics: none — `SprintNotFound`/`ConfirmationRequired` already
   existed and are reused.
+- `tests/Forge.Tests/Integration/ControlPlaneTests.cs` gained
+  `SprintLifecycleCommandsRoundTripThroughTheHost`, exercising all four new
+  wire kinds against a real `ControlPlaneHost`, matching ADR 0019's own
+  `ResolveGateRoundTripsThroughTheHostAndSettlesTheNode`/
+  `SupersedeAttemptRoundTripsThroughTheHostAndLinksAReplacement` precedent —
+  independent review found the original PR shipped with only a fake-backed
+  routing test, unable to catch a kind-constant, dispatch, or serializer
+  mismatch between the client and Host. `create_sprint`'s own success path
+  is not exercised there (this harness's real Host composition registers no
+  `ILlmProvider`, so `CreateSprintAsync`'s frozen-routing-profile step always
+  reports `SprintProviderCandidatesEmpty`); its wire mechanics are proven on
+  that failure path instead — the sprint `run`/`resume`/`cancel` exercise is
+  created in-process first, matching how the two pre-existing round-trip
+  tests already avoid the same dependency.
 
 ## References
 
