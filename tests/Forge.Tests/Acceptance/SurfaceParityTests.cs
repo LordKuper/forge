@@ -81,13 +81,13 @@ public sealed class SurfaceParityTests
                 foreach (string option in tokens.Where(token => token.StartsWith("--", StringComparison.Ordinal)))
                 {
                     Assert.True(
-                        HasOption(command, option),
-                        $"'{command.Name}' does not expose '{option}'.");
+                        HasOption(current, option),
+                        $"'{current.Name}' does not expose '{option}'.");
                 }
 
                 foreach (string subcommand in Alternatives(tokens))
                 {
-                    Assert.Contains(command.Subcommands, item => item.Name == subcommand);
+                    Assert.Contains(current.Subcommands, item => item.Name == subcommand);
                 }
             });
     }

@@ -309,7 +309,7 @@ public sealed class MainPageViewModel(
         if (target.SprintId is not { } resolvedSprintId)
         {
             return target.Ambiguous
-                ? text.Resolve(MessageKeys.GateSprintAmbiguous)
+                ? text.Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous)
                 : Message(text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SprintNotFound);
         }
 

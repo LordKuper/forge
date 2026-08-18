@@ -149,6 +149,35 @@ end of the literal-subcommand path). Verified against every currently
 `tokens[0]` already starts with `--` or `<`, so the new check is a no-op
 for all of them and only `attempt.supersede` gains real coverage from it.
 
+### Round 2 review: three further findings, all fixed
+
+Independent review found the `SprintTarget.Ambiguous` branch of
+`SupersedeAttemptAsync` still returned `MessageKeys.GateSprintAmbiguous`
+verbatim — text that explicitly reads "resolve its gate" — reached on the
+normal blank-sprint-id-with-multiple-non-terminal-sprints path for a
+capability that has no gate at all. Round 1 had already given the sibling
+`SprintNotFound` branch its own `AttemptSupersedeFailed` wording but left
+this branch sharing the gate's message; it was also the only branch of the
+method without a test (the gate path has one), which is how it went
+unnoticed. Fixed with a dedicated `AttemptSupersedeSprintAmbiguous` key
+(en/ru) and a regression test mirroring the gate's own ambiguity test.
+
+The same round found round 1's own literal-subcommand-token fix (above) was
+itself incomplete: it resolved `current` — the exact documented command —
+but then discarded it, leaving the `--option` and `Alternatives()` checks
+searching from `command` with `HasOption`'s own recursive descent, the
+exact hazard the walk's comment names. `--instruction-file` would still
+have passed if declared on a sibling of `supersede` rather than on
+`supersede` itself. Fixed by searching from `current` for both checks;
+verified `HasOption(current, option)` still passes for every currently
+`Implemented` capability, so this is a pure tightening with no other test
+changes required.
+
+Finally, this ADR's own "Consequences" section listed five of the seven
+message keys this slice added, omitting `AttemptIdRequired` and
+`AttemptIdMissingPlaceholder` despite both being introduced by name earlier
+in this document. Fixed by completing the list.
+
 ## Deliberately deferred
 
 - **`sprint.manage` Desktop controls.** See "Context" above — blocked on
@@ -178,8 +207,10 @@ for all of them and only `attempt.supersede` gains real coverage from it.
   `AttemptSupersedePrompt`, reusing `ResolveSprintIdAsync`/`SprintTarget`.
 - New message keys: `AttemptSupersedeFailed`, `AttemptIdLabel`,
   `AttemptInstructionLabel`, `AttemptSupersedeAction`,
-  `AttemptSupersedeConfirmationRequired` (en/ru). `AttemptSuperseded`
-  already existed from the CLI slice and is reused for the success case.
+  `AttemptSupersedeConfirmationRequired`, `AttemptIdRequired`,
+  `AttemptIdMissingPlaceholder`, `AttemptSupersedeSprintAmbiguous` (en/ru).
+  `AttemptSuperseded` already existed from the CLI slice and is reused for
+  the success case.
 - No new diagnostic codes — `SprintNotFound`, `WorkflowEventConflict`,
   `SupersessionInstructionRequired`/`TooLong`, and `ConfirmationRequired`
   are all reused, matching the CLI's own behavior for each.

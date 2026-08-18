@@ -102,4 +102,5 @@
   <data name="AttemptSupersedeConfirmationRequired" xml:space="preserve"><value>Confirm the supersession before it is applied.</value></data>
   <data name="AttemptIdRequired" xml:space="preserve"><value>Enter an attempt id.</value></data>
   <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(no attempt id entered)</value></data>
+  <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to supersede its attempt.</value></data>
 </root>

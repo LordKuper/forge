@@ -753,6 +753,35 @@ public sealed class MainPageViewModelTests
         Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
     }
 
+    /// <summary>Regression: round 2 review found this branch returned <see
+    /// cref="MessageKeys.GateSprintAmbiguous"/> -- text that explicitly says "resolve its gate" --
+    /// on the normal blank-sprint-id-with-multiple-non-terminal-sprints path for `attempt.supersede`,
+    /// a capability with no gate at all. Fixed with a dedicated <see
+    /// cref="MessageKeys.AttemptSupersedeSprintAmbiguous"/> key.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, null, Guid.NewGuid().ToString(), "instruction", true, cancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous), message);
+        Assert.NotEqual(Text().Resolve(MessageKeys.GateSprintAmbiguous), message);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SupersedeAttemptAsyncReportsAConflictForAnUnparsableAttemptIdWithoutCallingMutations()
