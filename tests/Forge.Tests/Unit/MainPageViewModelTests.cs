@@ -1040,13 +1040,14 @@ public sealed class MainPageViewModelTests
         Assert.Contains(text.Resolve(MessageKeys.AttemptIdMissingPlaceholder), prompt, StringComparison.Ordinal);
     }
 
-    /// <summary>ADR 0025's `control.events` capability. Proves both halves of the new logic this
-    /// slice adds around the already-tested <see cref="ControlEventsReader"/> (see
-    /// <c>ControlEventsReaderTests</c> for the cursor/dedup mechanics themselves): the rendered
-    /// text uses the same <see cref="SurfaceFormatting.EventLines"/> projection `forge events`
-    /// does, and the view model's own stored cursor genuinely carries forward across calls so a
-    /// second poll with nothing new renders <see cref="MessageKeys.NoEvents"/> instead of
-    /// replaying the first poll's event.</summary>
+    /// <summary>ADR 0025's `control.events` capability. Proves the new logic this slice adds
+    /// around the already-tested <see cref="ControlEventsReader"/> (see
+    /// <c>ControlEventsReaderTests</c> for the cursor/dedup mechanics themselves): the view
+    /// model's own stored cursor genuinely carries forward across calls, so a second poll with
+    /// nothing new renders <see cref="MessageKeys.NoEvents"/> instead of replaying the first
+    /// poll's event. (CLI/Desktop rendering parity itself is proved separately, by
+    /// <c>SurfaceParityTests.DesktopAndCliRenderTheSameEventsForOneSnapshot</c> -- this test's own
+    /// `Contains` assertion below is not that proof.)</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task PollEventsAsyncStoresTheCursorSoASecondPollDoesNotReplayTheFirstEvent()

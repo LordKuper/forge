@@ -216,12 +216,36 @@ public sealed class SurfaceParityTests
             guardIndex < dialogIndex, "The blank-instruction guard must run before the confirmation dialog.");
     }
 
-    private static string SupersedeAttemptMethodBody()
+    private static string SupersedeAttemptMethodBody() => MethodBody("private async Task SupersedeAttemptAsync()");
+
+    /// <summary>Round 1 review of PR #65 found <c>RefreshAsync</c> cleared <c>EventsLabel</c>
+    /// unconditionally on every refresh -- including a routine `Refresh` click or the implicit
+    /// refresh after an unrelated action -- discarding a still-valid poll's rendered page for no
+    /// reason. Unlike <c>GateResultLabel</c>/<c>AttemptSupersedeResultLabel</c> (a one-shot
+    /// mutation's own outcome, safe to always clear), `EventsLabel` is a live view of the view
+    /// model's own stored cursor and must only reset on the same condition that invalidates that
+    /// cursor: a project-root switch. No MAUI control can be instantiated headlessly, so this pins
+    /// the guard directly in the code-behind text, the same way the supersede guards above do.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void RefreshAsyncOnlyClearsEventsLabelWhenTheProjectRootChanged()
+    {
+        string method = MethodBody("public async Task RefreshAsync()");
+
+        int guardIndex = method.IndexOf(
+            "!string.Equals(ProjectRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
+        int clearIndex = method.IndexOf("EventsLabel.Text = string.Empty;", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "RefreshAsync no longer guards EventsLabel's reset by project root.");
+        Assert.True(clearIndex >= 0, "RefreshAsync no longer clears EventsLabel at all.");
+        Assert.True(guardIndex < clearIndex, "EventsLabel's reset must be gated by the project-root guard.");
+    }
+
+    private static string MethodBody(string signature)
     {
         string codeBehind = File.ReadAllText(Path.Combine(
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-        int start = codeBehind.IndexOf("private async Task SupersedeAttemptAsync()", StringComparison.Ordinal);
-        Assert.True(start >= 0, "MainPage.xaml.cs no longer declares SupersedeAttemptAsync().");
+        int start = codeBehind.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"MainPage.xaml.cs no longer declares '{signature}'.");
         int bodyStart = codeBehind.IndexOf('{', start);
         int depth = 0;
         for (int index = bodyStart; index < codeBehind.Length; index++)
@@ -240,7 +264,7 @@ public sealed class SurfaceParityTests
             }
         }
 
-        throw new InvalidOperationException("SupersedeAttemptAsync's closing brace was not found.");
+        throw new InvalidOperationException($"'{signature}''s closing brace was not found.");
     }
 
     [Fact]
@@ -327,6 +351,45 @@ public sealed class SurfaceParityTests
 
     private static string SprintSection(string cliOutput, string title) =>
         cliOutput[cliOutput.IndexOf(title, StringComparison.Ordinal)..].TrimEnd();
+
+    /// <summary>Round 1 review of PR #65 found `SurfaceFormatting.EventLines`'s extraction had no
+    /// test proving the CLI and Desktop actually render identically -- sharing the helper is not
+    /// itself the no-drift guarantee, matching the caveat
+    /// <see cref="DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot"/> already states for
+    /// its own capability. Same shape here: drive one real event, render through both surfaces with
+    /// diagnostics on a separate channel (so a diagnostic present on one side never folds into the
+    /// text being compared), and diff the text directly.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameEventsForOneSnapshot()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["events", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, environment.Application)
+            .PollEventsAsync(environment.ProjectRoot, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture, so pin that the compared text
+        // really carries this sprint's own event -- an empty page on both sides would pass too.
+        Assert.Contains(
+            sprintId.Value.ToString("D", CultureInfo.InvariantCulture), desktop, StringComparison.Ordinal);
+    }
 
     [Fact]
     [Trait("Category", "Acceptance")]

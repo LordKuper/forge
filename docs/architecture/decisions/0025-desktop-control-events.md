@@ -73,13 +73,24 @@ A cursor's watermarks describe one project's sprints; reusing them against
 a different project root is meaningless (structurally decodable, since the
 format carries no project identity, but semantically stale). `PollEventsAsync`
 compares the requested `projectRoot` against the root its stored cursor was
-last read against and resets to a fresh cursor on any change — mirroring
-`RefreshAsync`'s own "a prior action's outcome must never survive an
-unrelated trigger" rule, already established twice for `GateResultLabel`/
-`AttemptSupersedeResultLabel`. `RefreshAsync` itself also clears
-`EventsLabel`, the same way it clears those two labels, so a stale
-project's last-polled events never survive into an unrelated refresh
-either.
+last read against and resets to a fresh cursor on any change.
+
+`EventsLabel` needs the same reset, but *not* the same trigger
+`GateResultLabel`/`AttemptSupersedeResultLabel` use. Those two labels carry
+a one-shot mutation's own outcome with no companion state, so clearing them
+unconditionally on every `RefreshAsync` call (routine `Refresh`, page
+`OnAppearing`, or the implicit refresh after an unrelated action) is
+correct — a decision's own result should never survive past the next
+refresh regardless of cause. `EventsLabel` is different: it is a live view
+of the view model's own stored cursor, which does *not* reset on an
+ordinary refresh, only on a project-root switch. Round 1 review caught the
+first version of this slice clearing `EventsLabel` unconditionally anyway
+(copying the other two labels' own rule verbatim without checking whether
+it actually applied), which meant a poll's rendered page never survived a
+single subsequent `Refresh` click. Fixed by gating the clear on the same
+project-root-switch condition the cursor itself resets on — tracked in
+`MainPage`'s own code-behind (`lastPolledEventsProjectRoot`), since the
+view model's cursor state is not otherwise exposed to the page.
 
 ### No `--follow` equivalent on Desktop
 
@@ -91,6 +102,31 @@ a second polling mechanism alongside the CLI's own, for no capability the
 CLI itself does not already lack (nothing here needs push delivery; ADR
 0024's own notification sweep already covers the "the user is not looking
 at the app" case this capability does not need to solve again).
+
+## Round 1 review
+
+Independent review found two issues, both fixed:
+
+1. **`RefreshAsync` cleared `EventsLabel` unconditionally**, copying
+   `GateResultLabel`/`AttemptSupersedeResultLabel`'s own reset rule without
+   checking whether it actually applied to a label with companion cursor
+   state — see "The stored cursor resets on a project-root switch" above
+   for the fix and why the two labels' reset conditions are not actually
+   the same. A new static test, `RefreshAsyncOnlyClearsEventsLabelWhenTheProjectRootChanged`,
+   pins the fix directly in the code-behind text (no MAUI control can be
+   instantiated headlessly in this suite, the same constraint every other
+   code-behind-text assertion in `SurfaceParityTests` already works
+   around).
+2. **`EventLines`'s extraction had no test proving the CLI and Desktop
+   actually render identically.** Sharing `SurfaceFormatting` is not
+   itself the no-drift guarantee this ADR claims — either surface can
+   still wrap, reorder, or filter the shared lines on its way to the
+   screen, exactly the caveat `SurfaceParityTests.DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot`
+   already states for its own capability but that this slice's own tests
+   never extended to `control.events`. Fixed with a new
+   `DesktopAndCliRenderTheSameEventsForOneSnapshot` test: drive one real
+   event, render through both surfaces with diagnostics on a separate
+   channel, and diff the text directly.
 
 ## Deliberately deferred
 
@@ -115,8 +151,8 @@ at the app" case this capability does not need to solve again).
 - `SurfaceFormatting` gains `EventLines`, shared by `CliApplication.WriteEvents`
   and `MainPageViewModel.PollEventsAsync`.
 - `MainPage.xaml` gains `EventsPollButton`, `EventsLabel`; `MainPage.xaml.cs`
-  wires them and clears `EventsLabel` inside `RefreshAsync`, matching the
-  existing per-action result-label reset pattern.
+  wires them and clears `EventsLabel` inside `RefreshAsync`, gated on a
+  project-root switch (see "Round 1 review") rather than unconditionally.
 - `MainPageViewModel` gains `PollEventsAsync` and two private fields
   (`eventsCursor`, `eventsCursorProjectRoot`) holding this page instance's
   own poll progress.

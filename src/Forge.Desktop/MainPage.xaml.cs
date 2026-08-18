@@ -10,6 +10,14 @@ public partial class MainPage : ContentPage
     private readonly SurfaceText text;
     private readonly MainPageViewModel viewModel;
     private bool busy;
+    // Unlike GateResultLabel/AttemptSupersedeResultLabel (a one-shot mutation's own outcome, with
+    // no companion state), EventsLabel is a live view of the view model's own stored polling
+    // cursor -- clearing it on every routine refresh would discard a still-valid poll's rendered
+    // page for no reason. Tracked independently here (the view model's cursor state is not
+    // exposed) so RefreshAsync can clear it only when the condition that actually invalidates it --
+    // a project-root switch, matching MainPageViewModel.PollEventsAsync's own reset condition --
+    // is true, not on every refresh regardless.
+    private string? lastPolledEventsProjectRoot;
 
     public MainPage(
         SurfaceText text,
@@ -96,10 +104,14 @@ public partial class MainPage : ContentPage
         GateResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
         AttemptSupersedeResultLabel.Text = string.Empty;
-        // Same reasoning again, for the last poll's rendered page -- a stale project's events must
-        // never survive into this project's refresh. The view model's own stored cursor resets
-        // independently on the same project-switch condition (see MainPageViewModel.PollEventsAsync).
-        EventsLabel.Text = string.Empty;
+        // Same reasoning again, for the last poll's rendered page -- but only reset it on the
+        // condition that actually invalidates it (a project-root switch), not on every refresh:
+        // see the lastPolledEventsProjectRoot field's own comment.
+        if (!string.Equals(ProjectRoot, lastPolledEventsProjectRoot, StringComparison.Ordinal))
+        {
+            EventsLabel.Text = string.Empty;
+            lastPolledEventsProjectRoot = ProjectRoot;
+        }
     }
 
     protected override async void OnAppearing()
@@ -274,7 +286,10 @@ public partial class MainPage : ContentPage
     /// this page, a poll needs no confirmation dialog (nothing irreversible happens) and does not
     /// call <see cref="RefreshAsync"/> afterward -- the events page is not part of
     /// <see cref="MainPageSnapshot"/>, so nothing else on screen needs to change for it.</summary>
-    private async Task PollEventsAsync() =>
+    private async Task PollEventsAsync()
+    {
         EventsLabel.Text = await viewModel.PollEventsAsync(ProjectRoot, CancellationToken.None)
             .ConfigureAwait(true);
+        lastPolledEventsProjectRoot = ProjectRoot;
+    }
 }
