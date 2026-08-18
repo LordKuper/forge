@@ -32,6 +32,8 @@ public sealed class SurfaceParityTests
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
         [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
+        [CapabilityIds.WorkflowReview] =
+            ["SprintIdEntry", "GateNodeIdEntry", "GateApproveButton", "GateRejectButton", "GateResultLabel"],
     };
 
     [Fact]

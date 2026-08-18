@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Localization;
 
@@ -199,6 +200,37 @@ public sealed class MainPageViewModel(
                 .ConfigureAwait(false);
             return Message(
                 text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. <paramref name="sprintId"/>
+    /// reuses the same entry the sprint-tree expansion uses; an unparsable or missing value is
+    /// reported the same way `forge gate approve|reject` reports an unparsable `--sprint`, rather
+    /// than silently falling back to some other sprint. <paramref name="nodeId"/> empty means the
+    /// canonical human-approval node, matching the CLI's own `--node` default.</summary>
+    public async Task<string> ResolveGateAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        if (!Guid.TryParse(sprintId, out Guid parsedSprintId))
+        {
+            return Message(text.Resolve(MessageKeys.GateResolutionFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            NodeActionResult result = await mutations
+                .ResolveGateAsync(projectRoot, parsedSprintId, effectiveNodeId, approved, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.GateResolved : MessageKeys.GateResolutionFailed),
                 result.DiagnosticCode);
         }).ConfigureAwait(false);
     }

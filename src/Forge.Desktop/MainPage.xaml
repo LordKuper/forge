@@ -23,6 +23,13 @@
         <Button x:Name="InitializeButton" Clicked="OnInitializeClicked" />
         <Button x:Name="RecoverButton" Clicked="OnRecoverClicked" />
       </HorizontalStackLayout>
+      <!-- Reuses SprintIdEntry above as the gate's sprint context: one sprint-id field, not two. -->
+      <Entry x:Name="GateNodeIdEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <HorizontalStackLayout Spacing="8">
+        <Button x:Name="GateApproveButton" Clicked="OnGateApproveClicked" />
+        <Button x:Name="GateRejectButton" Clicked="OnGateRejectClicked" />
+      </HorizontalStackLayout>
+      <Label x:Name="GateResultLabel" />
       <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />

@@ -1,5 +1,6 @@
 using System.Globalization;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
@@ -354,6 +355,95 @@ public sealed class MainPageViewModelTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(1, mutations.DisposeCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncRoutesThroughTheResolvedMutationsAndDefaultsTheNodeId()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, true, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.ResolveGateCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, "not-a-guid", null, true, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.ResolveGateCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncDisposesTheResolvedMutationsAfterTheCall()
+    {
+        using TestEnvironment environment = new();
+        DisposableFakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, true, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.DisposeCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncResolvesARealAwaitingHumanGateThroughTheLocalFallback()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        // Named after the canonical human-approval node id so the `nodeId: null` call below
+        // genuinely exercises the default-substitution path, matching `forge gate approve|reject`
+        // with no `--node`.
+        string nodeId = ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value.ToString(), null, true, true, cancellationToken);
+
+        Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, state.Nodes[nodeId].State);
     }
 
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);

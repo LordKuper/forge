@@ -33,8 +33,11 @@ public partial class MainPage : ContentPage
         // it is described here too.
         Describe(ProjectRootEntry, text.Resolve(MessageKeys.ProjectRootLabel));
         Describe(SprintIdEntry, text.Resolve(MessageKeys.SprintIdLabel));
+        Describe(GateNodeIdEntry, text.Resolve(MessageKeys.GateNodeIdLabel));
         Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
         Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
+        GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
+        GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -56,6 +59,11 @@ public partial class MainPage : ContentPage
     /// <summary>Empty means "expand the active sprint", matching `forge tree` with no `--sprint`.</summary>
     private string? SprintId =>
         string.IsNullOrWhiteSpace(SprintIdEntry.Text) ? null : SprintIdEntry.Text;
+
+    /// <summary>Empty means the canonical human-approval node, matching `forge gate approve|reject`
+    /// with no `--node`.</summary>
+    private string? GateNodeId =>
+        string.IsNullOrWhiteSpace(GateNodeIdEntry.Text) ? null : GateNodeIdEntry.Text;
 
     public async Task RefreshAsync()
     {
@@ -92,6 +100,12 @@ public partial class MainPage : ContentPage
 
     private async void OnConfigurationSetClicked(object? sender, EventArgs e) =>
         await RunAsync(SetConfigurationAsync).ConfigureAwait(true);
+
+    private async void OnGateApproveClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ResolveGateAsync(approved: true)).ConfigureAwait(true);
+
+    private async void OnGateRejectClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ResolveGateAsync(approved: false)).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -159,6 +173,21 @@ public partial class MainPage : ContentPage
                 ConfigurationKeyEntry.Text ?? string.Empty,
                 ConfigurationValueEntry.Text,
                 CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability: unlike
+    /// <see cref="RecoverAsync"/>, this confirmation is never bypassable — the dialog's own
+    /// yes/no answer *is* the `confirmed` value passed through, with no config-driven shortcut.</summary>
+    private async Task ResolveGateAsync(bool approved)
+    {
+        string action = text.Resolve(approved ? MessageKeys.GateApproveAction : MessageKeys.GateRejectAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, action, action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        GateResultLabel.Text = await viewModel
+            .ResolveGateAsync(ProjectRoot, SprintId, GateNodeId, approved, confirmed, CancellationToken.None)
             .ConfigureAwait(true);
         await RefreshAsync().ConfigureAwait(true);
     }

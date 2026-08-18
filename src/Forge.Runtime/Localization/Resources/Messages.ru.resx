@@ -85,6 +85,10 @@
   <data name="GateApproveDescription" xml:space="preserve"><value>Одобрить контрольную точку, ожидающую решения человека.</value></data>
   <data name="GateRejectDescription" xml:space="preserve"><value>Отклонить контрольную точку, ожидающую решения человека.</value></data>
   <data name="GateResolved" xml:space="preserve"><value>Контрольная точка обработана.</value></data>
+  <data name="GateResolutionFailed" xml:space="preserve"><value>Не удалось обработать контрольную точку.</value></data>
+  <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
+  <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
+  <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>
   <data name="AttemptDescription" xml:space="preserve"><value>Команды попыток (только для человека).</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Отменить незавершённую попытку и создать связанную замену.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Попытка заменена.</value></data>
