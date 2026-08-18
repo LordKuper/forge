@@ -152,43 +152,31 @@ public sealed class AttemptSupervisionTests
             () => supervisor.SuperviseAsync<string>((_, _) => throw new InvalidOperationException("boom")));
     }
 
-    /// <summary>Regression test: an earlier version matched any <see cref="OperationCanceledException"/>
-    /// once <c>Reason</c> was non-<see cref="AttemptTerminationReason.None"/>, regardless of which
-    /// token the exception actually carried -- misattributing a cancellation the supervised work
-    /// raised for its own, unrelated reason to this supervisor's deadline, purely because of a
-    /// coincidental timing overlap. The fix checks the exception's own
-    /// <see cref="OperationCanceledException.CancellationToken"/> against <see cref="AttemptSupervisor.Token"/>.
-    /// </summary>
+    /// <summary>Regression test for a critical bug: an earlier version required the thrown
+    /// exception's own <see cref="OperationCanceledException.CancellationToken"/> to equal
+    /// <see cref="AttemptSupervisor.Token"/> exactly. `ProviderExecution.RunAsync` -- the one
+    /// caller this class exists for -- never satisfies that: it re-links the token it is given
+    /// into its own nested <see cref="CancellationTokenSource"/> before passing that descendant
+    /// token further down, so the exception that actually escapes carries a *different* token
+    /// object than <see cref="AttemptSupervisor.Token"/> even though it is a direct, deterministic
+    /// consequence of this supervisor cancelling it. The identity check made every real deadline
+    /// throw uncaught instead of classifying -- this test reproduces that re-linking shape
+    /// directly, independent of any real provider adapter.</summary>
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task AnOperationCanceledExceptionFromAnUnrelatedTokenPropagatesEvenWhileAReasonIsLatched()
+    public async Task ADeadlineIsStillClassifiedWhenTheCalleeRelinksTheTokenBeforeThrowing()
     {
         using AttemptSupervisor supervisor = new(ShortDeadline, LongDeadline, CancellationToken.None);
-        using CancellationTokenSource unrelated = new();
-        await unrelated.CancelAsync();
 
-        OperationCanceledException thrown = await Assert.ThrowsAsync<OperationCanceledException>(
-            () => supervisor.SuperviseAsync<string>(
-                async (_, _) =>
-                {
-                    // Wait for the session timeout to actually latch a reason, so the
-                    // misattribution this test regresses against is a real possibility, not
-                    // trivially absent because Reason was still None. Bounded, not an unconditional
-                    // spin: a regression that stops latching must fail this test, not hang the run.
-                    DateTime waitDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
-                    while (supervisor.Reason == AttemptTerminationReason.None)
-                    {
-                        Assert.True(
-                            DateTime.UtcNow < waitDeadline,
-                            "Expected the session timeout to latch a reason within 5 seconds.");
-                        await Task.Delay(10, CancellationToken.None).ConfigureAwait(false);
-                    }
+        AttemptSupervisionResult<string> result = await supervisor.SuperviseAsync<string>(
+            async (token, _) =>
+            {
+                using CancellationTokenSource relinked = CancellationTokenSource.CreateLinkedTokenSource(token);
+                await Task.Delay(Timeout.InfiniteTimeSpan, relinked.Token).ConfigureAwait(false);
+                throw new InvalidOperationException("Unreachable: only cancellation ends the delay.");
+            });
 
-                    unrelated.Token.ThrowIfCancellationRequested();
-                    throw new InvalidOperationException("Unreachable: the token above is already cancelled.");
-                }));
-
-        Assert.Equal(unrelated.Token, thrown.CancellationToken);
+        Assert.Equal(AttemptTerminationReason.SessionTimeout, result.Reason);
     }
 
     [Fact]

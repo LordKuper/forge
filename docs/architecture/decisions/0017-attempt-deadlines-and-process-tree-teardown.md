@@ -63,13 +63,23 @@ token — is latched as the attempt's `AttemptTerminationReason` (`None`
 until then) and cancels `Token`. `SuperviseAsync<T>` is the ergonomic entry
 point: it runs the supplied work with `Token`/`OnActivityAsync`, and
 translates a resulting `OperationCanceledException` into a classified
-`AttemptSupervisionResult<T>` only when both this supervisor's `Reason` is
-latched *and* the exception's own `CancellationToken` equals `Token` — not
-merely `Reason != None`, since work that independently throws for an
-unrelated token could otherwise be misattributed purely because of a
-timing coincidence with an already-latched reason. Any exception that
-fails that check (an ordinary thrown error, or a cancellation for an
-unrelated token) propagates unchanged.
+`AttemptSupervisionResult<T>` whenever `Reason != None` by that point. An
+earlier version additionally required the thrown exception's own
+`CancellationToken` to equal `Token` exactly, reasoning that work throwing
+independently for an unrelated token should not be misattributed purely
+because of a timing coincidence with an already-latched reason — plausible
+in isolation, but wrong for the one caller this class exists for: a fourth,
+critical-only review round found that `ProviderExecution.RunAsync` (P11.32-
+P11.40, ADR 0016) always re-links whatever token it is given into its own
+nested `CancellationTokenSource` before passing that descendant token
+further down, so the exception that actually escapes carries a *different*
+token object than `Token` even though it is a direct, deterministic
+consequence of this supervisor cancelling it. The identity check made
+every real deadline throw uncaught instead of classifying — breaking the
+primary use case entirely to guard a narrower, lower-severity
+misattribution risk. `Reason != None` alone is what ships; a callee that
+throws an unrelated cancellation while `Reason` happens to already be
+latched is accepted as a residual, lower-severity risk.
 
 The idle timer is self-rescheduling rather than reset-via-`Change` from
 `OnActivityAsync`: a `Timer.Change` call can never recall a callback the

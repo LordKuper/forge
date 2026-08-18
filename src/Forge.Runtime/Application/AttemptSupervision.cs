@@ -128,25 +128,29 @@ public sealed class AttemptSupervisor : IDisposable
     /// translating a cancellation this supervisor itself caused (either deadline, or the caller's
     /// own token) into a classified result instead of letting <see cref="OperationCanceledException"/>
     /// propagate -- the same self-cancellation pattern <see cref="Forge.Providers.ProviderExecution"/>
-    /// already uses for its own bound violations. The exception's own
-    /// <see cref="OperationCanceledException.CancellationToken"/> is checked against
-    /// <see cref="Token"/>, not merely whether <see cref="Reason"/> happens to be non-`None` at
-    /// that moment: a cancellation <paramref name="work"/> raises for a reason of its own (an
-    /// unrelated token, coincidentally overlapping with an already-latched reason) must not be
-    /// misattributed to this supervisor. Any exception that fails that check propagates unchanged.
+    /// already uses for its own bound violations. Classification keys on <see cref="Reason"/> alone,
+    /// not on matching the thrown exception's own
+    /// <see cref="OperationCanceledException.CancellationToken"/> against <see cref="Token"/>: a
+    /// well-behaved callee legitimately re-links <see cref="Token"/> into its own nested
+    /// <see cref="CancellationTokenSource"/> (exactly what `ProviderExecution.RunAsync` -- this
+    /// class's own primary intended caller -- does), so the exception that actually escapes almost
+    /// never carries <see cref="Token"/> itself, only a descendant of it. Requiring exact identity
+    /// (an earlier version of this method did) made every real deadline throw uncaught instead of
+    /// classifying, since the one caller this class exists for never satisfies it. The residual
+    /// risk -- a callee that throws an unrelated cancellation coincidentally while
+    /// <see cref="Reason"/> happens to already be latched -- is accepted as lower-severity than
+    /// silently failing the primary use case entirely.
     /// </summary>
     public async Task<AttemptSupervisionResult<T>> SuperviseAsync<T>(
         Func<CancellationToken, Func<AttemptActivityKind, CancellationToken, Task>, Task<T>> work)
     {
         ArgumentNullException.ThrowIfNull(work);
-        CancellationToken token = Token;
         try
         {
-            T value = await work(token, OnActivityAsync).ConfigureAwait(false);
+            T value = await work(Token, OnActivityAsync).ConfigureAwait(false);
             return new(Reason, value);
         }
-        catch (OperationCanceledException error) when (
-            Reason != AttemptTerminationReason.None && error.CancellationToken == token)
+        catch (OperationCanceledException) when (Reason != AttemptTerminationReason.None)
         {
             return new(Reason, default);
         }
