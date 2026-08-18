@@ -285,11 +285,17 @@ public partial class MainPage : ContentPage
     /// <summary>ADR 0005's read-only `control.events` capability. Unlike every mutating action on
     /// this page, a poll needs no confirmation dialog (nothing irreversible happens) and does not
     /// call <see cref="RefreshAsync"/> afterward -- the events page is not part of
-    /// <see cref="MainPageSnapshot"/>, so nothing else on screen needs to change for it.</summary>
+    /// <see cref="MainPageSnapshot"/>, so nothing else on screen needs to change for it. Round 2
+    /// review found <c>ProjectRoot</c> read twice across the `await` below -- editing the entry
+    /// mid-poll (the `busy` guard blocks re-clicks, not entry edits) could store the request's own
+    /// root in <see cref="lastPolledEventsProjectRoot"/> while the label and the view model's own
+    /// cursor still reflect whatever root the request actually read against. Captured into a local
+    /// once, before the request, so both assignments always agree with what was actually polled.</summary>
     private async Task PollEventsAsync()
     {
-        EventsLabel.Text = await viewModel.PollEventsAsync(ProjectRoot, CancellationToken.None)
+        string? requestedRoot = ProjectRoot;
+        EventsLabel.Text = await viewModel.PollEventsAsync(requestedRoot, CancellationToken.None)
             .ConfigureAwait(true);
-        lastPolledEventsProjectRoot = ProjectRoot;
+        lastPolledEventsProjectRoot = requestedRoot;
     }
 }

@@ -128,6 +128,41 @@ Independent review found two issues, both fixed:
    event, render through both surfaces with diagnostics on a separate
    channel, and diff the text directly.
 
+## Round 2 review
+
+Independent review found three issues, all fixed. The first two are the
+same "documentation/tests didn't actually keep up with round 1's own fix"
+shape — a pattern worth naming, since a plan-note or a test that looks
+right but doesn't track the real invariant is exactly what let round 1's
+own defect (and the shape of round 3's finding below) go unnoticed for as
+long as it did:
+
+1. **This slice's own `docs/plans/implementation-plan.md` progress note
+   still described the pre-round-1 unconditional-clear behavior**,
+   directly contradicting this ADR's already-corrected text. Fixed to
+   match, and to record both review rounds' outcomes the way every
+   sibling slice's own progress note already does.
+2. **`MainPage.xaml.cs`'s `PollEventsAsync` read `ProjectRoot` twice
+   across the `await`** — once to build the request, once (after the
+   request returned) to record what was polled. `RunAsync`'s `busy` flag
+   blocks a second click, but not an edit to `ProjectRootEntry` while a
+   poll is already in flight, and the `await` yields the UI thread for
+   exactly that window to matter: editing the entry mid-poll would store
+   the *new* root in `lastPolledEventsProjectRoot` while `EventsLabel` and
+   the view model's own cursor still reflect whatever root the request
+   actually read against — the same kind of two-field desync "The stored
+   cursor resets on a project-root switch" exists to prevent, just at a
+   different pair of fields. Fixed by capturing `ProjectRoot` into a local
+   once, before the request, and using that local for both assignments.
+3. **The round-1 static test proved only text order, not containment.** A
+   mutation moving the unconditional clear back outside the guard's own
+   `{ }` block (reintroducing round 1's exact defect) while leaving the
+   guard text itself untouched earlier in the method would still satisfy
+   "guard text appears before clear text" — the test would stay green
+   against the very regression it exists to catch. Fixed by extracting the
+   guard `if` statement's own brace-matched block and asserting the clear
+   is textually inside it, not merely somewhere after it.
+
 ## Deliberately deferred
 
 - **`sprint.manage` Desktop controls.** Unchanged from ADR 0022 — still

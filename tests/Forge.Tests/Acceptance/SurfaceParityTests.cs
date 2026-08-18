@@ -225,7 +225,12 @@ public sealed class SurfaceParityTests
     /// mutation's own outcome, safe to always clear), `EventsLabel` is a live view of the view
     /// model's own stored cursor and must only reset on the same condition that invalidates that
     /// cursor: a project-root switch. No MAUI control can be instantiated headlessly, so this pins
-    /// the guard directly in the code-behind text, the same way the supersede guards above do.</summary>
+    /// the guard directly in the code-behind text, the same way the supersede guards above do.
+    /// Round 2 review found the original version of this test only checked text ORDER (guard
+    /// before clear), which a mutation moving the clear back outside the guard's own `{ }` block --
+    /// reintroducing round 1's exact defect -- would not fail: the guard text would still appear
+    /// earlier in the method than the now-unconditional clear. This checks CONTAINMENT instead: the
+    /// clear must be textually inside the guard `if` statement's own block.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void RefreshAsyncOnlyClearsEventsLabelWhenTheProjectRootChanged()
@@ -234,10 +239,12 @@ public sealed class SurfaceParityTests
 
         int guardIndex = method.IndexOf(
             "!string.Equals(ProjectRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
-        int clearIndex = method.IndexOf("EventsLabel.Text = string.Empty;", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "RefreshAsync no longer guards EventsLabel's reset by project root.");
-        Assert.True(clearIndex >= 0, "RefreshAsync no longer clears EventsLabel at all.");
-        Assert.True(guardIndex < clearIndex, "EventsLabel's reset must be gated by the project-root guard.");
+        int ifIndex = method.LastIndexOf("if (", guardIndex, StringComparison.Ordinal);
+        Assert.True(ifIndex >= 0, "The project-root guard is no longer an `if` condition.");
+        string guardBlock = BracedBlock(method, ifIndex);
+
+        Assert.Contains("EventsLabel.Text = string.Empty;", guardBlock, StringComparison.Ordinal);
     }
 
     private static string MethodBody(string signature)
@@ -246,25 +253,33 @@ public sealed class SurfaceParityTests
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
         int start = codeBehind.IndexOf(signature, StringComparison.Ordinal);
         Assert.True(start >= 0, $"MainPage.xaml.cs no longer declares '{signature}'.");
-        int bodyStart = codeBehind.IndexOf('{', start);
+        return BracedBlock(codeBehind, start);
+    }
+
+    /// <summary>Returns the `{ ... }` block starting at the first `{` at or after
+    /// <paramref name="searchStart"/>, matched by brace depth rather than by indentation or a fixed
+    /// line count, so it is correct regardless of how the block is formatted.</summary>
+    private static string BracedBlock(string source, int searchStart)
+    {
+        int bodyStart = source.IndexOf('{', searchStart);
         int depth = 0;
-        for (int index = bodyStart; index < codeBehind.Length; index++)
+        for (int index = bodyStart; index < source.Length; index++)
         {
-            if (codeBehind[index] == '{')
+            if (source[index] == '{')
             {
                 depth++;
             }
-            else if (codeBehind[index] == '}')
+            else if (source[index] == '}')
             {
                 depth--;
                 if (depth == 0)
                 {
-                    return codeBehind[bodyStart..(index + 1)];
+                    return source[bodyStart..(index + 1)];
                 }
             }
         }
 
-        throw new InvalidOperationException($"'{signature}''s closing brace was not found.");
+        throw new InvalidOperationException("Block's closing brace was not found.");
     }
 
     [Fact]
