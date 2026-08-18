@@ -86,6 +86,49 @@ Task<IntegrationWriteResult>>`), so the two install/remove code paths
 cannot silently diverge from each other the way two hand-written copies
 could.
 
+## Round 1 review
+
+Independent review found four issues, all fixed:
+
+1. **The install/remove confirmation dialogs repeated the action name as
+   their own message instead of naming a target.** Unlike `RecoverAsync`
+   (a valid precedent for the *bypass* shape, but not for an uninformative
+   dialog — there is nothing more specific than "startup" to name),
+   `install`/`remove` write to and delete from the project's own working
+   tree, the same destructiveness rigor `GateConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName`/
+   `AttemptSupersedeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName`
+   already enforce for `workflow.review`/`attempt.supersede`. Fixed by
+   reusing `MainPageViewModel.InitializePrompt`'s existing shape (resolved
+   via `GetProjectSnapshotAsync`, the same call `InitializeAsync` already
+   makes) rather than inventing a third, independent prompt scheme; pinned
+   with a new static test mirroring the two existing dialog-naming checks.
+2. **The new parity test's fixture was degenerate.** `TestEnvironment`'s
+   only default provider (`fake`) has no matching generator anywhere in
+   this neutral test composition — the real Claude/Codex generators live
+   in Windows-only OS-adapter projects (ADR 0007) this suite never
+   references — so both surfaces rendered only the constant
+   `NoIntegrationArtifacts` string, and `IntegrationInspectionRow`/
+   `AppendIntegrationDocumentErrors`, the only parts of the shared
+   projection that can actually drift, were never exercised. Fixed by
+   giving `TestEnvironment` a new optional `generators` parameter (same
+   shape as its existing `llmProviders`/`providers` overrides) and a
+   minimal in-file fake generator for the `fake` provider, then pinning
+   that the compared text really carries a real artifact row.
+3. **`IntegrationWriteLines`, the mutating half and the one actually
+   reachable from a destructive action, had no parity test at all** —
+   the original PR covered only `generate`. Fixed with a second parity
+   test, `DesktopAndCliRenderTheSameIntegrationWriteForOneSnapshot`, using
+   two separate projects rather than one install-then-compare-a-second-
+   install (a second install against the same target renders `unchanged`,
+   not `written`, which would fail for a reason unrelated to what the test
+   exists to prove).
+4. **`IntegrationInspectionRow`/`IntegrationWriteRow` were left `public`**
+   with no caller outside `SurfaceFormatting.cs` after the extraction.
+   Narrowed to `private` (pre-1.0 contracts are freely replaceable); their
+   doc comments, which claimed to be "shared with Desktop" directly, were
+   corrected to point at `IntegrationInspectionLines`/`IntegrationWriteLines`
+   as the actual shared, tested surface.
+
 ## Deliberately deferred
 
 - **`sprint.manage` Desktop controls.** Unchanged from ADR 0022 — still

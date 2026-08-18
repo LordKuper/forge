@@ -46,10 +46,11 @@ public static class SurfaceFormatting
                 $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
     }
 
-    /// <summary>One provider's row for `forge integration skill generate`'s preview, shared with
-    /// Desktop (ADR 0011) so the two never drift: provider id, target path, and whether installing
-    /// would write/no-op/refuse.</summary>
-    public static string IntegrationInspectionRow(IntegrationArtifactInspection inspection)
+    /// <summary>One provider's row for `forge integration skill generate`'s preview: provider id,
+    /// target path, and whether installing would write/no-op/refuse. Private -- reached only
+    /// through <see cref="IntegrationInspectionLines"/>, the shared, tested no-drift surface (ADR
+    /// 0026); nothing outside this file calls the per-row formatter directly.</summary>
+    private static string IntegrationInspectionRow(IntegrationArtifactInspection inspection)
     {
         ArgumentNullException.ThrowIfNull(inspection);
         return string.Create(
@@ -57,9 +58,10 @@ public static class SurfaceFormatting
             $"{inspection.Artifact.ProviderId.Value} {inspection.Artifact.RelativePath} {Machine(inspection.State)}");
     }
 
-    /// <summary>One provider's row for `forge integration skill install|remove`'s result, shared
-    /// with Desktop (ADR 0011).</summary>
-    public static string IntegrationWriteRow(IntegrationArtifactResult result)
+    /// <summary>One provider's row for `forge integration skill install|remove`'s result. Private
+    /// for the same reason as <see cref="IntegrationInspectionRow"/> -- reached only through
+    /// <see cref="IntegrationWriteLines"/>.</summary>
+    private static string IntegrationWriteRow(IntegrationArtifactResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         return string.Create(

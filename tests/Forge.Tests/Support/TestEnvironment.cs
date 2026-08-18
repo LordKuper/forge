@@ -17,7 +17,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         IProviderToolchainManager? providers = null,
         IRepository? repository = null,
         IEnumerable<ILlmProvider>? llmProviders = null,
-        IProviderEnablementSource? providerEnablement = null)
+        IProviderEnablementSource? providerEnablement = null,
+        IEnumerable<IProviderIntegrationGenerator>? generators = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -63,6 +64,15 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         // `git rev-parse HEAD` would fail there, so sprint creation gets a fixed fake commit
         // unless a test explicitly needs to exercise repository-unavailable behavior.
         services.AddSingleton(repository ?? new FakeRepository());
+        // No default: the real generators (Claude/Codex) live in Windows-only OS-adapter projects
+        // this neutral test composition never references (ADR 0007), so `IEnumerable<IProviderIntegrationGenerator>`
+        // resolves empty unless a test opts in -- matching `forge integration skill generate`'s own
+        // "no enabled provider has an integration generator" path by default.
+        foreach (IProviderIntegrationGenerator generator in generators ?? [])
+        {
+            services.AddSingleton(generator);
+        }
+
         provider = services.BuildServiceProvider();
     }
 

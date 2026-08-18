@@ -338,15 +338,19 @@ public partial class MainPage : ContentPage
     /// confirmation, `integration_write_confirm` is an ordinary permission -- the dialog's own
     /// answer is still passed through as <c>confirmed</c>, but a decline does not itself short-
     /// circuit the call the way it does for those two, matching <see cref="RecoverAsync"/>'s own
-    /// shape exactly (the mutation may still succeed via a configured bypass).</summary>
+    /// shape exactly (the mutation may still succeed via a configured bypass). Round 1 review found
+    /// the dialog originally repeated the action name as its own message instead of naming a
+    /// target -- unlike <see cref="RecoverAsync"/> (nothing to name beyond "startup"), this writes
+    /// to the project's own working tree, so it reuses <see cref="MainPageViewModel.InitializePrompt"/>'s
+    /// shape, the same way <see cref="InitializeAsync"/> already names its own target.</summary>
     private async Task InstallIntegrationAsync()
     {
         string? requestedRoot = ProjectRoot;
+        ProjectSnapshot snapshot = await viewModel.GetProjectSnapshotAsync(requestedRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        string action = text.Resolve(MessageKeys.IntegrationInstallAction);
         bool confirmed = await DisplayAlertAsync(
-                text.Resolve(MessageKeys.IntegrationInstallAction),
-                text.Resolve(MessageKeys.IntegrationInstallAction),
-                text.Resolve(MessageKeys.IntegrationInstallAction),
-                text.Resolve(MessageKeys.CancelAction))
+                action, viewModel.InitializePrompt(snapshot), action, text.Resolve(MessageKeys.CancelAction))
             .ConfigureAwait(true);
         string message = await viewModel
             .InstallIntegrationAsync(requestedRoot, confirmed, CancellationToken.None)
@@ -356,15 +360,17 @@ public partial class MainPage : ContentPage
     }
 
     /// <summary>ADR 0026's `integration.skill` remove verb -- same shape as
-    /// <see cref="InstallIntegrationAsync"/>.</summary>
+    /// <see cref="InstallIntegrationAsync"/>, including naming its own target: `remove` deletes a
+    /// file from the project's own working tree, the same destructiveness reasoning that made
+    /// round 1 review flag the original undescriptive dialog.</summary>
     private async Task RemoveIntegrationAsync()
     {
         string? requestedRoot = ProjectRoot;
+        ProjectSnapshot snapshot = await viewModel.GetProjectSnapshotAsync(requestedRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        string action = text.Resolve(MessageKeys.IntegrationRemoveAction);
         bool confirmed = await DisplayAlertAsync(
-                text.Resolve(MessageKeys.IntegrationRemoveAction),
-                text.Resolve(MessageKeys.IntegrationRemoveAction),
-                text.Resolve(MessageKeys.IntegrationRemoveAction),
-                text.Resolve(MessageKeys.CancelAction))
+                action, viewModel.InitializePrompt(snapshot), action, text.Resolve(MessageKeys.CancelAction))
             .ConfigureAwait(true);
         string message = await viewModel
             .RemoveIntegrationAsync(requestedRoot, confirmed, CancellationToken.None)
