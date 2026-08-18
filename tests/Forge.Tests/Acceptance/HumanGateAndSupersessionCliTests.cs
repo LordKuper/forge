@@ -2,6 +2,7 @@ using System.CommandLine;
 using System.Globalization;
 using Forge.Application;
 using Forge.Cli;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Localization;
 using Forge.Tests.Support;
@@ -82,6 +83,45 @@ public sealed class HumanGateAndSupersessionCliTests
     {
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: GateGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root =
+            CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+
+        int exitCode = await root
+            .Parse([
+                "gate", "approve", "--sprint", sprintId.Value.ToString(), "--node", "gate",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains(DiagnosticCodes.ConfirmationRequired, diagnostics.ToString(), StringComparison.Ordinal);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate"].State);
+    }
+
+    /// <summary>ADR 0019's central decision: unlike every other confirmable mutation on
+    /// <c>IForgeMutations</c>, this command accepts no config-driven confirmation bypass — omitting
+    /// <c>--yes</c> must still be refused even when <c>interaction.confirm_destructive</c> is
+    /// disabled.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task GateApproveCommandRequiresConfirmationEvenWhenConfirmDestructiveIsDisabled()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User, environment.ProjectRoot, "interaction.confirm_destructive", "false",
+            TestContext.Current.CancellationToken);
+        Assert.True(configured.Succeeded);
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
         ISprintStore store = environment.Resolve<ISprintStore>();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
@@ -239,6 +279,77 @@ public sealed class HumanGateAndSupersessionCliTests
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
         Assert.NotEqual(0, exitCode);
+        Assert.Contains(
+            DiagnosticCodes.SupersessionInstructionUnreadable, diagnostics.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task AttemptSupersedeCommandRejectsAnEmptyInstruction()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        StringReader input = new("   \n  ");
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, input: input);
+
+        int exitCode = await root
+            .Parse([
+                "attempt", "supersede", Guid.NewGuid().ToString(), "--sprint", Guid.NewGuid().ToString(),
+                "--instruction-file", "-", "--yes", "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains(
+            DiagnosticCodes.SupersessionInstructionRequired, diagnostics.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>ADR 0019: unlike every other confirmable mutation on <c>IForgeMutations</c>
+    /// (<c>InstallIntegrationAsync</c>/<c>RemoveIntegrationAsync</c>), this command accepts no
+    /// config-driven confirmation bypass — omitting <c>--yes</c> must always be refused, regardless
+    /// of <c>interaction.confirm_destructive</c>.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task AttemptSupersedeCommandRequiresConfirmationEvenWhenConfirmDestructiveIsDisabled()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User, environment.ProjectRoot, "interaction.confirm_destructive", "false",
+            TestContext.Current.CancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: WorkGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        StringReader input = new("Try a different approach.");
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, input: input);
+
+        int exitCode = await root
+            .Parse([
+                "attempt", "supersede", started.AttemptId!.Value.ToString(), "--sprint", sprintId.Value.ToString(),
+                "--instruction-file", "-", "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.NotEqual(0, exitCode);
+        Assert.Contains(DiagnosticCodes.ConfirmationRequired, diagnostics.ToString(), StringComparison.Ordinal);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Created, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
     }
 
     [Fact]

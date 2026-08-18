@@ -716,11 +716,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // does not also require a replacement attempt to already exist: gating on that too would
         // reject a retry that lands between the cancel transition and replacement creation (the
         // cancel already committed; nothing about it is redone), leaving the node stuck `running`
-        // with a `cancelled` attempt and no path to recover except aborting the sprint. Once
-        // `cancelled`, the append below is safe to call unconditionally either way -- a genuine
-        // replay (same idempotency key) short-circuits inside the store before any version check
-        // runs; a call this permissive check lets through for the wrong reason still lands on an
-        // illegal `cancelled` -> `cancelled` transition there and is rejected all the same.
+        // with a `cancelled` attempt and no path to recover except aborting the sprint.
         bool alreadySuperseded = attempt.State == AttemptState.Cancelled;
         if (!alreadySuperseded)
         {
@@ -741,16 +737,26 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
 
-        // The caller's own validated key drives this append directly, matching `RetryNodeAsync`:
-        // a lost response's retry replays instead of failing the version check it would otherwise
-        // hit on a second, no-op-intended call.
-        AppendOutcome cancelOutcome = await store.AppendTransitionAsync(
-            projectRoot, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
-            "workflow.attempt_superseded", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled),
-            expectedAttemptVersion, idempotencyKey, cancellationToken).ConfigureAwait(false);
-        if (!cancelOutcome.Succeeded)
+        // Skipped entirely once already superseded: a caller resuming after a crash has no way to
+        // reconstruct the *original* (version, key) pair once the attempt has moved past whatever
+        // it observed (a fresh caller, e.g. a stateless CLI invocation re-run later, can only read
+        // the attempt's *current*, already-cancelled state) — attempting this append again with a
+        // freshly-recomputed pair would neither match the store's own idempotency-key ledger (a
+        // genuine replay short-circuits there only when the exact original key is presented) nor
+        // pass `IsLegalTransition` (there is no `cancelled` -> `cancelled` edge), so it would fail
+        // every time instead of resuming. Every step below independently checks current state
+        // before acting, so a retry after a crash mid-sequence always finishes whatever the
+        // interrupted call left undone regardless of whether this step itself ran again.
+        if (!alreadySuperseded)
         {
-            return new(false, node, cancelOutcome.DiagnosticCode);
+            AppendOutcome cancelOutcome = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+                "workflow.attempt_superseded", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled),
+                expectedAttemptVersion, idempotencyKey, cancellationToken).ConfigureAwait(false);
+            if (!cancelOutcome.Succeeded)
+            {
+                return new(false, node, cancelOutcome.DiagnosticCode);
+            }
         }
 
         // Not gated on `cancelOutcome.Replayed`: every step below independently checks current
@@ -996,23 +1002,23 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
 
-        // Deterministic on (sprint, node, the node version the decision was made against, and the
-        // decision itself): a retried call for the same logical decision resumes the same
-        // underlying attempt instead of abandoning it, so a crash mid-sequence can never leave the
-        // gate wedged. Approve and reject get *different* ids on purpose — a retry that flips the
-        // decision for the same node version must never resume (and silently reinterpret) the
-        // other decision's already-in-flight or already-settled attempt; it is refused below
-        // instead, as a stable conflict, once the node is no longer in a state either path expects.
-        AttemptId attemptId = DeterministicAttemptId(
+        // Found by linkage (at most one gate-resolution attempt is ever created for a given node —
+        // a human_approval node reaches `awaiting_human` exactly once), not by recomputing a hash
+        // from `expectedNodeVersion`: that recomputation only works for a caller that still holds
+        // the *exact* version the original decision was made against. A caller resuming after a
+        // crash with no memory of that original call (e.g. a stateless CLI invocation, re-run later)
+        // can only read the node's *current* version — already moved past `awaiting_human` once the
+        // first call got anywhere — so a hash recomputed from it would never match the attempt the
+        // original call actually created, permanently refusing every retry instead of resuming it.
+        AttemptSnapshot? existingAttempt =
+            state.Attempts.Values.FirstOrDefault(candidate => candidate.NodeId == nodeId);
+        bool resuming = existingAttempt is not null;
+        AttemptId attemptId = existingAttempt?.Id ?? DeterministicAttemptId(
             $"resolve_human_gate|{sprintId.Value:D}|{nodeId}|{expectedNodeVersion.ToString(CultureInfo.InvariantCulture)}|{approved}");
-        bool resuming = state.Attempts.ContainsKey(attemptId.Value.ToString("D"));
         if (!resuming)
         {
             // A brand-new decision must match the gate's current `awaiting_human` version and key
-            // exactly. Once resuming (the deterministic attempt above already exists), the node's
-            // *current* version has legitimately moved past `expectedNodeVersion` mid-walk — the key
-            // was already validated when this decision first started, and re-checking it against
-            // the node's now-different version would defeat resumability entirely.
+            // exactly.
             if (node.Version != expectedNodeVersion || idempotencyKey != ResolveHumanGateKey(sprintId, node))
             {
                 return new(false, node, DiagnosticCodes.SuggestionStale);
@@ -1023,9 +1029,29 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 return new(false, node, DiagnosticCodes.NodeTransitionInvalid);
             }
         }
-        else if (node.State is not (NodeState.AwaitingHuman or NodeState.Running or NodeState.Succeeded or NodeState.Failed))
+        else
         {
-            return new(false, node, DiagnosticCodes.NodeTransitionInvalid);
+            // A resumed call is not re-checked against `expectedNodeVersion`/`idempotencyKey` at
+            // all — the node's current version has legitimately moved past whatever the original
+            // call observed, and re-validating a key derived from that stale version would defeat
+            // resumability entirely (mirroring `SupersedeAttemptAsync`'s own "already superseded"
+            // pattern). What still must never happen is silently reinterpreting a decision flip: the
+            // attempt itself does not separately record which way it was decided, but the node's own
+            // current state does, once it has moved — `running`/`succeeded` only ever follow an
+            // `approved` decision, `failed` only ever follows a rejected one. A caller passing the
+            // opposite `approved` value is refused as a stable conflict instead of resuming (and
+            // reinterpreting) the other decision's attempt.
+            bool decisionKnown = node.State is NodeState.Running or NodeState.Succeeded or NodeState.Failed;
+            bool decisionWasApprove = node.State is NodeState.Running or NodeState.Succeeded;
+            if (decisionKnown && approved != decisionWasApprove)
+            {
+                return new(false, node, DiagnosticCodes.NodeTransitionInvalid);
+            }
+
+            if (node.State is not (NodeState.AwaitingHuman or NodeState.Running or NodeState.Succeeded or NodeState.Failed))
+            {
+                return new(false, node, DiagnosticCodes.NodeTransitionInvalid);
+            }
         }
 
         AppendOutcome walkOutcome = await DriveAttemptAsync(

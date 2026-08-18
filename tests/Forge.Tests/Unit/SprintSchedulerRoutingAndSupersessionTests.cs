@@ -324,6 +324,42 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         Assert.Single(finalState.Attempts.Values, candidate => candidate.Id != attempt.Id);
     }
 
+    /// <summary>Regression: a caller with no memory of the *original* (version, key) pair -- e.g. a
+    /// stateless CLI invocation that re-derives both fresh from the attempt's current state, the
+    /// same way <c>ForgeApplication.SupersedeAttemptAsync</c> does -- must still resolve cleanly
+    /// once the attempt has already been superseded, instead of attempting an illegal
+    /// `cancelled -&gt; cancelled` transition with a key the store's own idempotency ledger has
+    /// never seen.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncIsIdempotentWhenAFreshCallerRederivesTheVersionAndKey()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CompleteAttemptResult first = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, attempt), confirmed: true,
+            "Try a different approach.", cancellationToken);
+        Assert.True(first.Succeeded);
+
+        // A later, independent caller: reads the attempt's *current* (already-cancelled) state and
+        // derives its own (version, key) pair from that -- necessarily different from the original
+        // call's, since the attempt's version has since legitimately advanced.
+        SprintWorkflowState afterFirst = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot current = afterFirst.Attempts[attempt.Id.Value.ToString("D")];
+        CompleteAttemptResult resumed = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, current.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, current), confirmed: true,
+            "Try a different approach.", cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Single(finalState.Attempts.Values, candidate => candidate.Id != attempt.Id);
+    }
+
     /// <summary>Regression: an earlier version only recognized a replay once the fresh replacement
     /// attempt already existed, so a retry landing between the cancel transition and replacement
     /// creation (the exact durable state a crash right there would leave) fell through to the

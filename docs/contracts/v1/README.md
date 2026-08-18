@@ -37,6 +37,8 @@ gate on workstations and CI.
 | 0 | success | `ok` | Command completed |
 | 2 | usage | `invalid_arguments` | Syntax or validation error |
 | 2 | usage | `supersession_instruction_too_long` | Supersession instruction exceeds the maximum bounded length |
+| 2 | usage | `supersession_instruction_unreadable` | Supersession instruction source could not be read at all |
+| 2 | usage | `supersession_instruction_required` | Supersession instruction was empty or whitespace-only |
 | 3 | configuration | `configuration_scope_violation` | Key belongs to another scope |
 | 4 | project | `project_not_initialized` | Confirmed root lacks valid `.forge/` |
 | 5 | platform | `platform_not_supported` | No registered platform strategy |

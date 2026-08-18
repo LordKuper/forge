@@ -396,9 +396,10 @@ public static class CliApplication
         return command;
     }
 
-    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. Never emitted into any
-    /// generated agent integration text (<c>IntegrationSourceCompiler</c> enumerates no commands at
-    /// all) — the confirmation this command demands is the only enforcement surface it needs.</summary>
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 records this
+    /// honestly: there is no technical caller-identity control here, only mandatory, non-bypassable
+    /// confirmation — "human-only" is a project-level policy for this slice, not an enforced
+    /// boundary.</summary>
     private static Command CreateGateCommand(
         SurfaceText text,
         TextWriter output,
@@ -442,7 +443,7 @@ public static class CliApplication
                 return Report(diagnostics, DiagnosticCodes.SprintNotFound);
             }
 
-            string nodeId = parseResult.GetValue(node) ?? "human_approval";
+            string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
             NodeActionResult result = await mutations
                 .ResolveGateAsync(
@@ -459,8 +460,8 @@ public static class CliApplication
     }
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
-    /// <see cref="CreateGateCommand"/>'s remark — the same "never emitted into agent-facing text,
-    /// mandatory explicit confirmation" enforcement applies here.</summary>
+    /// <see cref="CreateGateCommand"/>'s remark — the same policy-only, no-technical-control posture
+    /// applies here.</summary>
     private static Command CreateAttemptCommand(
         SurfaceText text,
         TextWriter output,
@@ -497,25 +498,29 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            if (!Guid.TryParse(parseResult.GetValue(id), out Guid attemptId) ||
-                !Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid attemptId))
             {
                 return Report(diagnostics, DiagnosticCodes.WorkflowEventConflict);
             }
 
-            string? instruction = await ReadInstructionAsync(
+            InstructionReadResult read = await ReadInstructionAsync(
                     parseResult.GetValue(instructionFile)!, input, cancellationToken)
                 .ConfigureAwait(false);
-            if (instruction is null)
+            if (read.DiagnosticCode != DiagnosticCodes.None)
             {
-                return Report(diagnostics, DiagnosticCodes.SupersessionInstructionTooLong);
+                return Report(diagnostics, read.DiagnosticCode);
             }
 
             string? root = parseResult.GetValue(projectRoot);
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
             CompleteAttemptResult result = await mutations
                 .SupersedeAttemptAsync(
-                    root, sprintId, attemptId, instruction, parseResult.GetValue(confirm), cancellationToken)
+                    root, sprintId, attemptId, read.Instruction!, parseResult.GetValue(confirm), cancellationToken)
                 .ConfigureAwait(false);
             if (result.Succeeded)
             {
@@ -527,23 +532,74 @@ public static class CliApplication
         return command;
     }
 
-    /// <summary>Reads the replacement instruction from standard input (<c>-</c>) or a file. A file
-    /// read failure (missing file, permission denied) reports the same diagnostic an over-length
-    /// instruction would — <c>SupersedeAttemptAsync</c> itself has no "instruction unreadable" code,
-    /// and both are equally "no usable bounded instruction was supplied".</summary>
-    private static async Task<string?> ReadInstructionAsync(
+    private sealed record InstructionReadResult(string? Instruction, string DiagnosticCode)
+    {
+        public static InstructionReadResult Success(string instruction) => new(instruction, DiagnosticCodes.None);
+
+        public static InstructionReadResult Failure(string diagnosticCode) => new(null, diagnosticCode);
+    }
+
+    /// <summary>Reads the replacement instruction from standard input (<c>-</c>) or a file, bounded
+    /// to <see cref="SprintScheduler.MaxSupersessionInstructionLength"/> characters read either way
+    /// — never buffers an unbounded stream just to reject it afterward. Distinguishes three failure
+    /// modes <c>SupersedeAttemptAsync</c> itself does not need to (it only ever sees a string): the
+    /// source could not be read at all (missing file, permission denied, an invalid path),
+    /// the content that *was* read is over the bound, or it is empty/whitespace-only — a
+    /// human-initiated supersession with nothing actually said defeats its own purpose.</summary>
+    private static async Task<InstructionReadResult> ReadInstructionAsync(
         string path, TextReader input, CancellationToken cancellationToken)
     {
+        string content;
         try
         {
-            return path == "-"
-                ? await input.ReadToEndAsync(cancellationToken).ConfigureAwait(false)
-                : await File.ReadAllTextAsync(path, cancellationToken).ConfigureAwait(false);
+            if (path == "-")
+            {
+                content = await ReadBoundedAsync(input, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await using FileStream stream = File.OpenRead(path);
+                using StreamReader reader = new(stream);
+                content = await ReadBoundedAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or System.Security.SecurityException)
         {
-            return null;
+            return InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionUnreadable);
         }
+
+        if (content.Length > SprintScheduler.MaxSupersessionInstructionLength)
+        {
+            return InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
+        return string.IsNullOrWhiteSpace(content)
+            ? InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionRequired)
+            : InstructionReadResult.Success(content);
+    }
+
+    /// <summary>Reads at most <see cref="SprintScheduler.MaxSupersessionInstructionLength"/> + 1
+    /// characters — enough to detect an over-length source without reading further, whether that
+    /// source is a bounded file or an unbounded pipe on standard input.</summary>
+    private static async Task<string> ReadBoundedAsync(TextReader reader, CancellationToken cancellationToken)
+    {
+        char[] buffer = new char[SprintScheduler.MaxSupersessionInstructionLength + 1];
+        int totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            int read = await reader
+                .ReadAsync(buffer.AsMemory(totalRead, buffer.Length - totalRead), cancellationToken)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+        }
+
+        return new string(buffer, 0, totalRead);
     }
 
     private static Command CreateNextCommand(

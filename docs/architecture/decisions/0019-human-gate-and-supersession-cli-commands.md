@@ -68,6 +68,61 @@ already does in-process. A CLI or Host caller therefore supplies only
 the two mutating methods on `IForgeMutations` this item adds — never a
 version or key of their own.
 
+### `ResolveHumanGateAsync`/`SupersedeAttemptAsync` had to be fixed to actually support this
+
+Independent review found that the design above breaks the exact
+resumability both scheduler methods were built to provide (ADR 0018). Both
+recognized a resumed call only by recomputing the *same deterministic hash*
+the original call used — for `ResolveHumanGateAsync`, seeded with the
+node's version *at the moment of the original decision*; for
+`SupersedeAttemptAsync`, an idempotency key derived from the attempt's
+version at that same moment. A caller with no memory of that original call
+— exactly what `ForgeApplication`'s server-side derivation above produces
+on every genuinely new invocation — reads the target's *current* state
+instead, which has already moved once the original call got anywhere at
+all. The recomputed hash then never matches, so a crash between two
+sequential durable steps inside either method (the two node transitions in
+`ResolveHumanGateAsync`'s approved path; the cancel append and everything
+after it in `SupersedeAttemptAsync`) left the target permanently wedged:
+every later, independent retry recomputed a *different* hash from the
+now-advanced state, missed the store's own idempotency-key-based replay
+detection, and fell through to a hard failure
+(`node_transition_invalid`/an illegal `cancelled -> cancelled` transition)
+instead of resuming.
+
+Both are now fixed in `SprintScheduler.cs` itself, not in the new
+`ForgeApplication` wrapper, since the defect is in the resumability
+contract those methods offer their callers, not in how this item calls
+them:
+
+- **`ResolveHumanGateAsync`** now finds the gate's own attempt by linkage
+  (`state.Attempts.Values.FirstOrDefault(a => a.NodeId == nodeId)`) instead
+  of recomputing a hash — a human_approval node has at most one such
+  attempt, ever. The decision-flip protection the hash coincidentally
+  provided (approve and reject hashed to different ids, so a caller
+  flipping the decision could never accidentally resume the other one) is
+  now explicit instead of incidental: once the node's state reveals which
+  way the original decision went (`running`/`succeeded` only ever follow
+  `approved`; `failed` only ever follows a rejection), a resumed call
+  supplying the opposite `approved` value is refused as a conflict rather
+  than silently reinterpreting the original attempt.
+- **`SupersedeAttemptAsync`** already recognized "already superseded" by
+  the target's own `Cancelled` state (a fix from ADR 0018's own review
+  history) — but still *re-attempted* the cancel append unconditionally,
+  with whatever (possibly stale) version/key the caller supplied, relying
+  entirely on the store's idempotency-key ledger to recognize a genuine
+  replay before it. A freshly-recomputed key never matches that ledger, so
+  the append fell through to `IsLegalTransition`, which has no
+  `cancelled -> cancelled` edge. The cancel append itself is now skipped
+  entirely once already superseded, matching every other step in this
+  method, each of which already independently checks current state before
+  acting.
+
+Both fixes carry their own regression test — a caller re-deriving
+version/key fresh from already-advanced state must still resolve cleanly,
+and (for the gate) a caller flipping the decision that way must still be
+refused.
+
 ### No config-driven confirmation bypass
 
 Every other confirmable mutation on `IForgeMutations`
@@ -77,15 +132,16 @@ Every other confirmable mutation on `IForgeMutations`
 anyway. `ResolveGateAsync`/`SupersedeAttemptAsync` do not use that bypass —
 `confirmed` must be `true` outright, or the call returns
 `DiagnosticCodes.ConfirmationRequired` unconditionally. `interaction.confirm_destructive`
-is itself a project-scope configuration value reachable through
-`forge config project`, which an agent could set; letting a human-only
-command's confirmation requirement be silently disabled through ordinary
-configuration would defeat the requirement rather than merely relax it.
+is itself a user-scope configuration value reachable through
+`forge config user`, which an agent with shell access could still set;
+letting a human-only command's confirmation requirement be silently
+disabled through ordinary configuration would defeat the requirement
+rather than merely relax it.
 `SupersedeAttemptAsync`'s own domain-level `confirmed` parameter (already
 present since ADR 0018) is threaded straight through — the CLI's `--yes`
 flag is the only thing that can set it `true`.
 
-### Human-only enforcement is surface omission, not caller identity
+### Human-only enforcement does not exist as a technical control yet — named honestly as a gap
 
 ADR 0005 requires attempt supersession and gate resolution to be
 "human-only," but neither this codebase nor the Host control protocol has
@@ -97,20 +153,33 @@ caller-identity field now — human vs. agent, with the Host trusting
 whatever a connecting client self-reports — would be a false sense of
 enforcement: a client can claim to be anything.
 
-The mechanism this item uses instead, already present by construction:
-`IntegrationSourceCompiler.BuildBody` (the generator behind every
-`CLAUDE.md`/`AGENTS.md` Forge writes) emits only a fixed preamble, the
-testing-invariant paragraph, and the project's own `.forge/rules`/
-`.forge/knowledge` documents — it enumerates no CLI commands at all, so
-`forge gate`/`forge attempt supersede` are never mentioned in agent-facing
-text regardless of whether they exist. Combined with the mandatory,
-non-bypassable confirmation above, an agent operating strictly from its
-generated integration text has no path to either command, and an operator
-invoking them directly always passes through the same explicit `--yes`
-gate ADR 0005 requires. This is a structural absence, not a checked
-permission — nothing needs to keep re-verifying it, and no future
-capability-enumerating change to the compiler can silently regress it
-without itself being a reviewed change to `IntegrationSourceCompiler`.
+An earlier version of this section argued that `IntegrationSourceCompiler`
+never enumerating CLI commands into generated `CLAUDE.md`/`AGENTS.md` text
+was itself a meaningful barrier. Review found that reasoning unsound on two
+counts: `IntegrationSourceCompiler.AppendSection` copies a project's own
+`.forge/rules`/`.forge/knowledge` document bodies into the generated file
+*verbatim* — a project-authored rule can name and instruct
+`forge gate approve --yes` explicitly, with no compiler change required —
+and `forge --help` enumerates both commands regardless, discoverable by any
+agent that runs it. Command-omission from *generated* text is not a barrier
+an agent operating in this repository is actually confined by.
+
+What this item ships instead, honestly described: there is **no technical
+mechanism in this slice that distinguishes a human invocation from an agent
+invocation.** Both new commands require an explicit `--yes` with no
+config-driven bypass, which raises the bar against an *accidental* or
+*automatic* invocation (an agent following its ordinary workflow, with
+nothing telling it to pass `--yes` for this specific command, will not
+trigger it by accident) but does not — and is not claimed to — stop an
+agent that has been explicitly instructed (by a project rule, or by an
+operator's own prompt) to run it. ADR 0005's "human-only" requirement is,
+for this slice, a **project-level policy**, enforced the same way this
+repository's own AGENTS.md rules are enforced on Claude Code and Codex
+today: by instruction and convention, not by a cryptographic or
+authorization boundary. A real technical control — some form of caller
+identity the Host actually verifies, distinct from a capability an
+end-to-end connected client merely claims to have — is out of scope for
+this slice and is named as future work, not silently assumed solved.
 
 ### `--sprint`/`--node`/`--instruction-file` are not literally in `capabilities.json`'s `cli` strings
 
@@ -144,6 +213,12 @@ record, since `Forge.Host.Client` is a leaf project with no reference to
 
 ## Deliberately deferred
 
+- **A real technical control for "human-only."** This slice has none — see
+  above. A future item must design an actual caller-identity or
+  authorization mechanism (or explicitly accept policy-only enforcement as
+  the permanent answer, which is a materially different, and weaker,
+  posture than ADR 0005's own wording implies) before this gap can be
+  considered closed rather than merely documented.
 - **Sprint-lifecycle CLI commands** (`forge sprint create|run|resume|cancel`).
   `SprintOrchestrator` already implements all four; wiring them is a
   separate, self-contained slice of this same plan item, not bundled here
@@ -178,17 +253,26 @@ record, since `Forge.Host.Client` is a leaf project with no reference to
 ## Consequences
 
 - `ResolveHumanGateAsync`/`SupersedeAttemptAsync` (both zero-caller since
-  their own introducing stages) have their first production callers.
-- `attempt.supersede`'s "human-only" requirement is satisfied by
-  construction (generated integration text enumerates no commands) plus
-  mandatory, non-bypassable confirmation, not by a caller-identity check
-  this codebase has no infrastructure for.
+  their own introducing stages) have their first production callers, and
+  both are now genuinely crash-resumable for a stateless caller — the gap
+  their first real callers exposed and this item fixed.
+- `attempt.supersede`/`workflow.review`'s "human-only" requirement is, for
+  this slice, a project-level policy (mandatory, non-bypassable
+  confirmation) rather than an enforced technical boundary — named
+  honestly as a gap, not silently assumed solved.
 - `IForgeMutations` grows two members; both `ForgeApplication` and
   `RemoteForgeMutations` implement them identically to every existing
   mutation's local/remote split.
 - Neither new capability is yet marked `Implemented` in
   `CapabilityIds` — the backend and CLI half of this item's promised
   parity exists; the Desktop half does not yet, tracked as the next slice.
+- Two new diagnostic codes (`supersession_instruction_unreadable`,
+  `supersession_instruction_required`) distinguish an unreadable
+  instruction source from an over-length or empty one; the instruction
+  itself is now read bounded (never more than
+  `SprintScheduler.MaxSupersessionInstructionLength + 1` characters from
+  either a file or standard input) rather than buffered whole before the
+  bound is checked.
 
 ## References
 

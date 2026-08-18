@@ -537,7 +537,12 @@ public sealed class ForgeApplication(
         SprintId id = new(sprintId);
         SprintWorkflowState? state =
             await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
-        if (state is null || !state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
         {
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
@@ -575,7 +580,12 @@ public sealed class ForgeApplication(
         AttemptId attempt = new(attemptId);
         SprintWorkflowState? state =
             await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
-        if (state is null || !state.Attempts.TryGetValue(attemptId.ToString("D"), out AttemptSnapshot? attemptSnapshot))
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Attempts.TryGetValue(attemptId.ToString("D"), out AttemptSnapshot? attemptSnapshot))
         {
             return new(false, null, DiagnosticCodes.WorkflowEventConflict);
         }

@@ -100,6 +100,17 @@ public static class DiagnosticCodes
     /// <summary>ADR 0006's bounded supersession-instruction artifact exceeded its maximum length.</summary>
     public const string SupersessionInstructionTooLong = "supersession_instruction_too_long";
 
+    /// <summary>The supersession instruction source (a file path, or standard input) could not be
+    /// read at all — missing file, permission denied, or an invalid path — distinct from
+    /// <see cref="SupersessionInstructionTooLong"/>, which means it *was* read but exceeded the
+    /// bound.</summary>
+    public const string SupersessionInstructionUnreadable = "supersession_instruction_unreadable";
+
+    /// <summary>ADR 0006's bounded supersession-instruction artifact was empty or whitespace-only —
+    /// the whole point of a human-initiated supersession is recording why, so an instruction with no
+    /// actual content is rejected the same way an over-length one is.</summary>
+    public const string SupersessionInstructionRequired = "supersession_instruction_required";
+
     /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";
