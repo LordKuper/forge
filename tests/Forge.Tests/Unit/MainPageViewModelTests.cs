@@ -378,6 +378,34 @@ public sealed class MainPageViewModelTests
         Assert.NotEqual(Text().Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous), message);
     }
 
+    /// <summary>Round 1 review of PR #67 found <see cref="CancelSprintAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity"/>
+    /// only proves the ambiguity branch inside `CancelSprintAsync`'s own copy of the resolution
+    /// logic -- `RunSprintAsync`/`ResumeSprintAsync` share a SEPARATE copy inside the private
+    /// `TransitionSprintAsync` helper, and swapping ITS message to `GateSprintAmbiguous` left the
+    /// full suite green. `run` stands in for both, since `resume` shares the identical helper
+    /// call.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunSprintAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RunSprintAsync(environment.ProjectRoot, null, cancellationToken);
+
+        Assert.Equal(0, mutations.RunSprintCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.SprintManageSprintAmbiguous), message);
+        Assert.NotEqual(Text().Resolve(MessageKeys.GateSprintAmbiguous), message);
+        Assert.NotEqual(Text().Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous), message);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public void SprintCancelPromptNamesTheSprint()

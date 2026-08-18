@@ -592,15 +592,18 @@ public sealed class SurfaceParityTests
             .CreateSprintAsync(desktopEnvironment.ProjectRoot, cancellationToken);
 
         Assert.Empty(diagnostics.ToString());
-        string prefix = text.Resolve(MessageKeys.SprintCreated);
         string cli = cliOutput.ToString().TrimEnd();
-        Assert.StartsWith(prefix, cli, StringComparison.Ordinal);
-        Assert.StartsWith(prefix, desktop, StringComparison.Ordinal);
+        // Round 1 review found the original check ("starts with the prefix" plus "the tail parses
+        // as a Guid") independently on each side never actually compared the two surfaces against
+        // each other -- and skipped exactly one unasserted separator character, so a drifted
+        // separator (e.g. "prefix:id" instead of "prefix id") would still slip through on both
+        // sides. A "D"-format Guid is always exactly 36 characters, so everything before the last
+        // 36 characters -- prefix AND separator together -- is compared directly for equality
+        // between the two surfaces, and the tail is independently confirmed to actually be a Guid.
+        Assert.Equal(cli[..^36], desktop[..^36]);
+        Assert.True(Guid.TryParse(cli[^36..], out _), $"CLI message did not end in a well-formed id: {cli}");
         Assert.True(
-            Guid.TryParse(cli[(prefix.Length + 1)..], out _), $"CLI message did not end in a well-formed id: {cli}");
-        Assert.True(
-            Guid.TryParse(desktop[(prefix.Length + 1)..], out _),
-            $"Desktop message did not end in a well-formed id: {desktop}");
+            Guid.TryParse(desktop[^36..], out _), $"Desktop message did not end in a well-formed id: {desktop}");
     }
 
     /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameSprintCreatedMessageFormat"/>,

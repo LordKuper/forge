@@ -58,7 +58,7 @@
       "desktop": "Sprints/Rebase",
       "permission": "workflow_mutate",
       "acceptance": "sprint-rebase-parity",
-      "note": "Not implemented on either surface. `SprintGitIsolation.RebaseAttemptAsync` (the git-level primitive this would wrap) already exists but has no reachable trigger: it recovers from a concurrent-integration race that can only occur once a node executor drives attempts through `SprintScheduler.IntegrateAsync`, and no executor exists yet (ADR 0020, ADR 0027)."
+      "note": "Not implemented on either surface. `SprintGitIsolation.RebaseAttemptAsync` (the git-level primitive this would wrap) already exists but has no reachable trigger: it recovers from a concurrent-integration race that can only occur once a node executor drives attempts through `SprintGitIsolation.IntegrateAsync`, and no executor exists yet (ADR 0020, ADR 0027)."
     },
     {
       "id": "attempt.supersede",

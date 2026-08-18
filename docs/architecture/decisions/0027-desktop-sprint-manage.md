@@ -23,8 +23,9 @@ isolation, but it exists purely to recover from `WorktreeBaseMismatch`: two
 attempts' branches both forked from the same integration tip, one
 integrated first, the second's fast-forward now fails because the tip
 moved. That race can only occur once a node executor exists to drive
-attempts through `SprintScheduler`'s own `IntegrateAsync`, and no executor
-exists yet — confirmed by the same "zero production callers" fact every
+attempts through `SprintGitIsolation`'s own `IntegrateAsync`, and no
+executor exists yet — confirmed by the same "zero production callers" fact
+every
 prior Stage 11 ADR has independently reconfirmed for `SprintScheduler.StartAttemptAsync`/
 `ILlmProvider.RunAsync`. Building `forge sprint rebase` today would ship a
 command with no state it could ever legitimately act on.
@@ -106,6 +107,42 @@ failure renders nothing but the diagnostic on both sides, exactly the
 "an empty state on both sides would pass too" pattern ADR 0025 round 1
 rejected for the events parity test.
 
+## Round 1 review
+
+Independent review found five issues, all fixed:
+
+1. **The `sprint.rebase` capability note and this ADR's own Context section
+   both cited a nonexistent member**, `SprintScheduler.IntegrateAsync` —
+   `SprintScheduler` never references that type; the real method is
+   `SprintGitIsolation.IntegrateAsync`. The investigation's conclusion was
+   unaffected (independently re-verified by the review itself), only the
+   name was wrong. Fixed in both `capabilities.json` and this ADR.
+2. **The `create` parity test's format check never actually compared the
+   two surfaces against each other**, and skipped exactly one unasserted
+   separator character — a drifted separator (e.g. `"prefix:id"` instead
+   of `"prefix id"`) would have passed on both sides independently. Fixed:
+   since a `"D"`-format `Guid` is always exactly 36 characters, everything
+   before the last 36 characters (prefix and separator together) is now
+   compared for direct equality between the two surfaces, with the tail
+   independently confirmed to parse as a `Guid`.
+3. **`TransitionSprintAsync`'s own copy of the ambiguity-resolution
+   branch — shared by `run`/`resume` — had no test of its own.** Only
+   `CancelSprintAsync`'s separate copy of the identical branch was tested;
+   swapping `TransitionSprintAsync`'s message to `GateSprintAmbiguous`
+   left the full suite green. This is precisely the ADR 0022 round-2
+   defect this ADR's own "Decisions" section claims to have pre-empted —
+   pre-empted for one of the two call sites, not both. Fixed with a new
+   `RunSprintAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity`
+   test (`run` stands in for `resume`, which shares the identical helper
+   call); verified by mutation testing — applied the exact regression,
+   confirmed the new test fails, reverted.
+4. **`CHANGELOG.md` had no entry for the capability-contract split** —
+   `contract_version`'s first-ever bump in this file — despite the section
+   being published verbatim as the GitHub Release description. Added a
+   `Changed` entry.
+5. **This ADR's own Consequences section said "five new message keys"
+   directly above a list of six.** Corrected.
+
 ## Deliberately deferred
 
 - **`forge sprint rebase` and Desktop `sprint.rebase` controls.** Not a
@@ -141,7 +178,7 @@ rejected for the events parity test.
 - `MainPageViewModel` gains `CreateSprintAsync`, `RunSprintAsync`,
   `ResumeSprintAsync`, `CancelSprintAsync`, `SprintCancelPrompt`, and a
   private `TransitionSprintAsync` helper shared by `run`/`resume`.
-- Five new message keys: `SprintCreateAction`, `SprintRunAction`,
+- Six new message keys: `SprintCreateAction`, `SprintRunAction`,
   `SprintResumeAction`, `SprintCancelAction`, `SprintManageFailed`,
   `SprintManageSprintAmbiguous` (en/ru). `SprintCreated`/`SprintAdvanced`/
   `SprintAdvancedUnknownState`/`SprintResumed`/`SprintCancelled` already
