@@ -278,7 +278,7 @@ public sealed class HumanGateAndSupersessionCliTests
             ])
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-        Assert.NotEqual(0, exitCode);
+        Assert.Equal(ExitCodes.Usage, exitCode);
         Assert.Contains(
             DiagnosticCodes.SupersessionInstructionUnreadable, diagnostics.ToString(), StringComparison.Ordinal);
     }
@@ -303,7 +303,7 @@ public sealed class HumanGateAndSupersessionCliTests
             ])
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-        Assert.NotEqual(0, exitCode);
+        Assert.Equal(ExitCodes.Usage, exitCode);
         Assert.Contains(
             DiagnosticCodes.SupersessionInstructionRequired, diagnostics.ToString(), StringComparison.Ordinal);
     }
