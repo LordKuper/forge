@@ -261,15 +261,37 @@ is therefore the node's current attempt number: `currentNode.AttemptCount`
 is untouched by the cancel transition above, so re-deriving the attempt id
 that number resolves to (the exact same deterministic-id formula used to
 create the replacement) and comparing it against the replacement's own id
-tells the two cases apart precisely — a match means the node has picked the
-replacement up and its `running` now belongs to it; anything else means it
-has not, whatever the node's current state (leftover `running`, or already
-re-armed as far as `failed`). A replacement not yet picked up still needs
-the node re-armed to `ready` so an ordinary `StartAttemptAsync` can reach it
+tells the two cases apart. A replacement not yet picked up still needs the
+node re-armed to `ready` so an ordinary `StartAttemptAsync` can reach it
 (covering both "just created by this same call" and "created by an earlier,
 crash-interrupted call"); only once it has genuinely been picked up must
 re-arming stay hands-off — the original bug this whole three-round chain
 traces back to.
+
+### The re-arm signal searches every attempt number the node has used, not just its current one
+
+A fourth review round — the last full-scope round already used, this one
+critical-findings-only per this repository's review-gate rules — found that
+comparing the node's *current* attempt number against the replacement's own
+for plain equality was still one step short. That number only ever grows:
+an ordinary auto-retry of the replacement itself (a ordinary provider
+failure, nothing to do with supersession) or a later, second supersession
+both advance `currentNode.AttemptCount` further without ever moving it
+back. A replay of the original supersede call arriving after such further
+progress compares the node's now-*later* generation against the
+replacement's own, fixed generation, finds no match, and wrongly concludes
+"not picked up yet" — re-arming the node out from under whatever later,
+genuinely in-flight generation is actually running. Exactly the class of
+bug the two sections above this one already fixed, recurring one layer
+further out. The fix: since `StartAttemptAsync` increments
+`currentNode.AttemptCount` by exactly one on every call, the set of attempt
+numbers the node has ever actually used is precisely the dense range
+`1..currentNode.AttemptCount` — no gaps, nothing skipped or reused — so the
+check searches that whole range for whichever number's deterministic id
+matches the replacement's own, rather than only the current one. A match
+anywhere in the range means the node reached that generation at some point
+and, being monotonic, never un-reached it, so its `running` now belongs to
+it or a later descendant either way.
 
 ### Deliberately deferred
 

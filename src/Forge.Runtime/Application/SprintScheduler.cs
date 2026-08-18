@@ -774,17 +774,33 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // past `created` (no node executor exists), so `StartAttemptAsync` picking the replacement up
         // leaves it `created` still -- only the node moves, to `running`, carrying the attempt number
         // it started as an argument. The reliable signal is therefore the *node's* current attempt
-        // number: `currentNode.AttemptCount` is unchanged by the cancel transition above, so a value
-        // that still resolves (via the exact same deterministic-id formula used to create the
-        // replacement) to some *other* attempt means the node has not picked the replacement up yet
-        // (whatever its current state — leftover `running`, or already re-armed to `failed`); a
-        // value that resolves to the replacement itself means it has, and the node's `running` now
-        // belongs to it, not to whatever this cancel transition left behind — re-arming must not
-        // touch it, the case the linkage check above still guards against.
-        bool replacementStarted = existingReplacement is not null &&
-            DeterministicAttemptId(
-                $"start_attempt|{sprintId.Value:D}|{nodeId}|{currentNode.AttemptCount.ToString(CultureInfo.InvariantCulture)}") ==
-            existingReplacement.Id;
+        // number, but *equality* against it is not enough: `currentNode.AttemptCount` only ever
+        // grows (a later ordinary retry, or a later second supersession, both advance it further
+        // without moving it back), so a replay of this call arriving after such further progress
+        // would see a *later* number than the one the replacement itself started at and wrongly
+        // conclude "not picked up yet" for a replacement one or more generations behind that further
+        // progress. Instead, every attempt number the node has ever actually used is exactly the
+        // dense range `1..currentNode.AttemptCount` (each `StartAttemptAsync` call increments it by
+        // exactly one, never skipping or reusing a number), so this searches that whole range for
+        // whichever number's deterministic id matches the replacement's own — found anywhere in it
+        // means the node reached (and, being monotonic, never un-reached) the replacement's own
+        // generation, so its `running` now belongs to it or a later descendant, not to whatever this
+        // cancel transition left behind; re-arming must not touch it, the case the linkage check
+        // above still guards against.
+        bool replacementStarted = false;
+        if (existingReplacement is not null)
+        {
+            for (int number = 1; number <= currentNode.AttemptCount; number++)
+            {
+                if (DeterministicAttemptId(
+                        $"start_attempt|{sprintId.Value:D}|{nodeId}|{number.ToString(CultureInfo.InvariantCulture)}") ==
+                    existingReplacement.Id)
+                {
+                    replacementStarted = true;
+                    break;
+                }
+            }
+        }
         if (!replacementStarted)
         {
             // The node state machine has no direct `running` -> `ready` edge (only `running` ->

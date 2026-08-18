@@ -481,6 +481,58 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         Assert.Equal(NodeState.Running, finalState.Nodes["a"].State);
     }
 
+    /// <summary>Regression: an earlier version of the "has the replacement started" check compared
+    /// the node's *current* attempt number against the replacement's own for equality. That number
+    /// only ever grows -- an ordinary auto-retry of the replacement itself (or a later second
+    /// supersession) advances it further without moving it back -- so a replay of the original
+    /// supersede call arriving after such further progress saw a *later* generation than the one the
+    /// replacement started at and wrongly concluded "not picked up yet", re-arming the node out from
+    /// under whatever later, genuinely in-flight generation was actually running.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReplayAfterTheReplacementFailedAndRetriedAgainDoesNotInterruptTheLatestRun()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Guid key = SprintScheduler.SupersedeAttemptKey(sprintId, attempt);
+
+        CompleteAttemptResult superseded = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Try a different approach.", cancellationToken);
+        Assert.True(superseded.Succeeded);
+
+        // The replacement (generation 2) starts, then fails on its own and auto-retries -- ordinary
+        // failure handling, nothing to do with supersession -- re-arming the node without creating a
+        // new attempt.
+        StartAttemptResult startedReplacement = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", superseded.Node!.Version, cancellationToken);
+        Assert.True(startedReplacement.Succeeded, $"diag={startedReplacement.DiagnosticCode}");
+        CompleteAttemptResult failedReplacement = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", startedReplacement.AttemptId!, false, SampleDigest, [], [],
+            cancellationToken);
+        Assert.True(failedReplacement.Succeeded);
+        Assert.Equal(NodeState.Ready, failedReplacement.Node!.State);
+
+        // A third generation starts -- a genuinely new, unrelated attempt actually running now.
+        StartAttemptResult startedThirdGeneration = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", failedReplacement.Node.Version, cancellationToken);
+        Assert.True(startedThirdGeneration.Succeeded, $"diag={startedThirdGeneration.DiagnosticCode}");
+
+        // A late replay of the *original* supersede call must not disturb the third generation's own
+        // in-flight run, even though it is one generation past the replacement this call itself
+        // created.
+        CompleteAttemptResult replay = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Try a different approach.", cancellationToken);
+
+        Assert.True(replay.Succeeded, $"diag={replay.DiagnosticCode}");
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Running, finalState.Nodes["a"].State);
+        Assert.Equal(AttemptState.Created, finalState.Attempts[startedThirdGeneration.AttemptId!.Value.ToString("D")].State);
+    }
+
     private static async Task<(SprintScheduler Scheduler, ISprintStore Store, SprintId SprintId, AttemptSnapshot Attempt)>
         StartImplementationAttemptAsync(TestEnvironment environment)
     {
