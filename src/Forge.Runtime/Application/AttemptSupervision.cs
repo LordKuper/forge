@@ -61,7 +61,14 @@ public sealed class AttemptSupervisor : IDisposable
 
         this.idleDeadline = idleDeadline;
         lastActivityTimestamp = Stopwatch.GetTimestamp();
-        linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        // Deliberately a standalone source, not `CreateLinkedTokenSource(cancellationToken)`:
+        // that would register its own internal propagation callback on `cancellationToken`
+        // *before* `callerRegistration` below, so the caller-cancellation classification would
+        // depend on which of the two registered callbacks the BCL happens to invoke first (an
+        // undocumented ordering detail) rather than on this class's own code. `callerRegistration`
+        // alone already fully propagates caller cancellation into `Token`, and does so with the
+        // latch-then-cancel ordering `FireUnderLock` guarantees explicitly.
+        linkedCancellation = new CancellationTokenSource();
         callerRegistration = cancellationToken.Register(() => FireUnderLock(AttemptTerminationReason.Cancelled));
         sessionTimer = new Timer(
             _ => FireUnderLock(AttemptTerminationReason.SessionTimeout),
@@ -71,13 +78,25 @@ public sealed class AttemptSupervisor : IDisposable
         // every activity would still leave a window where activity arriving right as the timer
         // fires produces a spurious idle timeout. Re-deriving the remaining time from an
         // authoritative last-activity timestamp on every tick closes that window instead of
-        // merely narrowing it.
-        idleTimer = new Timer(_ => CheckIdle(), null, idleDeadline, Timeout.InfiniteTimeSpan);
+        // merely narrowing it. Created disarmed and armed only after the `idleTimer` field is
+        // fully assigned: `CheckIdle` (the callback) reads that same field, so starting the
+        // countdown as part of construction itself would risk the callback observing an
+        // unpublished field if it ever fired before the assignment completed.
+        idleTimer = new Timer(_ => CheckIdle(), null, Timeout.InfiniteTimeSpan, Timeout.InfiniteTimeSpan);
+        idleTimer.Change(idleDeadline, Timeout.InfiniteTimeSpan);
     }
 
     /// <summary>The token to hand to the supervised work in place of the caller's own token.
-    /// Cancelling the caller's token also cancels this one (it is linked), so a genuinely
-    /// cancellation-aware piece of work needs only ever look at this single token.</summary>
+    /// Cancelling the caller's token also cancels this one, through <see cref="callerRegistration"/>
+    /// -- a genuinely cancellation-aware piece of work needs only ever look at this single token.
+    /// <see cref="LatchAndCancel"/> calls <see cref="CancellationTokenSource.Cancel()"/> while
+    /// holding <see cref="gate"/>, which synchronously runs every callback registered on this
+    /// token (including ones registered by the supervised work itself, or by anything further
+    /// linked to it): a callback that calls back into <see cref="Dispose"/> from that same thread
+    /// would reenter this class mid-`Cancel()` -- reentering <see cref="gate"/> itself is safe
+    /// (`lock` is per-thread reentrant), but disposing <see cref="linkedCancellation"/> while its
+    /// own `Cancel()` is still unwinding is not a pattern any registration on this token should
+    /// rely on.</summary>
     public CancellationToken Token => linkedCancellation.Token;
 
     /// <summary><see cref="AttemptTerminationReason.None"/> until a deadline fires or the caller's

@@ -100,6 +100,23 @@ is holding. `Dispose()` calls `Unregister()` on that registration instead
 already re-checks `disposed` immediately after acquiring the lock, so once
 it can finally proceed it touches nothing further.
 
+Two more corrections from later review rounds. First, `Token`'s underlying
+source is a plain `new CancellationTokenSource()`, not
+`CancellationTokenSource.CreateLinkedTokenSource(cancellationToken)`: the
+latter registers its own internal propagation callback on the caller's
+token, and since `callerRegistration` also registers on that same token,
+"latch the reason before `Token` cancels" would have depended on which of
+the two callbacks the BCL happens to invoke first — an undocumented
+ordering detail, not something this class's own code guarantees.
+`callerRegistration` alone already fully propagates caller cancellation
+(via `FireUnderLock`, which always latches before it cancels), making that
+ordering structural instead of incidental. Second, the idle `Timer` is
+created disarmed (`Timeout.InfiniteTimeSpan` due time) and only armed with
+a `Change` call after the `idleTimer` field is fully assigned — its own
+callback (`CheckIdle`) reads that same field, so starting the countdown as
+part of construction itself risked the callback observing an unpublished
+field had it ever fired before the assignment completed.
+
 ### Two new diagnostic codes, no new persistence plumbing
 
 `ProviderDiagnosticCodes.IdleTimeout` (`provider_idle_timeout`) and

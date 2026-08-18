@@ -8,6 +8,39 @@ public sealed class AttemptSupervisionTests
     private static readonly TimeSpan LongDeadline = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan ShortDeadline = TimeSpan.FromMilliseconds(150);
 
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(0, 1, "sessionDeadline")]
+    [InlineData(-1, 1, "sessionDeadline")]
+    [InlineData(1, 0, "idleDeadline")]
+    [InlineData(1, -1, "idleDeadline")]
+    public void ConstructorRejectsANonPositiveDeadline(double sessionSeconds, double idleSeconds, string paramName)
+    {
+        ArgumentOutOfRangeException error = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new AttemptSupervisor(
+                TimeSpan.FromSeconds(sessionSeconds), TimeSpan.FromSeconds(idleSeconds), CancellationToken.None));
+
+        Assert.Equal(paramName, error.ParamName);
+    }
+
+    /// <summary>Regression test for the leak a prior review round found: a deadline above
+    /// <c>Timer</c>'s own due-time ceiling used to throw from inside <c>new Timer(...)</c> after
+    /// the linked <see cref="CancellationTokenSource"/> and registration already existed, which
+    /// nothing could then dispose since the constructor never returned an instance to call
+    /// <see cref="AttemptSupervisor.Dispose"/> on.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(50, 1, "sessionDeadline")]
+    [InlineData(1, 50, "idleDeadline")]
+    public void ConstructorRejectsADeadlineAboveTheTimerCeiling(double sessionDays, double idleDays, string paramName)
+    {
+        ArgumentOutOfRangeException error = Assert.Throws<ArgumentOutOfRangeException>(
+            () => new AttemptSupervisor(
+                TimeSpan.FromDays(sessionDays), TimeSpan.FromDays(idleDays), CancellationToken.None));
+
+        Assert.Equal(paramName, error.ParamName);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SuperviseAsyncReturnsNoneWhenTheWorkCompletesWithinBothDeadlines()
