@@ -121,7 +121,7 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
     private static Guid? DetermineActiveSprint(IReadOnlyList<SprintStatus> sprints)
     {
         List<Guid> nonTerminal = [.. sprints
-            .Where(sprint => sprint.State is not (SprintState.Completed or SprintState.Cancelled))
+            .Where(sprint => !WorkflowStateMachines.IsTerminal(sprint.State))
             .Select(sprint => sprint.Id)];
         return nonTerminal.Count == 1 ? nonTerminal[0] : null;
     }

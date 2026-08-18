@@ -254,11 +254,45 @@ public sealed class SprintOrchestrator(
             // A node graph may open with a human gate; entering `running` is the only moment that
             // gate becomes eligible to auto-promote to `awaiting_human`, so the scheduler needs a
             // chance to react right here rather than waiting for some other call to happen along.
+            // The caller-visible result must reflect that: returning the pre-advance snapshot would
+            // report `running` to a caller while the durable state has already moved past it.
             ProjectRootStatus status = await rootResolver
                 .ResolveAsync(command.ProjectRoot, cancellationToken)
                 .ConfigureAwait(false);
-            await scheduler.AdvanceGraphAsync(status.Root, command.SprintId, cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                SprintWorkflowState advanced = await scheduler
+                    .AdvanceGraphAsync(status.Root, command.SprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result with { Sprint = advanced.Sprint };
+            }
+            catch (InvalidOperationException)
+            {
+                // Narrowed to the one condition this is meant to absorb: a sprint whose event log
+                // exists but whose frozen definition does not (`AdvanceGraphAsync`'s own
+                // `RequireDefinitionAsync` invariant). The transition to `running` immediately above
+                // already committed durably regardless; only this *side effect* failed. Reporting
+                // that already-committed result instead of letting this crash the caller matches
+                // every other mutation here: fail closed with a result, never an unhandled exception,
+                // whether this method is called in-process or dispatched through the Host
+                // (`ControlPlaneHostedService`'s own dispatch has a matching defensive catch for the
+                // same reason). Deliberately re-checked rather than caught unconditionally: an
+                // `InvalidOperationException` from anywhere else in `AdvanceGraphAsync` (its own
+                // `RequireStateAsync` invariant — durable state vanishing mid-call — or an
+                // `ObjectDisposedException`, which derives from this type) is a genuinely unexpected
+                // internal failure, not this narrow, known condition, and is re-thrown so it surfaces
+                // rather than silently reporting success. (An `await` cannot appear in a `catch when`
+                // filter, so the check is a re-throw inside the handler instead of a filter.)
+                SprintDefinition? definition = await store
+                    .LoadDefinitionAsync(status.Root, command.SprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (definition is not null)
+                {
+                    throw;
+                }
+
+                return result;
+            }
         }
 
         return result;
@@ -304,10 +338,16 @@ public sealed class SprintOrchestrator(
             _ => current,
         };
 
+    // `awaiting_human` is deliberately not a resume source: a pending gate is only ever resolved
+    // through `SprintScheduler.ResolveHumanGateAsync` (approve/reject), which is what drives the
+    // sprint itself out of `awaiting_human` via `SynchronizeSprintGateStateAsync` — never a raw
+    // operator `resume` call. Mapping it here would let `resume` silently bypass the pending
+    // decision, flipping the sprint straight to `running` while the gate node itself stays
+    // `awaiting_human` forever, exactly the disagreement `AdvanceGraphAsync` documents must never be
+    // observable.
     private static SprintState ResumeTarget(SprintState current) =>
         current switch
         {
-            SprintState.AwaitingHuman => SprintState.Running,
             SprintState.Blocked or SprintState.Failed => SprintState.Ready,
             _ => current,
         };

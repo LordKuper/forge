@@ -92,6 +92,30 @@ public interface IForgeMutations
         string instruction,
         bool confirmed,
         CancellationToken cancellationToken);
+
+    /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph
+    /// (ADR 0001). Not confirmable/destructive — each call is a stateless attempt to create one new
+    /// sprint, so a caller that wants a crash-safe retry to resume rather than mint a second sprint
+    /// must not simply re-invoke this method (see the ADR for this slice).</summary>
+    Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken);
+
+    /// <summary>Advances a sprint one legal hop (`draft` to `ready`, then `ready` to `running`) —
+    /// not a single call to a running sprint, matching <see cref="SprintOrchestrator"/>'s own
+    /// contract. Not confirmable: starting/advancing a sprint is additive, not destructive.</summary>
+    Task<SprintTransitionResult> RunSprintAsync(string? projectRoot, Guid sprintId, CancellationToken cancellationToken);
+
+    /// <summary>Un-blocks a `blocked` sprint back to `ready`. Not confirmable: resuming is
+    /// additive, not destructive.</summary>
+    Task<SprintTransitionResult> ResumeSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken);
+
+    /// <summary>Cancels a sprint. Confirmable like <see cref="InstallIntegrationAsync"/>/
+    /// <see cref="RemoveIntegrationAsync"/>: <paramref name="confirmed"/> may fall back to
+    /// `interaction.confirm_destructive` — this is an ordinary destructive mutation, not one of the
+    /// human-only capabilities <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>
+    /// are.</summary>
+    Task<SprintTransitionResult> CancelSprintAsync(
+        string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -112,7 +136,8 @@ public sealed class ForgeApplication(
     IProviderEnablementSource providerEnablement,
     IntegrationInstallationService integrationInstallation,
     ISprintStore sprintStore,
-    SprintScheduler scheduler) : IForgeMutations
+    SprintScheduler scheduler,
+    SprintOrchestrator orchestrator) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -594,6 +619,100 @@ public sealed class ForgeApplication(
         return await scheduler
             .SupersedeAttemptAsync(
                 status.Root, id, attempt, attemptSnapshot.Version, key, confirmed, instruction, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        return await orchestrator
+            .CreateSprintAsync(
+                new(status.Root, StatusAdvisor.StateVersion(status), Guid.NewGuid()), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<SprintTransitionResult> RunSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintSnapshot? sprint =
+            await orchestrator.GetSprintAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (sprint is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        return await orchestrator
+            .RunSprintAsync(
+                new(status.Root, id, sprint.Version, SprintOrchestrator.RunSprintKey(sprint)), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<SprintTransitionResult> ResumeSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintSnapshot? sprint =
+            await orchestrator.GetSprintAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (sprint is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        return await orchestrator
+            .ResumeSprintAsync(
+                new(status.Root, id, sprint.Version, SprintOrchestrator.ResumeSprintKey(sprint)), cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<SprintTransitionResult> CancelSprintAsync(
+        string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        bool effectiveConfirmed =
+            confirmed || !await RequiresConfirmationAsync(cancellationToken).ConfigureAwait(false);
+        if (!effectiveConfirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        SprintId id = new(sprintId);
+        SprintSnapshot? sprint =
+            await orchestrator.GetSprintAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (sprint is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        return await orchestrator
+            .CancelSprintAsync(
+                new(status.Root, id, sprint.Version, SprintOrchestrator.CancelSprintKey(sprint)), cancellationToken)
             .ConfigureAwait(false);
     }
 

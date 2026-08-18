@@ -142,6 +142,115 @@ public sealed class SprintOrchestrationTests
         Assert.Equal(SprintState.Ready, resumed.Sprint!.State);
     }
 
+    /// <summary>Regression: a pending human gate is only ever resolved through
+    /// <c>SprintScheduler.ResolveHumanGateAsync</c>, never through <c>ResumeSprintAsync</c> --
+    /// resuming past it would silently bypass the decision, flipping the sprint to `running` while
+    /// the gate node itself stays `awaiting_human` forever.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResumingASprintAwaitingAHumanGateIsRefusedRatherThanBypassingTheGate()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        Assert.Equal(SprintState.AwaitingHuman, toRunning.Sprint!.State);
+
+        SprintTransitionResult resumed = await orchestrator.ResumeSprintAsync(
+            new(environment.ProjectRoot, sprintId, toRunning.Sprint.Version,
+                SprintOrchestrator.ResumeSprintKey(toRunning.Sprint)),
+            cancellationToken);
+
+        Assert.False(resumed.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintTransitionInvalid, resumed.DiagnosticCode);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.AwaitingHuman, state.Sprint.State);
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate"].State);
+    }
+
+    /// <summary>Regression: <c>RunSprintAsync</c> must report the sprint's state *after* its own
+    /// `AdvanceGraphAsync` side effect, not the pre-advance snapshot -- a graph that opens with a
+    /// gate promotes straight past `running` into `awaiting_human` within this same call.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunReportsTheStateAfterItsOwnAdvanceGraphSideEffectNotTheStaleSnapshot()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+
+        Assert.True(toRunning.Succeeded);
+        // Not `Running`: the returned snapshot must already reflect the gate's own auto-promotion,
+        // matching whatever a fresh read of durable state shows immediately after this call returns.
+        Assert.Equal(SprintState.AwaitingHuman, toRunning.Sprint!.State);
+        SprintSnapshot fresh =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(fresh.State, toRunning.Sprint.State);
+        Assert.Equal(fresh.Version, toRunning.Sprint.Version);
+    }
+
+    /// <summary>Regression: `AdvanceGraphAsync`'s own internal invariant (`RequireDefinitionAsync`
+    /// throws for a sprint with durable event state but no readable frozen definition -- the
+    /// "invisible, safely resumable sprint" `CreateSprintAsync` itself documents leaving behind when
+    /// a create is interrupted before `SaveDefinitionAsync`) must never crash `RunSprintAsync` after
+    /// its own transition to `running` has already committed durably.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunSurvivesAMissingFrozenDefinitionAfterItsOwnTransitionAlreadyCommitted()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        // Bypasses CreateSprintAsync entirely -- durable event state exists, but
+        // SaveDefinitionAsync/MarkSprintCreatedAsync never ran, so no frozen definition exists.
+        SprintId sprintId = SprintId.New();
+        await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        SprintSnapshot draft =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, draft.Version, SprintOrchestrator.RunSprintKey(draft)),
+            cancellationToken);
+
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+
+        // The transition itself committed durably; AdvanceGraphAsync's side effect failing on the
+        // missing definition must be absorbed, not thrown.
+        Assert.True(toRunning.Succeeded, $"diag={toRunning.DiagnosticCode}");
+        Assert.Equal(SprintState.Running, toRunning.Sprint!.State);
+        SprintSnapshot fresh =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Running, fresh.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task TransitioningAnUnknownSprintReportsSprintNotFound()

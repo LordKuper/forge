@@ -296,6 +296,14 @@ public sealed class ControlPlaneHostedService(
                     await DispatchResolveGateAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.SupersedeAttemptKind =>
                     await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.CreateSprintKind =>
+                    await DispatchCreateSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.RunSprintKind =>
+                    await DispatchRunSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.ResumeSprintKind =>
+                    await DispatchResumeSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.CancelSprintKind =>
+                    await DispatchCancelSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -309,11 +317,17 @@ public sealed class ControlPlaneHostedService(
                 request.CorrelationId,
                 new ControlDiagnostic(ControlDiagnosticCode.Malformed, exception.Message));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             // Unlike the client-caused branch above, this means the Host itself failed to read its
-            // own durable state (a locked or unreadable sprint journal) — never the client's fault.
-            // The detail stays generic rather than echoing exception.Message: that message can
+            // own durable state (a locked or unreadable sprint journal, or -- InvalidOperationException,
+            // e.g. SprintScheduler.RequireDefinitionAsync -- a sprint with durable event state but no
+            // readable frozen definition) -- never the client's fault. Left uncaught, an exception
+            // thrown after a mutation's own transition already committed (e.g. RunSprintAsync's
+            // trailing AdvanceGraphAsync call) would otherwise escape this dispatch entirely, tearing
+            // the connection down and reporting HostUnavailable to a caller whose mutation actually
+            // landed. The detail stays generic rather than echoing exception.Message: that message can
             // contain a local filesystem path, which the client-caused branch's messages never do.
             LogDispatchFailed(logger, request.Kind, exception);
             return new ControlResponse(
@@ -526,6 +540,74 @@ public sealed class ControlPlaneHostedService(
             .SupersedeAttemptAsync(
                 options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Instruction, payload.Confirmed,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchCreateSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        CreateSprintResult result = await application
+            .CreateSprintAsync(options.ProjectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchRunSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SprintIdRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SprintIdRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The run_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .RunSprintAsync(options.ProjectRoot, payload.SprintId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchResumeSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SprintIdRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SprintIdRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The resume_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .ResumeSprintAsync(options.ProjectRoot, payload.SprintId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchCancelSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        CancelSprintRequest? payload = request.Payload is { } value
+            ? value.Deserialize<CancelSprintRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The cancel_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .CancelSprintAsync(options.ProjectRoot, payload.SprintId, payload.Confirmed, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
