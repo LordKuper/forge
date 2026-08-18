@@ -157,13 +157,21 @@ public sealed class HumanGateAndSupersessionCliTests
     /// only proves the *parameter* works, never that `CreateRootCommand`'s own default lambda
     /// (`() => !Console.IsOutputRedirected`) is wired to it at all. `dotnet test` redirects this
     /// process's own standard output to capture it, so the default deterministically evaluates to
-    /// non-interactive here, matching every CI/local run of this suite.</summary>
+    /// non-interactive under `dotnet test` (both this suite's CI and local runs), but this test does
+    /// not hard-assert that: xunit v3 builds a directly runnable executable, so a developer running
+    /// `Forge.Tests.exe` from an actual interactive terminal would have `Console.IsOutputRedirected`
+    /// read `false` there, and a hard-coded "always refused" assertion would then be the one that's
+    /// wrong, not the production code. Instead this computes the expected outcome from the SAME real
+    /// property the production default consults, so the test passes under either launch environment
+    /// while still failing if the default is ever replaced with a constant (e.g. `() => true`) --
+    /// the exact mutation this test exists to catch.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public async Task GateApproveCommandRefusesTheRealAmbientNonInteractiveTestProcessByDefault()
+    public async Task GateApproveCommandUsesTheRealAmbientConsoleStateByDefault()
     {
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        bool interactive = !Console.IsOutputRedirected;
         StringWriter output = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
         FakeForgeMutations mutations = new();
@@ -182,9 +190,17 @@ public sealed class HumanGateAndSupersessionCliTests
             ])
             .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
 
-        Assert.Equal(ExitCodes.Authorization, exitCode);
-        Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
-        Assert.Equal(0, mutations.ResolveGateCalls);
+        if (interactive)
+        {
+            Assert.Equal(0, exitCode);
+            Assert.Equal(1, mutations.ResolveGateCalls);
+        }
+        else
+        {
+            Assert.Equal(ExitCodes.Authorization, exitCode);
+            Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
+            Assert.Equal(0, mutations.ResolveGateCalls);
+        }
     }
 
     /// <summary>ADR 0019's central decision: unlike every other confirmable mutation on

@@ -35,9 +35,10 @@ public static class CliApplication
         // signal every one of this command tree's real callers actually varies on: a human at an
         // interactive shell has an attached terminal for stdout even when piping instruction text
         // in, while an agent subprocess invoked through `.forge/rules` has both its streams
-        // redirected so its host tool can capture them. The default is evaluated once per call
-        // (not cached), matching `Console.IsInputRedirected`'s own already-established meaning: it
-        // reflects the process's stream setup, which does not change mid-invocation.
+        // redirected so its host tool can capture them. This lambda, not a value computed here, is
+        // what each command action calls -- see ADR 0023 for why a human deliberately redirecting
+        // their OWN output (e.g. `| tee log.txt`) is an accepted, named false-refusal, not a case
+        // this signal can distinguish from a non-interactive agent.
         Func<bool> effectiveIsInteractive = isInteractive ?? (() => !Console.IsOutputRedirected);
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable. `resolveMutations` receives the SAME `--project-root` value the invoking
@@ -545,10 +546,11 @@ public static class CliApplication
         return command;
     }
 
-    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 records this
-    /// honestly: there is no technical caller-identity control here, only mandatory, non-bypassable
-    /// confirmation — "human-only" is a project-level policy for this slice, not an enforced
-    /// boundary.</summary>
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 originally
+    /// recorded this honestly as policy-only ("no technical caller-identity control, only
+    /// mandatory, non-bypassable confirmation"); ADR 0023 adds the first real technical control
+    /// (the interactive-session check below) on top of that confirmation, still not claiming
+    /// unforgeable caller identity — see ADR 0023 for what it does and does not close.</summary>
     private static Command CreateGateCommand(
         SurfaceText text,
         TextWriter output,

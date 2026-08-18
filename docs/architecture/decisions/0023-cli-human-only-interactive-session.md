@@ -36,7 +36,8 @@ finally implemented them.
 
 `forge gate approve|reject` and `forge attempt supersede` now refuse to run
 unless standard *output* is an interactive terminal
-(`!Console.IsOutputRedirected` at the moment the command tree is built). An
+(`!Console.IsOutputRedirected`, re-evaluated fresh each time the command's
+own action runs — never cached or fixed at command-tree construction). An
 agent invoked through `.forge/rules` runs as a subprocess of its own host
 tool — this session's own Bash tool included — with both streams
 redirected so the host tool can capture them, exactly the condition this
@@ -59,6 +60,19 @@ and is the same signal common Unix tooling checks (`isatty(stdout)`) for
 exactly this "should I behave as if a human is watching" question, chosen
 specifically because piped *input* is an ordinary, legitimate data channel
 that says nothing about who is driving the process.
+
+This trade the check's direction, not the underlying limitation: a human
+who deliberately redirects their OWN output — `forge gate approve ... |
+tee log.txt` to keep a record, for example — is now refused exactly like a
+non-interactive agent, even though a real human is making the decision.
+This is a genuine, known false refusal, not merely a false-negative gap
+like pty allocation; it is accepted rather than fixed for the same reason
+input redirection was rejected as the signal: there is no `Console`
+property, and no portable primitive in this codebase's neutral code today,
+that distinguishes "a human piped my output for logging" from "an agent's
+host tool captured my output to parse it." A future `--force-interactive`
+escape hatch (or similar, deliberately opt-in) is the likely shape of a
+real fix, named here rather than silently left unstated.
 
 This is deliberately not framed as solved: an attacker or agent that
 explicitly allocates a pseudo-terminal (a real `pty`) before invoking the
@@ -162,14 +176,52 @@ Independent review found six issues, none left unaddressed:
    `Console.IsOutputRedirected` consulted) had zero test coverage —
    replacing the default expression with `() => true` would have shipped
    with the full suite still green, since every existing test explicitly
-   overrides the parameter. Fixed with a third test
-   (`GateApproveCommandRefusesTheRealAmbientNonInteractiveTestProcessByDefault`)
-   that omits `isInteractive` entirely and asserts the real ambient
-   `dotnet test` process (output redirected, same as it was for input) is
-   refused.
+   overrides the parameter. Fixed with a third test (see round 2 below for
+   the further fix this test itself needed).
 6. A minor indentation slip in an existing test's `CreateRootCommand` call
    (introduced when the `isInteractive` argument was added) that
    `dotnet format` did not flag. Fixed.
+
+### Round 2 review: six further gaps, all fixed
+
+1. **The `| tee`/output-redirection false refusal** described above under
+   "the technical control" — round 1's own input→output fix traded one
+   false refusal for a different, narrower one, and the first version of
+   this ADR never named it. Documented honestly rather than fixed (no
+   portable signal exists to distinguish it), matching how the pty and
+   Host-protocol bypasses are handled.
+2. `CreateGateCommand`'s own doc comment still asserted "there is no
+   technical caller-identity control here" verbatim — accurate before this
+   ADR, stale after it, and inconsistent with `CreateAttemptCommand`'s
+   sibling comment (already updated to reference ADR 0023). Fixed by
+   updating `CreateGateCommand`'s comment to match.
+3. `DiagnosticCodes.PermissionDenied`'s own XML doc — the constant every
+   consumer actually reads — still said "standard input," carried over
+   from round 1's original (pre-fix) wording. Fixed.
+4. This ADR's own "at the moment the command tree is built" claim was
+   false: the lambda is evaluated fresh every time a command's action
+   runs, not once at tree-construction time — the exact inaccuracy round 1
+   already fixed in the *code* comment, left uncorrected here. Fixed to
+   match.
+5. `GateApproveCommandRefusesTheRealAmbientNonInteractiveTestProcessByDefault`
+   hard-asserted the ambient test process is always refused. True under
+   `dotnet test`, but xunit v3 also builds a directly runnable
+   `Forge.Tests.exe` — run from an actual interactive terminal,
+   `Console.IsOutputRedirected` reads `false` there, and the hard-coded
+   assertion becomes the wrong one, not the production code. Renamed to
+   `GateApproveCommandUsesTheRealAmbientConsoleStateByDefault` and rewritten
+   to compute its own expectation from the same real `Console
+   .IsOutputRedirected` property the production default consults, so it
+   passes under either launch environment while still failing if the
+   default is ever replaced with a constant.
+6. A code comment cited `Console.IsInputRedirected`'s "own already-
+   established meaning" as authority for the *output* check's semantics —
+   confusing after the round-1 signal switch — and separately claimed the
+   value is "not cached," which risks misreading against the fact that
+   `Console.IsOutputRedirected` itself is a memoized BCL property. Fixed by
+   rewriting the comment to describe only what this lambda does (call
+   through fresh on every invocation) without characterizing the BCL
+   property's own internals.
 
 ## Consequences
 
@@ -186,8 +238,10 @@ Independent review found six issues, none left unaddressed:
   and `AttemptSupersedeCommandRefusesANonInteractiveSessionEvenWithYes`
   prove the refusal itself (exit 8, `permission_denied` on stderr, zero
   mutation calls, and — for supersede — the instruction source is never
-  read at all); `GateApproveCommandRefusesTheRealAmbientNonInteractiveTestProcessByDefault`
-  proves the production default is actually wired, not just the parameter.
+  read at all); `GateApproveCommandUsesTheRealAmbientConsoleStateByDefault`
+  proves the production default is actually wired, not just the parameter
+  — computing its own expectation from the real `Console.IsOutputRedirected`
+  rather than hard-coding a launch-environment-dependent outcome.
 - `SurfaceLanguageTests.DiagnosticCodesMapToTheContractExitCodes` gained the
   new `PermissionDenied → Authorization` case.
 - No wire/protocol change: this is CLI presentation-layer argument handling,
@@ -209,6 +263,14 @@ Independent review found six issues, none left unaddressed:
   identity (a signed human-presence token, an OS-level interactive-session
   credential, or similar, verified at the Host itself) is a substantially
   larger effort with no existing primitive in this codebase to build on.
+- **A false refusal for a real human who redirects their own output.**
+  `forge gate approve ... | tee log.txt` — or any other deliberate output
+  redirection by an interactive human — is now refused identically to a
+  non-interactive agent, since output redirection is exactly the signal
+  this control checks. No portable, reliable signal in this codebase's
+  neutral code today distinguishes the two cases; a future opt-in escape
+  hatch (e.g. `--force-interactive`) is the likely shape of a real fix,
+  not attempted in this ADR.
 - **Applying the same check to any future human-only CLI command.** Only
   the two commands that exist today are covered; a future one must
   explicitly opt in the same way, not inherit it implicitly.
