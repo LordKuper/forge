@@ -30,6 +30,11 @@
         <Button x:Name="GateRejectButton" Clicked="OnGateRejectClicked" />
       </HorizontalStackLayout>
       <Label x:Name="GateResultLabel" />
+      <!-- Reuses SprintIdEntry above as the supersession's sprint context too. -->
+      <Entry x:Name="AttemptIdEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Entry x:Name="AttemptInstructionEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Button x:Name="AttemptSupersedeButton" Clicked="OnAttemptSupersedeClicked" />
+      <Label x:Name="AttemptSupersedeResultLabel" />
       <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />

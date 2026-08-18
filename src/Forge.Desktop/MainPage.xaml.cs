@@ -34,10 +34,13 @@ public partial class MainPage : ContentPage
         Describe(ProjectRootEntry, text.Resolve(MessageKeys.ProjectRootLabel));
         Describe(SprintIdEntry, text.Resolve(MessageKeys.SprintIdLabel));
         Describe(GateNodeIdEntry, text.Resolve(MessageKeys.GateNodeIdLabel));
+        Describe(AttemptIdEntry, text.Resolve(MessageKeys.AttemptIdLabel));
+        Describe(AttemptInstructionEntry, text.Resolve(MessageKeys.AttemptInstructionLabel));
         Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
         Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
         GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
         GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
+        AttemptSupersedeButton.Text = text.Resolve(MessageKeys.AttemptSupersedeAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -65,6 +68,9 @@ public partial class MainPage : ContentPage
     private string? GateNodeId =>
         string.IsNullOrWhiteSpace(GateNodeIdEntry.Text) ? null : GateNodeIdEntry.Text;
 
+    private string? AttemptId =>
+        string.IsNullOrWhiteSpace(AttemptIdEntry.Text) ? null : AttemptIdEntry.Text;
+
     public async Task RefreshAsync()
     {
         MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
@@ -87,6 +93,8 @@ public partial class MainPage : ContentPage
         // ResolveGateAsync re-assigns this immediately after calling RefreshAsync, so a decision's
         // own outcome still shows correctly right after making it.
         GateResultLabel.Text = string.Empty;
+        // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
+        AttemptSupersedeResultLabel.Text = string.Empty;
     }
 
     protected override async void OnAppearing()
@@ -112,6 +120,9 @@ public partial class MainPage : ContentPage
 
     private async void OnGateRejectClicked(object? sender, EventArgs e) =>
         await RunAsync(() => ResolveGateAsync(approved: false)).ConfigureAwait(true);
+
+    private async void OnAttemptSupersedeClicked(object? sender, EventArgs e) =>
+        await RunAsync(SupersedeAttemptAsync).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -207,5 +218,47 @@ public partial class MainPage : ContentPage
         // decision's own outcome is what the user sees, not a stale value RefreshAsync just wiped.
         await RefreshAsync().ConfigureAwait(true);
         GateResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: same shape as
+    /// <see cref="ResolveGateAsync"/> — the dialog's own answer is the only source of `confirmed`,
+    /// and declining short-circuits before <see cref="viewModel"/> ever resolves a Host connection.
+    /// A blank attempt id or blank instruction is refused *before* the dialog shows: unlike the
+    /// gate's node id, neither has a default to fall back to, so showing a confirmation dialog for
+    /// either would ask the user to confirm superseding an unnamed target with no replacement text.
+    /// The instruction's *length* bound stays server-validated in <see cref="viewModel"/> — only
+    /// emptiness is checked here, since only emptiness makes the target itself meaningless the way a
+    /// blank attempt id does.</summary>
+    private async Task SupersedeAttemptAsync()
+    {
+        if (AttemptId is null)
+        {
+            AttemptSupersedeResultLabel.Text = text.Resolve(MessageKeys.AttemptIdRequired);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(AttemptInstructionEntry.Text))
+        {
+            AttemptSupersedeResultLabel.Text = text.Resolve(MessageKeys.AttemptInstructionRequired);
+            return;
+        }
+
+        string action = text.Resolve(MessageKeys.AttemptSupersedeAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.AttemptSupersedePrompt(SprintId, AttemptId), action,
+                text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        if (!confirmed)
+        {
+            AttemptSupersedeResultLabel.Text = text.Resolve(MessageKeys.AttemptSupersedeConfirmationRequired);
+            return;
+        }
+
+        string message = await viewModel
+            .SupersedeAttemptAsync(
+                ProjectRoot, SprintId, AttemptId, AttemptInstructionEntry.Text, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        AttemptSupersedeResultLabel.Text = message;
     }
 }

@@ -34,6 +34,14 @@ public sealed class SurfaceParityTests
         [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
         [CapabilityIds.WorkflowReview] =
             ["SprintIdEntry", "GateNodeIdEntry", "GateApproveButton", "GateRejectButton", "GateResultLabel"],
+        [CapabilityIds.AttemptSupersede] =
+        [
+            "SprintIdEntry",
+            "AttemptIdEntry",
+            "AttemptInstructionEntry",
+            "AttemptSupersedeButton",
+            "AttemptSupersedeResultLabel",
+        ],
     };
 
     [Fact]
@@ -54,16 +62,32 @@ public sealed class SurfaceParityTests
                 Command command = Assert.Single(
                     root.Subcommands,
                     subcommand => subcommand.Name == tokens[0]);
+                // Every literal token after tokens[0] (neither an option nor `<...>`-shaped) must
+                // itself be a subcommand at its documented depth -- e.g. "supersede" in "attempt
+                // supersede <attempt-id> --instruction-file <path|->". Without this, renaming a CLI
+                // subcommand would leave this test green as long as some *option* with the matching
+                // name still existed anywhere in the tree (HasOption below searches recursively).
+                Command current = command;
+                foreach (string token in tokens.Skip(1))
+                {
+                    if (token.StartsWith("--", StringComparison.Ordinal) || token.StartsWith('<'))
+                    {
+                        break;
+                    }
+
+                    current = Assert.Single(current.Subcommands, subcommand => subcommand.Name == token);
+                }
+
                 foreach (string option in tokens.Where(token => token.StartsWith("--", StringComparison.Ordinal)))
                 {
                     Assert.True(
-                        HasOption(command, option),
-                        $"'{command.Name}' does not expose '{option}'.");
+                        HasOption(current, option),
+                        $"'{current.Name}' does not expose '{option}'.");
                 }
 
                 foreach (string subcommand in Alternatives(tokens))
                 {
-                    Assert.Contains(command.Subcommands, item => item.Name == subcommand);
+                    Assert.Contains(current.Subcommands, item => item.Name == subcommand);
                 }
             });
     }
@@ -144,6 +168,78 @@ public sealed class SurfaceParityTests
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
 
         Assert.Contains("viewModel.GatePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void AttemptSupersedeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        // Same reasoning as the gate check above, for attempt.supersede.
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
+    /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
+    /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's
+    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the code-behind
+    /// text.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog()
+    {
+        string method = SupersedeAttemptMethodBody();
+
+        int guardIndex = method.IndexOf("AttemptId is null", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank attempt id.");
+        Assert.True(
+            guardIndex < dialogIndex, "The blank-attempt-id guard must run before the confirmation dialog.");
+    }
+
+    /// <summary>Round 3 review: a blank replacement instruction was refused only after the user
+    /// confirmed the irreversible action, asymmetric with the attempt-id guard immediately above and
+    /// its own "ask before, not after" rationale.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog()
+    {
+        string method = SupersedeAttemptMethodBody();
+
+        int guardIndex = method.IndexOf("AttemptInstructionEntry.Text", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank instruction.");
+        Assert.True(
+            guardIndex < dialogIndex, "The blank-instruction guard must run before the confirmation dialog.");
+    }
+
+    private static string SupersedeAttemptMethodBody()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+        int start = codeBehind.IndexOf("private async Task SupersedeAttemptAsync()", StringComparison.Ordinal);
+        Assert.True(start >= 0, "MainPage.xaml.cs no longer declares SupersedeAttemptAsync().");
+        int bodyStart = codeBehind.IndexOf('{', start);
+        int depth = 0;
+        for (int index = bodyStart; index < codeBehind.Length; index++)
+        {
+            if (codeBehind[index] == '{')
+            {
+                depth++;
+            }
+            else if (codeBehind[index] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return codeBehind[bodyStart..(index + 1)];
+                }
+            }
+        }
+
+        throw new InvalidOperationException("SupersedeAttemptAsync's closing brace was not found.");
     }
 
     [Fact]
@@ -262,7 +358,12 @@ public sealed class SurfaceParityTests
     }
 
     private static IEnumerable<string> Alternatives(IEnumerable<string> tokens) =>
+        // Only tokens naming alternative *subcommands* (e.g. `<approve|reject>`) qualify -- stopping
+        // at the first `--option` excludes a token with the same `<a|b>` shape that instead describes
+        // an option's own value grammar (e.g. `attempt.supersede`'s `--instruction-file <path|->`,
+        // where "-" is a literal accepted value, not a sibling subcommand named "-").
         tokens
+            .TakeWhile(token => !token.StartsWith("--", StringComparison.Ordinal))
             .Where(token => token.StartsWith('<') && token.EndsWith('>') && token.Contains('|', StringComparison.Ordinal))
             .SelectMany(token => token.Trim('<', '>').Split('|'));
 

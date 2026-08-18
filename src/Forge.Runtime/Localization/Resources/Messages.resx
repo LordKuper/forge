@@ -95,4 +95,13 @@
   <data name="AttemptDescription" xml:space="preserve"><value>Human-only attempt commands.</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Cancel a non-terminal attempt and create a linked replacement.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Attempt superseded.</value></data>
+  <data name="AttemptSupersedeFailed" xml:space="preserve"><value>Attempt supersession failed.</value></data>
+  <data name="AttemptIdLabel" xml:space="preserve"><value>Attempt id:</value></data>
+  <data name="AttemptInstructionLabel" xml:space="preserve"><value>Replacement instruction:</value></data>
+  <data name="AttemptSupersedeAction" xml:space="preserve"><value>Supersede attempt</value></data>
+  <data name="AttemptSupersedeConfirmationRequired" xml:space="preserve"><value>Confirm the supersession before it is applied.</value></data>
+  <data name="AttemptIdRequired" xml:space="preserve"><value>Enter an attempt id.</value></data>
+  <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(no attempt id entered)</value></data>
+  <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to supersede its attempt.</value></data>
+  <data name="AttemptInstructionRequired" xml:space="preserve"><value>Enter a replacement instruction.</value></data>
 </root>

@@ -9,6 +9,7 @@ public static class CapabilityIds
     public const string ConfigurationManage = "configuration.manage";
     public const string ProviderHealth = "provider.health";
     public const string WorkflowReview = "workflow.review";
+    public const string AttemptSupersede = "attempt.supersede";
 
     /// <summary>Capabilities implemented on both surfaces by the current stage.</summary>
     public static IReadOnlyList<string> Implemented { get; } =
@@ -18,6 +19,7 @@ public static class CapabilityIds
         ConfigurationManage,
         ProviderHealth,
         WorkflowReview,
+        AttemptSupersede,
     ];
 }
 

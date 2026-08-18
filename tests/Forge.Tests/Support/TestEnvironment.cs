@@ -334,6 +334,14 @@ internal sealed class FakeForgeMutations : IForgeMutations
 
     public int SupersedeAttemptCalls { get; private set; }
 
+    public Guid? LastSupersedeSprintId { get; private set; }
+
+    public Guid? LastSupersedeAttemptId { get; private set; }
+
+    public string? LastSupersedeInstruction { get; private set; }
+
+    public bool? LastSupersedeConfirmed { get; private set; }
+
     public Task<NodeActionResult> ResolveGateAsync(
         string? projectRoot,
         Guid sprintId,
@@ -359,6 +367,10 @@ internal sealed class FakeForgeMutations : IForgeMutations
         CancellationToken cancellationToken)
     {
         SupersedeAttemptCalls++;
+        LastSupersedeSprintId = sprintId;
+        LastSupersedeAttemptId = attemptId;
+        LastSupersedeInstruction = instruction;
+        LastSupersedeConfirmed = confirmed;
         return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
     }
 

@@ -95,4 +95,13 @@
   <data name="AttemptDescription" xml:space="preserve"><value>Команды попыток (только для человека).</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Отменить незавершённую попытку и создать связанную замену.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Попытка заменена.</value></data>
+  <data name="AttemptSupersedeFailed" xml:space="preserve"><value>Не удалось заменить попытку.</value></data>
+  <data name="AttemptIdLabel" xml:space="preserve"><value>Идентификатор попытки:</value></data>
+  <data name="AttemptInstructionLabel" xml:space="preserve"><value>Инструкция для замены:</value></data>
+  <data name="AttemptSupersedeAction" xml:space="preserve"><value>Заменить попытку</value></data>
+  <data name="AttemptSupersedeConfirmationRequired" xml:space="preserve"><value>Подтвердите замену перед её применением.</value></data>
+  <data name="AttemptIdRequired" xml:space="preserve"><value>Введите идентификатор попытки.</value></data>
+  <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(идентификатор попытки не указан)</value></data>
+  <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы заменить его попытку.</value></data>
+  <data name="AttemptInstructionRequired" xml:space="preserve"><value>Введите инструкцию для замены.</value></data>
 </root>
