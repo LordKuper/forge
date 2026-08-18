@@ -78,6 +78,21 @@ public sealed record ResolveGateRequest(Guid SprintId, string NodeId, bool Appro
 /// human-only `attempt.supersede`).</summary>
 public sealed record SupersedeAttemptRequest(Guid SprintId, Guid AttemptId, string Instruction, bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. Empty: the Host
+/// always creates from its own project's canonical graph, and mints its own idempotency key, so
+/// nothing travels on the wire — see <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>.</summary>
+public sealed record CreateSprintRequest;
+
+/// <summary>Shared by <see cref="ControlProtocol.RunSprintKind"/> and
+/// <see cref="ControlProtocol.ResumeSprintKind"/> — neither is confirmable, so the target sprint id
+/// is the only field either needs.</summary>
+public sealed record SprintIdRequest(Guid SprintId);
+
+/// <summary><see cref="ControlProtocol.CancelSprintKind"/>'s request payload — unlike
+/// <see cref="SprintIdRequest"/>, cancellation is an ordinary destructive mutation (see
+/// <see cref="IntegrationWriteRequest"/>), so it also carries <see cref="Confirmed"/>.</summary>
+public sealed record CancelSprintRequest(Guid SprintId, bool Confirmed);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -126,6 +141,26 @@ public static class ControlProtocol
     /// <see cref="SupersedeAttemptRequest"/>. Response payload: a `CompleteAttemptResult` instance
     /// (same shape as <see cref="ResolveGateKind"/>'s response).</summary>
     public const string SupersedeAttemptKind = "supersede_attempt";
+
+    /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph (ADR
+    /// 0001). Request payload: a <see cref="CreateSprintRequest"/>. Response payload: a
+    /// `CreateSprintResult` instance (<c>{"succeeded": bool, "sprint_id"?: uuid, "diagnostic_code": string}</c>).</summary>
+    public const string CreateSprintKind = "create_sprint";
+
+    /// <summary>Advances a sprint one legal hop (`draft` to `ready`, then `ready` to `running`).
+    /// Request payload: a <see cref="SprintIdRequest"/>. Response payload: a
+    /// `SprintTransitionResult` instance (same shape as <see cref="ResumeSprintKind"/>'s response).</summary>
+    public const string RunSprintKind = "run_sprint";
+
+    /// <summary>Un-blocks a `blocked` sprint back to `ready`. Request payload: a
+    /// <see cref="SprintIdRequest"/>. Response payload: a `SprintTransitionResult` instance
+    /// (<c>{"succeeded": bool, "sprint"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string ResumeSprintKind = "resume_sprint";
+
+    /// <summary>Cancels a sprint. Request payload: a <see cref="CancelSprintRequest"/>. Response
+    /// payload: a `SprintTransitionResult` instance (same shape as
+    /// <see cref="ResumeSprintKind"/>'s response).</summary>
+    public const string CancelSprintKind = "cancel_sprint";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

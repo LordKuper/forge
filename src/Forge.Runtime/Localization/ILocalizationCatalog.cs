@@ -97,6 +97,14 @@ public static class MessageKeys
     public const string TreeDescription = "TreeDescription";
     public const string SprintDescription = "SprintDescription";
     public const string SprintInspectDescription = "SprintInspectDescription";
+    public const string SprintCreateDescription = "SprintCreateDescription";
+    public const string SprintCreated = "SprintCreated";
+    public const string SprintRunDescription = "SprintRunDescription";
+    public const string SprintAdvanced = "SprintAdvanced";
+    public const string SprintResumeDescription = "SprintResumeDescription";
+    public const string SprintResumed = "SprintResumed";
+    public const string SprintCancelDescription = "SprintCancelDescription";
+    public const string SprintCancelled = "SprintCancelled";
     public const string IntegrationHeaderPreamble = "IntegrationHeaderPreamble";
     public const string IntegrationTestingInvariant = "IntegrationTestingInvariant";
     public const string IntegrationDescription = "IntegrationDescription";

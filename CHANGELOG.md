@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.41.0
+
+### Added
+
+- `forge sprint create` creates a sprint from the project's canonical
+  implementation-critical graph.
+- `forge sprint run` advances a sprint one legal hop (`draft` to `ready`,
+  then `ready` to `running`).
+- `forge sprint resume` un-blocks a blocked sprint back to `ready`.
+- `forge sprint cancel` cancels a sprint, requiring confirmation (`--yes`,
+  or `interaction.confirm_destructive` disabled).
+
 ## v0.40.0
 
 ### Added

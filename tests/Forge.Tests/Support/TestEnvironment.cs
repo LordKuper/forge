@@ -349,6 +349,44 @@ internal sealed class FakeForgeMutations : IForgeMutations
         SupersedeAttemptCalls++;
         return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
     }
+
+    public int CreateSprintCalls { get; private set; }
+
+    public int RunSprintCalls { get; private set; }
+
+    public int ResumeSprintCalls { get; private set; }
+
+    public int CancelSprintCalls { get; private set; }
+
+    public bool? LastCancelSprintConfirmed { get; private set; }
+
+    public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        CreateSprintCalls++;
+        return Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));
+    }
+
+    public Task<SprintTransitionResult> RunSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken)
+    {
+        RunSprintCalls++;
+        return Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
+    }
+
+    public Task<SprintTransitionResult> ResumeSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken)
+    {
+        ResumeSprintCalls++;
+        return Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
+    }
+
+    public Task<SprintTransitionResult> CancelSprintAsync(
+        string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken)
+    {
+        CancelSprintCalls++;
+        LastCancelSprintConfirmed = confirmed;
+        return Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
+    }
 }
 
 /// <summary>Like <see cref="FakeForgeMutations"/>, but disposable — proves a caller that resolves a
@@ -401,6 +439,21 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
+
+    public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));
+
+    public Task<SprintTransitionResult> RunSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken) =>
+        Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
+
+    public Task<SprintTransitionResult> ResumeSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken) =>
+        Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
+
+    public Task<SprintTransitionResult> CancelSprintAsync(
+        string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken) =>
+        Task.FromResult(new SprintTransitionResult(true, null, DiagnosticCodes.None));
 
     public ValueTask DisposeAsync()
     {

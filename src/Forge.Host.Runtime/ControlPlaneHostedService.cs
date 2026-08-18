@@ -296,6 +296,14 @@ public sealed class ControlPlaneHostedService(
                     await DispatchResolveGateAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.SupersedeAttemptKind =>
                     await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.CreateSprintKind =>
+                    await DispatchCreateSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.RunSprintKind =>
+                    await DispatchRunSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.ResumeSprintKind =>
+                    await DispatchResumeSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.CancelSprintKind =>
+                    await DispatchCancelSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -526,6 +534,74 @@ public sealed class ControlPlaneHostedService(
             .SupersedeAttemptAsync(
                 options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Instruction, payload.Confirmed,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchCreateSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        CreateSprintResult result = await application
+            .CreateSprintAsync(options.ProjectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchRunSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SprintIdRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SprintIdRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The run_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .RunSprintAsync(options.ProjectRoot, payload.SprintId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchResumeSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SprintIdRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SprintIdRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The resume_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .ResumeSprintAsync(options.ProjectRoot, payload.SprintId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchCancelSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        CancelSprintRequest? payload = request.Payload is { } value
+            ? value.Deserialize<CancelSprintRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The cancel_sprint payload is required.");
+        }
+
+        SprintTransitionResult result = await application
+            .CancelSprintAsync(options.ProjectRoot, payload.SprintId, payload.Confirmed, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

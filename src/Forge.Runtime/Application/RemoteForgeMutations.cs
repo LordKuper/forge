@@ -117,6 +117,50 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, null, DiagnosticCodes.HostUnavailable);
     }
 
+    public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        JsonElement payload = JsonSerializer.SerializeToElement(new CreateSprintRequest(), ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.CreateSprintKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<CreateSprintResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
+    public Task<SprintTransitionResult> RunSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken) =>
+        SendSprintIdRequestAsync(ControlProtocol.RunSprintKind, sprintId, cancellationToken);
+
+    public Task<SprintTransitionResult> ResumeSprintAsync(
+        string? projectRoot, Guid sprintId, CancellationToken cancellationToken) =>
+        SendSprintIdRequestAsync(ControlProtocol.ResumeSprintKind, sprintId, cancellationToken);
+
+    public async Task<SprintTransitionResult> CancelSprintAsync(
+        string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken)
+    {
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new CancelSprintRequest(sprintId, confirmed), ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.CancelSprintKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<SprintTransitionResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
+    private async Task<SprintTransitionResult> SendSprintIdRequestAsync(
+        string kind, Guid sprintId, CancellationToken cancellationToken)
+    {
+        JsonElement payload =
+            JsonSerializer.SerializeToElement(new SprintIdRequest(sprintId), ControlProtocol.JsonOptions);
+        ControlResponse response = await SendAsync(kind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<SprintTransitionResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
     private async Task<IntegrationWriteResult> SendIntegrationRequestAsync(
         string kind,
         bool confirmed,

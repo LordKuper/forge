@@ -63,6 +63,14 @@
   <data name="TreeDescription" xml:space="preserve"><value>Показать иерархию спринтов/узлов/попыток проекта.</value></data>
   <data name="SprintDescription" xml:space="preserve"><value>Команды спринта.</value></data>
   <data name="SprintInspectDescription" xml:space="preserve"><value>Показать полные детали одного спринта.</value></data>
+  <data name="SprintCreateDescription" xml:space="preserve"><value>Создать спринт по канонической implementation-critical схеме проекта.</value></data>
+  <data name="SprintCreated" xml:space="preserve"><value>Спринт создан:</value></data>
+  <data name="SprintRunDescription" xml:space="preserve"><value>Продвинуть спринт на один допустимый шаг (draft в ready, затем ready в running).</value></data>
+  <data name="SprintAdvanced" xml:space="preserve"><value>Спринт переведён в состояние</value></data>
+  <data name="SprintResumeDescription" xml:space="preserve"><value>Возобновить заблокированный спринт до состояния ready.</value></data>
+  <data name="SprintResumed" xml:space="preserve"><value>Спринт возобновлён.</value></data>
+  <data name="SprintCancelDescription" xml:space="preserve"><value>Отменить спринт.</value></data>
+  <data name="SprintCancelled" xml:space="preserve"><value>Спринт отменён.</value></data>
   <data name="IntegrationHeaderPreamble" xml:space="preserve"><value>Этот файл сгенерирован Forge из .forge/rules/ и .forge/knowledge/. Не редактируйте его напрямую; редактируйте эти источники и выполните повторную генерацию.</value></data>
   <data name="IntegrationTestingInvariant" xml:space="preserve"><value>Приоритет реализации перед тестированием: сначала реализуйте изменение в рамках задачи, затем подтвердите его соответствие определению готовности через проверку и выполнение, и только после этого выбирайте или пишите минимальный набор новых тестов на основе рисков, защищающих изменение. Не выбирайте и не пишите новые тесты до этого подтверждения.</value></data>
   <data name="IntegrationDescription" xml:space="preserve"><value>Команды интеграции с провайдерами.</value></data>

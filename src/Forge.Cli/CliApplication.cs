@@ -43,7 +43,7 @@ public static class CliApplication
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateEventsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateTreeCommand(text, output, diagnostics, application));
-        root.Subcommands.Add(CreateSprintCommand(text, output, diagnostics, application));
+        root.Subcommands.Add(CreateSprintCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
@@ -341,10 +341,139 @@ public static class CliApplication
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        ForgeApplication application)
+        ForgeApplication application,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
     {
         Command command = new("sprint", text.Resolve(MessageKeys.SprintDescription));
         command.Subcommands.Add(CreateSprintInspectCommand(text, output, diagnostics, application));
+        command.Subcommands.Add(CreateSprintCreateCommand(text, output, diagnostics, resolveMutations));
+        command.Subcommands.Add(CreateSprintRunCommand(text, output, diagnostics, resolveMutations));
+        command.Subcommands.Add(CreateSprintResumeCommand(text, output, diagnostics, resolveMutations));
+        command.Subcommands.Add(CreateSprintCancelCommand(text, output, diagnostics, resolveMutations));
+        return command;
+    }
+
+    private static Command CreateSprintCreateCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Command command = new("create", text.Resolve(MessageKeys.SprintCreateDescription));
+        command.Options.Add(projectRoot);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            CreateSprintResult result =
+                await mutations.CreateSprintAsync(root, cancellationToken).ConfigureAwait(false);
+            if (result is { Succeeded: true, SprintId: { } sprintId })
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture, $"{text.Resolve(MessageKeys.SprintCreated)} {sprintId.Value:D}"));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateSprintRunCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations) =>
+        CreateSprintTransitionCommand(
+            text, output, diagnostics, resolveMutations, "run", MessageKeys.SprintRunDescription,
+            MessageKeys.SprintAdvanced, includeResultingState: true,
+            (mutations, root, sprintId, cancellationToken) =>
+                mutations.RunSprintAsync(root, sprintId, cancellationToken));
+
+    private static Command CreateSprintResumeCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations) =>
+        CreateSprintTransitionCommand(
+            text, output, diagnostics, resolveMutations, "resume", MessageKeys.SprintResumeDescription,
+            MessageKeys.SprintResumed, includeResultingState: false,
+            (mutations, root, sprintId, cancellationToken) =>
+                mutations.ResumeSprintAsync(root, sprintId, cancellationToken));
+
+    private static Command CreateSprintTransitionCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        string name,
+        string descriptionKey,
+        string successKey,
+        bool includeResultingState,
+        Func<IForgeMutations, string?, Guid, CancellationToken, Task<SprintTransitionResult>> transition)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Command command = new(name, text.Resolve(descriptionKey));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            SprintTransitionResult result =
+                await transition(mutations, root, sprintId, cancellationToken).ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(includeResultingState && result.Sprint is not null
+                    ? string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"{text.Resolve(successKey)} {SurfaceFormatting.Machine(result.Sprint.State)}")
+                    : text.Resolve(successKey));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateSprintCancelCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<bool> confirm = new("--yes") { Description = "Confirm cancellation." };
+        Command command = new("cancel", text.Resolve(MessageKeys.SprintCancelDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            SprintTransitionResult result = await mutations
+                .CancelSprintAsync(root, sprintId, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.SprintCancelled));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
         return command;
     }
 
