@@ -406,6 +406,27 @@ public sealed class MainPageViewModelTests
         Assert.NotEqual(Text().Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous), message);
     }
 
+    /// <summary>Round 2 review of PR #67 found the round-1 fix above only covered the
+    /// `Ambiguous == true` half of `TransitionSprintAsync`'s duplicated resolution block -- the
+    /// `false` half (unparsable/not-found) was still proven only via `CancelSprintAsync`'s own
+    /// separate copy, the exact "one of two call sites" shape round 1 itself named, one branch
+    /// lower.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunSprintAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RunSprintAsync(
+            environment.ProjectRoot, "not-a-guid", TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.RunSprintCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public void SprintCancelPromptNamesTheSprint()
@@ -418,6 +439,27 @@ public sealed class MainPageViewModelTests
         string prompt = viewModel.SprintCancelPrompt(sprintId);
 
         Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>Round 2 review of PR #67 found the blank-sprint placeholder branch had no test,
+    /// unlike both prompts this one claims to mirror (<see cref="MainPageViewModel.GatePrompt"/>/
+    /// <see cref="MainPageViewModel.AttemptSupersedePrompt"/> each have one) -- and a blank
+    /// `SprintIdEntry` is the page's own default state, so this is the dialog text users see most
+    /// often.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void SprintCancelPromptRendersThePlaceholderForABlankSprintId()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+
+        string prompt = viewModel.SprintCancelPrompt(null);
+
+        string expected = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} {text.Resolve(MessageKeys.GateActiveSprintPlaceholder)}");
+        Assert.Equal(expected, prompt);
     }
 
     [Fact]

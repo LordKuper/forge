@@ -136,12 +136,43 @@ Independent review found five issues, all fixed:
    test (`run` stands in for `resume`, which shares the identical helper
    call); verified by mutation testing — applied the exact regression,
    confirmed the new test fails, reverted.
-4. **`CHANGELOG.md` had no entry for the capability-contract split** —
-   `contract_version`'s first-ever bump in this file — despite the section
-   being published verbatim as the GitHub Release description. Added a
-   `Changed` entry.
+4. **`CHANGELOG.md` had no entry for the capability-contract split**,
+   despite the section being published verbatim as the GitHub Release
+   description. Added a `Changed` entry.
 5. **This ADR's own Consequences section said "five new message keys"
    directly above a list of six.** Corrected.
+
+## Round 2 review
+
+Independent review found three issues, all fixed:
+
+1. **Round 1 finding 3 was fixed for only the `Ambiguous == true` half of
+   the branch it named.** `TransitionSprintAsync`'s copy also has a
+   `false` (unparsable/not-found) half; only `CancelSprintAsync`'s
+   separate copy of that half was tested. Mutation-verified: swapping the
+   message/diagnostic on that line left the full suite green. Fixed with a
+   new `RunSprintAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations`
+   test; verified by mutation testing — applied the exact regression,
+   confirmed the new test fails, reverted.
+2. **`SprintCancelPrompt`'s blank-sprint branch had no test**, unlike both
+   prompts it claims to mirror (`GatePrompt`/`AttemptSupersedePrompt` each
+   have one). Mutation-verified: swapping the placeholder key left the
+   full suite green. Fixed with a new
+   `SprintCancelPromptRendersThePlaceholderForABlankSprintId` test —
+   the first attempt used `Assert.Contains` against the placeholder text
+   and passed even under the mutation, because the Russian
+   `SprintIdLabel` string itself already contains the placeholder's own
+   Russian text as a substring (`"... (пусто: активный спринт): ..."`
+   contains `"активный спринт"` regardless of which placeholder branch
+   renders). Fixed by asserting `Assert.Equal` against the full composed
+   string instead of a substring, which fails correctly on the mutation
+   regardless of UI culture.
+3. **Round 1 finding 4's fix introduced its own inaccuracy**: it justified
+   the `CHANGELOG.md` addition with "`contract_version`'s first-ever bump
+   in this file", but that file's `contract_version` was already bumped
+   once before, `1.0.0` -> `1.1.0` in commit `a7be09f` (v0.11.0). Removed
+   the inaccurate appositive; the `Changed` entry itself was correct and
+   is kept.
 
 ## Deliberately deferred
 
