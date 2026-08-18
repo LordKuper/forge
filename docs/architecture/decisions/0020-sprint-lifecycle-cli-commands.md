@@ -159,6 +159,12 @@ exercised `run`/`resume` against that fake. Fixed by only rendering the
 state-suffixed message when `result.Sprint` is not `null`, falling back to
 the plain `successKey` text otherwise — the same defensive shape
 `CreateSprintAsync`'s own output already needed for `result.SprintId`.
+Review found that fallback text itself was wrong for `run`: `SprintAdvanced`
+("Sprint advanced to") is a sentence *prefix* for the normal, state-suffixed
+case, not a complete sentence — the null-`Sprint` fallback printed it alone,
+a dangling fragment. Fixed with a dedicated complete-sentence key,
+`SprintAdvancedUnknownState` ("Sprint advanced."), used only when
+`includeResultingState` is `true` but `result.Sprint` is `null`.
 
 ### `RunSprintAsync`'s `AdvanceGraphAsync` call could crash a caller after its own transition already committed
 
@@ -184,6 +190,29 @@ and `ControlPlaneHostedService.DispatchAsync`'s existing IO-failure catch
 now also covers `InvalidOperationException` generally, as defense in depth
 for the same pre-existing shape in other dispatch handlers this PR did not
 otherwise touch.
+
+A further review round found that first fix's catch was both too wide and
+too silent: it absorbed *every* `InvalidOperationException` from the whole
+`AdvanceGraphAsync` subtree — including `RequireStateAsync`'s own "has no
+durable state" invariant (state vanishing mid-call, a genuinely unexpected
+failure) and `ObjectDisposedException` (which derives from
+`InvalidOperationException`) — and reported plain success
+(`DiagnosticCode: None`) with no signal anywhere that anything had gone
+wrong, not even a log line. Narrowed: the handler now re-checks
+`store.LoadDefinitionAsync(...)` inside the `catch` block (an `await`
+cannot appear in a `catch when` filter) and only swallows the exception
+when the definition is genuinely missing — the one condition this exists
+for. Anything else re-throws, surfacing through the Host dispatch's own
+(now-widened) catch and its log line, or crashing the local CLI path loudly
+rather than silently — which is the correct outcome for a failure this
+unexpected. The residual gap — even the narrow, genuinely-expected case
+still reports plain success with no diagnostic — is accepted rather than
+solved here: no existing diagnostic code fits "committed but did not fully
+settle" without misrepresenting either the transition (which did succeed)
+or the exit code a CLI caller would see (`ExitCodes.For` maps any non-`None`
+code to non-zero regardless of `Succeeded`, which would make `forge sprint
+run` print a success message and exit non-zero in the same call — a worse
+UX than the current silent, if incomplete, success).
 
 ## Deliberately deferred
 
@@ -218,6 +247,47 @@ otherwise touch.
   and whether `AdvanceGraphAsync`'s promotion loop should be gated on sprint
   state generally, not just for this one caller) rather than a narrow patch
   bolted onto `CancelSprintAsync` alone.
+- **`forge sprint create` has no guard against a second non-terminal
+  sprint.** `StatusAdvisor.DetermineActiveSprint` returns `null` — silently
+  blanking `forge status`/`forge next`'s active-sprint target — whenever
+  more than one non-terminal sprint exists, and nothing in `create` prevents
+  reaching that state on the ordinary path (no crash required: two plain,
+  successful `forge sprint create` invocations reach it). A guard was
+  attempted and reverted: refusing creation whenever any existing sprint is
+  non-terminal broke a deliberately-tested scenario this codebase already
+  relies on — multiple non-terminal sprints coexisting in one project is an
+  intentional, exercised case (e.g. `StageSixGateTests
+  .ConcurrentSprintsStayIsolatedAndBothResumeAfterReopeningTheStoreFromScratch`,
+  `ProjectSnapshotTests.TwoNonTerminalSprintsLeaveTheActiveSprintUnresolved`,
+  and several `ResumeSchedulerHostedServiceTests` cases proving a corrupted
+  sprint does not stop others from being re-derived) — and the naive
+  implementation made matters worse by eagerly loading *every* existing
+  sprint's state to check it, so a single corrupted, unrelated sprint
+  elsewhere in the project would fail an otherwise-unrelated `create` call,
+  reintroducing exactly the cross-sprint-isolation failure those tests
+  exist to prevent. Left deferred rather than re-attempted under review
+  time pressure; a correct fix (if one is wanted at all, given the above)
+  needs to distinguish "an operator's ordinary second `create`" from "a
+  system that intentionally supports concurrent sprints" without touching
+  every other sprint's durable state to decide.
+- **`forge sprint resume` on a sprint blocked by a rejected gate leaves the
+  sprint durably stuck with no CLI-reachable progress.** `resume` moves the
+  *sprint* from `blocked` back to `ready`, but the rejected gate *node*
+  stays `Failed` — nothing re-arms it. A subsequent `run` reaches `running`
+  with nothing left to promote: `AdvanceGraphAsync`'s `Pending`-to-`Ready`
+  loop requires every dependency `Succeeded`/`Skipped` (a `Failed` gate
+  never satisfies it), its gate-promotion loop only handles
+  `Ready`/`Running` snapshots, and `EvaluateCompletionAsync` — the one path
+  that would re-block on a stuck gate — is never reached because no attempt
+  remains whose completion would call it. The only way to re-arm a rejected
+  gate is `SprintScheduler.RetryNodeAsync`, which no CLI command or
+  `ControlProtocol` kind exposes (this slice does not add one, and ADR 0019
+  did not either). `SprintLifecycleCliTests
+  .SprintResumeCommandUnblocksASprintBlockedByARejectedGate` — this slice's
+  own flagship `resume` scenario — now asserts the gate node's post-resume
+  `Failed` state directly, so this limitation is encoded rather than merely
+  implied. A CLI surface for node retry is future work; nothing here
+  forecloses it.
 
 ## Consequences
 

@@ -67,6 +67,7 @@
   <data name="SprintCreated" xml:space="preserve"><value>Sprint created:</value></data>
   <data name="SprintRunDescription" xml:space="preserve"><value>Advance a sprint one legal hop (draft to ready, then ready to running).</value></data>
   <data name="SprintAdvanced" xml:space="preserve"><value>Sprint advanced to</value></data>
+  <data name="SprintAdvancedUnknownState" xml:space="preserve"><value>Sprint advanced.</value></data>
   <data name="SprintResumeDescription" xml:space="preserve"><value>Resume a blocked sprint back to ready.</value></data>
   <data name="SprintResumed" xml:space="preserve"><value>Sprint resumed.</value></data>
   <data name="SprintCancelDescription" xml:space="preserve"><value>Cancel a sprint.</value></data>

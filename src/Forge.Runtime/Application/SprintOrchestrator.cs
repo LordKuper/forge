@@ -268,15 +268,29 @@ public sealed class SprintOrchestrator(
             }
             catch (InvalidOperationException)
             {
-                // AdvanceGraphAsync's own internal invariants (e.g. `RequireDefinitionAsync`) throw
-                // when durable state disagrees with itself in a way that should never happen — a
-                // sprint whose event log exists but whose frozen definition does not. The transition
-                // to `running` immediately above already committed durably regardless; only this
-                // *side effect* failed. Reporting that already-committed result instead of letting an
-                // internal invariant violation crash the caller matches every other mutation here:
-                // fail closed with a result, never an unhandled exception, whether this method is
-                // called in-process or dispatched through the Host (ControlPlaneHostedService's own
-                // dispatch has a matching defensive catch for the same reason).
+                // Narrowed to the one condition this is meant to absorb: a sprint whose event log
+                // exists but whose frozen definition does not (`AdvanceGraphAsync`'s own
+                // `RequireDefinitionAsync` invariant). The transition to `running` immediately above
+                // already committed durably regardless; only this *side effect* failed. Reporting
+                // that already-committed result instead of letting this crash the caller matches
+                // every other mutation here: fail closed with a result, never an unhandled exception,
+                // whether this method is called in-process or dispatched through the Host
+                // (`ControlPlaneHostedService`'s own dispatch has a matching defensive catch for the
+                // same reason). Deliberately re-checked rather than caught unconditionally: an
+                // `InvalidOperationException` from anywhere else in `AdvanceGraphAsync` (its own
+                // `RequireStateAsync` invariant — durable state vanishing mid-call — or an
+                // `ObjectDisposedException`, which derives from this type) is a genuinely unexpected
+                // internal failure, not this narrow, known condition, and is re-thrown so it surfaces
+                // rather than silently reporting success. (An `await` cannot appear in a `catch when`
+                // filter, so the check is a re-throw inside the handler instead of a filter.)
+                SprintDefinition? definition = await store
+                    .LoadDefinitionAsync(status.Root, command.SprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (definition is not null)
+                {
+                    throw;
+                }
+
                 return result;
             }
         }

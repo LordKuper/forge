@@ -80,4 +80,9 @@ public static class WorkflowStateMachines
     /// <summary>An attempt state with no outgoing edges in the frozen machine above — derived
     /// rather than a second hardcoded state list, so it can never drift from the table it reads.</summary>
     public static bool IsTerminal(AttemptState state) => Attempt[state].Count == 0;
+
+    /// <summary>Same derivation as <see cref="IsTerminal(AttemptState)"/>, for the sprint machine —
+    /// matches <see cref="Forge.Application.StatusAdvisor"/>'s own inline `Completed`/`Cancelled`
+    /// check.</summary>
+    public static bool IsTerminal(SprintState state) => Sprint[state].Count == 0;
 }

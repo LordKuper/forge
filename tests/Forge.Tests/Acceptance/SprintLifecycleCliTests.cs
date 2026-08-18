@@ -108,6 +108,12 @@ public sealed class SprintLifecycleCliTests
         Assert.Contains(Text(catalog).Resolve(MessageKeys.SprintResumed), output.ToString(), StringComparison.Ordinal);
         SprintSnapshot resumed = (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(SprintState.Ready, resumed.State);
+        // Known limitation, documented in ADR 0020's "Deliberately deferred": `resume` only un-blocks
+        // the *sprint*, not the rejected gate node itself -- nothing in this slice exposes
+        // `SprintScheduler.RetryNodeAsync`, so the gate stays `Failed` and a subsequent `run` cannot
+        // make further progress. Encoded here rather than left implied.
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Failed, state.Nodes["gate"].State);
     }
 
     [Fact]

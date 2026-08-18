@@ -67,6 +67,7 @@
   <data name="SprintCreated" xml:space="preserve"><value>Спринт создан:</value></data>
   <data name="SprintRunDescription" xml:space="preserve"><value>Продвинуть спринт на один допустимый шаг (draft в ready, затем ready в running).</value></data>
   <data name="SprintAdvanced" xml:space="preserve"><value>Спринт переведён в состояние</value></data>
+  <data name="SprintAdvancedUnknownState" xml:space="preserve"><value>Спринт продвинут.</value></data>
   <data name="SprintResumeDescription" xml:space="preserve"><value>Возобновить заблокированный спринт до состояния ready.</value></data>
   <data name="SprintResumed" xml:space="preserve"><value>Спринт возобновлён.</value></data>
   <data name="SprintCancelDescription" xml:space="preserve"><value>Отменить спринт.</value></data>

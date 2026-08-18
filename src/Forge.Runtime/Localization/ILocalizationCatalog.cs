@@ -101,6 +101,7 @@ public static class MessageKeys
     public const string SprintCreated = "SprintCreated";
     public const string SprintRunDescription = "SprintRunDescription";
     public const string SprintAdvanced = "SprintAdvanced";
+    public const string SprintAdvancedUnknownState = "SprintAdvancedUnknownState";
     public const string SprintResumeDescription = "SprintResumeDescription";
     public const string SprintResumed = "SprintResumed";
     public const string SprintCancelDescription = "SprintCancelDescription";
