@@ -129,4 +129,9 @@ public static class MessageKeys
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";
+    public const string AttemptSupersedeFailed = "AttemptSupersedeFailed";
+    public const string AttemptIdLabel = "AttemptIdLabel";
+    public const string AttemptInstructionLabel = "AttemptInstructionLabel";
+    public const string AttemptSupersedeAction = "AttemptSupersedeAction";
+    public const string AttemptSupersedeConfirmationRequired = "AttemptSupersedeConfirmationRequired";
 }

@@ -288,6 +288,72 @@ public sealed class MainPageViewModel(
         return new(null, ambiguous);
     }
 
+    /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. <paramref name="sprintId"/>
+    /// shares <see cref="ResolveGateAsync"/>'s blank-means-active-sprint/ambiguity resolution exactly
+    /// (see <see cref="ResolveSprintIdAsync"/>). An unparsable <paramref name="attemptId"/> is reported
+    /// the same way `forge attempt supersede`'s own attempt-id argument is (`WorkflowEventConflict`,
+    /// not a dedicated "not found" code). <paramref name="instruction"/> is validated to the same
+    /// bound `SprintScheduler.MaxSupersessionInstructionLength` enforces server-side, checked
+    /// client-side first only because the full text is already in memory — an Entry, unlike the CLI's
+    /// file-or-stdin source, has nothing left to stream.</summary>
+    public async Task<string> SupersedeAttemptAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? attemptId,
+        string? instruction,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.GateSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!Guid.TryParse(attemptId, out Guid resolvedAttemptId))
+        {
+            return Message(text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        string trimmedInstruction = instruction ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(trimmedInstruction))
+        {
+            return Message(
+                text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SupersessionInstructionRequired);
+        }
+
+        if (trimmedInstruction.Length > SprintScheduler.MaxSupersessionInstructionLength)
+        {
+            return Message(
+                text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            CompleteAttemptResult result = await mutations
+                .SupersedeAttemptAsync(
+                    projectRoot, resolvedSprintId, resolvedAttemptId, trimmedInstruction, confirmed,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.AttemptSuperseded : MessageKeys.AttemptSupersedeFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/attempt a pending supersession would act on,
+    /// mirroring <see cref="GatePrompt"/>'s own shape and defaulting rules exactly.</summary>
+    public string AttemptSupersedePrompt(string? sprintId, string? attemptId) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.AttemptIdLabel)} {attemptId}");
+
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
     /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive
     /// across calls. A no-op for the local <see cref="ForgeApplication"/> fallback, which implements

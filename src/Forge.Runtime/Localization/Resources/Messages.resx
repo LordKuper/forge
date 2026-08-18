@@ -95,4 +95,9 @@
   <data name="AttemptDescription" xml:space="preserve"><value>Human-only attempt commands.</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Cancel a non-terminal attempt and create a linked replacement.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Attempt superseded.</value></data>
+  <data name="AttemptSupersedeFailed" xml:space="preserve"><value>Attempt supersession failed.</value></data>
+  <data name="AttemptIdLabel" xml:space="preserve"><value>Attempt id:</value></data>
+  <data name="AttemptInstructionLabel" xml:space="preserve"><value>Replacement instruction:</value></data>
+  <data name="AttemptSupersedeAction" xml:space="preserve"><value>Supersede attempt</value></data>
+  <data name="AttemptSupersedeConfirmationRequired" xml:space="preserve"><value>Confirm the supersession before it is applied.</value></data>
 </root>

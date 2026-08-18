@@ -705,5 +705,241 @@ public sealed class MainPageViewModelTests
         Assert.Equal(NodeState.AwaitingHuman, state.Nodes[nodeId].State);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncRoutesThroughTheResolvedMutationsWithForwardedValues()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        Guid sprintId = Guid.NewGuid();
+        Guid attemptId = Guid.NewGuid();
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId.ToString(), attemptId.ToString(), "Try a different approach.", true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.SupersedeAttemptCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.AttemptSuperseded), message);
+        Assert.Equal(sprintId, mutations.LastSupersedeSprintId);
+        Assert.Equal(attemptId, mutations.LastSupersedeAttemptId);
+        Assert.Equal("Try a different approach.", mutations.LastSupersedeInstruction);
+        Assert.True(mutations.LastSupersedeConfirmed);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, "not-a-guid", Guid.NewGuid().ToString(), "instruction", true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReportsAConflictForAnUnparsableAttemptIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), "not-a-guid", "instruction", true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Contains(DiagnosticCodes.WorkflowEventConflict, message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task SupersedeAttemptAsyncReportsAnEmptyInstructionWithoutCallingMutations(string? instruction)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), instruction, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Contains(DiagnosticCodes.SupersessionInstructionRequired, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReportsAnOverLongInstructionWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        string instruction = new('x', SprintScheduler.MaxSupersessionInstructionLength + 1);
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), instruction, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Contains(DiagnosticCodes.SupersessionInstructionTooLong, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncWithABlankSprintIdTargetsTheActiveSprint()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, "   ", Guid.NewGuid().ToString(), "instruction", true, cancellationToken);
+
+        Assert.Equal(1, mutations.SupersedeAttemptCalls);
+        Assert.Equal(sprintId.Value, mutations.LastSupersedeSprintId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncDisposesTheResolvedMutationsAfterTheCall()
+    {
+        using TestEnvironment environment = new();
+        DisposableFakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), "instruction", true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.DisposeCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncCancelsAndLinksAReplacementThroughTheLocalFallback()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId.Value.ToString(), started.AttemptId!.Value.ToString(),
+            "Try a different approach.", true, cancellationToken);
+
+        Assert.Equal(Text().Resolve(MessageKeys.AttemptSuperseded), message);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Cancelled, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
+        AttemptSnapshot replacement =
+            Assert.Single(state.Attempts.Values, candidate => candidate.Id != started.AttemptId);
+        Assert.Equal(started.AttemptId, replacement.SupersedesAttemptId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncRefusesAnUnconfirmedDecisionThroughTheLocalFallbackWithoutChangingTheAttempt()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId.Value.ToString(), started.AttemptId!.Value.ToString(),
+            "Try a different approach.", false, cancellationToken);
+
+        Assert.Contains(DiagnosticCodes.ConfirmationRequired, message, StringComparison.Ordinal);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Created, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AttemptSupersedePromptNamesTheSprintAndAttempt()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+        string attemptId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.AttemptSupersedePrompt(sprintId, attemptId);
+
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+        Assert.Contains(attemptId, prompt, StringComparison.Ordinal);
+    }
+
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);
 }

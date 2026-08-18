@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.43.0
+
+### Added
+
+- The Desktop app can now supersede a non-terminal attempt with a
+  replacement instruction, matching `forge attempt supersede`.
+  Confirmation is always required.
+
 ## v0.42.0
 
 ### Added

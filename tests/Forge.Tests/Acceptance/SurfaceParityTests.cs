@@ -34,6 +34,14 @@ public sealed class SurfaceParityTests
         [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
         [CapabilityIds.WorkflowReview] =
             ["SprintIdEntry", "GateNodeIdEntry", "GateApproveButton", "GateRejectButton", "GateResultLabel"],
+        [CapabilityIds.AttemptSupersede] =
+        [
+            "SprintIdEntry",
+            "AttemptIdEntry",
+            "AttemptInstructionEntry",
+            "AttemptSupersedeButton",
+            "AttemptSupersedeResultLabel",
+        ],
     };
 
     [Fact]
@@ -144,6 +152,17 @@ public sealed class SurfaceParityTests
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
 
         Assert.Contains("viewModel.GatePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void AttemptSupersedeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        // Same reasoning as the gate check above, for attempt.supersede.
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -262,7 +281,12 @@ public sealed class SurfaceParityTests
     }
 
     private static IEnumerable<string> Alternatives(IEnumerable<string> tokens) =>
+        // Only tokens naming alternative *subcommands* (e.g. `<approve|reject>`) qualify -- stopping
+        // at the first `--option` excludes a token with the same `<a|b>` shape that instead describes
+        // an option's own value grammar (e.g. `attempt.supersede`'s `--instruction-file <path|->`,
+        // where "-" is a literal accepted value, not a sibling subcommand named "-").
         tokens
+            .TakeWhile(token => !token.StartsWith("--", StringComparison.Ordinal))
             .Where(token => token.StartsWith('<') && token.EndsWith('>') && token.Contains('|', StringComparison.Ordinal))
             .SelectMany(token => token.Trim('<', '>').Split('|'));
 
