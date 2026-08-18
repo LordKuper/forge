@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.44.0
+
+### Security
+
+- `forge gate approve|reject` and `forge attempt supersede` now refuse to
+  run unless invoked from an interactive terminal, reporting
+  `permission_denied` (exit code 8). This is the first real technical
+  control behind their human-only requirement, beyond mandatory
+  confirmation alone. Piping the replacement instruction via
+  `--instruction-file -` is unaffected; deliberately redirecting the
+  command's own output (e.g. `| tee log.txt`) is refused the same way a
+  non-interactive invocation is, even for a real human.
+
 ## v0.43.0
 
 ### Added

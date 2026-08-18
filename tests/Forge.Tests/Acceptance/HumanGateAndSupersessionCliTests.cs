@@ -31,7 +31,8 @@ public sealed class HumanGateAndSupersessionCliTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -60,7 +61,8 @@ public sealed class HumanGateAndSupersessionCliTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         StringWriter output = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -92,8 +94,8 @@ public sealed class HumanGateAndSupersessionCliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root =
-            CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -106,6 +108,103 @@ public sealed class HumanGateAndSupersessionCliTests
         Assert.Contains(DiagnosticCodes.ConfirmationRequired, diagnostics.ToString(), StringComparison.Ordinal);
         SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate"].State);
+    }
+
+    /// <summary>ADR 0023: the first real technical control behind ADR 0005/0019's "human-only"
+    /// requirement. Refused before argument validation, before any mutation call, and unconditionally
+    /// -- `--yes` cannot substitute for an interactive session the same way it cannot substitute for
+    /// a missing sprint/node id.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task GateApproveCommandRefusesANonInteractiveSessionEvenWithYes()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: GateGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        FakeForgeMutations mutations = new();
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations),
+            isInteractive: () => false);
+
+        int exitCode = await root
+            .Parse([
+                "gate", "approve", "--sprint", sprintId.Value.ToString(), "--node", "gate", "--yes",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(ExitCodes.Authorization, exitCode);
+        Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, mutations.ResolveGateCalls);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate"].State);
+    }
+
+    /// <summary>ADR 0023: covers the production default (`isInteractive` omitted entirely, unlike
+    /// every other test in this file, which passes an explicit override) — every other test here
+    /// only proves the *parameter* works, never that `CreateRootCommand`'s own default lambda
+    /// (`() => !Console.IsOutputRedirected`) is wired to it at all. `dotnet test` redirects this
+    /// process's own standard output to capture it, so the default deterministically evaluates to
+    /// non-interactive under `dotnet test` (both this suite's CI and local runs), but this test does
+    /// not hard-assert that: xunit v3 builds a directly runnable executable, so a developer running
+    /// `Forge.Tests.exe` from an actual interactive terminal would have `Console.IsOutputRedirected`
+    /// read `false` there, and a hard-coded "always refused" assertion would then be the one that's
+    /// wrong, not the production code. Instead this computes the expected outcome from the SAME real
+    /// property the production default consults, so the test passes under either launch environment.
+    /// This only catches a mutation whose wrong constant happens to disagree with the real ambient
+    /// value in whichever environment the suite is actually run under -- under `dotnet test`
+    /// (`interactive` is `false` here), that is a default hard-coded to `() => true` (an agent would
+    /// slip through); a default hard-coded to `() => false` is indistinguishable from correct
+    /// behavior in that same always-redirected environment, and this test alone does not catch it.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task GateApproveCommandUsesTheRealAmbientConsoleStateByDefault()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        bool interactive = !Console.IsOutputRedirected;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        FakeForgeMutations mutations = new();
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        int exitCode = await root
+            .Parse([
+                "gate", "approve", "--sprint", Guid.NewGuid().ToString(), "--node", "gate", "--yes",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        if (interactive)
+        {
+            Assert.Equal(0, exitCode);
+            Assert.Equal(1, mutations.ResolveGateCalls);
+        }
+        else
+        {
+            Assert.Equal(ExitCodes.Authorization, exitCode);
+            Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
+            Assert.Equal(0, mutations.ResolveGateCalls);
+        }
     }
 
     /// <summary>ADR 0019's central decision: unlike every other confirmable mutation on
@@ -131,8 +230,8 @@ public sealed class HumanGateAndSupersessionCliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root =
-            CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -162,7 +261,8 @@ public sealed class HumanGateAndSupersessionCliTests
             Text(catalog),
             output,
             environment.Application,
-            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations),
+            isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -194,8 +294,8 @@ public sealed class HumanGateAndSupersessionCliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         StringReader input = new("Try a different approach.");
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root =
-            CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, input: input);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, input: input, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -236,7 +336,8 @@ public sealed class HumanGateAndSupersessionCliTests
         {
             StringWriter output = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
-            RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+            RootCommand root = CliApplication.CreateRootCommand(
+                Text(catalog), output, environment.Application, isInteractive: () => true);
 
             int exitCode = await root
                 .Parse([
@@ -267,8 +368,8 @@ public sealed class HumanGateAndSupersessionCliTests
         StringWriter output = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
         ResourceLocalizationCatalog catalog = new();
-        RootCommand root =
-            CliApplication.CreateRootCommand(Text(catalog), output, environment.Application, diagnostics);
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, isInteractive: () => true);
         string missingPath = Path.Combine(Path.GetTempPath(), $"forge-missing-{Guid.NewGuid():N}.txt");
 
         int exitCode = await root
@@ -294,7 +395,7 @@ public sealed class HumanGateAndSupersessionCliTests
         StringReader input = new("   \n  ");
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            Text(catalog), output, environment.Application, diagnostics, input: input);
+            Text(catalog), output, environment.Application, diagnostics, input: input, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -319,7 +420,7 @@ public sealed class HumanGateAndSupersessionCliTests
         StringReader input = new(new string('x', SprintScheduler.MaxSupersessionInstructionLength + 1));
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            Text(catalog), output, environment.Application, diagnostics, input: input);
+            Text(catalog), output, environment.Application, diagnostics, input: input, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -362,7 +463,7 @@ public sealed class HumanGateAndSupersessionCliTests
         StringReader input = new("Try a different approach.");
         ResourceLocalizationCatalog catalog = new();
         RootCommand root = CliApplication.CreateRootCommand(
-            Text(catalog), output, environment.Application, diagnostics, input: input);
+            Text(catalog), output, environment.Application, diagnostics, input: input, isInteractive: () => true);
 
         int exitCode = await root
             .Parse([
@@ -375,6 +476,75 @@ public sealed class HumanGateAndSupersessionCliTests
         Assert.Contains(DiagnosticCodes.ConfirmationRequired, diagnostics.ToString(), StringComparison.Ordinal);
         SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(AttemptState.Created, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
+    }
+
+    /// <summary>ADR 0023: same technical control as <see
+    /// cref="GateApproveCommandRefusesANonInteractiveSessionEvenWithYes"/>. The instruction source
+    /// is a <see cref="ThrowingTextReader"/> that fails the test if ever read, proving the refusal
+    /// happens strictly before <c>ReadInstructionAsync</c> -- not merely before the mutation call.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task AttemptSupersedeCommandRefusesANonInteractiveSessionEvenWithYes()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: WorkGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        FakeForgeMutations mutations = new();
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations),
+            input: new ThrowingTextReader(),
+            isInteractive: () => false);
+
+        int exitCode = await root
+            .Parse([
+                "attempt", "supersede", started.AttemptId!.Value.ToString(), "--sprint", sprintId.Value.ToString(),
+                "--instruction-file", "-", "--yes", "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(ExitCodes.Authorization, exitCode);
+        Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Created, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
+    }
+
+    /// <summary>Fails the test immediately if the instruction source is ever read, rather than
+    /// silently returning empty text -- a refusal that happened to read nothing first would pass a
+    /// weaker assertion, but this reader makes "never read at all" the only way to pass.
+    /// <c>ReadInstructionAsync</c>'s bounded reader calls <see cref="ReadAsync(Memory{char},
+    /// CancellationToken)"/> specifically, so that overload -- not just the synchronous ones -- must
+    /// throw.</summary>
+    private sealed class ThrowingTextReader : TextReader
+    {
+        public override int Read() => throw Failure();
+
+        public override int Read(char[] buffer, int index, int count) => throw Failure();
+
+        public override ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken) =>
+            throw Failure();
+
+        public override Task<string?> ReadLineAsync() => throw Failure();
+
+        private static InvalidOperationException Failure() => new(
+            "The instruction source must not be read when the session is refused as non-interactive.");
     }
 
     [Fact]
@@ -392,7 +562,8 @@ public sealed class HumanGateAndSupersessionCliTests
             output,
             environment.Application,
             resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations),
-            input: input);
+            input: input,
+            isInteractive: () => true);
 
         int exitCode = await root
             .Parse([

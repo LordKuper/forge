@@ -19,13 +19,27 @@ public static class CliApplication
         Func<CancellationToken, ValueTask<InstallationResult>>? install = null,
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null,
         Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null,
-        TextReader? input = null)
+        TextReader? input = null,
+        Func<bool>? isInteractive = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(application);
         TextWriter diagnostics = error ?? output;
         TextReader effectiveInput = input ?? Console.In;
+        // ADR 0023: deliberately checks *output*, not input, redirection. `forge attempt supersede`
+        // reads its replacement instruction from `--instruction-file -` (standard input) as a
+        // documented, ordinary invocation shape — checking `Console.IsInputRedirected` would refuse
+        // that exact shape unconditionally, since piping an instruction always redirects stdin
+        // regardless of whether a human or an agent is doing the piping. Output redirection is the
+        // signal every one of this command tree's real callers actually varies on: a human at an
+        // interactive shell has an attached terminal for stdout even when piping instruction text
+        // in, while an agent subprocess invoked through `.forge/rules` has both its streams
+        // redirected so its host tool can capture them. This lambda, not a value computed here, is
+        // what each command action calls -- see ADR 0023 for why a human deliberately redirecting
+        // their OWN output (e.g. `| tee log.txt`) is an accepted, named false-refusal, not a case
+        // this signal can distinguish from a non-interactive agent.
+        Func<bool> effectiveIsInteractive = isInteractive ?? (() => !Console.IsOutputRedirected);
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable. `resolveMutations` receives the SAME `--project-root` value the invoking
         // command resolved (never a value fixed before argument parsing), so a Host connection is
@@ -47,8 +61,10 @@ public static class CliApplication
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
-        root.Subcommands.Add(CreateGateCommand(text, output, diagnostics, effectiveResolver));
-        root.Subcommands.Add(CreateAttemptCommand(text, output, diagnostics, effectiveResolver, effectiveInput));
+        root.Subcommands.Add(
+            CreateGateCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
+        root.Subcommands.Add(CreateAttemptCommand(
+            text, output, diagnostics, effectiveResolver, effectiveInput, effectiveIsInteractive));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -530,21 +546,25 @@ public static class CliApplication
         return command;
     }
 
-    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 records this
-    /// honestly: there is no technical caller-identity control here, only mandatory, non-bypassable
-    /// confirmation — "human-only" is a project-level policy for this slice, not an enforced
-    /// boundary.</summary>
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 originally
+    /// recorded this honestly as policy-only ("no technical caller-identity control, only
+    /// mandatory, non-bypassable confirmation"); ADR 0023 adds the first real technical control
+    /// (the interactive-session check below) on top of that confirmation, still not claiming
+    /// unforgeable caller identity — see ADR 0023 for what it does and does not close.</summary>
     private static Command CreateGateCommand(
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
     {
         Command command = new("gate", text.Resolve(MessageKeys.GateDescription));
         command.Subcommands.Add(CreateGateResolveCommand(
-            text, output, diagnostics, resolveMutations, "approve", MessageKeys.GateApproveDescription, approved: true));
+            text, output, diagnostics, resolveMutations, isInteractive, "approve",
+            MessageKeys.GateApproveDescription, approved: true));
         command.Subcommands.Add(CreateGateResolveCommand(
-            text, output, diagnostics, resolveMutations, "reject", MessageKeys.GateRejectDescription, approved: false));
+            text, output, diagnostics, resolveMutations, isInteractive, "reject",
+            MessageKeys.GateRejectDescription, approved: false));
         return command;
     }
 
@@ -553,6 +573,7 @@ public static class CliApplication
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive,
         string name,
         string descriptionKey,
         bool approved)
@@ -571,6 +592,15 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            // ADR 0023: refused before any of this action's OWN validation runs -- the earliest
+            // point reachable once System.CommandLine has already parsed `--sprint`/`--node`/`--yes`
+            // into `parseResult` -- and unconditional: `--yes` cannot substitute for an interactive
+            // session.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
             string? root = parseResult.GetValue(projectRoot);
             if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
             {
@@ -594,17 +624,20 @@ public static class CliApplication
     }
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
-    /// <see cref="CreateGateCommand"/>'s remark — the same policy-only, no-technical-control posture
-    /// applies here.</summary>
+    /// <see cref="CreateGateCommand"/>'s remark — both commands now share ADR 0023's same
+    /// interactive-session technical control, on top of the mandatory, never-bypassed confirmation
+    /// this remark used to describe as the only control.</summary>
     private static Command CreateAttemptCommand(
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        TextReader input)
+        TextReader input,
+        Func<bool> isInteractive)
     {
         Command command = new("attempt", text.Resolve(MessageKeys.AttemptDescription));
-        command.Subcommands.Add(CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input));
+        command.Subcommands.Add(
+            CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input, isInteractive));
         return command;
     }
 
@@ -613,7 +646,8 @@ public static class CliApplication
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        TextReader input)
+        TextReader input,
+        Func<bool> isInteractive)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
@@ -632,6 +666,14 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            // ADR 0023: same earliest-reachable, unconditional refusal as the gate commands -- before
+            // this action's own sprint-id/attempt-id validation and before reading the instruction
+            // file/stdin.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
             if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
             {
                 return Report(diagnostics, DiagnosticCodes.SprintNotFound);

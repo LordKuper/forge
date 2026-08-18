@@ -71,6 +71,7 @@ public sealed class SurfaceLanguageTests
     [InlineData(DiagnosticCodes.PlatformNotSupported, ExitCodes.Platform)]
     [InlineData(DiagnosticCodes.UpdateCheckDeferred, ExitCodes.Update)]
     [InlineData(DiagnosticCodes.ProviderPreflightPending, ExitCodes.Provider)]
+    [InlineData(DiagnosticCodes.PermissionDenied, ExitCodes.Authorization)]
     [InlineData(DiagnosticCodes.ConfirmationRequired, ExitCodes.Confirmation)]
     [InlineData(DiagnosticCodes.SuggestionStale, ExitCodes.Concurrency)]
     [InlineData(DiagnosticCodes.InternalError, ExitCodes.Internal)]
