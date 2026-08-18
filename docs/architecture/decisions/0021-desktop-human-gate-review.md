@@ -142,6 +142,18 @@ entirely client-side, before `IForgeMutations` is ever reached) instead of
 `SprintNotFound` when more than one exists. Both branches (genuinely none,
 and more than one) now have their own regression test.
 
+A third review round found the "genuinely none" test above only ever
+exercised the zero-sprint case, leaving the *non-terminal filter itself*
+unverified: replacing it with an unconditional count over every sprint
+regardless of state still passed the whole suite. The real state that gap
+missed is ordinary — more than one sprint, all `Completed`/`Cancelled` —
+where the filtered count is correctly `0` (not ambiguous, genuinely none in
+progress) but an unfiltered count would be `2` (wrongly reported as
+ambiguous): round 2's own wrong-information failure mode, with the two
+branches swapped. Fixed with a third test creating two sprints and
+cancelling both, asserting `SprintNotFound` and specifically *not*
+`GateSprintAmbiguous`.
+
 ### The confirmation dialog names its target, and a stale result never survives an unrelated refresh
 
 Two further review findings, both fixed before merge:
@@ -155,7 +167,15 @@ Two further review findings, both fixed before merge:
   which names both the sprint (or the active-sprint placeholder, avoiding
   an extra round-trip just to resolve and display it) and the effective
   node id, applying the identical defaulting rules `ResolveGateAsync`
-  itself uses.
+  itself uses. A third review round found this fix itself had zero test
+  coverage — reverting `MainPage.ResolveGateAsync`'s dialog call back to
+  the pre-fix `DisplayAlertAsync(action, action, action, cancel)` still
+  passed the whole suite. Fixed with two direct `GatePrompt` unit tests
+  (`Forge.Desktop.Presentation` needs no MAUI host, unlike the code-behind
+  half) and a `SurfaceParityTests` static assertion that the code-behind
+  actually sources the dialog's message from `viewModel.GatePrompt(` —
+  the same "no MAUI control can be instantiated headlessly" reasoning the
+  screen-reader-description check above already relies on.
 - `GateResultLabel` was assigned only inside the gate flow and never reset
   by `RefreshAsync`, so a decision's outcome text survived every later,
   unrelated refresh — a stale "Gate resolved." could sit next to a

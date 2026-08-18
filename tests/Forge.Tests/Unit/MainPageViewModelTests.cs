@@ -513,6 +513,80 @@ public sealed class MainPageViewModelTests
         Assert.DoesNotContain(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
     }
 
+    /// <summary>Regression: the ambiguity check must count only *non-terminal* sprints. Without that
+    /// filter, more than one sprint of any state (including two cancelled ones, where the correct
+    /// answer is "genuinely none in progress") would be wrongly reported as ambiguous.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncWithABlankSprintIdAndOnlyTerminalSprintsReportsSprintNotFound()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId first = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        SprintId second = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+        await CancelAsync(orchestrator, environment.ProjectRoot, first, cancellationToken);
+        await CancelAsync(orchestrator, environment.ProjectRoot, second, cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, null, null, true, true, cancellationToken);
+
+        Assert.Equal(0, mutations.ResolveGateCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+        Assert.NotEqual(Text().Resolve(MessageKeys.GateSprintAmbiguous), message);
+    }
+
+    private static async Task CancelAsync(
+        SprintOrchestrator orchestrator, string projectRoot, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        SprintSnapshot sprint = (await orchestrator.GetSprintAsync(projectRoot, sprintId, cancellationToken))!;
+        Assert.True((await orchestrator.CancelSprintAsync(
+            new(projectRoot, sprintId, sprint.Version, SprintOrchestrator.CancelSprintKey(sprint)),
+            cancellationToken)).Succeeded);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void GatePromptNamesTheBlankSprintPlaceholderAndTheDefaultNode()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+
+        string prompt = viewModel.GatePrompt(null, null);
+
+        Assert.Contains(text.Resolve(MessageKeys.GateActiveSprintPlaceholder), prompt, StringComparison.Ordinal);
+        Assert.Contains(ImplementationCriticalGraphBuilder.HumanApprovalNodeId, prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void GatePromptNamesTheSuppliedSprintAndNodeInsteadOfTheDefaults()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.GatePrompt(sprintId, "custom-node");
+
+        // Not a `DoesNotContain` for the placeholder/default node id: both `SprintIdLabel` and
+        // `GateNodeIdLabel` themselves already mention "active sprint"/`human_approval` as part of
+        // their own static wording ("Sprint id (empty: active sprint):"), regardless of the value
+        // that follows -- so that assertion would be locale-dependent noise, not a real check. The
+        // supplied values actually appearing is what proves they reached the prompt.
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+        Assert.Contains("custom-node", prompt, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ResolveGateAsyncDisposesTheResolvedMutationsAfterTheCall()
