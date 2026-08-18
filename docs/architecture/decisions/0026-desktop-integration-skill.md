@@ -113,7 +113,10 @@ Independent review found four issues, all fixed:
    giving `TestEnvironment` a new optional `generators` parameter (same
    shape as its existing `llmProviders`/`providers` overrides) and a
    minimal in-file fake generator for the `fake` provider, then pinning
-   that the compared text really carries a real artifact row.
+   that the compared text really carries a real artifact row. (Round 2
+   review found this closed only the artifact-row half of the claim —
+   `AppendIntegrationDocumentErrors` was still never reached; see "Round
+   2 review" below.)
 3. **`IntegrationWriteLines`, the mutating half and the one actually
    reachable from a destructive action, had no parity test at all** —
    the original PR covered only `generate`. Fixed with a second parity
@@ -128,6 +131,24 @@ Independent review found four issues, all fixed:
    doc comments, which claimed to be "shared with Desktop" directly, were
    corrected to point at `IntegrationInspectionLines`/`IntegrationWriteLines`
    as the actual shared, tested surface.
+
+## Round 2 review
+
+Independent review found one issue, fixed:
+
+1. **Round 1 finding 2 was only half-closed.** Round 1 itself named two
+   drift-capable parts of the shared projection — `IntegrationInspectionRow`
+   *and* `AppendIntegrationDocumentErrors` — but the fake-generator fix
+   only exercised the first. Both new parity tests used freshly
+   initialized projects with no `.forge/rules` parse failures, so the
+   `  ! {path} {code}` document-error rows this PR newly exposed to
+   Desktop were never rendered by any test on either surface; a
+   Desktop-side regression there would have left the full suite green.
+   Fixed by writing a malformed rule document (missing frontmatter,
+   matching `IntegrationGenerationTests`'s own fixture shape) into the
+   preview parity test's project before generating, and pinning that the
+   compared text carries the resulting error row alongside the artifact
+   row.
 
 ## Deliberately deferred
 

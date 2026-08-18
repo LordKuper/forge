@@ -457,6 +457,15 @@ public sealed class SurfaceParityTests
         InitializeProjectResult init = await environment.InitializeAsync(
             environment.ProjectRoot, true, cancellationToken);
         Assert.True(init.Succeeded);
+        // Round 2 review found this fixture closed only half of round 1 finding 2: the artifact
+        // row was exercised, but AppendIntegrationDocumentErrors -- the other drift-capable part
+        // of the shared projection, and the one this PR newly exposed to Desktop -- was never
+        // reached by any test on either surface. A malformed rule document (missing frontmatter,
+        // matching IntegrationGenerationTests' own fixture shape) forces one.
+        string rulesDirectory = Path.Combine(ProjectRootResolver.ForgeDirectory(environment.ProjectRoot), "rules");
+        Directory.CreateDirectory(rulesDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(rulesDirectory, "broken.md"), "No frontmatter here.", cancellationToken);
         SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
         StringWriter cliOutput = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
@@ -471,8 +480,10 @@ public sealed class SurfaceParityTests
         Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
         Assert.Empty(diagnostics.ToString());
         // The comparison above is only as strong as its fixture, so pin that the compared text
-        // really carries a real artifact row -- an empty page on both sides would pass too.
+        // really carries a real artifact row and the malformed document's own error row -- either
+        // one silently empty on both sides would pass too.
         Assert.Contains("fake", desktop, StringComparison.Ordinal);
+        Assert.Contains("rules/broken.md", desktop, StringComparison.Ordinal);
     }
 
     /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameIntegrationPreviewForOneSnapshot"/>,
