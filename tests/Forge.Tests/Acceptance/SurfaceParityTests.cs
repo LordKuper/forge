@@ -32,6 +32,8 @@ public sealed class SurfaceParityTests
         [CapabilityIds.ConfigurationManage] =
             ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
         [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
+        [CapabilityIds.WorkflowReview] =
+            ["SprintIdEntry", "GateNodeIdEntry", "GateApproveButton", "GateRejectButton", "GateResultLabel"],
     };
 
     [Fact]
@@ -127,6 +129,21 @@ public sealed class SurfaceParityTests
         Assert.All(
             entries,
             entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void GateConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        // ADR 0021: a confirmation dialog for an irreversible human decision must name the sprint
+        // and node it acts on, not repeat the action name as title/message/accept. No MAUI control
+        // can be instantiated headlessly in this suite (matching the reasoning above), so this pins
+        // the code-behind actually sources the dialog's message from MainPageViewModel.GatePrompt
+        // rather than, e.g., the button's own action text.
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.GatePrompt(", codeBehind, StringComparison.Ordinal);
     }
 
     [Fact]

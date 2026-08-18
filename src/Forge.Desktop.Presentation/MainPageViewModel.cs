@@ -1,7 +1,9 @@
 using System.Globalization;
 using System.Text;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Localization;
 
 namespace Forge.Desktop.Presentation;
@@ -201,6 +203,89 @@ public sealed class MainPageViewModel(
                 text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
                 result.DiagnosticCode);
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. <paramref name="sprintId"/>
+    /// reuses the same entry the sprint-tree expansion uses: a blank value targets the active
+    /// sprint, matching <see cref="RefreshAsync"/>'s own "blank means active sprint" rule (the page's
+    /// default state — nothing typed yet — would otherwise always fail this action even while a
+    /// gate is visibly `awaiting_human` in the tree above it). A non-blank, unparsable value is still
+    /// reported the same way `forge gate approve|reject` reports an unparsable `--sprint`.
+    /// <paramref name="nodeId"/> defaults to the canonical human-approval node only when
+    /// <see langword="null"/>, matching the CLI's own `--node` default exactly — an empty or
+    /// whitespace-only string is forwarded as-is, the same as the CLI would (see
+    /// <see cref="GatePrompt"/>, which applies the identical rule for display).</summary>
+    public async Task<string> ResolveGateAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            // Two different reasons collapse to "no id" (StatusAdvisor.DetermineActiveSprint):
+            // nothing non-terminal exists, or more than one does and Forge never silently picks
+            // among them (ADR 0005). The latter needs a message that actually tells the user what
+            // to do next -- "not found" would be wrong information, not merely terse, since the
+            // candidate sprints are the ones already rendered in the tree above this action.
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.GateSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.GateResolutionFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            NodeActionResult result = await mutations
+                .ResolveGateAsync(projectRoot, resolvedSprintId, effectiveNodeId, approved, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.GateResolved : MessageKeys.GateResolutionFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/node a pending gate decision would act on —
+    /// shown before <see cref="ResolveGateAsync"/> so the user can verify the target before an
+    /// irreversible decision, using the same blank-means-active-sprint/human-approval defaulting
+    /// rules that call itself applies (displayed as a placeholder rather than the resolved active
+    /// sprint id, which would need its own round-trip just to render this prompt).</summary>
+    public string GatePrompt(string? sprintId, string? nodeId) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.GateNodeIdLabel)} " +
+                $"{nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId}");
+
+    /// <summary><paramref name="Ambiguous"/> distinguishes "more than one non-terminal sprint, Forge
+    /// never silently picks one" (<see cref="SprintId"/> is <see langword="null"/> but a sprint id
+    /// entry would resolve it) from "genuinely none" (entering one would not help either).</summary>
+    private readonly record struct SprintTarget(Guid? SprintId, bool Ambiguous);
+
+    private async Task<SprintTarget> ResolveSprintIdAsync(
+        string? projectRoot, string? sprintId, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(sprintId))
+        {
+            return new(Guid.TryParse(sprintId, out Guid parsed) ? parsed : null, false);
+        }
+
+        ProjectSnapshot snapshot = await application
+            .GetProjectSnapshotAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (snapshot.ActiveSprintId is { } activeSprintId)
+        {
+            return new(activeSprintId, false);
+        }
+
+        bool ambiguous = snapshot.Sprints.Count(sprint => !WorkflowStateMachines.IsTerminal(sprint.State)) > 1;
+        return new(null, ambiguous);
     }
 
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether

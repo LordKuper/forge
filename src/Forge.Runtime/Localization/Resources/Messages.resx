@@ -85,6 +85,13 @@
   <data name="GateApproveDescription" xml:space="preserve"><value>Approve an awaiting-human gate node.</value></data>
   <data name="GateRejectDescription" xml:space="preserve"><value>Reject an awaiting-human gate node.</value></data>
   <data name="GateResolved" xml:space="preserve"><value>Gate resolved.</value></data>
+  <data name="GateResolutionFailed" xml:space="preserve"><value>Gate resolution failed.</value></data>
+  <data name="GateNodeIdLabel" xml:space="preserve"><value>Gate node id (empty: human_approval):</value></data>
+  <data name="GateApproveAction" xml:space="preserve"><value>Approve gate</value></data>
+  <data name="GateRejectAction" xml:space="preserve"><value>Reject gate</value></data>
+  <data name="GateConfirmationRequired" xml:space="preserve"><value>Confirm the gate decision before it is applied.</value></data>
+  <data name="GateActiveSprintPlaceholder" xml:space="preserve"><value>the active sprint</value></data>
+  <data name="GateSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to resolve its gate.</value></data>
   <data name="AttemptDescription" xml:space="preserve"><value>Human-only attempt commands.</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Cancel a non-terminal attempt and create a linked replacement.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Attempt superseded.</value></data>

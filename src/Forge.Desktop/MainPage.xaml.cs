@@ -33,8 +33,11 @@ public partial class MainPage : ContentPage
         // it is described here too.
         Describe(ProjectRootEntry, text.Resolve(MessageKeys.ProjectRootLabel));
         Describe(SprintIdEntry, text.Resolve(MessageKeys.SprintIdLabel));
+        Describe(GateNodeIdEntry, text.Resolve(MessageKeys.GateNodeIdLabel));
         Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
         Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
+        GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
+        GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -57,6 +60,11 @@ public partial class MainPage : ContentPage
     private string? SprintId =>
         string.IsNullOrWhiteSpace(SprintIdEntry.Text) ? null : SprintIdEntry.Text;
 
+    /// <summary>Empty means the canonical human-approval node, matching `forge gate approve|reject`
+    /// with no `--node`.</summary>
+    private string? GateNodeId =>
+        string.IsNullOrWhiteSpace(GateNodeIdEntry.Text) ? null : GateNodeIdEntry.Text;
+
     public async Task RefreshAsync()
     {
         MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
@@ -73,6 +81,12 @@ public partial class MainPage : ContentPage
         RecoverButton.IsEnabled = snapshot.RecoverEnabled;
         ConfigurationLabel.Text = snapshot.ConfigurationText;
         DiagnosticsLabel.Text = snapshot.DiagnosticsText;
+        // Not part of the snapshot: a prior gate decision's outcome must never survive into an
+        // unrelated later refresh (a different sprint typed in, a different project root, or just a
+        // routine Refresh click) and read as if it still describes what is now on screen.
+        // ResolveGateAsync re-assigns this immediately after calling RefreshAsync, so a decision's
+        // own outcome still shows correctly right after making it.
+        GateResultLabel.Text = string.Empty;
     }
 
     protected override async void OnAppearing()
@@ -92,6 +106,12 @@ public partial class MainPage : ContentPage
 
     private async void OnConfigurationSetClicked(object? sender, EventArgs e) =>
         await RunAsync(SetConfigurationAsync).ConfigureAwait(true);
+
+    private async void OnGateApproveClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ResolveGateAsync(approved: true)).ConfigureAwait(true);
+
+    private async void OnGateRejectClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ResolveGateAsync(approved: false)).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -161,5 +181,31 @@ public partial class MainPage : ContentPage
                 CancellationToken.None)
             .ConfigureAwait(true);
         await RefreshAsync().ConfigureAwait(true);
+    }
+
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability: unlike
+    /// <see cref="RecoverAsync"/>, this confirmation is never bypassable — the dialog's own
+    /// yes/no answer *is* the `confirmed` value passed through, with no config-driven shortcut.
+    /// Declining is not itself a failed mutation: matching <see cref="InitializeAsync"/>, it short-
+    /// circuits before <see cref="viewModel"/> ever resolves a Host connection or sends a request.</summary>
+    private async Task ResolveGateAsync(bool approved)
+    {
+        string action = text.Resolve(approved ? MessageKeys.GateApproveAction : MessageKeys.GateRejectAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.GatePrompt(SprintId, GateNodeId), action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        if (!confirmed)
+        {
+            GateResultLabel.Text = text.Resolve(MessageKeys.GateConfirmationRequired);
+            return;
+        }
+
+        string message = await viewModel
+            .ResolveGateAsync(ProjectRoot, SprintId, GateNodeId, approved, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        // After RefreshAsync, which clears GateResultLabel as part of its own reset, so this
+        // decision's own outcome is what the user sees, not a stale value RefreshAsync just wiped.
+        await RefreshAsync().ConfigureAwait(true);
+        GateResultLabel.Text = message;
     }
 }

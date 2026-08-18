@@ -8,6 +8,7 @@ public static class CapabilityIds
     public const string ProjectInitialize = "project.initialize";
     public const string ConfigurationManage = "configuration.manage";
     public const string ProviderHealth = "provider.health";
+    public const string WorkflowReview = "workflow.review";
 
     /// <summary>Capabilities implemented on both surfaces by the current stage.</summary>
     public static IReadOnlyList<string> Implemented { get; } =
@@ -16,6 +17,7 @@ public static class CapabilityIds
         ProjectInitialize,
         ConfigurationManage,
         ProviderHealth,
+        WorkflowReview,
     ];
 }
 

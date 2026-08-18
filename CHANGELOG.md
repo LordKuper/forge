@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.42.0
+
+### Added
+
+- The Desktop app can now approve or reject a gate node awaiting a human
+  decision, matching `forge gate approve|reject`. Confirmation is always
+  required.
+
 ## v0.41.0
 
 ### Added

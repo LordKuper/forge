@@ -119,6 +119,13 @@ public static class MessageKeys
     public const string GateApproveDescription = "GateApproveDescription";
     public const string GateRejectDescription = "GateRejectDescription";
     public const string GateResolved = "GateResolved";
+    public const string GateResolutionFailed = "GateResolutionFailed";
+    public const string GateNodeIdLabel = "GateNodeIdLabel";
+    public const string GateApproveAction = "GateApproveAction";
+    public const string GateRejectAction = "GateRejectAction";
+    public const string GateConfirmationRequired = "GateConfirmationRequired";
+    public const string GateActiveSprintPlaceholder = "GateActiveSprintPlaceholder";
+    public const string GateSprintAmbiguous = "GateSprintAmbiguous";
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";
