@@ -40,6 +40,21 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 {
     public const int MaxAutomaticRetries = 2;
 
+    /// <summary>ADR 0006's "frozen fallback policy" for a rate-limit deferral: no structured
+    /// provider metadata (a vendor-published retry-after/reset-time field) is parsed anywhere in
+    /// this repository today, so every deferral uses this one fixed wait rather than guessing at
+    /// an unverified vendor field name.</summary>
+    public static readonly TimeSpan DefaultRateLimitBackoff = TimeSpan.FromMinutes(1);
+
+    /// <summary>The maximum length of a human operator's bounded supersession instruction (ADR
+    /// 0006's "bounded instruction artifact") — generous for an operator's own written guidance,
+    /// far below anything that could be mistaken for a provider-scale payload.</summary>
+    public const int MaxSupersessionInstructionLength = 4000;
+
+    // ponytail: every routed call today is the one MVP surface ("batch", non-interactive) —
+    // revisit once a second surface (e.g. an interactive session) actually exists to distinguish.
+    private const string RoutingSurface = "batch";
+
     // Matches `finding.schema.json`'s own `message_key` pattern — validated here too since
     // `RecordReviewIterationAsync` must reject a malformed `ReviewFindingDraft` before persisting
     // anything, not discover the same constraint mid-loop via a schema-validation exception.
@@ -60,10 +75,22 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     private static readonly AttemptState[] AttemptRejectedPath =
         [AttemptState.Created, AttemptState.Preparing, AttemptState.Failed];
 
+    private readonly RoutingLedger routingLedger = new(store, clock);
+
     public static Guid RetryNodeKey(SprintId sprintId, NodeSnapshot node) => NodeActionKey("retry_failed_node", sprintId, node);
 
     public static Guid ResolveHumanGateKey(SprintId sprintId, NodeSnapshot node) =>
         NodeActionKey("resolve_human_gate", sprintId, node);
+
+    /// <summary>ADR 0006's human-only supersession command: "requires... idempotency key." Keyed by
+    /// the *attempt* (not the node, unlike every other action key here) and its version, since
+    /// supersession targets one specific in-flight attempt directly.</summary>
+    public static Guid SupersedeAttemptKey(SprintId sprintId, AttemptSnapshot attempt)
+    {
+        ArgumentNullException.ThrowIfNull(attempt);
+        return StatusAdvisor.IdempotencyKey(
+            "attempt.supersede", new("attempt", $"{sprintId.Value:D}:{attempt.Id.Value:D}"), attempt.Version);
+    }
 
     /// <summary>Registers every node in the graph as `pending`, then promotes what is already runnable.</summary>
     public async Task InitializeGraphAsync(
@@ -240,11 +267,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowBlocked);
         }
 
-        // `running` with the node's *current* attempt number is a legitimate resume point: a prior
-        // call already moved the node but the attempt record itself did not land (a crash, or a
-        // conflicting append). Basing the deterministic id on the number the node already carries —
-        // rather than count + 1 — keeps a retry's id stable across that transition instead of
-        // shifting to a new, unrelated one every time it is recomputed.
+        // `running` with the node's own recorded `CurrentAttemptId` is a legitimate resume point: a
+        // prior call already moved the node but the attempt record itself did not land (a crash, or
+        // a conflicting append). Reusing that recorded id — rather than re-deriving one — keeps a
+        // retry's id stable across that transition instead of shifting to a new, unrelated one every
+        // time it is recomputed.
         // ponytail: on this resume path `expectedNodeVersion` is not re-checked against the node's
         // current version — there is no prior version to check it against once the node has already
         // moved. A caller with an arbitrarily stale version is handed the real, already-in-flight
@@ -252,15 +279,79 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // ownership and state independently), so this trades a slightly looser staleness guarantee
         // on this one path for actually being resumable. Revisit if that trade stops being safe.
         bool nodeAlreadyRunning = node.State == NodeState.Running;
-        int attemptNumber = nodeAlreadyRunning ? node.AttemptCount : node.AttemptCount + 1;
-        AttemptId attemptId = DeterministicAttemptId(
-            $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+        int attemptNumber = node.AttemptCount + 1;
+
+        // A non-`null` `node.CurrentAttemptId` while `nodeAlreadyRunning` is trusted directly (the
+        // resume case above). Otherwise, a `created` attempt already recorded against this node is a
+        // pending human-initiated replacement (`SupersedeAttemptAsync`, Stage 11, P11.48-P11.55)
+        // waiting to be picked up — looked up by that direct linkage rather than re-derived from a
+        // deterministic id built from `attemptNumber`: a replacement's own id was minted from
+        // whatever number was free *at its own creation time*, which does not have to be
+        // `attemptNumber` here (a second, later replacement of a still-pending first one advances
+        // past a number `AttemptCount` never itself reflects, precisely because nothing has started
+        // it yet to bump that count). Only when neither applies — an ordinary fresh node, never
+        // superseded — is a new id actually derived from `attemptNumber`.
+        AttemptId attemptId;
+        if (nodeAlreadyRunning && node.CurrentAttemptId is { } resumedAttemptId)
+        {
+            attemptId = new(Guid.Parse(resumedAttemptId));
+        }
+        else if (!nodeAlreadyRunning && state.Attempts.Values.FirstOrDefault(
+                     candidate => candidate.NodeId == nodeId && candidate.State == AttemptState.Created) is
+        { } pendingReplacement)
+        {
+            attemptId = pendingReplacement.Id;
+        }
+        else
+        {
+            // `AttemptCount` can undershoot the true next-free number once a number has been
+            // consumed without ever bumping it (`SupersedeAttemptAsync`'s own collision-avoidance
+            // skip, minting a replacement's id past a number a still-pending, never-started earlier
+            // replacement already occupies) -- walking forward here past any number that already
+            // belongs to an existing attempt keeps this branch's id fresh regardless, the same
+            // discipline `SupersedeAttemptAsync`'s creation step already applies.
+            AttemptId candidateId = DeterministicAttemptId(
+                $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            while (state.Attempts.ContainsKey(candidateId.Value.ToString("D")))
+            {
+                attemptNumber++;
+                candidateId = DeterministicAttemptId(
+                    $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            attemptId = candidateId;
+        }
 
         if (!nodeAlreadyRunning)
         {
             if (node.Version != expectedNodeVersion || node.State != NodeState.Ready)
             {
                 return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            // Only a model-bearing role (ADR 0014's Planning/Implementation/Review) has a frozen
+            // execution profile to route by — every other Work role (intake, confirmation,
+            // test-work's own eligibility gate, finalization) invokes no provider and is never
+            // subject to ADR 0006's rate-limit/circuit-breaker/budget policy at all. Every routed
+            // decision here is later refunded by `CompleteAttemptAsync` on success (see there) so
+            // the shared budget bounds only genuinely unresolved retry/deferral/failure loops, not
+            // ordinary one-pass progress through however many model-bearing nodes and review
+            // iterations a sprint happens to have.
+            ExecutionPhase? modelPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
+            RouteDecision? routedDecision = null;
+            if (modelPhase is { } phase &&
+                definition.ExecutionProfiles.TryGetValue(phase, out ExecutionProfile? profile))
+            {
+                HealthKey key = new(profile.Provider, profile.Model, RoutingSurface);
+                RouteDecision decision = await routingLedger
+                    .DecideAsync(projectRoot, sprintId, nodeId, attemptId, key, cancellationToken)
+                    .ConfigureAwait(false);
+                if (decision.Outcome != RouteOutcome.Routed)
+                {
+                    return new(false, null, RouteDiagnosticCode(decision.Outcome));
+                }
+
+                routedDecision = decision;
             }
 
             AppendOutcome nodeOutcome = await store.AppendTransitionAsync(
@@ -270,9 +361,22 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
                     [WorkflowEvent.AttemptNumberArgument] = attemptNumber.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.CurrentAttemptIdArgument] = attemptId.Value.ToString("D"),
                 }).ConfigureAwait(false);
             if (!nodeOutcome.Succeeded)
             {
+                // The node transition this routed decision was meant to authorize never actually
+                // landed (a stale pre-check, or a genuine race against a concurrent caller) -- refund
+                // the unit `DecideAsync` already consumed, exactly like `CompleteAttemptAsync` does
+                // on a real success, so a run of conflicts here can never permanently exhaust the
+                // shared budget for work that never happened.
+                if (routedDecision is not null)
+                {
+                    await routingLedger.RecordOutcomeAsync(
+                        projectRoot, sprintId, routedDecision, true, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 return new(false, null, nodeOutcome.DiagnosticCode);
             }
         }
@@ -413,6 +517,23 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 // is a defensive backstop against corruption rather than the expected path here.
                 return new(false, node, DiagnosticCodes.WorkflowEventConflict);
             }
+
+            // A genuinely new success refunds the shared routing budget unit `StartAttemptAsync`
+            // consumed for this attempt (`RoutingLedger.BuildBudget` never refunds a `Routed`
+            // decision on its own) — gated on `existingResult is null` exactly like the result save
+            // above, so a resumed/replayed call never refunds twice for the same attempt.
+            if (succeeded)
+            {
+                IReadOnlyList<RouteDecision> decisions = await routingLedger
+                    .GetRouteDecisionsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+                RouteDecision? routed = decisions.LastOrDefault(
+                    item => item.AttemptId == attemptId && item.Outcome == RouteOutcome.Routed);
+                if (routed is not null)
+                {
+                    await routingLedger.RecordOutcomeAsync(projectRoot, sprintId, routed, true, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+            }
         }
 
         if (node.State == NodeState.Running)
@@ -450,6 +571,320 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             .ConfigureAwait(false);
         return new(true, final.Nodes[nodeId], DiagnosticCodes.None);
     }
+
+    /// <summary>
+    /// ADR 0006's durable rate-limit wait: "A retryable rate limit abandons the failed attempt,
+    /// records a safe `resume_not_before` from structured provider metadata or the frozen fallback
+    /// policy, releases its executor slot, and leaves the node ready but routing-deferred." Finds
+    /// the `Routed` decision <see cref="StartAttemptAsync"/> recorded for this attempt, marks the
+    /// same provider/model/surface key unroutable through <see cref="DefaultRateLimitBackoff"/>
+    /// from now, then abandons the attempt through the exact same bounded auto-retry path
+    /// <see cref="CompleteAttemptAsync"/> already applies to any other failure — "repeated
+    /// deferral cannot spin or bypass the sprint retry budget" holds because a deferral consumes
+    /// the same shared budget unit every routed call already does, not a separate one. No
+    /// structured provider metadata is parsed anywhere in this repository today (ADR 0006 offers
+    /// it as an alternative source), so every deferral uses the one frozen fallback wait rather
+    /// than an unverified vendor field.
+    /// </summary>
+    public async Task<CompleteAttemptResult> DeferAttemptAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        AttemptId attemptId,
+        string inputDigest,
+        CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        string attemptKey = attemptId.Value.ToString("D");
+        if (!state.Attempts.TryGetValue(attemptKey, out AttemptSnapshot? attempt))
+        {
+            return new(false, node, DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        if (attempt.NodeId is not null && attempt.NodeId != nodeId)
+        {
+            return new(false, node, DiagnosticCodes.AttemptOwnershipMismatch);
+        }
+
+        if (WorkflowStateMachines.IsTerminal(attempt.State))
+        {
+            return new(false, node, DiagnosticCodes.AttemptTerminal);
+        }
+
+        IReadOnlyList<RouteDecision> decisions = await routingLedger
+            .GetRouteDecisionsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        RouteDecision? routed = decisions.LastOrDefault(
+            item => item.AttemptId == attemptId && item.Outcome == RouteOutcome.Routed);
+        if (routed is null)
+        {
+            // No routing decision exists for this attempt (e.g. its node's role has no execution
+            // profile to route by) -- there is nothing to defer against; an ordinary
+            // `CompleteAttemptAsync(succeeded: false, ...)` is the caller's correct path instead.
+            return new(false, node, DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        // Recorded only once the completion this deferral rides on actually lands: `CompleteAttemptAsync`
+        // can still reject this call for reasons `DeferAttemptAsync`'s own checks above do not cover
+        // (a node/attempt version conflict, an illegal transition). Recording the durable routing
+        // block first would leave the provider/model key blocked from a defer call that never
+        // actually abandoned the attempt.
+        CompleteAttemptResult result = await CompleteAttemptAsync(
+            projectRoot,
+            sprintId,
+            nodeId,
+            attemptId,
+            succeeded: false,
+            inputDigest,
+            outputs: [],
+            diagnostics:
+            [
+                new NodeDiagnostic(
+                    Forge.Providers.ProviderDiagnosticCodes.RateLimited,
+                    "provider",
+                    "diagnostic.provider_rate_limited",
+                    new Dictionary<string, string?>(StringComparer.Ordinal)),
+            ],
+            cancellationToken).ConfigureAwait(false);
+        if (!result.Succeeded)
+        {
+            return result;
+        }
+
+        await routingLedger.RecordDeferralAsync(
+            projectRoot, sprintId, routed, clock.UtcNow + DefaultRateLimitBackoff, cancellationToken)
+            .ConfigureAwait(false);
+        return result;
+    }
+
+    /// <summary>
+    /// ADR 0006's human-only operator-steering command: "An operator may explicitly supersede a
+    /// non-terminal attempt... Forge cancels the process tree, discards the owned worktree,
+    /// records `AttemptSuperseded`, and creates a fresh attempt for the same node from the
+    /// superseded attempt's recorded base. It never edits the frozen plan, continues a partially
+    /// modified worktree, or hides the original input and outcome." Cancelling the live process
+    /// tree and discarding the owned worktree are enacted by whichever future node executor
+    /// actually holds those live resources once it observes the durable `cancelled`/
+    /// `AttemptSuperseded` transition this method appends (matching how
+    /// `Forge.Application.SprintGitIsolation` itself is already built ahead of any executor); this
+    /// method owns only the durable half: the superseded attempt's own record is never edited
+    /// (only a new `cancelled` transition and a separate `AttemptSuperseded` event are appended —
+    /// "never hides the original input and outcome"), and the fresh attempt durably links back to
+    /// exactly what it replaced (<see cref="WorkflowEvent.SupersedesAttemptIdArgument"/>) and
+    /// reuses its recorded base (<see cref="WorkflowEvent.BaseCommitArgument"/>) rather than
+    /// drifting to wherever integration currently sits.
+    /// </summary>
+    public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        long expectedAttemptVersion,
+        Guid idempotencyKey,
+        bool confirmed,
+        string instruction,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(instruction);
+        if (!confirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        if (instruction.Length > MaxSupersessionInstructionLength)
+        {
+            return new(false, null, DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        string attemptKey = attemptId.Value.ToString("D");
+        if (!state.Attempts.TryGetValue(attemptKey, out AttemptSnapshot? attempt))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        // A replay of an already-completed (or partially-completed, crash-interrupted) supersession
+        // is recognized the same way `ResolveHumanGateAsync` recognizes its own resumed calls: by
+        // whether the target attempt already reflects this call's outcome, not by re-checking a
+        // version it has since legitimately advanced past (it is now `cancelled`, one version ahead
+        // of whatever the caller's original, pre-supersession expectation was). This deliberately
+        // does not also require a replacement attempt to already exist: gating on that too would
+        // reject a retry that lands between the cancel transition and replacement creation (the
+        // cancel already committed; nothing about it is redone), leaving the node stuck `running`
+        // with a `cancelled` attempt and no path to recover except aborting the sprint. Once
+        // `cancelled`, the append below is safe to call unconditionally either way -- a genuine
+        // replay (same idempotency key) short-circuits inside the store before any version check
+        // runs; a call this permissive check lets through for the wrong reason still lands on an
+        // illegal `cancelled` -> `cancelled` transition there and is rejected all the same.
+        bool alreadySuperseded = attempt.State == AttemptState.Cancelled;
+        if (!alreadySuperseded)
+        {
+            if (attempt.Version != expectedAttemptVersion || idempotencyKey != SupersedeAttemptKey(sprintId, attempt))
+            {
+                return new(false, null, DiagnosticCodes.SuggestionStale);
+            }
+
+            if (WorkflowStateMachines.IsTerminal(attempt.State))
+            {
+                return new(false, null, DiagnosticCodes.AttemptTerminal);
+            }
+        }
+
+        string? nodeId = attempt.NodeId;
+        if (nodeId is null || !state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        // The caller's own validated key drives this append directly, matching `RetryNodeAsync`:
+        // a lost response's retry replays instead of failing the version check it would otherwise
+        // hit on a second, no-op-intended call.
+        AppendOutcome cancelOutcome = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_superseded", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled),
+            expectedAttemptVersion, idempotencyKey, cancellationToken).ConfigureAwait(false);
+        if (!cancelOutcome.Succeeded)
+        {
+            return new(false, node, cancelOutcome.DiagnosticCode);
+        }
+
+        // Not gated on `cancelOutcome.Replayed`: every step below independently checks current
+        // state before acting, so a retry after a crash mid-sequence always finishes whatever the
+        // interrupted call left undone instead of silently stopping at just the cancellation.
+        await store.AppendAttemptSupersededAsync(projectRoot, sprintId, attemptId, instruction, cancellationToken)
+            .ConfigureAwait(false);
+
+        SprintWorkflowState afterCancel = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeSnapshot currentNode = afterCancel.Nodes[nodeId];
+
+        // Found by linkage, not recomputed from `currentNode.AttemptCount`: that count only ever
+        // advances when `StartAttemptAsync` actually *starts* something, never merely because an
+        // attempt was created, so a replacement still waiting to be picked up leaves it unchanged —
+        // recomputing "the next" id from it on a later call would at best re-derive the same pending
+        // replacement and at worst (superseding that still-pending replacement itself, before it was
+        // ever started) collide with its own number, since nothing has retired that slot yet.
+        AttemptSnapshot? existingReplacement = afterCancel.Attempts.Values
+            .FirstOrDefault(candidate => candidate.SupersedesAttemptId == attemptId);
+        if (existingReplacement is null)
+        {
+            // Starts from the same `AttemptCount + 1` `StartAttemptAsync` itself would use for a
+            // brand-new attempt, but does not stop there: that number can already belong to another
+            // attempt this node has minted without ever starting it (most directly, `attempt` itself,
+            // when it was already an unstarted pending replacement being superseded again) — walking
+            // forward until a genuinely free number is found avoids colliding with it. `StartAttemptAsync`
+            // no longer needs to independently agree on which number this is: it finds this node's
+            // pending replacement by direct linkage (`NodeId`+`created`), not by recomputing the id
+            // from `AttemptCount`, so nothing here depends on the exact number chosen beyond it being
+            // free and reproducible on a replay of this same call.
+            int attemptNumber = currentNode.AttemptCount + 1;
+            AttemptId freshAttemptId = DeterministicAttemptId(
+                $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            while (afterCancel.Attempts.ContainsKey(freshAttemptId.Value.ToString("D")))
+            {
+                attemptNumber++;
+                freshAttemptId = DeterministicAttemptId(
+                    $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            Dictionary<string, string?> creationArguments = new(StringComparer.Ordinal)
+            {
+                [WorkflowEvent.NodeIdArgument] = nodeId,
+                [WorkflowEvent.SupersedesAttemptIdArgument] = attemptKey,
+            };
+            if (attempt.BaseCommit is { } baseCommit)
+            {
+                creationArguments[WorkflowEvent.BaseCommitArgument] = baseCommit;
+            }
+
+            AppendOutcome creationOutcome = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Attempt, freshAttemptId.Value.ToString("D"), "AttemptChanged",
+                "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(WorkflowStateMachines.AttemptInitial),
+                0, Guid.NewGuid(), cancellationToken, creationArguments).ConfigureAwait(false);
+            if (!creationOutcome.Succeeded && creationOutcome.DiagnosticCode != DiagnosticCodes.WorkflowEventConflict)
+            {
+                return new(false, currentNode, creationOutcome.DiagnosticCode);
+            }
+        }
+
+        // Re-arming is gated on whether the replacement has actually been picked up by a
+        // `StartAttemptAsync` call, not merely on whether it exists: creation and the node re-arm
+        // are two separate durable steps, and a crash can land between them -- with the replacement
+        // created but the node still `running` from the cancelled attempt's own transition, waiting
+        // to be re-armed. Gating this on "no replacement exists" missed exactly that window: the
+        // replacement would be durably created, but nothing would ever re-arm the node, and no other
+        // verb can move a `running` node to `ready` -- the sprint stuck with a `created` replacement
+        // its own node can never start. Re-deriving a number from `currentNode.AttemptCount` and
+        // comparing deterministic ids does not work robustly either: `AttemptCount` only reflects the
+        // *count* of attempts actually started, not which specific one, so once a node has been
+        // superseded more than once (a not-yet-started replacement itself superseded again) no fixed
+        // arithmetic on that count reliably reconstructs any particular generation's own id. Two
+        // independent, durable signals together cover every case without reconstructing anything:
+        // `CurrentAttemptId` (set directly by `StartAttemptAsync` to the exact attempt it started)
+        // catches a replacement that is *currently* running, still `created` because nothing in this
+        // codebase drives an attempt through `preparing`/`running`/`validating` on its own — only a
+        // real completion (`CompleteAttemptAsync`/`ResolveHumanGateAsync`) walks it there; the
+        // replacement's own `State` no longer being `created` catches exactly that completed case,
+        // including when the node has since moved on to a *later* generation the replacement itself
+        // is no longer the current one for.
+        bool replacementStarted = existingReplacement is not null &&
+            (existingReplacement.State != AttemptState.Created ||
+                (currentNode.State == NodeState.Running &&
+                    currentNode.CurrentAttemptId == existingReplacement.Id.Value.ToString("D")));
+        if (!replacementStarted)
+        {
+            // The node state machine has no direct `running` -> `ready` edge (only `running` ->
+            // `failed` -> `ready`, the same two-step path an ordinary auto-retry already takes) — so
+            // this always walks both steps, and each is independently checked against the node's
+            // *current* state (not gated on a single flag) so a retry resumed after a crash between
+            // the two steps finishes only the remaining one instead of getting stuck in `failed`.
+            if (currentNode.State == NodeState.Running)
+            {
+                AppendOutcome failedOutcome = await AppendNodeAsync(
+                    projectRoot, sprintId, nodeId, "workflow.node_superseded", NodeState.Failed,
+                    currentNode.Version, cancellationToken).ConfigureAwait(false);
+                if (!failedOutcome.Succeeded)
+                {
+                    return new(false, currentNode, failedOutcome.DiagnosticCode);
+                }
+
+                currentNode = failedOutcome.State!.Nodes[nodeId];
+            }
+
+            if (currentNode.State == NodeState.Failed)
+            {
+                AppendOutcome readyOutcome = await AppendNodeAsync(
+                    projectRoot, sprintId, nodeId, "workflow.node_retried", NodeState.Ready, currentNode.Version,
+                    cancellationToken).ConfigureAwait(false);
+                if (!readyOutcome.Succeeded)
+                {
+                    return new(false, currentNode, readyOutcome.DiagnosticCode);
+                }
+            }
+        }
+
+        await AdvanceGraphAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        await EvaluateCompletionAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        SprintWorkflowState final = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, final.Nodes[nodeId], DiagnosticCodes.None);
+    }
+
+    private static string RouteDiagnosticCode(RouteOutcome outcome) => outcome switch
+    {
+        RouteOutcome.Deferred => DiagnosticCodes.RoutingDeferred,
+        RouteOutcome.BudgetExhausted => DiagnosticCodes.RoutingBudgetExhausted,
+        RouteOutcome.CircuitOpen => DiagnosticCodes.RoutingCircuitOpen,
+        // DecideAsync never returns Routed/Succeeded/Failed/Excluded from this call site — Routed
+        // is handled by the caller before this is ever reached, and the other three are only ever
+        // produced by RecordOutcomeAsync/RecordDeferralAsync, never by DecideAsync itself.
+        _ => DiagnosticCodes.InternalError,
+    };
 
     /// <summary>
     /// Safely bumps an in-flight attempt's last-activity time — ADR 0006's "safe, throttled activity
@@ -1536,11 +1971,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         string messageKey,
         NodeState toState,
         long expectedVersion,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? extraArguments = null) =>
         await store.AppendTransitionAsync(
             projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", messageKey,
-            WorkflowStateNames.ToSnakeCase(toState), expectedVersion, Guid.NewGuid(), cancellationToken)
-            .ConfigureAwait(false);
+            WorkflowStateNames.ToSnakeCase(toState), expectedVersion, Guid.NewGuid(), cancellationToken,
+            extraArguments).ConfigureAwait(false);
 
     private async Task<AppendOutcome> WalkAttemptAsync(
         string projectRoot,

@@ -48,6 +48,13 @@ public sealed record WorkflowEvent(
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
 
+    /// <summary>Carried on a node's `running` transition: the id of the attempt it was started
+    /// with, so <see cref="NodeSnapshot.CurrentAttemptId"/> can answer "which attempt does this
+    /// node's `running` state belong to" directly, without re-deriving an id from
+    /// <see cref="NodeSnapshot.AttemptCount"/> and risking a mismatch once a replacement attempt
+    /// (Stage 11, P11.48-P11.55) is involved.</summary>
+    public const string CurrentAttemptIdArgument = "current_attempt_id";
+
     /// <summary>Carried on an attempt's creation event so its owning node is a durable fact, not
     /// something only the caller who happens to pair matching ids remembers.</summary>
     public const string NodeIdArgument = "node_id";
@@ -64,6 +71,32 @@ public sealed record WorkflowEvent(
     /// sprint whose *actual* cause was an open finding may recover automatically once that finding
     /// resolves; every other cause requires the operator's explicit `resume_sprint` decision.</summary>
     public const string BlockedReasonArgument = "blocked_reason";
+
+    /// <summary>ADR 0006's human-only operator-steering command (Stage 11, P11.48-P11.55): "Forge
+    /// ... records `AttemptSuperseded`." Appended on the superseded attempt's own aggregate,
+    /// alongside (never instead of) its ordinary `AttemptChanged` transition to `cancelled` — this
+    /// event carries the bounded operator instruction and is never a transition itself (no
+    /// <see cref="ToStateArgument"/>), matching <see cref="AttemptActivityRecordedType"/>'s own
+    /// non-transition shape.</summary>
+    public const string AttemptSupersededType = "AttemptSuperseded";
+
+    /// <summary>Carried on an <see cref="AttemptSupersededType"/> event — the bounded instruction
+    /// artifact ADR 0006 requires ("never hides the original input and outcome": this augments the
+    /// record, it never edits or removes it).</summary>
+    public const string SupersessionInstructionArgument = "supersession_instruction";
+
+    /// <summary>Carried on the *replacement* attempt's own creation event — ADR 0006's "linkage":
+    /// a clean-replacement attempt durably names exactly which attempt it replaced. Absent on an
+    /// ordinarily-started attempt.</summary>
+    public const string SupersedesAttemptIdArgument = "supersedes_attempt_id";
+
+    /// <summary>Carried on an attempt's creation event when its worktree's git base commit is
+    /// already known at creation time — currently only true for a
+    /// <see cref="SupersedesAttemptIdArgument"/> clean replacement, which reuses the superseded
+    /// attempt's own recorded base rather than drifting to wherever integration currently sits
+    /// (ADR 0006: "from the superseded attempt's recorded base"). Absent otherwise: nothing else
+    /// today records what commit an attempt's worktree would be created at.</summary>
+    public const string BaseCommitArgument = "base_commit";
 }
 
 public sealed record SprintWorkflowState(
@@ -135,6 +168,15 @@ public static class WorkflowFold
                 continue;
             }
 
+            if (current.Type == WorkflowEvent.AttemptSupersededType)
+            {
+                // Validated (throws loudly on corruption) but, like an activity event, never a
+                // transition and never projected into the folded snapshot itself: the bounded
+                // instruction it carries is durable audit content, not workflow state.
+                _ = IsTransitionRecord(current);
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -160,19 +202,24 @@ public static class WorkflowFold
                         blockedReason);
                     break;
                 case AggregateKind.Node:
+                    nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previousNode);
                     int attemptCount = current.Arguments.TryGetValue(
                         WorkflowEvent.AttemptNumberArgument,
                         out string? countText) && countText is not null
                         ? int.Parse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture)
-                        : nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previous)
-                            ? previous.AttemptCount
-                            : 0;
+                        : previousNode?.AttemptCount ?? 0;
+                    string? currentAttemptId = current.Arguments.TryGetValue(
+                        WorkflowEvent.CurrentAttemptIdArgument,
+                        out string? currentAttemptIdValue) && currentAttemptIdValue is not null
+                        ? currentAttemptIdValue
+                        : previousNode?.CurrentAttemptId;
                     nodes[current.Aggregate.Id] = new(
                         new(current.Aggregate.Id),
                         WorkflowStateNames.Parse<NodeState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
-                        attemptCount);
+                        attemptCount,
+                        currentAttemptId);
                     break;
                 case AggregateKind.Attempt:
                     attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? previousAttempt);
@@ -186,6 +233,16 @@ public static class WorkflowFold
                         out string? targetOutcomeValue) && targetOutcomeValue is not null
                         ? targetOutcomeValue
                         : previousAttempt?.TargetOutcome;
+                    string? baseCommit = current.Arguments.TryGetValue(
+                        WorkflowEvent.BaseCommitArgument,
+                        out string? baseCommitValue) && baseCommitValue is not null
+                        ? baseCommitValue
+                        : previousAttempt?.BaseCommit;
+                    AttemptId? supersedesAttemptId = current.Arguments.TryGetValue(
+                        WorkflowEvent.SupersedesAttemptIdArgument,
+                        out string? supersedesValue) && supersedesValue is not null
+                        ? new AttemptId(Guid.Parse(supersedesValue))
+                        : previousAttempt?.SupersedesAttemptId;
                     attempts[current.Aggregate.Id] = new(
                         new(Guid.Parse(current.Aggregate.Id)),
                         WorkflowStateNames.Parse<AttemptState>(toState),
@@ -194,7 +251,9 @@ public static class WorkflowFold
                         nodeId,
                         targetOutcome,
                         previousAttempt?.LastActivityAt,
-                        previousAttempt?.LastActivityKind);
+                        previousAttempt?.LastActivityKind,
+                        baseCommit,
+                        supersedesAttemptId);
                     break;
                 default:
                     throw new InvalidDataException(
@@ -217,6 +276,15 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Activity event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptSupersededType)
+        {
+            bool hasInstruction = current.Arguments.TryGetValue(
+                WorkflowEvent.SupersessionInstructionArgument, out string? instruction) && instruction is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasInstruction
+                ? throw new InvalidDataException($"Supersession event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

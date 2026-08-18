@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.39.0
+
+### Added
+
+- A rate-limited attempt is now durably deferred instead of retried
+  immediately: it releases its slot, records a resume time, and leaves its
+  node ready but blocked from starting again until that time passes, without
+  bypassing the sprint's shared retry budget.
+- An operator can now supersede a non-terminal attempt with a confirmed,
+  versioned, idempotent command carrying a bounded replacement instruction.
+  The superseded attempt is cancelled, linked to a freshly created
+  replacement attempt on the same node, and the node is re-armed to start
+  the replacement.
+
 ## v0.38.0
 
 ### Added

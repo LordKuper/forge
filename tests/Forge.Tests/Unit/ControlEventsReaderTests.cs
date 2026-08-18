@@ -278,6 +278,11 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken,
             AttemptActivityKind kind = AttemptActivityKind.Heartbeat) =>
             throw new NotSupportedException();
+
+        public Task AppendAttemptSupersededAsync(
+            string projectRoot, SprintId sprintId, AttemptId attemptId, string instruction,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private static WorkflowEvent FakeEvent(Guid sprintId, long sequence, DateTimeOffset occurredAt) =>

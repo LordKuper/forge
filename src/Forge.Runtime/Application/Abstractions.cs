@@ -337,6 +337,19 @@ public interface ISprintStore
         CancellationToken cancellationToken,
         AttemptActivityKind kind = AttemptActivityKind.Heartbeat);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptSupersededType"/> event carrying the
+    /// operator's bounded <paramref name="instruction"/> (ADR 0006, Stage 11 P11.48-P11.55) — like
+    /// <see cref="AppendAttemptActivityAsync"/>, not gated by <see cref="AppendTransitionAsync"/>'s
+    /// optimistic concurrency, since the caller (<c>SprintScheduler.SupersedeAttemptAsync</c>)
+    /// already validated the attempt's version and idempotency key before appending its own real
+    /// `cancelled` transition; this only augments that already-committed record.</summary>
+    Task AppendAttemptSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        string instruction,
+        CancellationToken cancellationToken);
+
     /// <summary>
     /// Every durable transition and routing record for one sprint, in append order, including the
     /// records <see cref="LoadAsync"/> folds away — the raw stream a read model needs to derive

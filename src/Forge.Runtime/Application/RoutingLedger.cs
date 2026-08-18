@@ -186,8 +186,11 @@ public sealed class RoutingLedger(ISprintStore store, IClock clock)
             {
                 consumed++;
             }
-            else if (decision.Outcome == RouteOutcome.Excluded)
+            else if (decision.Outcome is RouteOutcome.Excluded or RouteOutcome.Succeeded)
             {
+                // A successful call refunds its unit exactly like an excluded one: the shared budget
+                // bounds unresolved retry/deferral/failure loops, not the total number of ordinary,
+                // eventually-successful calls a sprint happens to make.
                 consumed = Math.Max(0, consumed - 1);
             }
         }

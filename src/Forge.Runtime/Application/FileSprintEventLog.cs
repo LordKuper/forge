@@ -539,6 +539,59 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task AppendAttemptSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        string instruction,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // An attempt is superseded at most once (it is terminal-cancelled by the same call that
+            // requests this), so a second call for the same attempt id is always a replay of the
+            // first, not a distinct supersession -- recorded once, here, rather than by an
+            // idempotency key the caller would otherwise have to thread through. Skipping the append
+            // outright (instead of comparing instruction text) means the durably recorded instruction
+            // is always whichever one actually won the race to append first, never silently
+            // overwritten by a replay that happens to carry different text.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptSupersededType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent superseded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptSupersededType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_superseded_instruction",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.SupersessionInstructionArgument] = instruction,
+                });
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(superseded), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
         string projectRoot,
         SprintId sprintId,

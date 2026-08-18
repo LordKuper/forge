@@ -77,13 +77,26 @@ public sealed record AttemptId(Guid Value)
     public static AttemptId New() => new(Guid.NewGuid());
 }
 
+/// <summary><paramref name="CurrentAttemptId"/> is the id of the attempt this node was most
+/// recently started with (set only by the node's own `running` transition, never cleared on a
+/// later transition) — the durable, unambiguous answer to "which attempt does this node's
+/// `running` state currently belong to", used instead of re-deriving it from
+/// <paramref name="AttemptCount"/> and a deterministic-id guess, which cannot tell apart a
+/// human-initiated replacement attempt (Stage 11, P11.48-P11.55) from an ordinary one.</summary>
 public sealed record NodeSnapshot(
     NodeId Id,
     NodeState State,
     long Version,
     DateTimeOffset UpdatedAt,
-    int AttemptCount = 0);
+    int AttemptCount = 0,
+    string? CurrentAttemptId = null);
 
+/// <summary><paramref name="BaseCommit"/> and <paramref name="SupersedesAttemptId"/> are set only
+/// on an attempt `SprintScheduler.SupersedeAttemptAsync` (Stage 11, P11.48-P11.55) created as a
+/// human-initiated clean replacement — "linkage" back to the exact attempt and base it replaced.
+/// An ordinarily-started attempt (automatic retry or a fresh node) carries neither: nothing today
+/// records what git commit an attempt's worktree would be created at, matching every prior Stage
+/// 11 item's "no node executor exists yet" gap.</summary>
 public sealed record AttemptSnapshot(
     AttemptId Id,
     AttemptState State,
@@ -92,4 +105,6 @@ public sealed record AttemptSnapshot(
     string? NodeId = null,
     string? TargetOutcome = null,
     DateTimeOffset? LastActivityAt = null,
-    AttemptActivityKind? LastActivityKind = null);
+    AttemptActivityKind? LastActivityKind = null,
+    string? BaseCommit = null,
+    AttemptId? SupersedesAttemptId = null);
