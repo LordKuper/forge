@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
@@ -98,30 +99,34 @@ public sealed class NotificationDeliveryHostedServiceTests
             cancellationToken)).SprintId!;
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
 
+        // Not just "a cursor file exists," and not just "the watermark is present" (which proves
+        // nothing about how FAR it advanced): compare against the ground truth of reading this
+        // sprint's own full event history directly, independent of the service under test, so the
+        // assertion proves the disabled tick's cursor is genuinely caught up to it -- not merely
+        // present at some smaller, stale value.
+        string sprintIdText = sprintId.Value.ToString("D");
+        long expectedWatermark = await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken);
+
         FakeNotificationService fake = new();
         using NotificationDeliveryHostedService service = CreateService(environment, fake);
         await service.StartAsync(cancellationToken);
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            // Round 7 review found a fixed delay here can't distinguish "still gating" from "too
+            // slow under load to have ticked at all" -- wait for the cursor to actually reach the
+            // ground-truth watermark (proving at least one real tick ran) before asserting nothing
+            // was delivered.
+            await WaitForCursorAsync(
+                environment.ProjectRoot,
+                cursor => cursor.Watermarks.TryGetValue(sprintIdText, out long watermark) &&
+                    watermark == expectedWatermark,
+                cancellationToken);
             Assert.Empty(fake.Delivered);
         }
         finally
         {
             await service.StopAsync(cancellationToken);
         }
-
-        // Not just "a cursor file exists," and not just "the watermark is present" (which proves
-        // nothing about how FAR it advanced): compare against the ground truth of reading this
-        // sprint's own full event history directly, independent of the service under test, so the
-        // assertion proves the disabled tick's cursor is genuinely caught up to it -- not merely
-        // present at some smaller, stale value.
-        ControlEventsCursor cursorWhileDisabled =
-            await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
-        Assert.True(cursorWhileDisabled.Watermarks.TryGetValue(
-            sprintId.Value.ToString("D"), out long watermarkWhileDisabled));
-        long expectedWatermark = await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken);
-        Assert.Equal(expectedWatermark, watermarkWhileDisabled);
 
         ConfigurationWriteResult enabled = await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User, environment.ProjectRoot, "notifications.enabled", "true", cancellationToken);
@@ -323,12 +328,22 @@ public sealed class NotificationDeliveryHostedServiceTests
         Directory.CreateDirectory(Path.GetDirectoryName(userConfigPath)!);
         await File.WriteAllTextAsync(userConfigPath, "{ not valid json", cancellationToken);
 
+        string sprintIdText = sprintId.Value.ToString("D");
+        long expectedWatermark = await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken);
+
         FakeNotificationService fake = new();
         using NotificationDeliveryHostedService service = CreateService(environment, fake);
         await service.StartAsync(cancellationToken);
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+            // Round 7 review found a fixed delay followed immediately by a cursor-file read could
+            // throw DirectoryNotFoundException under load, before the first tick ever ran. Wait for
+            // the cursor to actually reach the ground-truth watermark instead.
+            await WaitForCursorAsync(
+                environment.ProjectRoot,
+                cursor => cursor.Watermarks.TryGetValue(sprintIdText, out long watermark) &&
+                    watermark == expectedWatermark,
+                cancellationToken);
         }
         finally
         {
@@ -337,9 +352,6 @@ public sealed class NotificationDeliveryHostedServiceTests
 
         Assert.Null(service.ExecuteTask!.Exception);
         Assert.Empty(fake.Delivered);
-        ControlEventsCursor cursor = await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
-        Assert.True(cursor.Watermarks.TryGetValue(sprintId.Value.ToString("D"), out long watermark));
-        Assert.Equal(await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken), watermark);
     }
 
     [Fact]
@@ -393,23 +405,34 @@ public sealed class NotificationDeliveryHostedServiceTests
         return cursor;
     }
 
+    /// <summary>Round 7 review found the prior fixed 40x50ms=2s budget on both polling helpers
+    /// below was itself load-sensitive: under CI-shaped contention (observed 6.5x-20x local
+    /// slowdown), 2 seconds is not always enough for even one real tick to land, producing a
+    /// timeout indistinguishable from a genuine "never happened" defect. A generous wall-clock
+    /// deadline, not an attempt count, is what actually needs to survive a slow runner.</summary>
+    private static readonly TimeSpan PollTimeout = TimeSpan.FromSeconds(10);
+
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(50);
+
     private static async Task WaitForDeliveryAsync(FakeNotificationService fake, CancellationToken cancellationToken)
     {
-        for (int attempt = 0; attempt < 40 && fake.Delivered.Count == 0; attempt++)
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (fake.Delivered.Count == 0 && stopwatch.Elapsed < PollTimeout)
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            await Task.Delay(PollInterval, cancellationToken);
         }
 
         Assert.NotEmpty(fake.Delivered);
     }
 
-    private static async Task WaitForCursorAsync(
+    private static async Task<ControlEventsCursor> WaitForCursorAsync(
         string projectRoot, Func<ControlEventsCursor, bool> isReady, CancellationToken cancellationToken)
     {
         string path = NotificationDeliveryCursorStore.CursorFilePath(projectRoot);
-        for (int attempt = 0; attempt < 40; attempt++)
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < PollTimeout)
         {
-            // Unlike every other cursor read in this file, this one runs WHILE the service is
+            // Unlike every other cursor read in this file, this one can run WHILE the service is
             // still ticking -- SaveCursorAsync's own File.Move(overwrite: true) can be replacing
             // this exact file underneath a concurrent read (round 6 review reproduced the resulting
             // IOException empirically). Tolerate it exactly as NotificationDeliveryCursorStore's own
@@ -422,7 +445,7 @@ public sealed class NotificationDeliveryHostedServiceTests
                     if (ControlEventsCursorCodec.TryDecode(content, out ControlEventsCursor cursor) &&
                         isReady(cursor))
                     {
-                        return;
+                        return cursor;
                     }
                 }
             }
@@ -431,10 +454,11 @@ public sealed class NotificationDeliveryHostedServiceTests
                 // Transient: a concurrent SaveCursorAsync is mid-rename. Retry on the next poll.
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+            await Task.Delay(PollInterval, cancellationToken);
         }
 
         Assert.Fail("The persisted cursor never reached the expected state.");
+        throw new UnreachableException();
     }
 
     private static async Task RunToRunningAsync(

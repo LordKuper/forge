@@ -468,6 +468,36 @@ reliably under CI-shaped load" pattern, this time in the very helper round
    on the next poll, matching production's own established tolerance for
    reading a file this service writes to concurrently.
 
+### Round 7 review (critical-only): the fixed polling/delay budgets themselves were load-sensitive
+
+Round 7 confirmed CI stayed green on the round-6 commit (one transient,
+unrelated `ControlPlaneTests` handshake-timing failure on that same run
+re-ran clean, outside this PR's diff), then found three further critical
+issues — a seventh, eighth, and ninth instance of the "passes locally,
+races under load" pattern, all sharing one root cause: fixed time budgets
+(a 2-second, 40-attempt poll; two 300ms delays) that CI-shaped contention
+(6.5x-20x local slowdown, reproduced directly) can exceed before even one
+real tick lands. All fixed:
+
+1. **(Critical) `WaitForDeliveryAsync` and `WaitForCursorAsync`'s shared
+   2-second budget could expire under load with no tick having landed yet**,
+   producing an `Assert.Fail`/`Assert.NotEmpty` failure indistinguishable
+   from a genuine "never delivered" defect. Fixed by replacing the fixed
+   attempt count on both with a shared 10-second wall-clock deadline
+   (`Stopwatch`-measured), which cannot spin out early on repeated
+   transient `IOException`s either -- the wait condition latches (cursor
+   watermarks only accumulate forward), so once satisfied it stays
+   satisfied.
+2. **(Critical) `DisablingNotificationsSkipsDeliveryButStillAdvancesTheCursor`
+   used a fixed `Task.Delay(300ms)` immediately followed by a cursor-file
+   read**, which could throw before the first tick had a chance to create
+   the file at all. Fixed by replacing the delay with `WaitForCursorAsync`,
+   polling until the cursor genuinely reaches the ground-truth watermark
+   (proving a real tick ran) before asserting nothing was delivered.
+3. **(Critical) `AnUnreadableConfigurationFailsClosedAndStillAdvancesTheCursor`
+   had the identical fixed-delay-then-read shape** as finding 2, reproduced
+   failing with `DirectoryNotFoundException`. Fixed the same way.
+
 ## Consequences
 
 - `Forge.Application.INotificationService` (port) and
