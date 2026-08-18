@@ -83,6 +83,23 @@ public static class DiagnosticCodes
     public const string WorktreeUnavailable = "worktree_unavailable";
     public const string ControlCursorStale = "control_cursor_stale";
 
+    /// <summary>ADR 0006's durable rate-limit wait (Stage 11, P11.48-P11.55):
+    /// <c>RoutingLedger.DecideAsync</c> found the node's provider/model/surface key still
+    /// unroutable through a previously-recorded `resume_not_before`.</summary>
+    public const string RoutingDeferred = "routing_deferred";
+
+    /// <summary>The sprint's shared routing retry budget (<c>RoutingLedger.DefaultRetryBudget</c>)
+    /// is exhausted — never guessed into a delay; this blocks and requires normal recovery, per ADR
+    /// 0006's "quota exhaustion without a safe retry time... is not guessed into a delay."</summary>
+    public const string RoutingBudgetExhausted = "routing_budget_exhausted";
+
+    /// <summary>The node's provider/model/surface key's circuit breaker
+    /// (<c>RoutingLedger.GetCircuitBreakerAsync</c>) is currently open.</summary>
+    public const string RoutingCircuitOpen = "routing_circuit_open";
+
+    /// <summary>ADR 0006's bounded supersession-instruction artifact exceeded its maximum length.</summary>
+    public const string SupersessionInstructionTooLong = "supersession_instruction_too_long";
+
     /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";

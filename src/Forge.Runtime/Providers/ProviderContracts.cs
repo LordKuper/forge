@@ -72,6 +72,11 @@ public static class ProviderDiagnosticCodes
     /// <summary>See <see cref="IdleTimeout"/>; produced when the absolute session deadline fires
     /// instead.</summary>
     public const string SessionTimeout = "provider_session_timeout";
+
+    /// <summary>ADR 0006's durable rate-limit wait (Stage 11, P11.48-P11.55): produced when an
+    /// attempt is abandoned as a retryable rate limit (<see cref="ProviderFailureKind.RateLimited"/>)
+    /// rather than an ordinary provider failure.</summary>
+    public const string RateLimited = "provider_rate_limited";
 }
 
 /// <summary>
