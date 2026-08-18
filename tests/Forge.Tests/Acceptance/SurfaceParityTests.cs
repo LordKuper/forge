@@ -42,6 +42,7 @@ public sealed class SurfaceParityTests
             "AttemptSupersedeButton",
             "AttemptSupersedeResultLabel",
         ],
+        [CapabilityIds.ControlEvents] = ["EventsPollButton", "EventsLabel"],
     };
 
     [Fact]

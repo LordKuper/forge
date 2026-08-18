@@ -1159,18 +1159,9 @@ public static class CliApplication
 
     private static void WriteEvents(SurfaceText text, TextWriter output, ControlEventsPage page)
     {
-        output.WriteLine(text.Resolve(MessageKeys.EventsTitle));
-        if (page.Events.Count == 0)
+        foreach (string line in SurfaceFormatting.EventLines(text, page))
         {
-            output.WriteLine(text.Resolve(MessageKeys.NoEvents));
-            return;
-        }
-
-        foreach (ControlEventRecord record in page.Events)
-        {
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"  {record.SprintId} {record.Event.Type} {SurfaceFormatting.Machine(record.Event.Aggregate.Kind)}:{record.Event.Aggregate.Id} {record.Event.MessageKey}"));
+            output.WriteLine(line);
         }
     }
 

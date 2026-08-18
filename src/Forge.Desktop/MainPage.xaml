@@ -35,6 +35,8 @@
       <Entry x:Name="AttemptInstructionEntry" HorizontalOptions="Start" WidthRequest="360" />
       <Button x:Name="AttemptSupersedeButton" Clicked="OnAttemptSupersedeClicked" />
       <Label x:Name="AttemptSupersedeResultLabel" />
+      <Button x:Name="EventsPollButton" Clicked="OnEventsPollClicked" />
+      <Label x:Name="EventsLabel" />
       <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />

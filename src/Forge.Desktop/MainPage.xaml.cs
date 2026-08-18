@@ -41,6 +41,7 @@ public partial class MainPage : ContentPage
         GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
         GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         AttemptSupersedeButton.Text = text.Resolve(MessageKeys.AttemptSupersedeAction);
+        EventsPollButton.Text = text.Resolve(MessageKeys.EventsPollAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -95,6 +96,10 @@ public partial class MainPage : ContentPage
         GateResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
         AttemptSupersedeResultLabel.Text = string.Empty;
+        // Same reasoning again, for the last poll's rendered page -- a stale project's events must
+        // never survive into this project's refresh. The view model's own stored cursor resets
+        // independently on the same project-switch condition (see MainPageViewModel.PollEventsAsync).
+        EventsLabel.Text = string.Empty;
     }
 
     protected override async void OnAppearing()
@@ -123,6 +128,9 @@ public partial class MainPage : ContentPage
 
     private async void OnAttemptSupersedeClicked(object? sender, EventArgs e) =>
         await RunAsync(SupersedeAttemptAsync).ConfigureAwait(true);
+
+    private async void OnEventsPollClicked(object? sender, EventArgs e) =>
+        await RunAsync(PollEventsAsync).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -261,4 +269,12 @@ public partial class MainPage : ContentPage
         await RefreshAsync().ConfigureAwait(true);
         AttemptSupersedeResultLabel.Text = message;
     }
+
+    /// <summary>ADR 0005's read-only `control.events` capability. Unlike every mutating action on
+    /// this page, a poll needs no confirmation dialog (nothing irreversible happens) and does not
+    /// call <see cref="RefreshAsync"/> afterward -- the events page is not part of
+    /// <see cref="MainPageSnapshot"/>, so nothing else on screen needs to change for it.</summary>
+    private async Task PollEventsAsync() =>
+        EventsLabel.Text = await viewModel.PollEventsAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
 }

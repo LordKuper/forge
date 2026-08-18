@@ -109,4 +109,5 @@
   <data name="NotificationFailedTitle" xml:space="preserve"><value>Forge: sprint failed</value></data>
   <data name="NotificationCompletedTitle" xml:space="preserve"><value>Forge: sprint completed</value></data>
   <data name="NotificationSprintLabel" xml:space="preserve"><value>Sprint:</value></data>
+  <data name="EventsPollAction" xml:space="preserve"><value>Poll events</value></data>
 </root>
