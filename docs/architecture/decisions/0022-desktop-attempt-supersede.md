@@ -126,6 +126,22 @@ Desktop-slice ADR has noted), so both guards are pinned by a code-behind
 text assertion proving the guard text appears, and appears *before*
 `DisplayAlertAsync`, inside `SupersedeAttemptAsync`'s own method body.
 
+Round 4 review (critical-only, per this repository's 3-full-scope-then-
+critical-only rule) found nothing critical, and noted one accepted, minor
+trade-off this same guard introduces: an instruction that is both
+whitespace-only *and* over the 4000-character bound now reports
+`AttemptIdRequired`'s sibling `AttemptInstructionRequired` immediately,
+rather than the more specific `supersession_instruction_too_long` a direct
+call to `MainPageViewModel.SupersedeAttemptAsync` still produces (proven by
+`SupersedeAttemptAsyncReportsTooLongNotRequiredForAWhitespaceOnlyOverLongInstruction`,
+which calls the view model directly and is unaffected). This is deliberately
+accepted rather than fixed: distinguishing the two would require checking
+the length bound in the code-behind pre-dialog guard too, duplicating a
+check this ADR's own design intentionally keeps server-validated only: see
+"The instruction is a single-line `Entry`..." above. The practical impact is
+one wording difference on an input that is already invalid either way (a
+blank-when-trimmed instruction over 4000 characters has no legitimate use).
+
 ### An unparsable attempt id reports `WorkflowEventConflict`, matching the CLI's own choice
 
 `CliApplication.CreateAttemptSupersedeCommand` reports an unparsable
