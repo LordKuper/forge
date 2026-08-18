@@ -982,9 +982,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
     /// <summary>
     /// Approves or rejects a human gate (matches the `workflow.review` / `ResolveHumanGate`
-    /// capability). Resumable: the underlying attempt id is deterministic in
-    /// (sprint, node, node version), so a retry of the same decision after a crash continues the
-    /// same attempt instead of abandoning it — a crash mid-sequence can never wedge the gate.
+    /// capability). Resumable: a crash-and-retry of the same in-flight decision continues the same
+    /// attempt (found by linkage, not by recomputing a hash — see below) instead of abandoning it,
+    /// so a crash mid-sequence can never wedge the gate. A gate can be decided more than once over
+    /// its lifetime (rejection can be retried back to `awaiting_human`), and this call is refused
+    /// with <see cref="DiagnosticCodes.NodeKindMismatch"/> for any node that is not a
+    /// <see cref="Forge.Domain.NodeKind.HumanGate"/>.
     /// </summary>
     public async Task<NodeActionResult> ResolveHumanGateAsync(
         string projectRoot,
@@ -995,6 +998,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         Guid idempotencyKey,
         CancellationToken cancellationToken)
     {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null || definedNode.Kind != NodeKind.HumanGate)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
@@ -1002,16 +1013,31 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
 
-        // Found by linkage (at most one gate-resolution attempt is ever created for a given node —
-        // a human_approval node reaches `awaiting_human` exactly once), not by recomputing a hash
+        // Found by linkage to this node's most recently updated attempt, not by recomputing a hash
         // from `expectedNodeVersion`: that recomputation only works for a caller that still holds
         // the *exact* version the original decision was made against. A caller resuming after a
         // crash with no memory of that original call (e.g. a stateless CLI invocation, re-run later)
         // can only read the node's *current* version — already moved past `awaiting_human` once the
         // first call got anywhere — so a hash recomputed from it would never match the attempt the
         // original call actually created, permanently refusing every retry instead of resuming it.
-        AttemptSnapshot? existingAttempt =
-            state.Attempts.Values.FirstOrDefault(candidate => candidate.NodeId == nodeId);
+        //
+        // Gated on the node no longer being `awaiting_human`: a rejected gate can be retried back to
+        // `awaiting_human` for a second decision, and once it is, no earlier round's attempt is ever
+        // eligible for resumption, however terminal or not it is — attempts only ever get created
+        // for this node from `awaiting_human` onward (see the fresh-path checks below), so a node
+        // still sitting at `awaiting_human` can only mean either no attempt exists yet, or a crash
+        // landed before *any* node-side transition of the current round — either way the fresh path
+        // below (which mints via the hash, matching an in-progress same-round attempt exactly, or a
+        // brand-new one) is what must run, never a stale attempt linked from a prior, already-decided
+        // round. Once the node *has* moved past `awaiting_human`, the current round can only ever
+        // have at most one live attempt in flight, so ties across rounds (each retry leaves its own,
+        // now-stale, terminal attempt linked to the same node id) are broken by `UpdatedAt`: the most
+        // recently updated linked attempt is always the current round's.
+        AttemptSnapshot? existingAttempt = node.State == NodeState.AwaitingHuman
+            ? null
+            : state.Attempts.Values.Where(candidate => candidate.NodeId == nodeId)
+                .OrderByDescending(candidate => candidate.UpdatedAt)
+                .FirstOrDefault();
         bool resuming = existingAttempt is not null;
         AttemptId attemptId = existingAttempt?.Id ?? DeterministicAttemptId(
             $"resolve_human_gate|{sprintId.Value:D}|{nodeId}|{expectedNodeVersion.ToString(CultureInfo.InvariantCulture)}|{approved}");

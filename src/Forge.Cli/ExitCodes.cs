@@ -23,7 +23,9 @@ public static class ExitCodes
     {
         DiagnosticCodes.None or DiagnosticCodes.ProjectAlreadyInitialized => Ok,
         DiagnosticCodes.ConfigurationKeyUnknown or DiagnosticCodes.ProjectRootNotAbsolute or
-            DiagnosticCodes.SprintNotFound => Usage,
+            DiagnosticCodes.SprintNotFound or DiagnosticCodes.SupersessionInstructionTooLong or
+            DiagnosticCodes.SupersessionInstructionUnreadable or
+            DiagnosticCodes.SupersessionInstructionRequired => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or

@@ -96,16 +96,45 @@ contract those methods offer their callers, not in how this item calls
 them:
 
 - **`ResolveHumanGateAsync`** now finds the gate's own attempt by linkage
-  (`state.Attempts.Values.FirstOrDefault(a => a.NodeId == nodeId)`) instead
-  of recomputing a hash — a human_approval node has at most one such
-  attempt, ever. The decision-flip protection the hash coincidentally
-  provided (approve and reject hashed to different ids, so a caller
-  flipping the decision could never accidentally resume the other one) is
-  now explicit instead of incidental: once the node's state reveals which
-  way the original decision went (`running`/`succeeded` only ever follow
-  `approved`; `failed` only ever follows a rejection), a resumed call
-  supplying the opposite `approved` value is refused as a conflict rather
-  than silently reinterpreting the original attempt.
+  instead of recomputing a hash. Getting the linkage itself right took two
+  more review rounds after the first attempt landed:
+  - A first fix (`state.Attempts.Values.FirstOrDefault(a => a.NodeId ==
+    nodeId)`) assumed a human-gate node has at most one such attempt, ever,
+    and that any attempt carrying the node's id must be a gate-resolution
+    attempt. Both assumptions are false. `StartAttemptAsync` stamps the
+    same `NodeIdArgument` on an ordinary `Work` node's own attempts, so the
+    lookup matched *any* node's live attempt — `forge gate approve` against
+    a `Work` node with an in-progress attempt would hijack and fraudulently
+    "succeed" it. And a rejected gate can be retried back to
+    `awaiting_human` for a second decision (`RetryNodeAsync`), which the
+    single-attempt premise did not account for: the lookup would resolve to
+    the first, terminal attempt from the *earlier* round, silently
+    discarding the fact that a second decision was ever made.
+  - The fix now checked at the top of the method, before any attempt
+    lookup, that the target node is actually a
+    `Forge.Domain.NodeKind.HumanGate` (refusing with
+    `DiagnosticCodes.NodeKindMismatch` otherwise) — closing the
+    cross-node-kind hijack outright, the same way `StartAttemptAsync`
+    already gates on `NodeKind.Work`. Linkage itself is now gated on the
+    node's *current* state: attempts for this node only ever get created
+    from `awaiting_human` onward, so as long as the node is still sitting
+    at `awaiting_human`, no earlier round's attempt is ever eligible —
+    resumability there is handled entirely by the deterministic-hash fresh
+    path, which naturally reproduces the same attempt id for a same-round,
+    same-version retry. Once the node has moved past `awaiting_human`,
+    linkage picks the most recently updated attempt linked to the node
+    (`OrderByDescending(a => a.UpdatedAt)`), which is always the current
+    round's — earlier rounds each leave their own, now-stale, terminal
+    attempt linked to the same node id, and `UpdatedAt` breaks that tie
+    deterministically instead of relying on `Dictionary` enumeration order.
+  - The decision-flip protection the hash coincidentally provided (approve
+    and reject hashed to different ids, so a caller flipping the decision
+    could never accidentally resume the other one) is now explicit instead
+    of incidental: once the node's state reveals which way the current
+    round's decision went (`running`/`succeeded` only ever follow
+    `approved`; `failed` only ever follows a rejection), a resumed call
+    supplying the opposite `approved` value is refused as a conflict rather
+    than silently reinterpreting the original attempt.
 - **`SupersedeAttemptAsync`** already recognized "already superseded" by
   the target's own `Cancelled` state (a fix from ADR 0018's own review
   history) — but still *re-attempted* the cancel append unconditionally,
@@ -122,6 +151,20 @@ Both fixes carry their own regression test — a caller re-deriving
 version/key fresh from already-advanced state must still resolve cleanly,
 and (for the gate) a caller flipping the decision that way must still be
 refused.
+
+### `Forge.Cli.ExitCodes.For` now maps the three supersession-instruction codes
+
+`supersession_instruction_too_long` (pre-existing), and the two new
+`supersession_instruction_unreadable`/`_required` codes this item adds, are
+documented in `docs/contracts/v1/README.md` as category 2 (usage, exit 2),
+but `ExitCodes.For`'s `switch` had no case for any of the three — all three
+fell through to the catch-all `Internal` (exit 13). That mismatch was latent
+before this item (nothing produced these codes on a real CLI path yet);
+`forge attempt supersede` makes all three reachable for the first time, so
+it is fixed here rather than left latent. `ExitCodes.For`'s broader,
+pre-existing gap for other diagnostic codes is unrelated and stays out of
+scope, matching ADR 0018's own precedent of not attempting a project-wide
+fix incidentally to an unrelated change.
 
 ### No config-driven confirmation bypass
 
