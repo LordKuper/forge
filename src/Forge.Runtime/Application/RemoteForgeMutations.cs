@@ -77,6 +77,46 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         CancellationToken cancellationToken) =>
         SendIntegrationRequestAsync(ControlProtocol.RemoveIntegrationKind, confirmed, cancellationToken);
 
+    public async Task<NodeActionResult> ResolveGateAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new ResolveGateRequest(sprintId, nodeId, approved, confirmed),
+            ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.ResolveGateKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<NodeActionResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
+    public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        string instruction,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(instruction);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new SupersedeAttemptRequest(sprintId, attemptId, instruction, confirmed),
+            ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.SupersedeAttemptKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<CompleteAttemptResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
     private async Task<IntegrationWriteResult> SendIntegrationRequestAsync(
         string kind,
         bool confirmed,

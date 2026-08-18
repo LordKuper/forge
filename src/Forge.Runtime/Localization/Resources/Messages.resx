@@ -72,4 +72,11 @@
   <data name="IntegrationRemoveDescription" xml:space="preserve"><value>Remove the Forge-owned Claude Code/Codex integration files.</value></data>
   <data name="IntegrationTitle" xml:space="preserve"><value>Integration:</value></data>
   <data name="NoIntegrationArtifacts" xml:space="preserve"><value>No enabled provider has an integration generator.</value></data>
+  <data name="GateDescription" xml:space="preserve"><value>Human-only gate approval commands.</value></data>
+  <data name="GateApproveDescription" xml:space="preserve"><value>Approve an awaiting-human gate node.</value></data>
+  <data name="GateRejectDescription" xml:space="preserve"><value>Reject an awaiting-human gate node.</value></data>
+  <data name="GateResolved" xml:space="preserve"><value>Gate resolved.</value></data>
+  <data name="AttemptDescription" xml:space="preserve"><value>Human-only attempt commands.</value></data>
+  <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Cancel a non-terminal attempt and create a linked replacement.</value></data>
+  <data name="AttemptSuperseded" xml:space="preserve"><value>Attempt superseded.</value></data>
 </root>

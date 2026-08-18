@@ -321,6 +321,34 @@ internal sealed class FakeForgeMutations : IForgeMutations
         LastIntegrationConfirmed = confirmed;
         return Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
     }
+
+    public int ResolveGateCalls { get; private set; }
+
+    public int SupersedeAttemptCalls { get; private set; }
+
+    public Task<NodeActionResult> ResolveGateAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ResolveGateCalls++;
+        return Task.FromResult(new NodeActionResult(true, null, DiagnosticCodes.None));
+    }
+
+    public Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        string instruction,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SupersedeAttemptCalls++;
+        return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
+    }
 }
 
 /// <summary>Like <see cref="FakeForgeMutations"/>, but disposable — proves a caller that resolves a
@@ -355,6 +383,24 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(IntegrationWriteResult.Empty(DiagnosticCodes.None));
+
+    public Task<NodeActionResult> ResolveGateAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new NodeActionResult(true, null, DiagnosticCodes.None));
+
+    public Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        string instruction,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
 
     public ValueTask DisposeAsync()
     {

@@ -68,6 +68,16 @@ public sealed record SetConfigurationRequest(string Scope, string Key, string? R
 /// expected-state-version travels on the wire).</summary>
 public sealed record IntegrationWriteRequest(bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.ResolveGateKind"/>'s request payload (ADR 0005/0018:
+/// human-only `workflow.review`). No expected node version travels on the wire — the Host derives
+/// it from a fresh state read of <see cref="SprintId"/>/<see cref="NodeId"/> instead, the same
+/// reason <see cref="SupersedeAttemptRequest"/> carries no attempt version.</summary>
+public sealed record ResolveGateRequest(Guid SprintId, string NodeId, bool Approved, bool Confirmed);
+
+/// <summary><see cref="ControlProtocol.SupersedeAttemptKind"/>'s request payload (ADR 0005/0018:
+/// human-only `attempt.supersede`).</summary>
+public sealed record SupersedeAttemptRequest(Guid SprintId, Guid AttemptId, string Instruction, bool Confirmed);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -105,6 +115,17 @@ public static class ControlProtocol
     /// Request payload: an <see cref="IntegrationWriteRequest"/>. Response payload:
     /// <c>{"artifacts": [...], "diagnostic_code": string}</c>.</summary>
     public const string RemoveIntegrationKind = "remove_integration";
+
+    /// <summary>ADR 0005/0018: the human-only `workflow.review` capability — approves or rejects an
+    /// `awaiting_human` gate node. Request payload: a <see cref="ResolveGateRequest"/>. Response
+    /// payload: a `NodeActionResult` instance (<c>{"succeeded": bool, "node"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string ResolveGateKind = "resolve_gate";
+
+    /// <summary>ADR 0005/0018: the human-only `attempt.supersede` capability — cancels a
+    /// non-terminal attempt and creates a linked replacement. Request payload: a
+    /// <see cref="SupersedeAttemptRequest"/>. Response payload: a `CompleteAttemptResult` instance
+    /// (same shape as <see cref="ResolveGateKind"/>'s response).</summary>
+    public const string SupersedeAttemptKind = "supersede_attempt";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

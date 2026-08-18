@@ -599,6 +599,91 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ResolveGateRoundTripsThroughTheHostAndSettlesTheNode()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        NodeActionResult result = await mutations.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value, "gate", approved: true, confirmed: true, cancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(NodeState.Succeeded, result.Node!.State);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, state.Nodes["gate"].State);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task SupersedeAttemptRoundTripsThroughTheHostAndLinksAReplacement()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        CompleteAttemptResult result = await mutations.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId.Value, started.AttemptId!.Value, "Try a different approach.",
+            confirmed: true, cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Cancelled, state.Attempts[started.AttemptId!.Value.ToString("D")].State);
+        AttemptSnapshot replacement =
+            Assert.Single(state.Attempts.Values, candidate => candidate.Id != started.AttemptId);
+        Assert.Equal(started.AttemptId, replacement.SupersedesAttemptId);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task RemoteMutationsReportHostUnavailableInsteadOfThrowingWhenNoHostIsRunning()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;

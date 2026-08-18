@@ -292,6 +292,10 @@ public sealed class ControlPlaneHostedService(
                     await DispatchInstallIntegrationAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RemoveIntegrationKind =>
                     await DispatchRemoveIntegrationAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.ResolveGateKind =>
+                    await DispatchResolveGateAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.SupersedeAttemptKind =>
+                    await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -477,6 +481,51 @@ public sealed class ControlPlaneHostedService(
 
         IntegrationWriteResult result = await application
             .RemoveIntegrationAsync(options.ProjectRoot, payload.Confirmed, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchResolveGateAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        ResolveGateRequest? payload = request.Payload is { } value
+            ? value.Deserialize<ResolveGateRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.NodeId is null)
+        {
+            throw new InvalidDataException("The resolve_gate payload is required.");
+        }
+
+        // Always this Host's own project, matching every other mutation dispatch here; the sprint
+        // and node it targets travel in the payload since a Host manages every sprint of its one
+        // project, not just one.
+        NodeActionResult result = await application
+            .ResolveGateAsync(
+                options.ProjectRoot, payload.SprintId, payload.NodeId, payload.Approved, payload.Confirmed,
+                cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchSupersedeAttemptAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        SupersedeAttemptRequest? payload = request.Payload is { } value
+            ? value.Deserialize<SupersedeAttemptRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.Instruction is null)
+        {
+            throw new InvalidDataException("The supersede_attempt payload is required.");
+        }
+
+        CompleteAttemptResult result = await application
+            .SupersedeAttemptAsync(
+                options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Instruction, payload.Confirmed,
+                cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

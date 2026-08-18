@@ -106,4 +106,11 @@ public static class MessageKeys
     public const string IntegrationRemoveDescription = "IntegrationRemoveDescription";
     public const string IntegrationTitle = "IntegrationTitle";
     public const string NoIntegrationArtifacts = "NoIntegrationArtifacts";
+    public const string GateDescription = "GateDescription";
+    public const string GateApproveDescription = "GateApproveDescription";
+    public const string GateRejectDescription = "GateRejectDescription";
+    public const string GateResolved = "GateResolved";
+    public const string AttemptDescription = "AttemptDescription";
+    public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
+    public const string AttemptSuperseded = "AttemptSuperseded";
 }
