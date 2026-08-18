@@ -266,6 +266,132 @@ public sealed class MainPageViewModelTests
         Assert.Contains(Text().Resolve(MessageKeys.IntegrationTitle), message, StringComparison.Ordinal);
     }
 
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `create` verb. Not confirmable, no
+    /// sprint id to resolve, matching the CLI's own `IntegrationSkillGenerateNeverRoutesThroughTheResolvedMutations`-style
+    /// routing coverage.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreateSprintAsyncRoutesThroughTheResolvedMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.CreateSprintAsync(environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.CreateSprintCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunSprintAsyncRoutesThroughTheResolvedMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.RunSprintAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.RunSprintCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResumeSprintAsyncRoutesThroughTheResolvedMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.ResumeSprintAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.ResumeSprintCalls);
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` `cancel` verb: ordinarily bypassable (matching
+    /// <see cref="IntegrationInstallAsyncRoutesThroughTheResolvedMutationsAndForwardsConfirmed"/>'s
+    /// own shape), not the human-only gate/supersede pair's never-bypassed one.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    [Trait("Category", "Unit")]
+    public async Task CancelSprintAsyncRoutesThroughTheResolvedMutationsAndForwardsConfirmed(bool confirmed)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.CancelSprintAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), confirmed, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.CancelSprintCalls);
+        Assert.Equal(confirmed, mutations.LastCancelSprintConfirmed);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CancelSprintAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.CancelSprintAsync(
+            environment.ProjectRoot, "not-a-guid", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.CancelSprintCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression pattern established by round 2 review of `attempt.supersede`
+    /// (<see cref="SupersedeAttemptAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity"/>):
+    /// a blank-sprint-id-with-multiple-non-terminal-sprints branch must use ITS OWN capability's
+    /// ambiguity message, not another capability's. Applied here proactively rather than waiting
+    /// for a review round to catch a copy-pasted key.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CancelSprintAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.CancelSprintAsync(
+            environment.ProjectRoot, null, true, cancellationToken);
+
+        Assert.Equal(0, mutations.CancelSprintCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.SprintManageSprintAmbiguous), message);
+        Assert.NotEqual(Text().Resolve(MessageKeys.GateSprintAmbiguous), message);
+        Assert.NotEqual(Text().Resolve(MessageKeys.AttemptSupersedeSprintAmbiguous), message);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void SprintCancelPromptNamesTheSprint()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.SprintCancelPrompt(sprintId);
+
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RecoverAsyncResolvesMutationsUsingTheSuppliedProjectRoot()

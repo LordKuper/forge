@@ -44,6 +44,14 @@
         <Button x:Name="IntegrationRemoveButton" Clicked="OnIntegrationRemoveClicked" />
       </HorizontalStackLayout>
       <Label x:Name="IntegrationWriteResultLabel" />
+      <!-- Reuses SprintIdEntry above as run/resume/cancel's sprint context too; create needs none. -->
+      <HorizontalStackLayout Spacing="8">
+        <Button x:Name="SprintCreateButton" Clicked="OnSprintCreateClicked" />
+        <Button x:Name="SprintRunButton" Clicked="OnSprintRunClicked" />
+        <Button x:Name="SprintResumeButton" Clicked="OnSprintResumeClicked" />
+        <Button x:Name="SprintCancelButton" Clicked="OnSprintCancelClicked" />
+      </HorizontalStackLayout>
+      <Label x:Name="SprintManageResultLabel" />
       <Label x:Name="DiagnosticsLabel" />
       <Label x:Name="ConfigurationTitleLabel" />
       <Label x:Name="ConfigurationLabel" />

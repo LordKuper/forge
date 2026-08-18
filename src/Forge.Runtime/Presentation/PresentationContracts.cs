@@ -12,6 +12,7 @@ public static class CapabilityIds
     public const string AttemptSupersede = "attempt.supersede";
     public const string ControlEvents = "control.events";
     public const string IntegrationSkill = "integration.skill";
+    public const string SprintManage = "sprint.manage";
 
     /// <summary>Capabilities implemented on both surfaces by the current stage.</summary>
     public static IReadOnlyList<string> Implemented { get; } =
@@ -24,6 +25,7 @@ public static class CapabilityIds
         AttemptSupersede,
         ControlEvents,
         IntegrationSkill,
+        SprintManage,
     ];
 }
 

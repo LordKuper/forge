@@ -147,4 +147,10 @@ public static class MessageKeys
     public const string IntegrationGenerateAction = "IntegrationGenerateAction";
     public const string IntegrationInstallAction = "IntegrationInstallAction";
     public const string IntegrationRemoveAction = "IntegrationRemoveAction";
+    public const string SprintCreateAction = "SprintCreateAction";
+    public const string SprintRunAction = "SprintRunAction";
+    public const string SprintResumeAction = "SprintResumeAction";
+    public const string SprintCancelAction = "SprintCancelAction";
+    public const string SprintManageFailed = "SprintManageFailed";
+    public const string SprintManageSprintAmbiguous = "SprintManageSprintAmbiguous";
 }

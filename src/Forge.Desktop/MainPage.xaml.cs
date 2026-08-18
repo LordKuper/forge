@@ -53,6 +53,10 @@ public partial class MainPage : ContentPage
         IntegrationGenerateButton.Text = text.Resolve(MessageKeys.IntegrationGenerateAction);
         IntegrationInstallButton.Text = text.Resolve(MessageKeys.IntegrationInstallAction);
         IntegrationRemoveButton.Text = text.Resolve(MessageKeys.IntegrationRemoveAction);
+        SprintCreateButton.Text = text.Resolve(MessageKeys.SprintCreateAction);
+        SprintRunButton.Text = text.Resolve(MessageKeys.SprintRunAction);
+        SprintResumeButton.Text = text.Resolve(MessageKeys.SprintResumeAction);
+        SprintCancelButton.Text = text.Resolve(MessageKeys.SprintCancelAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -118,6 +122,8 @@ public partial class MainPage : ContentPage
         // always clear both unconditionally.
         IntegrationLabel.Text = string.Empty;
         IntegrationWriteResultLabel.Text = string.Empty;
+        // Same reasoning as GateResultLabel above, for a sprint-lifecycle action's outcome.
+        SprintManageResultLabel.Text = string.Empty;
         // Same reasoning again, for the last poll's rendered page -- but only reset it on the
         // condition that actually invalidates it (a project-root switch), not on every refresh:
         // see the lastPolledEventsProjectRoot field's own comment.
@@ -166,6 +172,18 @@ public partial class MainPage : ContentPage
 
     private async void OnIntegrationRemoveClicked(object? sender, EventArgs e) =>
         await RunAsync(RemoveIntegrationAsync).ConfigureAwait(true);
+
+    private async void OnSprintCreateClicked(object? sender, EventArgs e) =>
+        await RunAsync(CreateSprintAsync).ConfigureAwait(true);
+
+    private async void OnSprintRunClicked(object? sender, EventArgs e) =>
+        await RunAsync(RunSprintAsync).ConfigureAwait(true);
+
+    private async void OnSprintResumeClicked(object? sender, EventArgs e) =>
+        await RunAsync(ResumeSprintAsync).ConfigureAwait(true);
+
+    private async void OnSprintCancelClicked(object? sender, EventArgs e) =>
+        await RunAsync(CancelSprintAsync).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -377,5 +395,58 @@ public partial class MainPage : ContentPage
             .ConfigureAwait(true);
         await RefreshAsync().ConfigureAwait(true);
         IntegrationWriteResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `create` verb. Not confirmable
+    /// (additive, not destructive): no dialog, matching `forge sprint create`.</summary>
+    private async Task CreateSprintAsync()
+    {
+        string message = await viewModel.CreateSprintAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        SprintManageResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `run` verb. Reuses
+    /// <see cref="SprintId"/> the same way <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>
+    /// already do: blank means the active sprint, resolved entirely inside
+    /// <see cref="MainPageViewModel.RunSprintAsync"/>. Not confirmable.</summary>
+    private async Task RunSprintAsync()
+    {
+        string message = await viewModel.RunSprintAsync(ProjectRoot, SprintId, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        SprintManageResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `resume` verb, same shape as
+    /// <see cref="RunSprintAsync"/>.</summary>
+    private async Task ResumeSprintAsync()
+    {
+        string message = await viewModel.ResumeSprintAsync(ProjectRoot, SprintId, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        SprintManageResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `cancel` verb. Ordinarily bypassable
+    /// (`workflow_mutate`, not one of <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>'s
+    /// human-only capabilities), matching <see cref="RecoverAsync"/>/<see cref="InstallIntegrationAsync"/>'s
+    /// shape exactly -- the dialog's own answer is still passed through as `confirmed`, but a
+    /// decline does not itself short-circuit the call. Reading <see cref="SprintId"/> again after
+    /// the dialog is safe, not a TOCTOU risk: `DisplayAlertAsync` is a platform modal that blocks
+    /// input to the page beneath, the same reasoning that already applies to
+    /// <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>'s own post-dialog reads.</summary>
+    private async Task CancelSprintAsync()
+    {
+        string action = text.Resolve(MessageKeys.SprintCancelAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.SprintCancelPrompt(SprintId), action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        string message = await viewModel
+            .CancelSprintAsync(ProjectRoot, SprintId, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        SprintManageResultLabel.Text = message;
     }
 }

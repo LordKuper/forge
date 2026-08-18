@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.48.0
+
+### Added
+
+- The Desktop app can now create, run, resume, and cancel a sprint
+  ("Create sprint", "Run sprint", "Resume sprint", "Cancel sprint"),
+  matching `forge sprint create|run|resume|cancel`.
+
 ## v0.47.0
 
 ### Added

@@ -384,10 +384,9 @@ public static class CliApplication
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
             CreateSprintResult result =
                 await mutations.CreateSprintAsync(root, cancellationToken).ConfigureAwait(false);
-            if (result is { Succeeded: true, SprintId: { } sprintId })
+            if (SurfaceFormatting.SprintCreatedMessage(text, result) is { } message)
             {
-                output.WriteLine(string.Create(
-                    CultureInfo.InvariantCulture, $"{text.Resolve(MessageKeys.SprintCreated)} {sprintId.Value:D}"));
+                output.WriteLine(message);
             }
 
             return Report(diagnostics, result.DiagnosticCode);
@@ -444,18 +443,10 @@ public static class CliApplication
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
             SprintTransitionResult result =
                 await transition(mutations, root, sprintId, cancellationToken).ConfigureAwait(false);
-            if (result.Succeeded)
+            if (SurfaceFormatting.SprintTransitionMessage(text, result, successKey, includeResultingState) is
+                { } message)
             {
-                output.WriteLine(includeResultingState
-                    ? result.Sprint is not null
-                        ? string.Create(
-                            CultureInfo.InvariantCulture,
-                            $"{text.Resolve(successKey)} {SurfaceFormatting.Machine(result.Sprint.State)}")
-                        // `successKey` (e.g. SprintAdvanced) is a sentence PREFIX for this branch, not
-                        // a complete sentence on its own -- falling back to it alone would print a
-                        // dangling fragment ("Sprint advanced to" with nothing after).
-                        : text.Resolve(MessageKeys.SprintAdvancedUnknownState)
-                    : text.Resolve(successKey));
+                output.WriteLine(message);
             }
 
             return Report(diagnostics, result.DiagnosticCode);
