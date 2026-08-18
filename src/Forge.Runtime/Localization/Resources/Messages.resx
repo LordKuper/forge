@@ -110,4 +110,7 @@
   <data name="NotificationCompletedTitle" xml:space="preserve"><value>Forge: sprint completed</value></data>
   <data name="NotificationSprintLabel" xml:space="preserve"><value>Sprint:</value></data>
   <data name="EventsPollAction" xml:space="preserve"><value>Poll events</value></data>
+  <data name="IntegrationGenerateAction" xml:space="preserve"><value>Preview integration</value></data>
+  <data name="IntegrationInstallAction" xml:space="preserve"><value>Install integration</value></data>
+  <data name="IntegrationRemoveAction" xml:space="preserve"><value>Remove integration</value></data>
 </root>

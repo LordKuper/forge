@@ -392,6 +392,53 @@ public sealed class MainPageViewModel(
         return Message(Render(null, SurfaceFormatting.EventLines(text, page)), page.DiagnosticCode);
     }
 
+    /// <summary>ADR 0026's `integration.skill` capability -- the read-only preview half (`forge
+    /// integration skill generate`). A query like <see cref="PollEventsAsync"/>: no confirmation,
+    /// no Host round-trip through <see cref="resolveMutations"/>.</summary>
+    public async Task<string> GenerateIntegrationPreviewAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        IntegrationInspectionResult result = await application
+            .InspectIntegrationAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        return Message(
+            Render(null, SurfaceFormatting.IntegrationInspectionLines(text, result)), result.DiagnosticCode);
+    }
+
+    /// <summary>ADR 0026's `integration.skill` install verb. Unlike `workflow.review`/
+    /// `attempt.supersede`'s human-only mandatory confirmation, `integration.skill`'s
+    /// `integration_write_confirm` permission (`capabilities.json`) is an ordinary one -- this may
+    /// still succeed even when <paramref name="confirmed"/> is <see langword="false"/>, if
+    /// `interaction.confirm_destructive` is configured to bypass it, matching
+    /// <see cref="RecoverAsync"/>'s own shape exactly.</summary>
+    public Task<string> InstallIntegrationAsync(
+        string? projectRoot, bool confirmed, CancellationToken cancellationToken) =>
+        WriteIntegrationAsync(
+            projectRoot, confirmed, (mutations, root, ok, ct) => mutations.InstallIntegrationAsync(root, ok, ct),
+            cancellationToken);
+
+    /// <summary>ADR 0026's `integration.skill` remove verb -- same shape as
+    /// <see cref="InstallIntegrationAsync"/>.</summary>
+    public Task<string> RemoveIntegrationAsync(
+        string? projectRoot, bool confirmed, CancellationToken cancellationToken) =>
+        WriteIntegrationAsync(
+            projectRoot, confirmed, (mutations, root, ok, ct) => mutations.RemoveIntegrationAsync(root, ok, ct),
+            cancellationToken);
+
+    private async Task<string> WriteIntegrationAsync(
+        string? projectRoot,
+        bool confirmed,
+        Func<IForgeMutations, string?, bool, CancellationToken, Task<IntegrationWriteResult>> write,
+        CancellationToken cancellationToken)
+    {
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            IntegrationWriteResult result = await write(mutations, projectRoot, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(Render(null, SurfaceFormatting.IntegrationWriteLines(text, result)), result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
     /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive
     /// across calls. A no-op for the local <see cref="ForgeApplication"/> fallback, which implements

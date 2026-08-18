@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Providers;
 
 namespace Forge.Localization;
@@ -45,10 +46,11 @@ public static class SurfaceFormatting
                 $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
     }
 
-    /// <summary>One provider's row for `forge integration skill generate`'s preview, shared with
-    /// Desktop (ADR 0011) so the two never drift: provider id, target path, and whether installing
-    /// would write/no-op/refuse.</summary>
-    public static string IntegrationInspectionRow(IntegrationArtifactInspection inspection)
+    /// <summary>One provider's row for `forge integration skill generate`'s preview: provider id,
+    /// target path, and whether installing would write/no-op/refuse. Private -- reached only
+    /// through <see cref="IntegrationInspectionLines"/>, the shared, tested no-drift surface (ADR
+    /// 0026); nothing outside this file calls the per-row formatter directly.</summary>
+    private static string IntegrationInspectionRow(IntegrationArtifactInspection inspection)
     {
         ArgumentNullException.ThrowIfNull(inspection);
         return string.Create(
@@ -56,14 +58,65 @@ public static class SurfaceFormatting
             $"{inspection.Artifact.ProviderId.Value} {inspection.Artifact.RelativePath} {Machine(inspection.State)}");
     }
 
-    /// <summary>One provider's row for `forge integration skill install|remove`'s result, shared
-    /// with Desktop (ADR 0011).</summary>
-    public static string IntegrationWriteRow(IntegrationArtifactResult result)
+    /// <summary>One provider's row for `forge integration skill install|remove`'s result. Private
+    /// for the same reason as <see cref="IntegrationInspectionRow"/> -- reached only through
+    /// <see cref="IntegrationWriteLines"/>.</summary>
+    private static string IntegrationWriteRow(IntegrationArtifactResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
         return string.Create(
             CultureInfo.InvariantCulture,
             $"{result.ProviderId.Value} {result.RelativePath} {Machine(result.Outcome)}");
+    }
+
+    /// <summary>`forge integration skill generate`'s full projection as one ordered line list,
+    /// shared with the Desktop control (ADR 0026) so the two can never drift.</summary>
+    public static IReadOnlyList<string> IntegrationInspectionLines(SurfaceText text, IntegrationInspectionResult result)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(result);
+        List<string> lines = [text.Resolve(MessageKeys.IntegrationTitle)];
+        if (result.Artifacts.Count == 0 && result.DiagnosticCode == DiagnosticCodes.None)
+        {
+            lines.Add(text.Resolve(MessageKeys.NoIntegrationArtifacts));
+        }
+
+        foreach (IntegrationArtifactInspection inspection in result.Artifacts)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"  {IntegrationInspectionRow(inspection)}"));
+        }
+
+        AppendIntegrationDocumentErrors(lines, result.DocumentErrors);
+        return lines;
+    }
+
+    /// <summary>`forge integration skill install|remove`'s full projection as one ordered line
+    /// list, shared with the Desktop control (ADR 0026) so the two can never drift.</summary>
+    public static IReadOnlyList<string> IntegrationWriteLines(SurfaceText text, IntegrationWriteResult result)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(result);
+        List<string> lines = [text.Resolve(MessageKeys.IntegrationTitle)];
+        foreach (IntegrationArtifactResult artifact in result.Artifacts)
+        {
+            lines.Add(string.Create(CultureInfo.InvariantCulture, $"  {IntegrationWriteRow(artifact)}"));
+        }
+
+        AppendIntegrationDocumentErrors(lines, result.DocumentErrors);
+        return lines;
+    }
+
+    /// <summary>Surfaces `.forge/rules`/`knowledge` parse failures (ADR 0009) alongside the
+    /// artifact rows, in every output mode — a document error silently degrades what generation
+    /// compiled, and dropping it would leave a user with no indication why some content was
+    /// missing.</summary>
+    private static void AppendIntegrationDocumentErrors(List<string> lines, IReadOnlyList<ForgeDocumentError> errors)
+    {
+        foreach (ForgeDocumentError error in errors)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture, $"  ! {error.RelativePath} {error.DiagnosticCode}"));
+        }
     }
 
     /// <summary>ADR 0005's `project -> sprint -> node -> attempt` hierarchy as one ordered line

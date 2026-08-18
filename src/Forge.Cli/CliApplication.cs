@@ -975,37 +975,14 @@ public static class CliApplication
                 return Report(diagnostics, result.DiagnosticCode);
             }
 
-            output.WriteLine(text.Resolve(MessageKeys.IntegrationTitle));
-            if (result.Artifacts.Count == 0 && result.DiagnosticCode == DiagnosticCodes.None)
+            foreach (string line in SurfaceFormatting.IntegrationInspectionLines(text, result))
             {
-                output.WriteLine(text.Resolve(MessageKeys.NoIntegrationArtifacts));
+                output.WriteLine(line);
             }
 
-            foreach (IntegrationArtifactInspection inspection in result.Artifacts)
-            {
-                output.WriteLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"  {SurfaceFormatting.IntegrationInspectionRow(inspection)}"));
-            }
-
-            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
             return Report(diagnostics, result.DiagnosticCode);
         });
         return command;
-    }
-
-    /// <summary>Surfaces `.forge/rules`/`knowledge` parse failures (ADR 0009) alongside the
-    /// artifact rows, in every output mode — a document error silently degrades what generation
-    /// compiled, and dropping it from plain-text output left a user with no indication why some
-    /// content was missing.</summary>
-    private static void WriteIntegrationDocumentErrors(TextWriter output, IReadOnlyList<ForgeDocumentError> errors)
-    {
-        foreach (ForgeDocumentError error in errors)
-        {
-            output.WriteLine(string.Create(
-                CultureInfo.InvariantCulture,
-                $"  ! {error.RelativePath} {error.DiagnosticCode}"));
-        }
     }
 
     private static Command CreateIntegrationWriteCommand(
@@ -1029,15 +1006,11 @@ public static class CliApplication
             IntegrationWriteResult result = await write(
                     mutations, root, parseResult.GetValue(confirm), cancellationToken)
                 .ConfigureAwait(false);
-            output.WriteLine(text.Resolve(MessageKeys.IntegrationTitle));
-            foreach (IntegrationArtifactResult artifact in result.Artifacts)
+            foreach (string line in SurfaceFormatting.IntegrationWriteLines(text, result))
             {
-                output.WriteLine(string.Create(
-                    CultureInfo.InvariantCulture,
-                    $"  {SurfaceFormatting.IntegrationWriteRow(artifact)}"));
+                output.WriteLine(line);
             }
 
-            WriteIntegrationDocumentErrors(output, result.DocumentErrors);
             return Report(diagnostics, result.DiagnosticCode);
         });
         return command;

@@ -4,10 +4,12 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using Forge.Application;
 using Forge.Cli;
+using Forge.Compiler;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
 using Forge.Localization;
 using Forge.Presentation;
+using Forge.Providers;
 using Forge.Tests.Support;
 using Forge.UnitTests;
 
@@ -43,6 +45,14 @@ public sealed class SurfaceParityTests
             "AttemptSupersedeResultLabel",
         ],
         [CapabilityIds.ControlEvents] = ["EventsPollButton", "EventsLabel"],
+        [CapabilityIds.IntegrationSkill] =
+        [
+            "IntegrationGenerateButton",
+            "IntegrationLabel",
+            "IntegrationInstallButton",
+            "IntegrationRemoveButton",
+            "IntegrationWriteResultLabel",
+        ],
     };
 
     [Fact]
@@ -180,6 +190,24 @@ public sealed class SurfaceParityTests
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
 
         Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Round 1 review of PR #66: the original `integration.skill` install/remove dialogs
+    /// repeated the action name as their own message instead of naming a target -- the same defect
+    /// the two checks above already forbid for `workflow.review`/`attempt.supersede`. `remove`
+    /// deletes a file from the project's own working tree, so this needs the same "name what will
+    /// actually be acted on" rigor, reusing `MainPageViewModel.InitializePrompt`'s existing shape
+    /// rather than introducing a third, independent prompt-naming scheme.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void IntegrationWriteConfirmationDialogsNameTheirTargetInsteadOfRepeatingTheActionName()
+    {
+        Assert.Contains(
+            "viewModel.InitializePrompt(", MethodBody("private async Task InstallIntegrationAsync()"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "viewModel.InitializePrompt(", MethodBody("private async Task RemoveIntegrationAsync()"),
+            StringComparison.Ordinal);
     }
 
     /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
@@ -410,6 +438,127 @@ public sealed class SurfaceParityTests
         // really carries this sprint's own event -- an empty page on both sides would pass too.
         Assert.Contains(
             sprintId.Value.ToString("D", CultureInfo.InvariantCulture), desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
+    /// for `SurfaceFormatting.IntegrationInspectionLines` (ADR 0026).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameIntegrationPreviewForOneSnapshot()
+    {
+        // A real integration generator for TestEnvironment's own default enabled provider
+        // ("fake") -- without one, no generator claims the enabled set, every artifact row stays
+        // empty on both sides, and the comparison below would pass even if
+        // IntegrationInspectionRow itself were broken. The real Claude/Codex generators live in
+        // Windows-only OS-adapter projects this neutral test never references (ADR 0007), so
+        // TestEnvironment's own `generators` parameter exists specifically for this.
+        using TestEnvironment environment = new(generators: [new FakeIntegrationGenerator()]);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        // Round 2 review found this fixture closed only half of round 1 finding 2: the artifact
+        // row was exercised, but AppendIntegrationDocumentErrors -- the other drift-capable part
+        // of the shared projection, and the one this PR newly exposed to Desktop -- was never
+        // reached by any test on either surface. A malformed rule document (missing frontmatter,
+        // matching IntegrationGenerationTests' own fixture shape) forces one.
+        string rulesDirectory = Path.Combine(ProjectRootResolver.ForgeDirectory(environment.ProjectRoot), "rules");
+        Directory.CreateDirectory(rulesDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(rulesDirectory, "broken.md"), "No frontmatter here.", cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["integration", "skill", "generate", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, environment.Application)
+            .GenerateIntegrationPreviewAsync(environment.ProjectRoot, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture, so pin that the compared text
+        // really carries a real artifact row and the malformed document's own error row -- either
+        // one silently empty on both sides would pass too.
+        Assert.Contains("fake", desktop, StringComparison.Ordinal);
+        Assert.Contains("rules/broken.md", desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameIntegrationPreviewForOneSnapshot"/>,
+    /// for the mutating half, `SurfaceFormatting.IntegrationWriteLines` (ADR 0026 round 1 review:
+    /// the original PR's parity test covered only the read verb, leaving the write formatting
+    /// helper -- the one actually reachable from a destructive action -- with zero coverage). Two
+    /// separate projects, not one install-then-compare-a-second-install: a second install against
+    /// the same target renders `Unchanged`, not `Written`, which would make the two sides diverge
+    /// for a reason unrelated to what this test exists to prove.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameIntegrationWriteForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new(generators: [new FakeIntegrationGenerator()]);
+        using TestEnvironment desktopEnvironment = new(generators: [new FakeIntegrationGenerator()]);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Assert.True((await cliEnvironment.InitializeAsync(
+            cliEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
+        Assert.True((await desktopEnvironment.InitializeAsync(
+            desktopEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
+        // Round 3 review found this test's own document-error coverage was missing: round 2 added
+        // a malformed rule document only to the preview (generate) parity test, but
+        // IntegrationInstallationService.InstallAsync/RemoveAsync each run their own InspectAsync
+        // and propagate its DocumentErrors verbatim, so the write path renders the identical error
+        // row -- on the verb actually reachable from a destructive action. Written into both
+        // projects identically so the comparison stays about rendering, not fixture divergence.
+        foreach (TestEnvironment environment in new[] { cliEnvironment, desktopEnvironment })
+        {
+            string rulesDirectory = Path.Combine(
+                ProjectRootResolver.ForgeDirectory(environment.ProjectRoot), "rules");
+            Directory.CreateDirectory(rulesDirectory);
+            await File.WriteAllTextAsync(
+                Path.Combine(rulesDirectory, "broken.md"), "No frontmatter here.", cancellationToken);
+        }
+
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse(["integration", "skill", "install", "--yes", "--project-root", cliEnvironment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
+            .InstallIntegrationAsync(desktopEnvironment.ProjectRoot, true, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture, so pin that a real artifact row
+        // is present, that it genuinely reflects a write (not a no-op), and that the malformed
+        // document's own error row is present too -- any one of them silently empty on both sides
+        // would pass regardless.
+        Assert.Contains("fake", desktop, StringComparison.Ordinal);
+        Assert.Contains("written", desktop, StringComparison.Ordinal);
+        Assert.Contains("rules/broken.md", desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>A minimal single-provider generator so this test stays in the portable
+    /// `Acceptance/` group instead of depending on the real, Windows-only Claude/Codex adapters --
+    /// same shape as `IntegrationInstallationServiceTests`'s own private fake.</summary>
+    private sealed class FakeIntegrationGenerator : IProviderIntegrationGenerator
+    {
+        public ProviderId ProviderId { get; } = new("fake");
+
+        public GeneratedArtifact Generate(CanonicalIntegrationSource source) =>
+            new(
+                ProviderId,
+                "TEST_INTEGRATION.md",
+                source.Content,
+                "text/markdown",
+                "agent_facing",
+                source.Language,
+                source.SourceDigest,
+                source.PolicySnapshotHash,
+                source.GeneratorVersion);
     }
 
     [Fact]

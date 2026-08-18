@@ -11,6 +11,7 @@ public static class CapabilityIds
     public const string WorkflowReview = "workflow.review";
     public const string AttemptSupersede = "attempt.supersede";
     public const string ControlEvents = "control.events";
+    public const string IntegrationSkill = "integration.skill";
 
     /// <summary>Capabilities implemented on both surfaces by the current stage.</summary>
     public static IReadOnlyList<string> Implemented { get; } =
@@ -22,6 +23,7 @@ public static class CapabilityIds
         WorkflowReview,
         AttemptSupersede,
         ControlEvents,
+        IntegrationSkill,
     ];
 }
 

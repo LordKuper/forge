@@ -50,6 +50,9 @@ public partial class MainPage : ContentPage
         GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         AttemptSupersedeButton.Text = text.Resolve(MessageKeys.AttemptSupersedeAction);
         EventsPollButton.Text = text.Resolve(MessageKeys.EventsPollAction);
+        IntegrationGenerateButton.Text = text.Resolve(MessageKeys.IntegrationGenerateAction);
+        IntegrationInstallButton.Text = text.Resolve(MessageKeys.IntegrationInstallAction);
+        IntegrationRemoveButton.Text = text.Resolve(MessageKeys.IntegrationRemoveAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -110,6 +113,11 @@ public partial class MainPage : ContentPage
         GateResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
         AttemptSupersedeResultLabel.Text = string.Empty;
+        // Same reasoning as GateResultLabel above: a preview or a write outcome carries no
+        // companion state (unlike EventsLabel's cursor below), so it is safe -- and correct -- to
+        // always clear both unconditionally.
+        IntegrationLabel.Text = string.Empty;
+        IntegrationWriteResultLabel.Text = string.Empty;
         // Same reasoning again, for the last poll's rendered page -- but only reset it on the
         // condition that actually invalidates it (a project-root switch), not on every refresh:
         // see the lastPolledEventsProjectRoot field's own comment.
@@ -149,6 +157,15 @@ public partial class MainPage : ContentPage
 
     private async void OnEventsPollClicked(object? sender, EventArgs e) =>
         await RunAsync(PollEventsAsync).ConfigureAwait(true);
+
+    private async void OnIntegrationGenerateClicked(object? sender, EventArgs e) =>
+        await RunAsync(GenerateIntegrationPreviewAsync).ConfigureAwait(true);
+
+    private async void OnIntegrationInstallClicked(object? sender, EventArgs e) =>
+        await RunAsync(InstallIntegrationAsync).ConfigureAwait(true);
+
+    private async void OnIntegrationRemoveClicked(object? sender, EventArgs e) =>
+        await RunAsync(RemoveIntegrationAsync).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -303,5 +320,62 @@ public partial class MainPage : ContentPage
         EventsLabel.Text = await viewModel.PollEventsAsync(requestedRoot, CancellationToken.None)
             .ConfigureAwait(true);
         lastPolledEventsProjectRoot = requestedRoot;
+    }
+
+    /// <summary>ADR 0026's `integration.skill` capability -- the read-only preview verb (`forge
+    /// integration skill generate`). Like <see cref="PollEventsAsync"/>, a query needs no
+    /// confirmation dialog and does not call <see cref="RefreshAsync"/> afterward, since the
+    /// preview is not part of <see cref="MainPageSnapshot"/>.</summary>
+    private async Task GenerateIntegrationPreviewAsync()
+    {
+        IntegrationLabel.Text = await viewModel
+            .GenerateIntegrationPreviewAsync(ProjectRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+    }
+
+    /// <summary>ADR 0026's `integration.skill` install verb. Unlike
+    /// <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>'s human-only mandatory
+    /// confirmation, `integration_write_confirm` is an ordinary permission -- the dialog's own
+    /// answer is still passed through as <c>confirmed</c>, but a decline does not itself short-
+    /// circuit the call the way it does for those two, matching <see cref="RecoverAsync"/>'s own
+    /// shape exactly (the mutation may still succeed via a configured bypass). Round 1 review found
+    /// the dialog originally repeated the action name as its own message instead of naming a
+    /// target -- unlike <see cref="RecoverAsync"/> (nothing to name beyond "startup"), this writes
+    /// to the project's own working tree, so it reuses <see cref="MainPageViewModel.InitializePrompt"/>'s
+    /// shape, the same way <see cref="InitializeAsync"/> already names its own target.</summary>
+    private async Task InstallIntegrationAsync()
+    {
+        string? requestedRoot = ProjectRoot;
+        ProjectSnapshot snapshot = await viewModel.GetProjectSnapshotAsync(requestedRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        string action = text.Resolve(MessageKeys.IntegrationInstallAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.InitializePrompt(snapshot), action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        string message = await viewModel
+            .InstallIntegrationAsync(requestedRoot, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        IntegrationWriteResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0026's `integration.skill` remove verb -- same shape as
+    /// <see cref="InstallIntegrationAsync"/>, including naming its own target: `remove` deletes a
+    /// file from the project's own working tree, the same destructiveness reasoning that made
+    /// round 1 review flag the original undescriptive dialog.</summary>
+    private async Task RemoveIntegrationAsync()
+    {
+        string? requestedRoot = ProjectRoot;
+        ProjectSnapshot snapshot = await viewModel.GetProjectSnapshotAsync(requestedRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        string action = text.Resolve(MessageKeys.IntegrationRemoveAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.InitializePrompt(snapshot), action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        string message = await viewModel
+            .RemoveIntegrationAsync(requestedRoot, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        IntegrationWriteResultLabel.Text = message;
     }
 }
