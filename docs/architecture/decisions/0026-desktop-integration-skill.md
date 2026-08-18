@@ -150,6 +150,24 @@ Independent review found one issue, fixed:
    compared text carries the resulting error row alongside the artifact
    row.
 
+## Round 3 review (final full-scope round)
+
+Independent review found one issue, fixed:
+
+1. **Round 2's own fix was itself asymmetric.** It added document-error
+   coverage only to the preview (`generate`) parity test, but
+   `IntegrationInstallationService.InstallAsync`/`.RemoveAsync` each run
+   their own `InspectAsync` internally and propagate its `DocumentErrors`
+   verbatim into `IntegrationWriteResult` — the write path renders the
+   identical error row, on the verb actually reachable from a destructive
+   action, and it was still untested there. Deleting `AppendIntegrationDocumentErrors`
+   from `IntegrationWriteLines` would have left every test in the suite
+   green, the exact shape round 2 itself rejected for the preview half.
+   Fixed by writing the same malformed rule document into both parity
+   projects in `DesktopAndCliRenderTheSameIntegrationWriteForOneSnapshot`
+   and pinning the error row alongside the existing artifact-row/
+   `written`-outcome assertions.
+
 ## Deliberately deferred
 
 - **`sprint.manage` Desktop controls.** Unchanged from ADR 0022 — still

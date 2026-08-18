@@ -504,6 +504,21 @@ public sealed class SurfaceParityTests
             cliEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
         Assert.True((await desktopEnvironment.InitializeAsync(
             desktopEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
+        // Round 3 review found this test's own document-error coverage was missing: round 2 added
+        // a malformed rule document only to the preview (generate) parity test, but
+        // IntegrationInstallationService.InstallAsync/RemoveAsync each run their own InspectAsync
+        // and propagate its DocumentErrors verbatim, so the write path renders the identical error
+        // row -- on the verb actually reachable from a destructive action. Written into both
+        // projects identically so the comparison stays about rendering, not fixture divergence.
+        foreach (TestEnvironment environment in new[] { cliEnvironment, desktopEnvironment })
+        {
+            string rulesDirectory = Path.Combine(
+                ProjectRootResolver.ForgeDirectory(environment.ProjectRoot), "rules");
+            Directory.CreateDirectory(rulesDirectory);
+            await File.WriteAllTextAsync(
+                Path.Combine(rulesDirectory, "broken.md"), "No frontmatter here.", cancellationToken);
+        }
+
         SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
         StringWriter cliOutput = new(CultureInfo.InvariantCulture);
         StringWriter diagnostics = new(CultureInfo.InvariantCulture);
@@ -517,10 +532,13 @@ public sealed class SurfaceParityTests
 
         Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
         Assert.Empty(diagnostics.ToString());
-        // The comparison above is only as strong as its fixture, so pin both that a real artifact
-        // row is present and that it genuinely reflects a write, not a no-op.
+        // The comparison above is only as strong as its fixture, so pin that a real artifact row
+        // is present, that it genuinely reflects a write (not a no-op), and that the malformed
+        // document's own error row is present too -- any one of them silently empty on both sides
+        // would pass regardless.
         Assert.Contains("fake", desktop, StringComparison.Ordinal);
         Assert.Contains("written", desktop, StringComparison.Ordinal);
+        Assert.Contains("rules/broken.md", desktop, StringComparison.Ordinal);
     }
 
     /// <summary>A minimal single-provider generator so this test stays in the portable
