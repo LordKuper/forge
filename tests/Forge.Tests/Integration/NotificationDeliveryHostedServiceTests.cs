@@ -173,6 +173,16 @@ public sealed class NotificationDeliveryHostedServiceTests
         try
         {
             await WaitForDeliveryAsync(fake, cancellationToken);
+            // WaitForDeliveryAsync only proves TickAsync reached its delivery loop -- it can still
+            // be short of SaveCursorAsync. Stopping the service right after would race that save
+            // against cancellation, sometimes leaving cursor.json never written (round 5 review
+            // reproduced this: ReadCursorAsync below then throws FileNotFoundException). Wait for
+            // both watermarks to actually be persisted before stopping.
+            await WaitForCursorAsync(
+                environment.ProjectRoot,
+                cursor => cursor.Watermarks.ContainsKey(failingIdText) &&
+                    cursor.Watermarks.ContainsKey(succeedingIdText),
+                cancellationToken);
         }
         finally
         {
@@ -391,6 +401,27 @@ public sealed class NotificationDeliveryHostedServiceTests
         }
 
         Assert.NotEmpty(fake.Delivered);
+    }
+
+    private static async Task WaitForCursorAsync(
+        string projectRoot, Func<ControlEventsCursor, bool> isReady, CancellationToken cancellationToken)
+    {
+        string path = NotificationDeliveryCursorStore.CursorFilePath(projectRoot);
+        for (int attempt = 0; attempt < 40; attempt++)
+        {
+            if (File.Exists(path))
+            {
+                string content = await File.ReadAllTextAsync(path, cancellationToken);
+                if (ControlEventsCursorCodec.TryDecode(content, out ControlEventsCursor cursor) && isReady(cursor))
+                {
+                    return;
+                }
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);
+        }
+
+        Assert.Fail("The persisted cursor never reached the expected state.");
     }
 
     private static async Task RunToRunningAsync(

@@ -410,6 +410,36 @@ defect class) and found no fourth instance; it also re-checked test
 soundness, secret/PII exposure, and contract-version consistency across the
 full feature diff, all clean.
 
+### Round 5 review (critical-only): a delivery-signal-only wait raced the cursor save
+
+Round 5 confirmed round 4's fix directly against CI (the exact
+`ubuntu-24.04`/`macos-14` jobs that had failed now passed on the round-4
+commit), then found one further critical issue — the same underlying shape
+as round 4's own finding: a test that passes reliably on a dev box but is
+not reliable in CI. Fixed:
+
+1. **(Critical) `ADeliveryFailureIsIsolatedAndTheCursorStillAdvancesPastBothEvents`
+   raced `TickAsync`'s own cursor save.** `WaitForDeliveryAsync` returns as
+   soon as the fake records a delivery — a point strictly *inside*
+   `TickAsync`'s delivery loop, before it reaches `SaveCursorAsync`. The
+   test's own `finally` then calls `StopAsync` immediately, cancelling the
+   stopping token; if that cancellation lands inside
+   `NotificationDeliveryCursorStore.SaveAsync`'s `File.WriteAllTextAsync`,
+   the resulting `OperationCanceledException` propagates out of
+   `TickAsync` (a cancellation the tick's own catch filter intentionally
+   rethrows rather than swallows), `ExecuteAsync` ends canceled rather than
+   faulted, `service.ExecuteTask!.Exception` stays null (so the existing
+   assertion doesn't catch it), and `cursor.json` is never written — the
+   test's own `ReadCursorAsync` call then throws `FileNotFoundException`.
+   Reproduced directly on the round-4 commit, both in a single plain full
+   suite run and repeatedly under contention, not merely theorized. Fixed
+   with a new `WaitForCursorAsync` helper that polls the persisted cursor
+   file itself until both sprints' watermarks are actually present, used in
+   place of relying on the delivery signal alone before this test calls
+   `StopAsync` — this closes the race regardless of platform or scheduling,
+   rather than merely widening the existing fixed-delay tolerance the way
+   the sibling tests happen to (safely, but only by chance) avoid it.
+
 ## Consequences
 
 - `Forge.Application.INotificationService` (port) and
