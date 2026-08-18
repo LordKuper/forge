@@ -36,8 +36,8 @@ finally implemented them.
 
 `forge gate approve|reject` and `forge attempt supersede` now refuse to run
 unless standard *output* is an interactive terminal
-(`!Console.IsOutputRedirected`, re-evaluated fresh each time the command's
-own action runs — never cached or fixed at command-tree construction). An
+(`!Console.IsOutputRedirected`, called fresh each time the command's own
+action runs, not fixed once at command-tree construction). An
 agent invoked through `.forge/rules` runs as a subprocess of its own host
 tool — this session's own Bash tool included — with both streams
 redirected so the host tool can capture them, exactly the condition this
@@ -61,7 +61,8 @@ exactly this "should I behave as if a human is watching" question, chosen
 specifically because piped *input* is an ordinary, legitimate data channel
 that says nothing about who is driving the process.
 
-This trade the check's direction, not the underlying limitation: a human
+This trades which direction the check is wrong in, not the underlying
+limitation itself: a human
 who deliberately redirects their OWN output — `forge gate approve ... |
 tee log.txt` to keep a record, for example — is now refused exactly like a
 non-interactive agent, even though a real human is making the decision.
@@ -212,8 +213,8 @@ Independent review found six issues, none left unaddressed:
    `GateApproveCommandUsesTheRealAmbientConsoleStateByDefault` and rewritten
    to compute its own expectation from the same real `Console
    .IsOutputRedirected` property the production default consults, so it
-   passes under either launch environment while still failing if the
-   default is ever replaced with a constant.
+   passes under either launch environment (see round 3 below for a further
+   accuracy fix to this test's own doc comment).
 6. A code comment cited `Console.IsInputRedirected`'s "own already-
    established meaning" as authority for the *output* check's semantics —
    confusing after the round-1 signal switch — and separately claimed the
@@ -222,6 +223,49 @@ Independent review found six issues, none left unaddressed:
    rewriting the comment to describe only what this lambda does (call
    through fresh on every invocation) without characterizing the BCL
    property's own internals.
+
+### Round 3 (final full-scope) review: five accuracy fixes, no functional defect
+
+Full re-trace of every CLI path reaching `ResolveGateAsync`/
+`SupersedeAttemptAsync` found no gap: only the two guarded `SetAction`
+callbacks reach either mutation, and no third redirection-signal problem
+exists beyond the two already documented (`--instruction-file -` piping and
+`| tee` output redirection). All five findings were doc/comment/test-claim
+accuracy issues, several of them the same *shape* of mistake round 2 itself
+made — fixed in code but left stale in prose, or in one case a claim that
+does not survive careful review of a different environment:
+
+1. The code comment's "never cached" phrasing round 2 removed as
+   misleading (against `Console.IsOutputRedirected` being a memoized BCL
+   property) was still present in this ADR's own prose. Fixed to match.
+2. `DiagnosticCodes.PermissionDenied`'s XML doc claimed `permission_denied`
+   was "reserved since Stage 8"; `git log -S permission_denied -- docs/
+   contracts/v1/README.md` shows it landed in `59b2ac1`, Stage 0 — this
+   ADR's own Context section already had the correct claim ("since the
+   table's own introduction"), only the source-code doc comment was wrong.
+   Fixed.
+3. A broken sentence ("This trade the check's direction...") opening the
+   round-2 false-refusal paragraph. Fixed.
+4. **The most substantive finding**: the round-2 default-coverage test's
+   own doc comment claimed it fails "if the default is ever replaced with
+   a constant," unqualified. Under `dotnet test` — the only environment
+   this suite is actually run in — `interactive` is always `false`, so
+   only the `else` (refused) branch of the test's own assertion ever
+   executes. A default hard-coded to `() => true` disagrees with that
+   branch and is caught. A default hard-coded to `() => false` agrees with
+   it by coincidence and is **not** caught — indistinguishable from correct
+   behavior in this always-redirected environment. Fixed by narrowing both
+   the test's own doc comment and this ADR's Consequences section (below)
+   to state the real, asymmetric coverage honestly instead of the
+   overclaimed symmetric one. A genuinely symmetric test would need control
+   over the real ambient `Console.IsOutputRedirected` value (e.g. a
+   subprocess launched with deliberately controlled redirection), out of
+   proportion for this finding's own severity — named as a real, narrower
+   gap rather than pretending the existing test already closes it.
+5. `CHANGELOG.md`'s `## v0.44.0` entry — used verbatim as this release's
+   GitHub Release description per AGENTS.md — omitted the `| tee`/
+   redirected-output false refusal both this ADR and the PR body name
+   explicitly. Fixed by adding it.
 
 ## Consequences
 
@@ -239,9 +283,13 @@ Independent review found six issues, none left unaddressed:
   prove the refusal itself (exit 8, `permission_denied` on stderr, zero
   mutation calls, and — for supersede — the instruction source is never
   read at all); `GateApproveCommandUsesTheRealAmbientConsoleStateByDefault`
-  proves the production default is actually wired, not just the parameter
-  — computing its own expectation from the real `Console.IsOutputRedirected`
-  rather than hard-coding a launch-environment-dependent outcome.
+  proves the production default reaches the real `Console.IsOutputRedirected`
+  in one direction (catches a default hard-coded to `() => true`), computing
+  its own expectation instead of a launch-environment-dependent hard-coded
+  one. It does not catch a default hard-coded to `() => false`, which is
+  indistinguishable from correct behavior under `dotnet test`'s own
+  always-redirected environment — named honestly as this test's real,
+  narrower scope rather than left overclaimed.
 - `SurfaceLanguageTests.DiagnosticCodesMapToTheContractExitCodes` gained the
   new `PermissionDenied → Authorization` case.
 - No wire/protocol change: this is CLI presentation-layer argument handling,

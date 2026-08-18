@@ -129,7 +129,7 @@ public static class DiagnosticCodes
     /// <summary>ADR 0023: `forge gate approve|reject` and `forge attempt supersede` refuse to run
     /// when standard output is not an interactive terminal — the first real technical control behind
     /// ADR 0005/0019's "human-only" requirement, previously enforced by mandatory confirmation alone.
-    /// Reserved since Stage 8 (`docs/contracts/v1/README.md`'s `permission_denied`/exit 8) and
+    /// Reserved since Stage 0 (`docs/contracts/v1/README.md`'s `permission_denied`/exit 8) and
     /// unimplemented until this ADR.</summary>
     public const string PermissionDenied = "permission_denied";
 }

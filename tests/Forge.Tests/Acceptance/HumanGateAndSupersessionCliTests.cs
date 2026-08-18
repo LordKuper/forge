@@ -162,9 +162,13 @@ public sealed class HumanGateAndSupersessionCliTests
     /// `Forge.Tests.exe` from an actual interactive terminal would have `Console.IsOutputRedirected`
     /// read `false` there, and a hard-coded "always refused" assertion would then be the one that's
     /// wrong, not the production code. Instead this computes the expected outcome from the SAME real
-    /// property the production default consults, so the test passes under either launch environment
-    /// while still failing if the default is ever replaced with a constant (e.g. `() => true`) --
-    /// the exact mutation this test exists to catch.</summary>
+    /// property the production default consults, so the test passes under either launch environment.
+    /// This only catches a mutation whose wrong constant happens to disagree with the real ambient
+    /// value in whichever environment the suite is actually run under -- under `dotnet test`
+    /// (`interactive` is `false` here), that is a default hard-coded to `() => true` (an agent would
+    /// slip through); a default hard-coded to `() => false` is indistinguishable from correct
+    /// behavior in that same always-redirected environment, and this test alone does not catch it.
+    /// </summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task GateApproveCommandUsesTheRealAmbientConsoleStateByDefault()
