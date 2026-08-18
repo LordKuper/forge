@@ -737,6 +737,21 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
 
+        // A human gate has no executor to replace — "supersede" only makes sense for a `Work`
+        // node's own attempt (ADR 0006: cancels the process tree a future executor would have been
+        // running and creates a linked replacement for that same future executor to pick up).
+        // Without this check, superseding a gate's attempt mints a `created` replacement nothing
+        // ever starts (only `StartAttemptAsync`, gated on `NodeKind.Work`, consumes a pending
+        // replacement), and re-arms the node through a `Running -> Failed -> Ready` sequence shaped
+        // for a Work node's state machine, not a gate's own `AwaitingHuman`-centered one.
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null || definedNode.Kind != NodeKind.Work)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
         // Skipped entirely once already superseded: a caller resuming after a crash has no way to
         // reconstruct the *original* (version, key) pair once the attempt has moved past whatever
         // it observed (a fresh caller, e.g. a stateless CLI invocation re-run later, can only read
@@ -1080,13 +1095,30 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             }
         }
 
+        AttemptState[] path = approved ? AttemptSucceededPath : AttemptRejectedPath;
         AppendOutcome walkOutcome = await DriveAttemptAsync(
-            projectRoot, sprintId, attemptId, approved ? AttemptSucceededPath : AttemptRejectedPath,
+            projectRoot, sprintId, attemptId, path,
             new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.NodeIdArgument] = nodeId },
             cancellationToken).ConfigureAwait(false);
         if (!walkOutcome.Succeeded)
         {
             return new(false, node, walkOutcome.DiagnosticCode);
+        }
+
+        // `DriveAttemptAsync` reports success both when it actually walked the attempt to
+        // `path[^1]` and when the attempt's current state is already off `path` entirely (its own
+        // "nothing to do" no-op — see its `index < 0` case). The latter is not a stand-in for the
+        // former: an attempt found by linkage can be off-path for a reason that has nothing to do
+        // with this decision (e.g. a stale, terminal attempt from an earlier round picked up while
+        // the node's own `running` state is ambiguous between this method's approve walk and an
+        // unrelated `AdvanceGraphAsync` promotion interrupted between its own two appends — see that
+        // method's own comment). Treating the no-op as "resumed successfully" there would durably
+        // settle the node on a decision no attempt or result ever actually recorded. Requiring the
+        // attempt to have actually reached `path[^1]` closes that gap without needing to first
+        // distinguish *why* the walk was a no-op.
+        if (walkOutcome.State!.Attempts[attemptId.Value.ToString("D")].State != path[^1])
+        {
+            return new(false, node, DiagnosticCodes.AttemptTerminal);
         }
 
         IReadOnlyList<NodeResult> existingResults =

@@ -308,6 +308,31 @@ public sealed class HumanGateAndSupersessionCliTests
             DiagnosticCodes.SupersessionInstructionRequired, diagnostics.ToString(), StringComparison.Ordinal);
     }
 
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task AttemptSupersedeCommandRejectsAnOverLongInstructionWithTheDocumentedExitCode()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        StringReader input = new(new string('x', SprintScheduler.MaxSupersessionInstructionLength + 1));
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, input: input);
+
+        int exitCode = await root
+            .Parse([
+                "attempt", "supersede", Guid.NewGuid().ToString(), "--sprint", Guid.NewGuid().ToString(),
+                "--instruction-file", "-", "--yes", "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Contains(
+            DiagnosticCodes.SupersessionInstructionTooLong, diagnostics.ToString(), StringComparison.Ordinal);
+    }
+
     /// <summary>ADR 0019: unlike every other confirmable mutation on <c>IForgeMutations</c>
     /// (<c>InstallIntegrationAsync</c>/<c>RemoveIntegrationAsync</c>), this command accepts no
     /// config-driven confirmation bypass — omitting <c>--yes</c> must always be refused, regardless

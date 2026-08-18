@@ -135,6 +135,30 @@ them:
     `approved`; `failed` only ever follows a rejection), a resumed call
     supplying the opposite `approved` value is refused as a conflict rather
     than silently reinterpreting the original attempt.
+  - A third round found the state-gating above still had a gap: a
+    `HumanGate` node's `running` state is ambiguous. It means either this
+    method's own approve walk mid-sequence (the resumability case above is
+    built for), *or* `AdvanceGraphAsync`'s own two-append gate promotion
+    (`ready -> running -> awaiting_human`) caught between its two appends —
+    a case that creates no attempt at all. In that second case, linkage
+    still finds *something* (an earlier round's now-stale, terminal
+    attempt, still linked to the same node id) and `DriveAttemptAsync`
+    reports success for it — not because it actually walked anywhere, but
+    because the attempt's state is already off the requested path entirely
+    (its own documented "nothing to do" no-op). That no-op was
+    indistinguishable, from the caller's side, from a real resumed walk
+    reaching its terminal state — so the node was driven to `succeeded`
+    (or refused to move rather than reject, symmetrically) with no attempt
+    or result ever actually recording the decision. Fixed generally rather
+    than by first working out *why* a given call landed here: after
+    `DriveAttemptAsync` reports success, the attempt's actual resulting
+    state must equal the target path's own terminal state
+    (`AttemptSucceededPath`/`AttemptRejectedPath`'s last element) or the
+    call is refused with `DiagnosticCodes.AttemptTerminal` instead of
+    proceeding. This closes the gap for every off-path no-op regardless of
+    cause, including the node-kind and stale-round scenarios above, without
+    weakening the genuine resumability cases (a no-op that lands exactly on
+    the resumed attempt's own already-reached terminal state still passes).
 - **`SupersedeAttemptAsync`** already recognized "already superseded" by
   the target's own `Cancelled` state (a fix from ADR 0018's own review
   history) — but still *re-attempted* the cancel append unconditionally,
@@ -146,11 +170,26 @@ them:
   entirely once already superseded, matching every other step in this
   method, each of which already independently checks current state before
   acting.
+  - The same third review round also found `SupersedeAttemptAsync` had no
+    node-kind guard at all — unlike `StartAttemptAsync` and the fixed
+    `ResolveHumanGateAsync` above. A human gate has no executor to replace,
+    so superseding its attempt minted a `created` replacement attempt
+    nothing would ever start (only `StartAttemptAsync`, itself gated on
+    `NodeKind.Work`, consumes a pending replacement), while re-arming the
+    node through a `Running -> Failed -> Ready` sequence shaped for a
+    `Work` node's own state machine, not a gate's `AwaitingHuman`-centered
+    one — silently leaving the node in a state its own graph never
+    produces through any legitimate path. Fixed the same way
+    `ResolveHumanGateAsync` is: refusing with
+    `DiagnosticCodes.NodeKindMismatch` for any target node that is not
+    `NodeKind.Work`, checked once the attempt's owning node is known.
 
-Both fixes carry their own regression test — a caller re-deriving
-version/key fresh from already-advanced state must still resolve cleanly,
-and (for the gate) a caller flipping the decision that way must still be
-refused.
+Every fix above carries its own regression test: a caller re-deriving
+version/key fresh from already-advanced state must still resolve cleanly; a
+caller flipping the gate's decision that way must still be refused; a gate
+stuck `running` from an interrupted promotion must be refused rather than
+force-succeeded; and superseding an attempt linked to a `HumanGate` node
+must be refused outright.
 
 ### `Forge.Cli.ExitCodes.For` now maps the three supersession-instruction codes
 
