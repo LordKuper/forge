@@ -43,8 +43,11 @@ public sealed class NotificationDeliveryHostedService(
 {
     /// <summary>Bounds <see cref="CatchUpToNowAsync"/>'s loop -- far past any realistic project's
     /// journal depth, so hitting it only ever happens against a pathologically large one; logged
-    /// and left for later ticks to keep advancing through rather than blocking this tick
-    /// indefinitely.</summary>
+    /// and left unresolved for now rather than blocking this tick indefinitely. The events past the
+    /// bound are NOT silently skipped: the persisted cursor only reflects what this call actually
+    /// advanced through, so a later tick delivers them as ordinary new notifications, not a
+    /// "catch-up" of anything -- from that later tick's own perspective, they are simply new.
+    /// </summary>
     private const int MaxCatchUpReads = 1_000;
 
     private const string EnabledKey = "notifications.enabled";
@@ -64,7 +67,13 @@ public sealed class NotificationDeliveryHostedService(
         LogLevel.Warning,
         new EventId(2022, "NotificationDeliveryCatchUpBoundReached"),
         "Stale-cursor recovery reached its read bound before catching up to the current journal " +
-            "tip; the remainder will be caught up on by later ticks.");
+            "tip; the remainder will be delivered as new notifications by later ticks.");
+
+    private static readonly Action<ILogger, string, Exception?> LogSettingsUnreadable = LoggerMessage.Define<string>(
+        LogLevel.Warning,
+        new EventId(2023, "NotificationDeliverySettingsUnreadable"),
+        "Could not read user configuration ({DiagnosticCode}); treating notifications as disabled " +
+            "for this tick rather than risk overriding an explicit notifications.enabled=false.");
 
     /// <summary>Unlike <see cref="ResumeSchedulerHostedService"/>'s own immediate-first-tick
     /// design — where promptly promoting a stuck node is a real correctness concern — a "best-
@@ -135,8 +144,13 @@ public sealed class NotificationDeliveryHostedService(
             throw;
         }
         catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
+            exception is IOException or UnauthorizedAccessException or InvalidDataException
+                or InvalidOperationException)
         {
+            // InvalidDataException matches ResumeSchedulerHostedService's own catch shape exactly
+            // (FileSprintEventLog.LoadValidatedEventsAsync throws it for a corrupt journal, reached
+            // via ControlEventsReader.ReadAsync the same way) -- round 3 review found this filter
+            // omitted it despite this method's own doc comment already claiming parity.
             LogTickFailed(logger, exception);
         }
     }
@@ -209,6 +223,9 @@ public sealed class NotificationDeliveryHostedService(
             // An unreadable configuration must never be treated as "enabled" by default: that
             // would silently override a genuine notifications.enabled=false the user already set,
             // the one case ADR 0005's "user-configurable" promise cannot tolerate getting wrong.
+            // Logged (round 3 review): failing closed trades a wrongly-skipped notification for a
+            // wrongly-shown one, and a silent, undiagnosable skip is worse than a noisy one.
+            LogSettingsUnreadable(logger, user.DiagnosticCode, null);
             return new(false, "en");
         }
 

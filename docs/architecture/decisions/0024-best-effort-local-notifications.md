@@ -326,6 +326,59 @@ added in the *same* round 1 commit — was left outside it. All six fixed:
    and asserting the disabled tick's persisted watermark equals it
    exactly, not merely that some non-negative number exists.
 
+### Round 3 review: the same "does the try/catch actually cover everything reachable from `TickAsync`" defect class, a third time
+
+Independent review found five issues, all fixed:
+
+1. **(High) `InvalidDataException` still escaped `TickAsync`'s catch
+   filter** — the third instance in this PR's own history of the same
+   underlying defect class round 2 finding 1 fixed: a code path reachable
+   from `TickAsync` not actually covered by its try/catch.
+   `FileSprintEventLog.LoadValidatedEventsAsync` throws
+   `InvalidDataException` for a corrupt journal, reached via
+   `ControlEventsReader.ReadAsync` the same way `ResumeSchedulerHostedService`
+   already reaches it — that service's own catch filter already includes
+   this type, and this service's doc comment already claimed parity with
+   it, but the filter itself omitted it. Fixed by adding
+   `InvalidDataException` to the filter; a regression test
+   (`ACorruptJournalDoesNotPermanentlyFaultTheService`) appends invalid
+   JSON to a sprint's own event log and asserts `ExecuteTask` stays
+   unfaulted.
+2. **The fail-closed config-read path (round 2's fix) logged nothing**,
+   making a genuine transient failure indistinguishable from "the user
+   disabled notifications" from the logs alone — undiagnosable in
+   practice. Fixed by adding a `LogSettingsUnreadable` warning log to that
+   branch, naming the diagnostic code; a new
+   `AnUnreadableConfigurationFailsClosedAndStillAdvancesTheCursor` test
+   proves the end-to-end behavior (no delivery, cursor still advances to
+   the same watermark a healthy read would reach).
+3. **`ADeliveryFailureIsIsolatedAndTheCursorStillAdvancesPastBothEvents`
+   still used `watermark >= 0`** — the exact pattern round 2 finding 6
+   rejected in the sibling "disabled" test, left unfixed here. Fixed by
+   extracting the ground-truth comparison into a shared
+   `ReadGroundTruthWatermarkAsync` helper and using it for both sprints in
+   this test, matching the "disabled" test's own rigor.
+4. **`NotificationDeliveryCursorStore.SaveAsync`'s cleanup path — rewritten
+   by both prior review rounds — had zero tests**, against AGENTS.md's
+   regression-test rule. Fixed with a new
+   `NotificationDeliveryCursorStoreTests.SaveAsyncCleansUpItsTempFileWhenTheFinalMoveFailsAndPropagatesTheOriginalException`
+   unit test: pre-creating a directory at the destination cursor-file path
+   forces the final `File.Move` to fail against a genuinely-written temp
+   file (not merely "nothing to clean up"), asserting both that the
+   original exception propagates and that no `.tmp` file remains. On this
+   Windows environment, that failure surfaces as
+   `UnauthorizedAccessException`, not `IOException` as originally assumed
+   when the fix was written — both are already in the hosted service's own
+   catch filter, so the delivery-side behavior was never wrong, only the
+   test's assumed exception type.
+5. **`MaxCatchUpReads`'s doc comment and `LogCatchUpBoundReached`'s log
+   message both inaccurately described unresolved events as later being
+   "caught up on."** They are not: once the bound is hit, the persisted
+   cursor reflects only what catch-up actually advanced through, and any
+   remaining events are delivered by a later tick as ordinary *new*
+   notifications — from that tick's perspective there is no "catch-up"
+   happening at all. Fixed by rewording both to state this precisely.
+
 ## Consequences
 
 - `Forge.Application.INotificationService` (port) and

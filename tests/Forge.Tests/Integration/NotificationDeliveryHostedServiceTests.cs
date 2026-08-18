@@ -120,11 +120,7 @@ public sealed class NotificationDeliveryHostedServiceTests
             await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
         Assert.True(cursorWhileDisabled.Watermarks.TryGetValue(
             sprintId.Value.ToString("D"), out long watermarkWhileDisabled));
-        ControlEventsPage groundTruth = await environment.Resolve<ControlEventsReader>()
-            .ReadAsync(environment.ProjectRoot, null, cancellationToken);
-        Assert.True(ControlEventsCursorCodec.TryDecode(groundTruth.Cursor, out ControlEventsCursor groundTruthCursor));
-        Assert.True(groundTruthCursor.Watermarks.TryGetValue(
-            sprintId.Value.ToString("D"), out long expectedWatermark));
+        long expectedWatermark = await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken);
         Assert.Equal(expectedWatermark, watermarkWhileDisabled);
 
         ConfigurationWriteResult enabled = await environment.Application.SetConfigurationAsync(
@@ -190,12 +186,18 @@ public sealed class NotificationDeliveryHostedServiceTests
 
         // The cursor must have advanced past BOTH events, not just the one that delivered
         // successfully -- a delivery failure isolates that one notification, not the sweep's own
-        // progress through the journal.
+        // progress through the journal. Compared against each sprint's own independently-computed
+        // ground-truth watermark (round 3 review found `>= 0` alone proves nothing about how far a
+        // watermark actually advanced, the same gap round 2 already fixed in the sibling
+        // "disabled" test but left unfixed here).
         ControlEventsCursor cursor = await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
-        Assert.True(cursor.Watermarks.TryGetValue(failingIdText, out long failingWatermark) && failingWatermark >= 0);
-        Assert.True(
-            cursor.Watermarks.TryGetValue(succeedingIdText, out long succeedingWatermark) &&
-            succeedingWatermark >= 0);
+        Assert.True(cursor.Watermarks.TryGetValue(failingIdText, out long failingWatermark));
+        Assert.True(cursor.Watermarks.TryGetValue(succeedingIdText, out long succeedingWatermark));
+        Assert.Equal(
+            await ReadGroundTruthWatermarkAsync(environment, failingSprintId, cancellationToken), failingWatermark);
+        Assert.Equal(
+            await ReadGroundTruthWatermarkAsync(environment, succeedingSprintId, cancellationToken),
+            succeedingWatermark);
     }
 
     /// <summary>Round 1 review of PR #64 found the ORIGINAL stale-cursor recovery replayed the
@@ -253,6 +255,83 @@ public sealed class NotificationDeliveryHostedServiceTests
         Assert.Empty(second.Delivered);
     }
 
+    /// <summary>Round 3 review found this exact defect for the third time in this PR's own
+    /// history: an exception type <see cref="ResumeSchedulerHostedService"/> already catches
+    /// (<c>FileSprintEventLog.LoadValidatedEventsAsync</c> throws <see cref="InvalidDataException"/>
+    /// for a corrupt journal, reached via <see cref="ControlEventsReader.ReadAsync"/> the same way)
+    /// was missing from this service's own tick-level catch filter despite its doc comment already
+    /// claiming parity with that shape.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ACorruptJournalDoesNotPermanentlyFaultTheService()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        string eventsPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "events.jsonl");
+        await File.AppendAllTextAsync(eventsPath, "{ not valid json\n", cancellationToken);
+
+        FakeNotificationService fake = new();
+        using NotificationDeliveryHostedService service = CreateService(environment, fake);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Null(service.ExecuteTask!.Exception);
+        Assert.Empty(fake.Delivered);
+    }
+
+    /// <summary>Round 3 review: an unreadable user configuration must never be treated as
+    /// "enabled" (see the config-gating fix in <c>ReadNotificationSettingsAsync</c>) -- proven end
+    /// to end here rather than only at the unit level, including that the cursor still advances
+    /// exactly as far as a healthy read would, matching the "disabled" test's own ground-truth
+    /// comparison.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AnUnreadableConfigurationFailsClosedAndStillAdvancesTheCursor()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        string userConfigPath = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(userConfigPath)!);
+        await File.WriteAllTextAsync(userConfigPath, "{ not valid json", cancellationToken);
+
+        FakeNotificationService fake = new();
+        using NotificationDeliveryHostedService service = CreateService(environment, fake);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(300), cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Null(service.ExecuteTask!.Exception);
+        Assert.Empty(fake.Delivered);
+        ControlEventsCursor cursor = await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
+        Assert.True(cursor.Watermarks.TryGetValue(sprintId.Value.ToString("D"), out long watermark));
+        Assert.Equal(await ReadGroundTruthWatermarkAsync(environment, sprintId, cancellationToken), watermark);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task TheServiceTicksOverAProjectWithNoNotificationWorthyEventsWithoutFailing()
@@ -279,6 +358,22 @@ public sealed class NotificationDeliveryHostedServiceTests
             notifications,
             new ResourceLocalizationCatalog(),
             NullLogger<NotificationDeliveryHostedService>.Instance);
+
+    /// <summary>The independently-computed "how far COULD this sprint's own watermark have
+    /// advanced" ground truth: reads its full event history directly via
+    /// <see cref="ControlEventsReader"/>, bypassing the service under test entirely, so a caller
+    /// can assert a persisted cursor is genuinely caught up rather than merely non-negative.
+    /// </summary>
+    private static async Task<long> ReadGroundTruthWatermarkAsync(
+        TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        ControlEventsPage groundTruth = await environment.Resolve<ControlEventsReader>()
+            .ReadAsync(environment.ProjectRoot, null, cancellationToken);
+        Assert.True(ControlEventsCursorCodec.TryDecode(groundTruth.Cursor, out ControlEventsCursor groundTruthCursor));
+        Assert.True(groundTruthCursor.Watermarks.TryGetValue(
+            sprintId.Value.ToString("D"), out long expectedWatermark));
+        return expectedWatermark;
+    }
 
     private static async Task<ControlEventsCursor> ReadCursorAsync(string projectRoot, CancellationToken cancellationToken)
     {
