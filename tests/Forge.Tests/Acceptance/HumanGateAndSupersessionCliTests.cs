@@ -152,6 +152,41 @@ public sealed class HumanGateAndSupersessionCliTests
         Assert.Equal(NodeState.AwaitingHuman, state.Nodes["gate"].State);
     }
 
+    /// <summary>ADR 0023: covers the production default (`isInteractive` omitted entirely, unlike
+    /// every other test in this file, which passes an explicit override) — every other test here
+    /// only proves the *parameter* works, never that `CreateRootCommand`'s own default lambda
+    /// (`() => !Console.IsOutputRedirected`) is wired to it at all. `dotnet test` redirects this
+    /// process's own standard output to capture it, so the default deterministically evaluates to
+    /// non-interactive here, matching every CI/local run of this suite.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task GateApproveCommandRefusesTheRealAmbientNonInteractiveTestProcessByDefault()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        FakeForgeMutations mutations = new();
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics,
+            resolveMutations: (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        int exitCode = await root
+            .Parse([
+                "gate", "approve", "--sprint", Guid.NewGuid().ToString(), "--node", "gate", "--yes",
+                "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Authorization, exitCode);
+        Assert.Contains(DiagnosticCodes.PermissionDenied, diagnostics.ToString(), StringComparison.Ordinal);
+        Assert.Equal(0, mutations.ResolveGateCalls);
+    }
+
     /// <summary>ADR 0019's central decision: unlike every other confirmable mutation on
     /// <c>IForgeMutations</c>, this command accepts no config-driven confirmation bypass — omitting
     /// <c>--yes</c> must still be refused even when <c>interaction.confirm_destructive</c> is
@@ -282,7 +317,7 @@ public sealed class HumanGateAndSupersessionCliTests
             StringWriter output = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
             RootCommand root = CliApplication.CreateRootCommand(
-            Text(catalog), output, environment.Application, isInteractive: () => true);
+                Text(catalog), output, environment.Application, isInteractive: () => true);
 
             int exitCode = await root
                 .Parse([

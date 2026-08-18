@@ -27,10 +27,18 @@ public static class CliApplication
         ArgumentNullException.ThrowIfNull(application);
         TextWriter diagnostics = error ?? output;
         TextReader effectiveInput = input ?? Console.In;
-        // ADR 0023: `Console.IsInputRedirected` is read once here, not inside the default lambda,
-        // so a caller with no override still gets a value fixed for this command tree's lifetime —
-        // matching how `effectiveInput` itself is resolved once, not re-read per invocation.
-        Func<bool> effectiveIsInteractive = isInteractive ?? (() => !Console.IsInputRedirected);
+        // ADR 0023: deliberately checks *output*, not input, redirection. `forge attempt supersede`
+        // reads its replacement instruction from `--instruction-file -` (standard input) as a
+        // documented, ordinary invocation shape — checking `Console.IsInputRedirected` would refuse
+        // that exact shape unconditionally, since piping an instruction always redirects stdin
+        // regardless of whether a human or an agent is doing the piping. Output redirection is the
+        // signal every one of this command tree's real callers actually varies on: a human at an
+        // interactive shell has an attached terminal for stdout even when piping instruction text
+        // in, while an agent subprocess invoked through `.forge/rules` has both its streams
+        // redirected so its host tool can capture them. The default is evaluated once per call
+        // (not cached), matching `Console.IsInputRedirected`'s own already-established meaning: it
+        // reflects the process's stream setup, which does not change mid-invocation.
+        Func<bool> effectiveIsInteractive = isInteractive ?? (() => !Console.IsOutputRedirected);
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable. `resolveMutations` receives the SAME `--project-root` value the invoking
         // command resolved (never a value fixed before argument parsing), so a Host connection is
@@ -582,8 +590,10 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            // ADR 0023: refused before any argument is even validated -- the earliest possible
-            // point, and unconditional: `--yes` cannot substitute for an interactive session.
+            // ADR 0023: refused before any of this action's OWN validation runs -- the earliest
+            // point reachable once System.CommandLine has already parsed `--sprint`/`--node`/`--yes`
+            // into `parseResult` -- and unconditional: `--yes` cannot substitute for an interactive
+            // session.
             if (!isInteractive())
             {
                 return Report(diagnostics, DiagnosticCodes.PermissionDenied);
@@ -654,8 +664,9 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            // ADR 0023: same earliest-possible, unconditional refusal as the gate commands -- before
-            // argument validation and before reading the instruction file/stdin.
+            // ADR 0023: same earliest-reachable, unconditional refusal as the gate commands -- before
+            // this action's own sprint-id/attempt-id validation and before reading the instruction
+            // file/stdin.
             if (!isInteractive())
             {
                 return Report(diagnostics, DiagnosticCodes.PermissionDenied);
