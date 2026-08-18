@@ -498,6 +498,31 @@ real tick lands. All fixed:
    had the identical fixed-delay-then-read shape** as finding 2, reproduced
    failing with `DirectoryNotFoundException`. Fixed the same way.
 
+### Round 8 review (critical-only): even the widened 10-second deadline wasn't always enough
+
+Round 8 confirmed CI stayed green on the round-7 commit, then reproduced
+load at far greater scale than any prior round — 352 samples of the
+affected test file across six contention levels on a 24-core box, up to 48
+parallel `dotnet test` processes plus 240 CPU-burning threads — and found
+one further critical issue, a fifth consecutive instance of the same
+underlying "fixed time budget vs. CI-shaped contention" pattern:
+
+1. **(Critical) `WaitForDeliveryAsync`/`WaitForCursorAsync`'s round-7
+   10-second deadline still wasn't always enough under extreme thread-pool
+   oversubscription.** 9 of 352 samples failed, all in
+   `ADeliveryFailureIsIsolatedAndTheCursorStillAdvancesPastBothEvents` (the
+   one test whose first tick must process two sprints' worth of work rather
+   than one). Critically, failure was **not monotonic in slowdown** — one
+   run failed at 26 seconds total elapsed while another in the same wave
+   passed at 65 seconds, against a 1-second unloaded baseline — a
+   thread-pool scheduling coin flip once oversubscribed, not a margin that
+   scales predictably with load, so no fixed deadline is ever provably
+   enough in principle. Product code was not implicated: `NotificationDeliveryHostedService`
+   behaved correctly in all 352 samples. Fixed by widening the shared
+   deadline to 30 seconds — the cost is zero on the happy path, since both
+   helpers already return as soon as their condition is met, and the wider
+   budget only matters when a runner is genuinely this starved.
+
 ## Consequences
 
 - `Forge.Application.INotificationService` (port) and

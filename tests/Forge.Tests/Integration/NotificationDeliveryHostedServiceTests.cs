@@ -409,8 +409,14 @@ public sealed class NotificationDeliveryHostedServiceTests
     /// below was itself load-sensitive: under CI-shaped contention (observed 6.5x-20x local
     /// slowdown), 2 seconds is not always enough for even one real tick to land, producing a
     /// timeout indistinguishable from a genuine "never happened" defect. A generous wall-clock
-    /// deadline, not an attempt count, is what actually needs to survive a slow runner.</summary>
-    private static readonly TimeSpan PollTimeout = TimeSpan.FromSeconds(10);
+    /// deadline, not an attempt count, is what actually needs to survive a slow runner. Round 8
+    /// review found even 10 seconds was not always enough under extreme thread-pool oversubscription
+    /// (reproduced: a run failed at 26s total while another in the same wave passed at 65s against a
+    /// 1s unloaded baseline -- a scheduling coin flip once oversubscribed, not a margin that scales
+    /// predictably with load). Widened further since the cost of a larger deadline is zero on the
+    /// happy path (both helpers return as soon as their condition is met) and only matters when a
+    /// runner is genuinely this starved.</summary>
+    private static readonly TimeSpan PollTimeout = TimeSpan.FromSeconds(30);
 
     private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(50);
 
