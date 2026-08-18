@@ -100,4 +100,6 @@
   <data name="AttemptInstructionLabel" xml:space="preserve"><value>Replacement instruction:</value></data>
   <data name="AttemptSupersedeAction" xml:space="preserve"><value>Supersede attempt</value></data>
   <data name="AttemptSupersedeConfirmationRequired" xml:space="preserve"><value>Confirm the supersession before it is applied.</value></data>
+  <data name="AttemptIdRequired" xml:space="preserve"><value>Enter an attempt id.</value></data>
+  <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(no attempt id entered)</value></data>
 </root>

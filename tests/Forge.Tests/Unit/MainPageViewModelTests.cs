@@ -717,16 +717,20 @@ public sealed class MainPageViewModelTests
             (_, _) => Task.FromResult<IForgeMutations>(mutations));
         Guid sprintId = Guid.NewGuid();
         Guid attemptId = Guid.NewGuid();
+        // Deliberately carries surrounding whitespace: the instruction must reach `mutations`
+        // verbatim, matching the CLI's own file-or-stdin source forwarded as-is. A `.Trim()` slipped
+        // into the production code would still pass every other assertion here.
+        const string instruction = "  Try a different approach.  ";
 
         string message = await viewModel.SupersedeAttemptAsync(
-            environment.ProjectRoot, sprintId.ToString(), attemptId.ToString(), "Try a different approach.", true,
+            environment.ProjectRoot, sprintId.ToString(), attemptId.ToString(), instruction, true,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(1, mutations.SupersedeAttemptCalls);
         Assert.Equal(Text().Resolve(MessageKeys.AttemptSuperseded), message);
         Assert.Equal(sprintId, mutations.LastSupersedeSprintId);
         Assert.Equal(attemptId, mutations.LastSupersedeAttemptId);
-        Assert.Equal("Try a different approach.", mutations.LastSupersedeInstruction);
+        Assert.Equal(instruction, mutations.LastSupersedeInstruction);
         Assert.True(mutations.LastSupersedeConfirmed);
     }
 
@@ -808,6 +812,56 @@ public sealed class MainPageViewModelTests
 
         Assert.Equal(0, mutations.SupersedeAttemptCalls);
         Assert.Contains(DiagnosticCodes.SupersessionInstructionTooLong, message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression: the rejecting side alone (`Max + 1`) does not pin the boundary -- an
+    /// off-by-one that rejects at exactly `Max` would still pass it. An instruction of exactly the
+    /// maximum length must still reach `mutations`, matching `SprintScheduler.SupersedeAttemptAsync`'s
+    /// own `instruction.Length > MaxSupersessionInstructionLength` check.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncAcceptsAnInstructionAtExactlyTheMaximumLength()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        string instruction = new('x', SprintScheduler.MaxSupersessionInstructionLength);
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), instruction, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.SupersedeAttemptCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.AttemptSuperseded), message);
+        Assert.Equal(instruction, mutations.LastSupersedeInstruction);
+    }
+
+    /// <summary>Regression: an instruction that is both whitespace-only and over the length bound
+    /// must report the same diagnostic `forge attempt supersede` would (`_too_long`), matching
+    /// `CliApplication.ReadInstructionAsync`'s own check order (bound before emptiness) exactly --
+    /// not `_required`, which the reversed order this fixes would have reported instead.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReportsTooLongNotRequiredForAWhitespaceOnlyOverLongInstruction()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        string instruction = new(' ', SprintScheduler.MaxSupersessionInstructionLength + 1);
+
+        string message = await viewModel.SupersedeAttemptAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), Guid.NewGuid().ToString(), instruction, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.SupersedeAttemptCalls);
+        Assert.Contains(DiagnosticCodes.SupersessionInstructionTooLong, message, StringComparison.Ordinal);
+        Assert.DoesNotContain(DiagnosticCodes.SupersessionInstructionRequired, message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -939,6 +993,22 @@ public sealed class MainPageViewModelTests
 
         Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
         Assert.Contains(attemptId, prompt, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression: unlike a gate's node id, an attempt has no default -- a missing attempt
+    /// id must render an explicit placeholder, never an empty value a confirmation dialog would show
+    /// as a blank line next to its own label.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AttemptSupersedePromptRendersAPlaceholderForAMissingAttemptId()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        MainPageViewModel viewModel = new(text, environment.Application);
+
+        string prompt = viewModel.AttemptSupersedePrompt(Guid.NewGuid().ToString(), null);
+
+        Assert.Contains(text.Resolve(MessageKeys.AttemptIdMissingPlaceholder), prompt, StringComparison.Ordinal);
     }
 
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);

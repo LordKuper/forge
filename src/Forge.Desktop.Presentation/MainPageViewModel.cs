@@ -318,17 +318,24 @@ public sealed class MainPageViewModel(
             return Message(text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.WorkflowEventConflict);
         }
 
-        string trimmedInstruction = instruction ?? string.Empty;
-        if (string.IsNullOrWhiteSpace(trimmedInstruction))
-        {
-            return Message(
-                text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SupersessionInstructionRequired);
-        }
-
-        if (trimmedInstruction.Length > SprintScheduler.MaxSupersessionInstructionLength)
+        // Verbatim, never trimmed -- the CLI forwards its own instruction source (a file or stdin)
+        // exactly as read, trailing whitespace included, and this must record the same durable text
+        // for identical input.
+        string effectiveInstruction = instruction ?? string.Empty;
+        // Bound checked before emptiness, matching CliApplication.ReadInstructionAsync's own order
+        // exactly: a whitespace-only instruction that is also over the bound must report the same
+        // diagnostic on both surfaces (supersession_instruction_too_long), not
+        // supersession_instruction_required on one and _too_long on the other.
+        if (effectiveInstruction.Length > SprintScheduler.MaxSupersessionInstructionLength)
         {
             return Message(
                 text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveInstruction))
+        {
+            return Message(
+                text.Resolve(MessageKeys.AttemptSupersedeFailed), DiagnosticCodes.SupersessionInstructionRequired);
         }
 
         IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
@@ -336,7 +343,7 @@ public sealed class MainPageViewModel(
         {
             CompleteAttemptResult result = await mutations
                 .SupersedeAttemptAsync(
-                    projectRoot, resolvedSprintId, resolvedAttemptId, trimmedInstruction, confirmed,
+                    projectRoot, resolvedSprintId, resolvedAttemptId, effectiveInstruction, confirmed,
                     cancellationToken)
                 .ConfigureAwait(false);
             return Message(
@@ -352,7 +359,8 @@ public sealed class MainPageViewModel(
             CultureInfo.InvariantCulture,
             $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
                 $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
-                $"{text.Resolve(MessageKeys.AttemptIdLabel)} {attemptId}");
+                $"{text.Resolve(MessageKeys.AttemptIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(attemptId) ? text.Resolve(MessageKeys.AttemptIdMissingPlaceholder) : attemptId)}");
 
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
     /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive

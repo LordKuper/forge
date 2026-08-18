@@ -67,6 +67,48 @@ unbounded source), this is a plain length check on an already-complete
 string. A multi-line `Editor` control would render long instructions more
 readably; deferred as a minor UX polish, not a correctness gap (see below).
 
+Independent review found this method's *check order* diverged from the
+CLI's: it tested emptiness before the length bound, while
+`CliApplication.ReadInstructionAsync` checks the bound first. For an
+instruction that is both whitespace-only and over 4000 characters (a long
+blank block pasted into the `Entry`), that meant Desktop reported
+`supersession_instruction_required` while the CLI reports
+`supersession_instruction_too_long` for the identical input — contradicting
+this section's own "same three diagnostics" claim. Fixed by swapping the
+checks to match the CLI's order exactly, with a regression test pinning
+the over-long-and-blank case specifically. The same round also found
+`trimmedInstruction`'s name promised a contract the code never implemented
+(it was a null-coalesce, never a `.Trim()`) — not trimming is *correct*
+(the CLI forwards its own instruction source verbatim, and this must
+record the same durable text for identical input on both surfaces), so the
+misleading name was the actual hazard: it invited a future maintainer to
+"restore" a trim the name implied was already missing. Renamed to
+`effectiveInstruction`, and the routing test now uses an instruction with
+surrounding whitespace, asserting it reaches `mutations` untouched. A
+third finding pinned the length bound's accepting side too — only the
+rejecting `Max + 1` case had a test, so an off-by-one accepting only up to
+`Max - 1` would have shipped undetected; an exactly-`Max`-length
+instruction now has its own passing test.
+
+### A blank attempt id is refused before the confirmation dialog shows
+
+`GatePrompt` (ADR 0021) is not a precedent for handling a missing target:
+its node-id line always renders a concrete value, since a blank node id has
+a documented default (`human_approval`). `attempt.supersede` has no such
+default — a blank attempt id is always an error. Independent review found
+the first version of this slice's `AttemptSupersedePrompt` interpolated a
+possibly-`null` attempt id unconditionally, so a blank `AttemptIdEntry`
+produced a confirmation dialog reading `Attempt id:` with nothing after
+it — asking the user to confirm an irreversible action against an unnamed
+target, only failing afterward with the unhelpful `workflow_event_conflict`.
+Fixed at two points: `MainPage.SupersedeAttemptAsync` now checks
+`AttemptId is null` *before* showing the dialog at all, reporting a
+dedicated `AttemptIdRequired` message with no dialog and no mutation call
+(the fast, correct answer, since no legitimate flow can proceed without
+one); and `AttemptSupersedePrompt` itself now renders an explicit
+`AttemptIdMissingPlaceholder` for a `null`/blank id as defense in depth,
+for any caller that reaches it without going through that guard.
+
 ### An unparsable attempt id reports `WorkflowEventConflict`, matching the CLI's own choice
 
 `CliApplication.CreateAttemptSupersedeCommand` reports an unparsable
@@ -90,6 +132,22 @@ having `Alternatives` stop scanning at the first `--option` token, since a
 genuine subcommand-alternatives token can only appear before any option
 starts. Verified `workflow.review`'s own existing check is unaffected (its
 `cli` string has no `--` token at all).
+
+The same review round found this test had a second, independent gap: it
+only ever asserted `tokens[0]` (the top-level subcommand), `--options`
+(searched recursively via `HasOption`), and `<a|b>`-shaped alternatives —
+never a plain *literal* subcommand token appearing after `tokens[0]`.
+`attempt.supersede` is the first `Implemented` capability whose `cli`
+field has one (`supersede`, between `attempt` and `<attempt-id>`), so
+renaming that CLI subcommand would have left this test green as long as
+some *option* with a matching name existed anywhere in the command tree.
+Fixed by walking each literal token after `tokens[0]` and requiring it to
+be a real subcommand at its documented depth, stopping at the first
+option or `<...>`-shaped token (positional arguments and options mark the
+end of the literal-subcommand path). Verified against every currently
+`Implemented` capability's own `cli` string: each one's first token after
+`tokens[0]` already starts with `--` or `<`, so the new check is a no-op
+for all of them and only `attempt.supersede` gains real coverage from it.
 
 ## Deliberately deferred
 

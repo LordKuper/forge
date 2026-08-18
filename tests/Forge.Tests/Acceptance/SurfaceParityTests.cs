@@ -62,6 +62,22 @@ public sealed class SurfaceParityTests
                 Command command = Assert.Single(
                     root.Subcommands,
                     subcommand => subcommand.Name == tokens[0]);
+                // Every literal token after tokens[0] (neither an option nor `<...>`-shaped) must
+                // itself be a subcommand at its documented depth -- e.g. "supersede" in "attempt
+                // supersede <attempt-id> --instruction-file <path|->". Without this, renaming a CLI
+                // subcommand would leave this test green as long as some *option* with the matching
+                // name still existed anywhere in the tree (HasOption below searches recursively).
+                Command current = command;
+                foreach (string token in tokens.Skip(1))
+                {
+                    if (token.StartsWith("--", StringComparison.Ordinal) || token.StartsWith('<'))
+                    {
+                        break;
+                    }
+
+                    current = Assert.Single(current.Subcommands, subcommand => subcommand.Name == token);
+                }
+
                 foreach (string option in tokens.Where(token => token.StartsWith("--", StringComparison.Ordinal)))
                 {
                     Assert.True(

@@ -222,9 +222,18 @@ public partial class MainPage : ContentPage
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: same shape as
     /// <see cref="ResolveGateAsync"/> — the dialog's own answer is the only source of `confirmed`,
-    /// and declining short-circuits before <see cref="viewModel"/> ever resolves a Host connection.</summary>
+    /// and declining short-circuits before <see cref="viewModel"/> ever resolves a Host connection.
+    /// A blank attempt id is refused *before* the dialog shows: unlike the gate's node id, there is
+    /// no default attempt to fall back to, so showing a confirmation dialog for one would ask the
+    /// user to confirm superseding an unnamed target.</summary>
     private async Task SupersedeAttemptAsync()
     {
+        if (AttemptId is null)
+        {
+            AttemptSupersedeResultLabel.Text = text.Resolve(MessageKeys.AttemptIdRequired);
+            return;
+        }
+
         string action = text.Resolve(MessageKeys.AttemptSupersedeAction);
         bool confirmed = await DisplayAlertAsync(
                 action, viewModel.AttemptSupersedePrompt(SprintId, AttemptId), action,
