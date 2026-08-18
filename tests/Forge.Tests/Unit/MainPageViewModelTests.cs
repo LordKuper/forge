@@ -1040,5 +1040,71 @@ public sealed class MainPageViewModelTests
         Assert.Contains(text.Resolve(MessageKeys.AttemptIdMissingPlaceholder), prompt, StringComparison.Ordinal);
     }
 
+    /// <summary>ADR 0025's `control.events` capability. Proves the new logic this slice adds
+    /// around the already-tested <see cref="ControlEventsReader"/> (see
+    /// <c>ControlEventsReaderTests</c> for the cursor/dedup mechanics themselves): the view
+    /// model's own stored cursor genuinely carries forward across calls, so a second poll with
+    /// nothing new renders <see cref="MessageKeys.NoEvents"/> instead of replaying the first
+    /// poll's event. (CLI/Desktop rendering parity itself is proved separately, by
+    /// <c>SurfaceParityTests.DesktopAndCliRenderTheSameEventsForOneSnapshot</c> -- this test's own
+    /// `Contains` assertion below is not that proof.)</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PollEventsAsyncStoresTheCursorSoASecondPollDoesNotReplayTheFirstEvent()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string first = await viewModel.PollEventsAsync(environment.ProjectRoot, cancellationToken);
+        Assert.Contains(sprintId.Value.ToString("D"), first, StringComparison.Ordinal);
+
+        string second = await viewModel.PollEventsAsync(environment.ProjectRoot, cancellationToken);
+        Assert.Contains(Text().Resolve(MessageKeys.NoEvents), second, StringComparison.Ordinal);
+        Assert.DoesNotContain(sprintId.Value.ToString("D"), second, StringComparison.Ordinal);
+    }
+
+    /// <summary>A stored cursor from one project must never carry over to a different one -- its
+    /// watermarks describe sprints from the wrong project entirely. Two genuinely separate
+    /// initialized project roots, one <see cref="ForgeApplication"/> (root-agnostic by design,
+    /// matching every surface's own `--root` support), one view model instance.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PollEventsAsyncResetsTheStoredCursorWhenTheProjectRootChanges()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        string secondRoot = Path.Combine(environment.Root, "project2");
+        Directory.CreateDirectory(secondRoot);
+        Assert.True((await environment.InitializeAsync(secondRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string firstProject = await viewModel.PollEventsAsync(environment.ProjectRoot, cancellationToken);
+        Assert.Contains(sprintId.Value.ToString("D"), firstProject, StringComparison.Ordinal);
+
+        // A different, event-free project: proves nothing, on its own, about whether the switch
+        // reset the stored cursor (an uninitialized/empty project would render the same either
+        // way) -- it only sets up the next assertion, which does.
+        await viewModel.PollEventsAsync(secondRoot, cancellationToken);
+
+        // Switching back: a genuine reset re-reads the first project from scratch and sees its
+        // sprint-creation event again. Without a reset, the still-live first-project cursor would
+        // instead render NoEvents here, since it already consumed that event on the first call.
+        string backToFirstProject = await viewModel.PollEventsAsync(environment.ProjectRoot, cancellationToken);
+        Assert.Contains(sprintId.Value.ToString("D"), backToFirstProject, StringComparison.Ordinal);
+    }
+
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);
 }

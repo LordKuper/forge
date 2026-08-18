@@ -10,6 +10,14 @@ public partial class MainPage : ContentPage
     private readonly SurfaceText text;
     private readonly MainPageViewModel viewModel;
     private bool busy;
+    // Unlike GateResultLabel/AttemptSupersedeResultLabel (a one-shot mutation's own outcome, with
+    // no companion state), EventsLabel is a live view of the view model's own stored polling
+    // cursor -- clearing it on every routine refresh would discard a still-valid poll's rendered
+    // page for no reason. Tracked independently here (the view model's cursor state is not
+    // exposed) so RefreshAsync can clear it only when the condition that actually invalidates it --
+    // a project-root switch, matching MainPageViewModel.PollEventsAsync's own reset condition --
+    // is true, not on every refresh regardless.
+    private string? lastPolledEventsProjectRoot;
 
     public MainPage(
         SurfaceText text,
@@ -41,6 +49,7 @@ public partial class MainPage : ContentPage
         GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
         GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         AttemptSupersedeButton.Text = text.Resolve(MessageKeys.AttemptSupersedeAction);
+        EventsPollButton.Text = text.Resolve(MessageKeys.EventsPollAction);
         ConfigurationSetButton.Text = text.Resolve(MessageKeys.ConfigurationSetAction);
         // Actions stay disabled until the first refresh reports the durable state.
         InitializeButton.IsEnabled = false;
@@ -73,7 +82,13 @@ public partial class MainPage : ContentPage
 
     public async Task RefreshAsync()
     {
-        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
+        // Captured once, before the request: ProjectRootEntry can be edited while this await is in
+        // flight, and reading the live property again afterward (as this PR originally did for the
+        // EventsLabel guard below) would let the rendered snapshot describe one root while the
+        // events-reset decision judges a different one -- the same TOCTOU shape round 2 review
+        // fixed in MainPageViewModel.PollEventsAsync, reintroduced here by this PR's own diff.
+        string? requestedRoot = ProjectRoot;
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(requestedRoot, SprintId, CancellationToken.None)
             .ConfigureAwait(true);
         StatusLabel.Text = snapshot.StatusText;
         ProjectRootLabel.Text = snapshot.ProjectRootText;
@@ -95,6 +110,14 @@ public partial class MainPage : ContentPage
         GateResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
         AttemptSupersedeResultLabel.Text = string.Empty;
+        // Same reasoning again, for the last poll's rendered page -- but only reset it on the
+        // condition that actually invalidates it (a project-root switch), not on every refresh:
+        // see the lastPolledEventsProjectRoot field's own comment.
+        if (!string.Equals(requestedRoot, lastPolledEventsProjectRoot, StringComparison.Ordinal))
+        {
+            EventsLabel.Text = string.Empty;
+            lastPolledEventsProjectRoot = requestedRoot;
+        }
     }
 
     protected override async void OnAppearing()
@@ -123,6 +146,9 @@ public partial class MainPage : ContentPage
 
     private async void OnAttemptSupersedeClicked(object? sender, EventArgs e) =>
         await RunAsync(SupersedeAttemptAsync).ConfigureAwait(true);
+
+    private async void OnEventsPollClicked(object? sender, EventArgs e) =>
+        await RunAsync(PollEventsAsync).ConfigureAwait(true);
 
     /// <summary>Serializes surface actions so a second click cannot re-enter a mutation.</summary>
     private async Task RunAsync(Func<Task> action)
@@ -260,5 +286,22 @@ public partial class MainPage : ContentPage
             .ConfigureAwait(true);
         await RefreshAsync().ConfigureAwait(true);
         AttemptSupersedeResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0005's read-only `control.events` capability. Unlike every mutating action on
+    /// this page, a poll needs no confirmation dialog (nothing irreversible happens) and does not
+    /// call <see cref="RefreshAsync"/> afterward -- the events page is not part of
+    /// <see cref="MainPageSnapshot"/>, so nothing else on screen needs to change for it. Round 2
+    /// review found <c>ProjectRoot</c> read twice across the `await` below -- editing the entry
+    /// mid-poll (the `busy` guard blocks re-clicks, not entry edits) could store the request's own
+    /// root in <see cref="lastPolledEventsProjectRoot"/> while the label and the view model's own
+    /// cursor still reflect whatever root the request actually read against. Captured into a local
+    /// once, before the request, so both assignments always agree with what was actually polled.</summary>
+    private async Task PollEventsAsync()
+    {
+        string? requestedRoot = ProjectRoot;
+        EventsLabel.Text = await viewModel.PollEventsAsync(requestedRoot, CancellationToken.None)
+            .ConfigureAwait(true);
+        lastPolledEventsProjectRoot = requestedRoot;
     }
 }

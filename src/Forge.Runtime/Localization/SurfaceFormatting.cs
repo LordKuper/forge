@@ -116,6 +116,30 @@ public static class SurfaceFormatting
         return lines;
     }
 
+    /// <summary>ADR 0005's bounded event-log projection as one ordered line list, shared by `forge
+    /// events` and the Desktop control-events view so the two can never drift.</summary>
+    public static IReadOnlyList<string> EventLines(SurfaceText text, ControlEventsPage page)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(page);
+        List<string> lines = [text.Resolve(MessageKeys.EventsTitle)];
+        if (page.Events.Count == 0)
+        {
+            lines.Add(text.Resolve(MessageKeys.NoEvents));
+            return lines;
+        }
+
+        foreach (ControlEventRecord record in page.Events)
+        {
+            lines.Add(string.Create(
+                CultureInfo.InvariantCulture,
+                $"  {record.SprintId} {record.Event.Type} {Machine(record.Event.Aggregate.Kind)}:" +
+                    $"{record.Event.Aggregate.Id} {record.Event.MessageKey}"));
+        }
+
+        return lines;
+    }
+
     private static void AppendNodeTree(SurfaceText text, List<string> lines, SprintDetails details)
     {
         foreach (EntityStatus node in details.Nodes)

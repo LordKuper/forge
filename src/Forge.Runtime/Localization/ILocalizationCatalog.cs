@@ -143,4 +143,5 @@ public static class MessageKeys
     public const string NotificationFailedTitle = "NotificationFailedTitle";
     public const string NotificationCompletedTitle = "NotificationCompletedTitle";
     public const string NotificationSprintLabel = "NotificationSprintLabel";
+    public const string EventsPollAction = "EventsPollAction";
 }

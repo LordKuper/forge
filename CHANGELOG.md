@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.46.0
+
+### Added
+
+- The Desktop app can now poll for recent workflow events ("Poll events"),
+  matching `forge events`.
+
 ## v0.45.0
 
 ### Added

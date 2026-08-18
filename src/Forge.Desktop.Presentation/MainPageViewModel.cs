@@ -40,6 +40,12 @@ public sealed class MainPageViewModel(
     // default.
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations =
         resolveMutations ?? ((_, _) => Task.FromResult<IForgeMutations>(application));
+    // ADR 0005: cursor-driven, not a subscriber registry -- this page instance is the only place a
+    // Desktop poll's progress lives, matching the CLI's own local `cursor` variable inside its
+    // `--follow` loop. Reset on a project switch, since a cursor's watermarks are meaningless
+    // against a different project's sprints.
+    private string? eventsCursor;
+    private string? eventsCursorProjectRoot;
 
     /// <summary>Restores the view from durable application state, never from serialized UI objects.
     /// <paramref name="sprintId"/> selects the sprint to expand; <see langword="null"/> or an empty
@@ -361,6 +367,30 @@ public sealed class MainPageViewModel(
                 $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
                 $"{text.Resolve(MessageKeys.AttemptIdLabel)} " +
                 $"{(string.IsNullOrWhiteSpace(attemptId) ? text.Resolve(MessageKeys.AttemptIdMissingPlaceholder) : attemptId)}");
+
+    /// <summary>ADR 0005's `control.events` read-only capability, sharing <see cref="ForgeApplication.ReadControlEventsAsync"/>
+    /// with `forge events` directly -- a query, so this needs no confirmation and no Host round-trip
+    /// through <see cref="resolveMutations"/>. Each call advances the stored cursor and renders the
+    /// page via <see cref="SurfaceFormatting.EventLines"/>, the same lines `forge events` prints,
+    /// so the two can never drift. A rejected cursor (<see cref="DiagnosticCodes.ControlCursorStale"/>)
+    /// still stores the fresh anchor <see cref="ControlEventsReader"/> returns for it -- the next poll
+    /// naturally starts over rather than needing its own recovery path, since redisplaying an event
+    /// already shown has no side effect here (unlike a delivered notification, nothing to dedup
+    /// against).</summary>
+    public async Task<string> PollEventsAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        if (!string.Equals(projectRoot, eventsCursorProjectRoot, StringComparison.Ordinal))
+        {
+            eventsCursor = null;
+            eventsCursorProjectRoot = projectRoot;
+        }
+
+        ControlEventsPage page = await application
+            .ReadControlEventsAsync(projectRoot, eventsCursor, cancellationToken)
+            .ConfigureAwait(false);
+        eventsCursor = page.Cursor;
+        return Message(Render(null, SurfaceFormatting.EventLines(text, page)), page.DiagnosticCode);
+    }
 
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
     /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive

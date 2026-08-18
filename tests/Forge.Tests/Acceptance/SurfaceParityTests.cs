@@ -42,6 +42,7 @@ public sealed class SurfaceParityTests
             "AttemptSupersedeButton",
             "AttemptSupersedeResultLabel",
         ],
+        [CapabilityIds.ControlEvents] = ["EventsPollButton", "EventsLabel"],
     };
 
     [Fact]
@@ -215,31 +216,76 @@ public sealed class SurfaceParityTests
             guardIndex < dialogIndex, "The blank-instruction guard must run before the confirmation dialog.");
     }
 
-    private static string SupersedeAttemptMethodBody()
+    private static string SupersedeAttemptMethodBody() => MethodBody("private async Task SupersedeAttemptAsync()");
+
+    /// <summary>Round 1 review of PR #65 found <c>RefreshAsync</c> cleared <c>EventsLabel</c>
+    /// unconditionally on every refresh -- including a routine `Refresh` click or the implicit
+    /// refresh after an unrelated action -- discarding a still-valid poll's rendered page for no
+    /// reason. Unlike <c>GateResultLabel</c>/<c>AttemptSupersedeResultLabel</c> (a one-shot
+    /// mutation's own outcome, safe to always clear), `EventsLabel` is a live view of the view
+    /// model's own stored cursor and must only reset on the same condition that invalidates that
+    /// cursor: a project-root switch. No MAUI control can be instantiated headlessly, so this pins
+    /// the guard directly in the code-behind text, the same way the supersede guards above do.
+    /// Round 2 review found the original version of this test only checked text ORDER (guard
+    /// before clear), which a mutation moving the clear back outside the guard's own `{ }` block --
+    /// reintroducing round 1's exact defect -- would not fail: the guard text would still appear
+    /// earlier in the method than the now-unconditional clear. This checks CONTAINMENT instead: the
+    /// clear must be textually inside the guard `if` statement's own block.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void RefreshAsyncOnlyClearsEventsLabelWhenTheProjectRootChanged()
+    {
+        string method = MethodBody("public async Task RefreshAsync()");
+
+        int guardIndex = method.IndexOf(
+            "!string.Equals(requestedRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "RefreshAsync no longer guards EventsLabel's reset by project root.");
+        int ifIndex = method.LastIndexOf("if (", guardIndex, StringComparison.Ordinal);
+        Assert.True(ifIndex >= 0, "The project-root guard is no longer an `if` condition.");
+        string guardBlock = BracedBlock(method, ifIndex);
+
+        Assert.Contains("EventsLabel.Text = string.Empty;", guardBlock, StringComparison.Ordinal);
+        // Round 3 review found the block-containment check above alone still let a mutation
+        // deleting this assignment pass: without it, lastPolledEventsProjectRoot never advances
+        // past its initial null, so the guard is true on every refresh against any typed project
+        // root -- round 1's exact defect, verified empirically to leave the whole suite green.
+        Assert.Contains(
+            "lastPolledEventsProjectRoot = requestedRoot;", guardBlock, StringComparison.Ordinal);
+    }
+
+    private static string MethodBody(string signature)
     {
         string codeBehind = File.ReadAllText(Path.Combine(
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-        int start = codeBehind.IndexOf("private async Task SupersedeAttemptAsync()", StringComparison.Ordinal);
-        Assert.True(start >= 0, "MainPage.xaml.cs no longer declares SupersedeAttemptAsync().");
-        int bodyStart = codeBehind.IndexOf('{', start);
+        int start = codeBehind.IndexOf(signature, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"MainPage.xaml.cs no longer declares '{signature}'.");
+        return BracedBlock(codeBehind, start);
+    }
+
+    /// <summary>Returns the `{ ... }` block starting at the first `{` at or after
+    /// <paramref name="searchStart"/>, matched by brace depth rather than by indentation or a fixed
+    /// line count, so it is correct regardless of how the block is formatted.</summary>
+    private static string BracedBlock(string source, int searchStart)
+    {
+        int bodyStart = source.IndexOf('{', searchStart);
         int depth = 0;
-        for (int index = bodyStart; index < codeBehind.Length; index++)
+        for (int index = bodyStart; index < source.Length; index++)
         {
-            if (codeBehind[index] == '{')
+            if (source[index] == '{')
             {
                 depth++;
             }
-            else if (codeBehind[index] == '}')
+            else if (source[index] == '}')
             {
                 depth--;
                 if (depth == 0)
                 {
-                    return codeBehind[bodyStart..(index + 1)];
+                    return source[bodyStart..(index + 1)];
                 }
             }
         }
 
-        throw new InvalidOperationException("SupersedeAttemptAsync's closing brace was not found.");
+        throw new InvalidOperationException("Block's closing brace was not found.");
     }
 
     [Fact]
@@ -326,6 +372,45 @@ public sealed class SurfaceParityTests
 
     private static string SprintSection(string cliOutput, string title) =>
         cliOutput[cliOutput.IndexOf(title, StringComparison.Ordinal)..].TrimEnd();
+
+    /// <summary>Round 1 review of PR #65 found `SurfaceFormatting.EventLines`'s extraction had no
+    /// test proving the CLI and Desktop actually render identically -- sharing the helper is not
+    /// itself the no-drift guarantee, matching the caveat
+    /// <see cref="DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot"/> already states for
+    /// its own capability. Same shape here: drive one real event, render through both surfaces with
+    /// diagnostics on a separate channel (so a diagnostic present on one side never folds into the
+    /// text being compared), and diff the text directly.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameEventsForOneSnapshot()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["events", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, environment.Application)
+            .PollEventsAsync(environment.ProjectRoot, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture, so pin that the compared text
+        // really carries this sprint's own event -- an empty page on both sides would pass too.
+        Assert.Contains(
+            sprintId.Value.ToString("D", CultureInfo.InvariantCulture), desktop, StringComparison.Ordinal);
+    }
 
     [Fact]
     [Trait("Category", "Acceptance")]
