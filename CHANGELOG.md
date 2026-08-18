@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.40.0
+
+### Added
+
+- `forge gate approve`/`forge gate reject` resolves a gate node awaiting a
+  human decision.
+- `forge attempt supersede <attempt-id> --instruction-file <path|->` cancels
+  a non-terminal attempt and creates a linked replacement carrying a
+  bounded instruction, reading the instruction from a file or standard
+  input. Both commands require explicit confirmation (`--yes`).
+
 ## v0.39.0
 
 ### Added

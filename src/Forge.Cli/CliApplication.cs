@@ -18,12 +18,14 @@ public static class CliApplication
         TextWriter? error = null,
         Func<CancellationToken, ValueTask<InstallationResult>>? install = null,
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null,
-        Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null)
+        Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null,
+        TextReader? input = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(application);
         TextWriter diagnostics = error ?? output;
+        TextReader effectiveInput = input ?? Console.In;
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable. `resolveMutations` receives the SAME `--project-root` value the invoking
         // command resolved (never a value fixed before argument parsing), so a Host connection is
@@ -45,6 +47,8 @@ public static class CliApplication
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
+        root.Subcommands.Add(CreateGateCommand(text, output, diagnostics, effectiveResolver));
+        root.Subcommands.Add(CreateAttemptCommand(text, output, diagnostics, effectiveResolver, effectiveInput));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -390,6 +394,212 @@ public static class CliApplication
             return ExitCodes.Ok;
         });
         return command;
+    }
+
+    /// <summary>ADR 0005/0018's human-only `workflow.review` capability. ADR 0019 records this
+    /// honestly: there is no technical caller-identity control here, only mandatory, non-bypassable
+    /// confirmation — "human-only" is a project-level policy for this slice, not an enforced
+    /// boundary.</summary>
+    private static Command CreateGateCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+    {
+        Command command = new("gate", text.Resolve(MessageKeys.GateDescription));
+        command.Subcommands.Add(CreateGateResolveCommand(
+            text, output, diagnostics, resolveMutations, "approve", MessageKeys.GateApproveDescription, approved: true));
+        command.Subcommands.Add(CreateGateResolveCommand(
+            text, output, diagnostics, resolveMutations, "reject", MessageKeys.GateRejectDescription, approved: false));
+        return command;
+    }
+
+    private static Command CreateGateResolveCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        string name,
+        string descriptionKey,
+        bool approved)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<string> node = new("--node")
+        {
+            Description = "Gate node id. Defaults to the canonical human_approval node.",
+        };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the decision." };
+        Command command = new(name, text.Resolve(descriptionKey));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(node);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            NodeActionResult result = await mutations
+                .ResolveGateAsync(
+                    root, sprintId, nodeId, approved, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.GateResolved));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
+    /// <see cref="CreateGateCommand"/>'s remark — the same policy-only, no-technical-control posture
+    /// applies here.</summary>
+    private static Command CreateAttemptCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        TextReader input)
+    {
+        Command command = new("attempt", text.Resolve(MessageKeys.AttemptDescription));
+        command.Subcommands.Add(CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input));
+        return command;
+    }
+
+    private static Command CreateAttemptSupersedeCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        TextReader input)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<string> instructionFile = new("--instruction-file")
+        {
+            Description = "Path to the replacement instruction, or '-' to read it from standard input.",
+            Required = true,
+        };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the supersession." };
+        Argument<string> id = new("attempt-id") { Description = "Attempt id." };
+        Command command = new("supersede", text.Resolve(MessageKeys.AttemptSupersedeDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(instructionFile);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid attemptId))
+            {
+                return Report(diagnostics, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            InstructionReadResult read = await ReadInstructionAsync(
+                    parseResult.GetValue(instructionFile)!, input, cancellationToken)
+                .ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return Report(diagnostics, read.DiagnosticCode);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            CompleteAttemptResult result = await mutations
+                .SupersedeAttemptAsync(
+                    root, sprintId, attemptId, read.Instruction!, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.AttemptSuperseded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private sealed record InstructionReadResult(string? Instruction, string DiagnosticCode)
+    {
+        public static InstructionReadResult Success(string instruction) => new(instruction, DiagnosticCodes.None);
+
+        public static InstructionReadResult Failure(string diagnosticCode) => new(null, diagnosticCode);
+    }
+
+    /// <summary>Reads the replacement instruction from standard input (<c>-</c>) or a file, bounded
+    /// to <see cref="SprintScheduler.MaxSupersessionInstructionLength"/> characters read either way
+    /// — never buffers an unbounded stream just to reject it afterward. Distinguishes three failure
+    /// modes <c>SupersedeAttemptAsync</c> itself does not need to (it only ever sees a string): the
+    /// source could not be read at all (missing file, permission denied, an invalid path),
+    /// the content that *was* read is over the bound, or it is empty/whitespace-only — a
+    /// human-initiated supersession with nothing actually said defeats its own purpose.</summary>
+    private static async Task<InstructionReadResult> ReadInstructionAsync(
+        string path, TextReader input, CancellationToken cancellationToken)
+    {
+        string content;
+        try
+        {
+            if (path == "-")
+            {
+                content = await ReadBoundedAsync(input, cancellationToken).ConfigureAwait(false);
+            }
+            else
+            {
+                await using FileStream stream = File.OpenRead(path);
+                using StreamReader reader = new(stream);
+                content = await ReadBoundedAsync(reader, cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException
+            or NotSupportedException or System.Security.SecurityException)
+        {
+            return InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionUnreadable);
+        }
+
+        if (content.Length > SprintScheduler.MaxSupersessionInstructionLength)
+        {
+            return InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
+        return string.IsNullOrWhiteSpace(content)
+            ? InstructionReadResult.Failure(DiagnosticCodes.SupersessionInstructionRequired)
+            : InstructionReadResult.Success(content);
+    }
+
+    /// <summary>Reads at most <see cref="SprintScheduler.MaxSupersessionInstructionLength"/> + 1
+    /// characters — enough to detect an over-length source without reading further, whether that
+    /// source is a bounded file or an unbounded pipe on standard input.</summary>
+    private static async Task<string> ReadBoundedAsync(TextReader reader, CancellationToken cancellationToken)
+    {
+        char[] buffer = new char[SprintScheduler.MaxSupersessionInstructionLength + 1];
+        int totalRead = 0;
+        while (totalRead < buffer.Length)
+        {
+            int read = await reader
+                .ReadAsync(buffer.AsMemory(totalRead, buffer.Length - totalRead), cancellationToken)
+                .ConfigureAwait(false);
+            if (read == 0)
+            {
+                break;
+            }
+
+            totalRead += read;
+        }
+
+        return new string(buffer, 0, totalRead);
     }
 
     private static Command CreateNextCommand(

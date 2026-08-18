@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Providers;
 using YamlDotNet.Core;
 
@@ -67,6 +68,30 @@ public interface IForgeMutations
         string? projectRoot,
         bool confirmed,
         CancellationToken cancellationToken);
+
+    /// <summary>ADR 0005's human-only `workflow.review` capability: approves or rejects a
+    /// `awaiting_human` gate node. <paramref name="confirmed"/> must be <see langword="true"/> —
+    /// unlike <see cref="InstallIntegrationAsync"/>/<see cref="RemoveIntegrationAsync"/>, this never
+    /// falls back to a config-driven bypass, since <c>interaction.confirm_destructive</c> is a value
+    /// an agent could itself set through <c>forge config</c>.</summary>
+    Task<NodeActionResult> ResolveGateAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
+    /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: cancels a non-terminal
+    /// attempt and creates a linked replacement. <paramref name="confirmed"/> must be
+    /// <see langword="true"/> — the same no-config-bypass rule as <see cref="ResolveGateAsync"/>.</summary>
+    Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        string instruction,
+        bool confirmed,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -85,7 +110,9 @@ public sealed class ForgeApplication(
     ProviderCatalog providerCatalog,
     ControlEventsReader eventsReader,
     IProviderEnablementSource providerEnablement,
-    IntegrationInstallationService integrationInstallation) : IForgeMutations
+    IntegrationInstallationService integrationInstallation,
+    ISprintStore sprintStore,
+    SprintScheduler scheduler) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -479,6 +506,95 @@ public sealed class ForgeApplication(
         string agentFacing = project.Values
             .FirstOrDefault(value => value.Key == "artifacts.language.agent_facing")?.Value.GetString() ?? "en";
         return (enabled, userFacing, agentFacing);
+    }
+
+    /// <summary>ADR 0005's human-only `workflow.review` capability. The caller supplies only
+    /// <paramref name="sprintId"/>/<paramref name="nodeId"/>/<paramref name="approved"/> — the
+    /// expected node version and idempotency key are derived here from a fresh state read, exactly
+    /// like <c>SurfaceParityTests</c> already does in-process, so no snapshot projection needs to
+    /// expose a raw entity version for a caller to round-trip back in.</summary>
+    public async Task<NodeActionResult> ResolveGateAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool approved,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        if (!confirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintWorkflowState? state =
+            await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        Guid key = SprintScheduler.ResolveHumanGateKey(id, node);
+        return await scheduler
+            .ResolveHumanGateAsync(status.Root, id, nodeId, approved, node.Version, key, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. Same server-side
+    /// version/idempotency-key derivation as <see cref="ResolveGateAsync"/>.</summary>
+    public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        string instruction,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(instruction);
+        if (!confirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        AttemptId attempt = new(attemptId);
+        SprintWorkflowState? state =
+            await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Attempts.TryGetValue(attemptId.ToString("D"), out AttemptSnapshot? attemptSnapshot))
+        {
+            return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+        }
+
+        Guid key = SprintScheduler.SupersedeAttemptKey(id, attemptSnapshot);
+        return await scheduler
+            .SupersedeAttemptAsync(
+                status.Root, id, attempt, attemptSnapshot.Version, key, confirmed, instruction, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static bool IsRecoverable(Exception error) =>

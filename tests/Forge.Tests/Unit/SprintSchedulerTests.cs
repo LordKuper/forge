@@ -306,6 +306,264 @@ public sealed class SprintSchedulerTests
         Assert.Equal(SprintState.Blocked, sprint!.State);
     }
 
+    /// <summary>Regression: a caller that cannot remember the *original* (version, key) pair a
+    /// prior, already-successful call used -- e.g. a stateless CLI invocation that re-derives both
+    /// fresh from whatever the node's current state happens to be -- must still resolve cleanly
+    /// instead of hitting `node_transition_invalid`. The original resumability design recognized a
+    /// retry only by recomputing the exact same deterministic hash the first call used, which a
+    /// caller supplying a *different*, freshly-observed version can never reproduce once the node
+    /// has moved past `awaiting_human`.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ApprovingAnAlreadyApprovedGateWithAFreshlyDerivedVersionAndKeyStillSucceeds()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult first = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(NodeState.Succeeded, first.Node!.State);
+
+        // A later, independent caller with no memory of the original call: it reads the node's
+        // *current* state and derives its own (version, key) pair from that, the same way
+        // ForgeApplication.ResolveGateAsync does.
+        NodeSnapshot current = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult resumed = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, current.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, current), cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        Assert.Equal(NodeState.Succeeded, resumed.Node!.State);
+    }
+
+    /// <summary>Regression companion: the fix above must not let a caller silently reinterpret an
+    /// already-decided gate as the opposite decision. A freshly-derived reject call against a gate
+    /// that was already approved must be refused, not resumed.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RejectingAnAlreadyApprovedGateWithAFreshlyDerivedVersionAndKeyIsRefused()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult first = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        Assert.True(first.Succeeded);
+
+        NodeSnapshot current = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult flipped = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", false, current.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, current), cancellationToken);
+
+        Assert.False(flipped.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeTransitionInvalid, flipped.DiagnosticCode);
+        SprintWorkflowState finalState =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, finalState.Nodes["gate"].State);
+    }
+
+    /// <summary>Regression: linkage-based resumability must be scoped to
+    /// <see cref="NodeKind.HumanGate"/> nodes. A prior fix recognized a resumed gate call by finding
+    /// *any* attempt linked to the target node id, which also matches an ordinary
+    /// <see cref="NodeKind.Work"/> node's own in-progress attempt (it is stamped with the same
+    /// `NodeIdArgument`) -- letting `ResolveHumanGateAsync` hijack a live, unrelated Work node's
+    /// attempt and fraudulently walk it to `succeeded`.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolvingAGateAgainstAWorkNodeIsRefusedEvenWhileThatNodeHasALiveAttempt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["a"];
+
+        NodeActionResult resolved = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "a", true, node.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, node), cancellationToken);
+
+        Assert.False(resolved.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeKindMismatch, resolved.DiagnosticCode);
+        NodeSnapshot untouched = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["a"];
+        Assert.Equal(NodeState.Running, untouched.State);
+        Assert.Empty(await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    /// <summary>Regression: a rejected gate can be manually re-armed to `awaiting_human` via
+    /// <see cref="SprintScheduler.RetryNodeAsync"/> for a second decision. Linkage-based resumability
+    /// must not pick up the first, terminal (`failed`) attempt for this second round -- it must mint
+    /// a fresh attempt, so the second decision is a real, separately recorded outcome rather than a
+    /// no-op replay of the first rejection.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ApprovingARetriedGateAfterAnEarlierRejectionRecordsAFreshApproval()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult rejected = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", false, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        Assert.True(rejected.Succeeded);
+        Assert.Equal(NodeState.Failed, rejected.Node!.State);
+
+        NodeSnapshot failed = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult retried = await scheduler.RetryNodeAsync(
+            environment.ProjectRoot, sprintId, "gate", failed.Version,
+            SprintScheduler.RetryNodeKey(sprintId, failed), cancellationToken);
+        Assert.True(retried.Succeeded);
+        Assert.Equal(NodeState.Ready, retried.Node!.State);
+
+        // Retrying the node alone does not resume a `blocked` sprint -- an operator must explicitly
+        // resume and re-run it (mirroring `ConfirmationGateTests`'s own recovery sequence), which is
+        // also the only moment a human gate re-promotes itself from `ready` to `awaiting_human`.
+        SprintSnapshot blocked = (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult resumed = await orchestrator.ResumeSprintAsync(
+            new(environment.ProjectRoot, sprintId, blocked.Version, SprintOrchestrator.ResumeSprintKey(blocked)),
+            cancellationToken);
+        Assert.True(resumed.Succeeded);
+        SprintTransitionResult running = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, resumed.Sprint!.Version, SprintOrchestrator.RunSprintKey(resumed.Sprint)),
+            cancellationToken);
+        Assert.True(running.Succeeded);
+        NodeSnapshot reArmed = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        Assert.Equal(NodeState.AwaitingHuman, reArmed.State);
+
+        NodeActionResult approved = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, reArmed.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, reArmed), cancellationToken);
+
+        Assert.True(approved.Succeeded, $"diag={approved.DiagnosticCode}");
+        Assert.Equal(NodeState.Succeeded, approved.Node!.State);
+        // Two distinct decisions on the same node id, each with its own recorded result.
+        Assert.Equal(2, (await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken)).Count);
+    }
+
+    /// <summary>Regression: a `HumanGate` node's `running` state is ambiguous between this method's
+    /// own approve walk and `AdvanceGraphAsync`'s two-append promotion (`ready -> running ->
+    /// awaiting_human`) caught mid-sequence -- the latter never creates an attempt at all. Linkage
+    /// picking up a stale, terminal attempt from an *earlier* round in that window, and
+    /// `DriveAttemptAsync`'s off-path no-op being mistaken for "resumed successfully", must never
+    /// durably settle the node on a decision nothing actually recorded.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ApprovingAGateStuckAtRunningFromAnInterruptedPromotionIsRefusedNotForceSucceeded()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult rejected = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", false, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        Assert.True(rejected.Succeeded);
+
+        NodeSnapshot failed = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        NodeActionResult retried = await scheduler.RetryNodeAsync(
+            environment.ProjectRoot, sprintId, "gate", failed.Version,
+            SprintScheduler.RetryNodeKey(sprintId, failed), cancellationToken);
+        Assert.True(retried.Succeeded);
+        Assert.Equal(NodeState.Ready, retried.Node!.State);
+
+        // Simulates `AdvanceGraphAsync`'s own gate-promotion append landing (`ready -> running`)
+        // without its second append (`running -> awaiting_human`) ever following -- nothing here
+        // goes through `ResolveHumanGateAsync`, so no attempt exists for this round at all.
+        AppendOutcome interrupted = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Node, "gate", "NodeChanged", "workflow.node_running",
+            WorkflowStateNames.ToSnakeCase(NodeState.Running), retried.Node.Version, Guid.NewGuid(), cancellationToken);
+        Assert.True(interrupted.Succeeded);
+        NodeSnapshot stuck = interrupted.State!.Nodes["gate"];
+        Assert.Equal(NodeState.Running, stuck.State);
+
+        NodeActionResult approved = await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", true, stuck.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, stuck), cancellationToken);
+
+        Assert.False(approved.Succeeded);
+        NodeSnapshot untouched = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        Assert.Equal(NodeState.Running, untouched.State);
+        Assert.All(
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken),
+            result => Assert.NotEqual(NodeOutcome.Succeeded, result.State));
+    }
+
+    /// <summary>Regression: a human gate has no executor, so superseding its attempt (only ever
+    /// reachable if it was interrupted mid-walk) must be refused rather than minting a `created`
+    /// replacement attempt nothing can ever start, and re-arming the node through a state sequence
+    /// shaped for a `Work` node's own machine.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedingAnAttemptLinkedToAHumanGateNodeIsRefused()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+
+        // A synthetic in-flight attempt linked to the gate node -- however this could come to exist,
+        // superseding it must never be allowed.
+        AttemptId attemptId = AttemptId.New();
+        AppendOutcome created = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"),
+            "AttemptChanged", "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(AttemptState.Created), 0,
+            Guid.NewGuid(), cancellationToken,
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.NodeIdArgument] = "gate" });
+        Assert.True(created.Succeeded);
+        AttemptSnapshot attempt = created.State!.Attempts[attemptId.Value.ToString("D")];
+
+        CompleteAttemptResult superseded = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attemptId, attempt.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, attempt), true, "Replace it.", cancellationToken);
+
+        Assert.False(superseded.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeKindMismatch, superseded.DiagnosticCode);
+        AttemptSnapshot untouched =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Attempts[
+                attemptId.Value.ToString("D")];
+        Assert.Equal(AttemptState.Created, untouched.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RecordingActivityOnARunningAttemptBumpsItsLastActivityTimeWithoutChangingItsState()
