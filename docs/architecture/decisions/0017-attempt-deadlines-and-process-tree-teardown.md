@@ -42,16 +42,19 @@ but nothing reads them yet — this item is what would read them.
 
 New `Forge.Application.AttemptSupervisor` (`AttemptSupervision.cs`): given
 an absolute session `TimeSpan`, a sliding idle `TimeSpan`, and the caller's
-own `CancellationToken`, it exposes a linked `Token` to hand to supervised
-work in the caller's place, and an `OnActivityAsync` callback to pass as
-that work's own activity callback (e.g. `ILlmProvider.RunAsync`'s
-`onActivity`, added by P11.32-P11.40). Two `System.Threading.Timer`s back
-the two deadlines: the session timer is armed once and never reset; the
-idle timer is rearmed by every `OnActivityAsync` call — "any bounded stream
-activity resets the idle deadline; model wording does not" holds because
-`OnActivityAsync` never inspects the activity's kind or any event text, so
-it cannot distinguish (and does not try to distinguish) "real" activity
-from prose — every parsed event counts, exactly matching what
+own `CancellationToken` (both deadlines validated as strictly positive
+before any disposable resource is created, so a rejected constructor call
+leaks nothing), it exposes a linked `Token` to hand to supervised work in
+the caller's place, and an `OnActivityAsync` callback to pass as that
+work's own activity callback (e.g. `ILlmProvider.RunAsync`'s `onActivity`,
+added by P11.32-P11.40). Two `System.Threading.Timer`s back the two
+deadlines: the session timer is armed once and never reset; the idle timer
+re-derives the true remaining time from an activity timestamp on every
+tick (see below) — "any bounded stream activity resets the idle deadline;
+model wording does not" holds because `OnActivityAsync` never inspects the
+activity's kind or any event text, so it cannot distinguish (and does not
+try to distinguish) "real" activity from prose — every parsed event
+counts, exactly matching what
 `ProviderExecution`'s own `onActivity` already invokes on.
 
 Whichever fires first — session timeout, idle timeout, or the caller's own
@@ -59,12 +62,32 @@ token — is latched as the attempt's `AttemptTerminationReason` (`None`
 until then) and cancels `Token`. `SuperviseAsync<T>` is the ergonomic entry
 point: it runs the supplied work with `Token`/`OnActivityAsync`, and
 translates a resulting `OperationCanceledException` into a classified
-`AttemptSupervisionResult<T>` only when this supervisor caused the
-cancellation itself (`Reason != None`) — the same self-cancellation pattern
-`ProviderExecution.RunAsync` already uses for its own bound violations
-(ADR 0016). Any other exception the work raises (an ordinary thrown error,
-unrelated to either deadline) propagates unchanged, since this class only
-ever intercepts cancellation it caused.
+`AttemptSupervisionResult<T>` only when both this supervisor's `Reason` is
+latched *and* the exception's own `CancellationToken` equals `Token` — not
+merely `Reason != None`, since work that independently throws for an
+unrelated token could otherwise be misattributed purely because of a
+timing coincidence with an already-latched reason. Any exception that
+fails that check (an ordinary thrown error, or a cancellation for an
+unrelated token) propagates unchanged.
+
+The idle timer is self-rescheduling rather than reset-via-`Change` from
+`OnActivityAsync`: a `Timer.Change` call can never recall a callback the
+runtime has already dispatched, so resetting the due time on every
+activity would still leave a window where activity arriving right as the
+timer fires produces a spurious idle timeout. `OnActivityAsync` instead
+only records an atomic last-activity timestamp
+(`Stopwatch.GetTimestamp()`); the idle timer's own callback re-derives the
+actual remaining time from that timestamp on every tick and either fires
+or reschedules for the true remaining span — closing the race rather than
+merely narrowing it. Every mutation of the latched reason and every
+`CancellationTokenSource.Cancel()`/`Dispose()` call runs under one lock
+held for the whole critical section (not released and re-acquired), so a
+timer callback can never run concurrently with `Dispose()` tearing down
+the same `CancellationTokenSource` — which that type documents as
+unsupported. `Cancel()` is wrapped in a broad catch, not just
+`ObjectDisposedException`: `Token` is public, so an arbitrary third-party
+registration on it (or on a further-linked token) throwing must never
+crash a timer callback thread.
 
 ### Two new diagnostic codes, no new persistence plumbing
 
@@ -86,12 +109,24 @@ lifecycle, not as a node diagnostic).
 ### Process-tree teardown is verified with a genuine grandchild, cross-platform
 
 New `ProcessRunnerTests` cases spawn a child that itself spawns a
-grandchild (a nested `Start-Process` on Windows, a backgrounded subshell on
-POSIX), each writing its own process id to a marker file so the test can
-positively confirm liveness and death via `Process.GetProcessById` rather
-than inferring it from a file lock (whose semantics differ enough across
-platforms to be a weaker proof). `CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild`
-proves cancellation kills both generations; `NormalParentExitLeavesNoOrphanedGrandchildRunning`
+grandchild — a nested `Start-Process` (its own `.ps1` file) on Windows, a
+freshly `sh`-invoked script (its own `.sh` file) on POSIX — each writing
+its own process id to a marker file so the test can positively confirm
+liveness and death via `Process.GetProcessById` rather than inferring it
+from a file lock (whose semantics differ enough across platforms to be a
+weaker proof). The POSIX grandchild deliberately runs as a separate `sh`
+invocation, not a `(...)` subshell: `$$` inside a subshell still reports
+the *invoking* shell's own pid in POSIX sh/dash/bash (fixed at shell
+startup, not re-evaluated per fork), so a `(...)`-based grandchild would
+have written the same pid as the child — silently testing the same process
+twice rather than a real second generation. Where a process was previously
+confirmed alive, its start time is captured then and death is checked
+against that exact instance (`Process.StartTime`), not the pid alone,
+since an OS can reassign a just-freed pid to an unrelated process before a
+liveness check runs.
+
+`CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild` proves
+cancellation kills both generations; `NormalParentExitLeavesNoOrphanedGrandchildRunning`
 is the companion baseline — a well-behaved parent that waits for its own
 grandchild before exiting leaves nothing running, no kill involved. Both
 run on Windows via `powershell.exe` and on Linux/macOS via `/bin/sh` (ADR

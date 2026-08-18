@@ -260,12 +260,16 @@ public sealed class ProcessRunnerTests
             Assert.True(IsProcessAlive(childPid), "The child process should still be running before cancellation.");
             Assert.True(
                 IsProcessAlive(grandchildPid), "The grandchild process should still be running before cancellation.");
+            // Captured while confirmed alive, so death can be verified against this exact process
+            // instance rather than merely an OS-reassignable pid.
+            DateTime childStartedAt = GetProcessStartTimeUtc(childPid);
+            DateTime grandchildStartedAt = GetProcessStartTimeUtc(grandchildPid);
 
             cancellation.Cancel();
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
 
-            await AssertProcessDiesAsync(childPid);
-            await AssertProcessDiesAsync(grandchildPid);
+            await AssertProcessDiesAsync(childPid, childStartedAt);
+            await AssertProcessDiesAsync(grandchildPid, grandchildStartedAt);
         }
         finally
         {
@@ -346,12 +350,23 @@ public sealed class ProcessRunnerTests
             return ("powershell.exe", ["-NoProfile", "-Command", parentScript]);
         }
 
-        string sleepSuffix = sleepSeconds > 0 ? $"sleep {sleepSeconds}" : "true";
-        string script =
-            $"echo $$ > '{childPidPath}'; " +
-            $"(echo $$ > '{grandchildPidPath}'; touch '{readyPath}'; {sleepSuffix}) {(sleepSeconds > 0 ? "&" : ";")} " +
-            (sleepSeconds > 0 ? $"sleep {sleepSeconds}" : "wait");
-        return ("/bin/sh", ["-c", script]);
+        // `$$` inside a `(...)` subshell still reports the *invoking* shell's own pid in POSIX
+        // sh/dash/bash, not the subshell's -- it is fixed at shell startup, not re-evaluated per
+        // fork. Spawning the grandchild as a genuinely separate `sh` invocation (its own process,
+        // exec'd fresh) is what gives it its own, correctly-reported `$$`; a script file sidesteps
+        // nested-quoting the same way the Windows `.ps1` file does above.
+        string posixGrandchildScriptPath = Path.Combine(directory, "grandchild.sh");
+        string posixGrandchildScript = string.Join(
+            "\n",
+            $"echo $$ > '{grandchildPidPath}'",
+            $"touch '{readyPath}'",
+            sleepSeconds > 0 ? $"sleep {sleepSeconds}" : "true");
+        File.WriteAllText(posixGrandchildScriptPath, posixGrandchildScript);
+
+        string posixScript = sleepSeconds > 0
+            ? $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}' & sleep {sleepSeconds}"
+            : $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}'";
+        return ("/bin/sh", ["-c", posixScript]);
     }
 
     private static async Task WaitForFileAsync(string path)
@@ -377,20 +392,51 @@ public sealed class ProcessRunnerTests
             using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
             return !process.HasExited;
         }
-        catch (ArgumentException)
+        catch (Exception error) when (
+            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
         {
             return false;
         }
     }
 
-    private static async Task AssertProcessDiesAsync(int processId)
+    private static DateTime GetProcessStartTimeUtc(int processId)
     {
-        for (int attempt = 0; attempt < 100 && IsProcessAlive(processId); attempt++)
+        using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
+        return process.StartTime.ToUniversalTime();
+    }
+
+    /// <summary>Matches on start time too, not just the pid alone: an OS can reassign a just-freed
+    /// pid to an unrelated process before this check runs, which a pid-only liveness check would
+    /// misreport as "still alive."</summary>
+    private static bool IsSameProcessStillAlive(int processId, DateTime expectedStartTimeUtc)
+    {
+        try
+        {
+            using System.Diagnostics.Process process = System.Diagnostics.Process.GetProcessById(processId);
+            return !process.HasExited && process.StartTime.ToUniversalTime() == expectedStartTimeUtc;
+        }
+        catch (Exception error) when (
+            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>When <paramref name="expectedStartTimeUtc"/> is supplied (the process was
+    /// previously confirmed alive at that instant), death is checked against that exact process
+    /// instance rather than the pid alone -- see <see cref="IsSameProcessStillAlive"/>.</summary>
+    private static async Task AssertProcessDiesAsync(int processId, DateTime? expectedStartTimeUtc = null)
+    {
+        bool StillAlive() => expectedStartTimeUtc is { } startTime
+            ? IsSameProcessStillAlive(processId, startTime)
+            : IsProcessAlive(processId);
+
+        for (int attempt = 0; attempt < 100 && StillAlive(); attempt++)
         {
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
 
-        Assert.False(IsProcessAlive(processId), $"Process {processId} should no longer be running.");
+        Assert.False(StillAlive(), $"Process {processId} should no longer be running.");
     }
 
     private sealed class RecordingSink : IProcessOutputSink
