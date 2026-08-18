@@ -854,6 +854,8 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
                 services.AddSingleton<IPlatformPreflight>(new SupportedPlatformPreflight());
                 services.AddSingleton(new ResumeSchedulerOptions(options.ProjectRoot));
                 services.AddSingleton<ResumeSchedulerHostedService>();
+                services.AddSingleton(new NotificationDeliveryOptions(options.ProjectRoot));
+                services.AddSingleton<NotificationDeliveryHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

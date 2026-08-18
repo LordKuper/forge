@@ -161,7 +161,7 @@ public sealed class ConfigurationTests
 
             using JsonDocument json = JsonDocument.Parse(
                 await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-            Assert.Equal("1.1.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.2.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal(
                 "ru",
                 json.RootElement.GetProperty("language").GetProperty("ui").GetString());
@@ -271,7 +271,7 @@ public sealed class ConfigurationTests
             await store.WriteAsync(reloaded, TestContext.Current.CancellationToken);
             using JsonDocument upgraded = JsonDocument.Parse(
                 await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-            Assert.Equal("1.1.0", upgraded.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.2.0", upgraded.RootElement.GetProperty("schema_version").GetString());
         }
         finally
         {

@@ -38,6 +38,7 @@ public sealed class ControlPlaneHostedService(
     IConfigurationRegistry registry,
     ForgeApplication application,
     ResumeSchedulerHostedService resumeScheduler,
+    NotificationDeliveryHostedService notificationDelivery,
     IHostApplicationLifetime lifetime,
     ILogger<ControlPlaneHostedService> logger) : BackgroundService
 {
@@ -127,6 +128,7 @@ public sealed class ControlPlaneHostedService(
         // Only starts once this Host has won the project lease above — never on a losing Host,
         // which returns before this point and never mutates durable state.
         await resumeScheduler.StartAsync(stoppingToken).ConfigureAwait(false);
+        await notificationDelivery.StartAsync(stoppingToken).ConfigureAwait(false);
 
         string pipeName = InstanceIdentity.ComputePipeName(options.InstanceId, projectId);
         NamedPipeControlTransport transport = new();
@@ -167,6 +169,7 @@ public sealed class ControlPlaneHostedService(
         await base.StopAsync(cancellationToken).ConfigureAwait(false);
         // A no-op if it was never started (this Host lost the lease race above).
         await resumeScheduler.StopAsync(cancellationToken).ConfigureAwait(false);
+        await notificationDelivery.StopAsync(cancellationToken).ConfigureAwait(false);
         if (listener is not null)
         {
             await listener.DisposeAsync().ConfigureAwait(false);

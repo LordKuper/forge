@@ -1,0 +1,269 @@
+# ADR 0024: Best-effort local notifications
+
+- Status: Accepted
+- Date: 2026-08-18
+- Contract version: 1.0.0
+
+## Context
+
+Stage 11's plan text (`docs/plans/implementation-plan.md` P11.67-P11.72):
+"Add best-effort local notifications for `awaiting_human`, `blocked`,
+`failed`, and `completed`, deduplicated from journal event ids and
+redacted." ADR 0005 already committed to the shape this must take:
+"Desktop/OS notifications project durable `awaiting_human`, `blocked`,
+`failed`, and `completed` events. They are best-effort, user-configurable,
+redacted, and deduplicated by event id. A notification is never the
+authoritative record and a delivery failure never changes workflow state.
+Network notification channels and custom scripts remain outside the MVP."
+
+Most of the projection half of this item was already built and tested
+under an earlier stage: `NotificationProjector` (`src/Forge.Runtime
+/Application/NotificationProjector.cs`) already maps `ControlEventRecord`s
+onto the four `NotificationKind` values, with its own doc comment noting
+"actual delivery (toast, tray, sound) is a platform-owned concern for a
+later stage to add." This ADR is exactly that later stage — the delivery
+half, plus the config gate and dedup mechanism the projection layer
+presumes exist.
+
+Stage 11 P11.56-P11.66 remains its own separate, still-open item (ADRs
+0019-0023) with substantial scope left (navigation shell, `sprint.manage`
+Desktop controls, `forge sprint rebase`, ICU localization, accessibility).
+This ADR picks P11.67-P11.72 instead — a distinct, well-specified plan
+item with concrete, already-partially-built acceptance criteria, not
+blocked on any of P11.56-P11.66's own open work.
+
+## Decisions
+
+### Dedup reuses `ControlEventsCursor`, not a new watermark concept
+
+`forge events --cursor` already has exactly the durable, gap-safe resume
+mechanism "deduplicated by event id" needs: `ControlEventsReader.ReadAsync`
+advances a per-sprint sequence watermark only through a contiguous run, so
+an event is delivered to a cursor holder exactly once, in order, even
+across process restarts. `NotificationDeliveryHostedService` persists its
+own opaque cursor token (`NotificationDeliveryCursorStore`, a plain
+base64-string file at `.forge/notifications/cursor.json`) and simply reads
+forward from it every tick — no separate "delivered event id set" is
+invented, since the cursor already provides the same guarantee
+`NotificationProjection.EventId`'s own doc comment names ("a caller that
+already delivered this id skips it").
+
+`NotificationDeliveryCursorStore` deliberately does not use
+`AtomicConfigurationFile`'s full crash-durability machinery (fsync'd
+directory flush, `.previous` fallback, internal to `Forge.Configuration`
+with no path for a `Forge.Host.Runtime` caller to reach it anyway) — a
+temp-file-then-rename is enough. ADR 0005 already frames the whole feature
+as best-effort: losing a cursor write to a genuine crash costs, at worst,
+one already-seen sweep's worth of re-delivered notifications on restart,
+an accepted, bounded cost.
+
+A cursor that fails to decode (`ReadControlEvents`'s own `ControlCursorStale`
+diagnostic) is not retried forever with the same broken token — this
+service's own cursor should never actually become unreadable except a rare
+partial-write race, and retrying the same broken token indefinitely would
+permanently wedge that project's notifications. It resets to the fresh
+anchor `ReadControlEvents` itself already returns and resumes cleanly from
+now, skipping only that one tick's delivery — never replaying the
+project's full history as "new."
+
+### `notifications.enabled` gates delivery, but the cursor advances regardless
+
+A new `User`-scope configuration key, default `true`, added to
+`ConfigurationRegistry`/`ConfigurationSchemaCodec`/`user-config.schema
+.json` (bumping `UserContractVersion` to `1.2.0`) the same way
+`interaction.confirm_destructive` was — satisfying ADR 0005's
+"user-configurable." It is optional and nullable in the schema DTO
+(`UserNotifications?`, not required), matching `providers.enabled`'s own
+shape rather than `interaction`'s: an on-disk document written before this
+key existed must still validate on read with it entirely absent, the exact
+backward-compatibility property the schema's own "an older document...
+still validates... and is silently upgraded the next time it is saved"
+comment already promises for `providers`.
+
+While disabled, `NotificationDeliveryHostedService` still reads and
+advances its cursor every tick — it only skips the `INotificationService
+.NotifyAsync` calls. Without this, re-enabling the key later would deliver
+every notification-worthy event accumulated while disabled as a single
+burst, which defeats the purpose of muting in the first place.
+
+### The delivery port lives in `Forge.Runtime`; the OS call lives in an adapter
+
+`INotificationService.NotifyAsync(title, body, cancellationToken)` is a
+new neutral port in `Forge.Runtime`, matching ADR 0007's table exactly:
+"Notification policy and durable attention events" (the projector, the
+cursor, the config gate, the redaction, all of which live in
+`NotificationDeliveryHostedService`) is cross-platform; "OS notification
+delivery" is the one adapter-owned piece. `AddForgeCore` registers a
+`NullNotificationService` default (`TryAddSingleton`, mirroring
+`IPlatformPreflight`'s own `UnsupportedPlatformPreflight` default) that
+silently discards — "no OS adapter installed" is not itself a delivery
+failure worth logging on every tick.
+
+`NotificationDeliveryHostedService` lives in `Forge.Host.Runtime`, not
+`Forge.Desktop` — ADR 0005/0006 already frame notifications as a Host-plane
+concern reading the same durable state Desktop and CLI both already share,
+not something owned by the MAUI app specifically. It runs whether or not
+Desktop is open, matching `ResumeSchedulerHostedService`'s own precedent
+exactly: registered as a singleton (not `AddHostedService`),
+`ControlPlaneHostedService` starts it only after winning the project lease
+and stops it before releasing that lease, so a Host that loses the lease
+race never ticks against durable state it does not own.
+
+### `WindowsNotificationService` uses `NotifyIcon.ShowBalloonTip`, not the Windows App SDK
+
+The modern, Microsoft-first-party way to send a local Windows notification
+is `Microsoft.Windows.AppNotifications` (`AppNotificationManager
+.Default.Register()`/`AppNotificationBuilder`) — the legacy
+`Microsoft.Toolkit.Uwp.Notifications`/`CommunityToolkit.WinUI.Notifications`
+package this superseded was archived shortly before this ADR was written.
+Both are built for a primary UI application with its own message pump and
+`OnStartup`/`Main` registration ceremony (WPF/WinForms examples throughout
+Microsoft's own documentation); Forge Host is a lightweight, headless
+background process with no such loop.
+
+`System.Windows.Forms.NotifyIcon.ShowBalloonTip` is chosen instead:
+Windows 10/11 render a balloon-tip call from the shell as a standard
+Action Center toast automatically, so it needs neither a message pump nor
+an unpackaged-app COM/AUMID registration step, and needs no new NuGet
+dependency at all — `System.Windows.Forms` is a framework reference
+(`UseWindowsForms=true` in `Forge.Runtime.Windows.csproj`) already part of
+the Windows Desktop shared framework this project's TFM pulls in. The
+accepted trade-offs, named honestly rather than silently assumed away:
+
+- **No click-activation or argument routing back into Forge.** Neither is
+  named as in scope by ADR 0005's own wording ("best-effort" local
+  notifications) or by this item's plan text.
+- **A small, persistent tray icon while a project's Host process runs.**
+  `ShowBalloonTip` is a no-op while `NotifyIcon.Visible` is `false`, and
+  toggling visibility off immediately after each call risks racing the
+  shell's own asynchronous balloon rendering — so the icon stays visible
+  for the service's own lifetime rather than flickering per notification.
+- **Delivery correctness cannot be verified by this repository's own test
+  suite or by an independent review agent.** No interactive desktop
+  session exists in CI (or, realistically, in most automated review
+  environments) to confirm a balloon tip actually renders. Every other
+  piece of this feature — the cursor, the projector, the config gate, the
+  redaction, the per-notification failure isolation — is fully covered by
+  `NotificationDeliveryHostedServiceTests` against a fake
+  `INotificationService`; `WindowsNotificationService` itself is not, and
+  that gap is named here rather than left implicit.
+
+### The first sweep waits one interval rather than ticking immediately
+
+`ResumeSchedulerHostedService.ExecuteAsync` ticks immediately on start,
+then waits — a real correctness choice for that service, since a node left
+stuck with a satisfied dependency should be promoted as soon as possible
+after the Host that can fix it comes up.
+`NotificationDeliveryHostedService` has no equivalent urgency: a
+best-effort notification arriving one `PollInterval` late on Host startup
+is a non-issue, so `ExecuteAsync` waits for the timer's first tick before
+ever calling `TickAsync` — the opposite order.
+
+This was not a stylistic preference: repeated full-suite local runs during
+this ADR's own validation showed an intermittent failure (roughly 2 of 5
+runs) in unrelated `ControlPlaneTests` round-trip tests that never
+reproduced when run in isolation or before this feature existed — the
+signature of resource contention across many concurrently-started test
+`ControlPlaneHost` instances, not a logic defect. Every real
+`ControlPlaneHost.StartAsync` call in the test suite now also starts a
+`NotificationDeliveryHostedService`, and the immediate-tick design meant
+every one of those Host starts synchronously performed an extra
+`ControlEventsReader.ReadAsync` call plus cursor file I/O at the exact
+moment the test suite already has the most concurrent Host-startup load.
+Deferring the first tick removes that synchronous burst from Host startup
+entirely; four repeated full-suite runs after this change were clean,
+against two flaky runs (out of five) before it. The underlying
+`ControlPlaneTests` timing sensitivity under heavy parallel load is a
+pre-existing property of those tests' own real-named-pipe design, not
+something this ADR claims to have fully solved — only to have stopped
+measurably contributing to.
+
+### The notification body is redacted even though nothing in it is secret today
+
+The composed body is `"{NotificationSprintLabel} {sprintId:D}"` — a fixed
+label plus a GUID, never plausibly matching `SecretRedactor`'s private-key/
+authorization/credential-URI patterns. `SecretRedactor.Redact` is still
+called on it, satisfying ADR 0005's "redacted" requirement literally and
+defensively: if a future change ever composes a richer body (a finding
+summary, an instruction excerpt), it is protected automatically rather
+than requiring someone to remember to add redaction later.
+
+### Title text is localized through the same startup-status language resolution every surface uses
+
+`NotificationDeliveryHostedService` calls the project's own
+`ForgeApplication.GetStartupStatusAsync` and reads `status.Language.Ui` —
+the exact resolved `language.ui` value `forge doctor`/`forge status`
+already compute — rather than re-deriving culture resolution a second time.
+Five new message keys (four titles, one `NotificationSprintLabel`) are
+added to `MessageKeys`/`Messages.resx`/`Messages.ru.resx`.
+
+## Consequences
+
+- `Forge.Application.INotificationService` (port) and
+  `NullNotificationService` (default) added; `AddForgeCore` registers the
+  default via `TryAddSingleton`.
+- `NotificationDeliveryCursorStore` (static, `Forge.Application`) persists
+  an opaque `ControlEventsCursor` token per project at `.forge/notifications
+  /cursor.json`.
+- `NotificationDeliveryHostedService` (`Forge.Host.Runtime`) sweeps on a
+  30-second `PeriodicTimer`, gated by `notifications.enabled`, wired into
+  `ControlPlaneHostedService`'s existing lease-scoped start/stop lifecycle
+  alongside `ResumeSchedulerHostedService`.
+- `notifications.enabled` (User scope, default `true`) added to
+  `ConfigurationRegistry`; `UserConfiguration.Notifications` (optional,
+  nullable) added to `ConfigurationSchemaCodec`; `user-config.schema.json`
+  gains an optional `notifications` object and a `1.2.0` `schema_version`
+  entry (`UserContractVersion` bumped to match).
+- `Forge.Runtime.Windows` gains `WindowsNotificationService`
+  (`INotificationService` via `NotifyIcon.ShowBalloonTip`) and
+  `AddForgeRuntimeWindowsNotifications` (an `IServiceCollection` extension
+  overriding the cross-platform default, mirroring `AddForgeWindowsUpdater`'s
+  own shape); `Forge.Host.Windows/Program.cs` calls it alongside the
+  existing updater/provider registrations. `UseWindowsForms=true` is the
+  only new build-time addition — no new NuGet package.
+- Five new message keys (`NotificationAwaitingHumanTitle`,
+  `NotificationBlockedTitle`, `NotificationFailedTitle`,
+  `NotificationCompletedTitle`, `NotificationSprintLabel`), en/ru.
+- `NotificationDeliveryHostedServiceTests` (6 tests): exactly-once delivery
+  across ticks, redacted title/body composition, config-gated skip with
+  cursor still advancing (and no backlog burst on re-enable), per-delivery
+  failure isolation (`ExecuteTask.Exception` stays `null`), a no-op tick
+  over an empty project, and stale-cursor recovery. `ControlPlaneTests`'s
+  own in-test Host builder (`ControlPlaneHost.StartAsync`) gained the same
+  `NotificationDeliveryOptions`/`NotificationDeliveryHostedService`
+  registrations `ForgeHostApplication.RunAsync` now has, matching the
+  parallel registration `ResumeSchedulerHostedService` already required —
+  missing this broke every test that starts a real in-process Host via
+  dependency injection, caught immediately by the full suite run.
+
+## Deliberately deferred
+
+- **Real verification that `WindowsNotificationService` actually renders a
+  toast.** Named above — no interactive desktop exists in this
+  repository's CI or realistic review environment to confirm it.
+- **Click-through activation.** No argument routing back into Forge; a
+  clicked notification does nothing beyond dismissing itself.
+- **Desktop-side notification history or an in-app "attention" view.**
+  Unrelated to this item; the still-open Stage 11 P11.56-P11.66 navigation
+  shell (ADR 0021/0022/0023's own deferred list) is the more natural home
+  for a future such view.
+- **Network notification channels or custom scripts.** ADR 0005 already
+  named both outside the MVP.
+- **A real technical guarantee that a duplicate notification is
+  impossible.** The cursor-write durability trade-off above accepts a
+  rare, bounded re-delivery window on crash — matching "best-effort," not
+  "exactly once."
+
+## References
+
+- ADR 0005 (`docs/architecture/decisions/0005-local-host-and-control-plane.md`)
+  — "Notifications are local attention projections," the requirement this
+  ADR implements.
+- ADR 0007 (`docs/architecture/decisions/0007-cross-platform-core-and-minimal-os-adapters.md`)
+  — the neutral/adapter split this ADR's `INotificationService` port
+  follows.
+- `src/Forge.Runtime/Application/NotificationProjector.cs` — the
+  already-built, already-tested projection half this ADR delivers.
+- `src/Forge.Host.Runtime/ResumeSchedulerHostedService.cs` — the lifecycle
+  and per-item failure-isolation pattern `NotificationDeliveryHostedService`
+  mirrors directly.

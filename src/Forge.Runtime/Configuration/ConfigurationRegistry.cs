@@ -70,6 +70,15 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             "\"en\"",
             null,
             false);
+        // ADR 0024: "user-configurable" per ADR 0005's "Notifications are local attention
+        // projections" -- defaults to on, matching every other opt-out (rather than opt-in) policy
+        // toggle in this registry.
+        yield return Create(
+            "notifications.enabled",
+            ConfigurationScope.User,
+            "true",
+            null,
+            false);
     }
 
     private static ConfigurationKey Create(

@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.45.0
+
+### Added
+
+- Forge Host now sends a best-effort local notification when a sprint
+  reaches `awaiting_human`, `blocked`, `failed`, or `completed`. Each
+  event notifies at most once, and content is redacted before delivery.
+  Disable with the new `notifications.enabled` configuration key
+  (`forge config set notifications.enabled false`).
+
 ## v0.44.0
 
 ### Security

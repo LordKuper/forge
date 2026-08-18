@@ -9,7 +9,7 @@ internal static class ConfigurationSchemaCodec
     /// <summary>Every new write stamps the latest minor version; an older document (missing
     /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
     /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
-    private const string UserContractVersion = "1.1.0";
+    private const string UserContractVersion = "1.2.0";
     private const string ProjectContractVersion = "1.0.0";
     private const string WorkflowName = "implementation-critical";
     private static readonly JsonSchema UserSchema = LoadSchema("user-config");
@@ -46,6 +46,12 @@ internal static class ConfigurationSchemaCodec
             Providers = GetOptionalStringArray(document, ConfigurationKeys.ProvidersEnabled) is { } enabled
                 ? new() { Enabled = enabled }
                 : null,
+            // Optional and nullable, like Providers above (not required, like Interaction) --
+            // ADR 0024 added this key after schema_version 1.1.0 shipped, so an on-disk document
+            // written before this key existed must still validate on read with it entirely absent.
+            Notifications = GetOptionalBoolean(document, "notifications.enabled") is { } notificationsEnabled
+                ? new() { Enabled = notificationsEnabled }
+                : null,
         };
         Validate(JsonSerializer.SerializeToElement(persisted, JsonOptions), UserSchema, "user");
         return persisted;
@@ -62,6 +68,7 @@ internal static class ConfigurationSchemaCodec
         Add(values, "language.llm", persisted.Language.Llm);
         Add(values, "interaction.confirm_destructive", persisted.Interaction.ConfirmDestructive);
         Add(values, ConfigurationKeys.ProvidersEnabled, persisted.Providers?.Enabled);
+        Add(values, "notifications.enabled", persisted.Notifications?.Enabled);
         return new(1, values);
     }
 
@@ -238,6 +245,8 @@ internal static class ConfigurationSchemaCodec
         public UserInteraction Interaction { get; set; } = new();
 
         public UserProviders? Providers { get; set; }
+
+        public UserNotifications? Notifications { get; set; }
     }
 
     internal sealed class UserLanguage
@@ -257,6 +266,11 @@ internal static class ConfigurationSchemaCodec
     internal sealed class UserProviders
     {
         public List<string>? Enabled { get; set; }
+    }
+
+    internal sealed class UserNotifications
+    {
+        public bool? Enabled { get; set; }
     }
 
     internal sealed class ProjectConfiguration

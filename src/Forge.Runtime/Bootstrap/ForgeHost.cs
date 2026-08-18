@@ -60,6 +60,9 @@ public static class ForgeHost
         services.AddSingleton<SprintGitIsolation>();
         services.AddSingleton<RoutingLedger>();
         services.AddSingleton<ControlEventsReader>();
+        // ADR 0024: overridden by a platform composition root the same way IPlatformPreflight is —
+        // no OS adapter means notifications are silently discarded, never an error.
+        services.TryAddSingleton<INotificationService, NullNotificationService>();
         services.AddSingleton<StartupRecovery>();
         services.AddSingleton<StartupPipeline>();
         services.AddSingleton<StatusAdvisor>();

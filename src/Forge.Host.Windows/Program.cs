@@ -11,5 +11,6 @@ return await ForgeHostApplication.RunAsync(
     // platform check, e.g. RecoverStartupAsync) alongside the CLI's own self-update machinery;
     // the Host never calls the latter, but there is no smaller registration to reuse — see
     // WindowsPlatformPreflight's own dependency on the updater's target detector/strategy resolver.
-    services => services.AddForgeWindowsUpdater().AddCodexProvider().AddClaudeProvider(),
+    services => services.AddForgeWindowsUpdater().AddCodexProvider().AddClaudeProvider()
+        .AddForgeRuntimeWindowsNotifications(),
     CancellationToken.None);
