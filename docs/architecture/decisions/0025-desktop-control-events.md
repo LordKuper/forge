@@ -134,8 +134,7 @@ Independent review found three issues, all fixed. The first two are the
 same "documentation/tests didn't actually keep up with round 1's own fix"
 shape — a pattern worth naming, since a plan-note or a test that looks
 right but doesn't track the real invariant is exactly what let round 1's
-own defect (and the shape of round 3's finding below) go unnoticed for as
-long as it did:
+own defect go unnoticed for as long as it did:
 
 1. **This slice's own `docs/plans/implementation-plan.md` progress note
    still described the pre-round-1 unconditional-clear behavior**,
@@ -162,6 +161,32 @@ long as it did:
    against the very regression it exists to catch. Fixed by extracting the
    guard `if` statement's own brace-matched block and asserting the clear
    is textually inside it, not merely somewhere after it.
+
+## Round 3 review (final full-scope round)
+
+Independent review found three issues, all fixed:
+
+1. **Round 2's containment fix still admitted a one-line mutation that
+   restored round 1's exact defect.** The test proved the *clear* is
+   inside the guard block but never checked that the block also advances
+   `lastPolledEventsProjectRoot`. Deleting that one assignment left the
+   full suite green — the field then never leaves its initial `null`, so
+   the guard is true on every refresh against any typed project root,
+   verified empirically. Fixed by asserting the assignment is present
+   inside the same block, alongside the clear.
+2. **This PR's own `RefreshAsync` introduced the identical TOCTOU shape
+   round 2 had just fixed in `PollEventsAsync`**, one method away: it
+   reads `ProjectRoot` once for `viewModel.RefreshAsync` and then again
+   (twice) for the `EventsLabel` guard, all across the same `await`. Not
+   pre-existing — before this slice, `RefreshAsync` read the property
+   exactly once. An entry edit mid-refresh could let the rendered
+   snapshot describe one root while the events-reset decision judges a
+   different one, and could store a root in `lastPolledEventsProjectRoot`
+   that was never actually rendered against. Fixed with the same
+   capture-into-a-local shape round 2 already established.
+3. **A dangling forward-reference** in "Round 2 review" above ("the shape
+   of round 3's finding below") pointed at a section that did not exist
+   at the time it was written. Removed.
 
 ## Deliberately deferred
 

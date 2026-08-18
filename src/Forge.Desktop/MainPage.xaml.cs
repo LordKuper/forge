@@ -82,7 +82,13 @@ public partial class MainPage : ContentPage
 
     public async Task RefreshAsync()
     {
-        MainPageSnapshot snapshot = await viewModel.RefreshAsync(ProjectRoot, SprintId, CancellationToken.None)
+        // Captured once, before the request: ProjectRootEntry can be edited while this await is in
+        // flight, and reading the live property again afterward (as this PR originally did for the
+        // EventsLabel guard below) would let the rendered snapshot describe one root while the
+        // events-reset decision judges a different one -- the same TOCTOU shape round 2 review
+        // fixed in MainPageViewModel.PollEventsAsync, reintroduced here by this PR's own diff.
+        string? requestedRoot = ProjectRoot;
+        MainPageSnapshot snapshot = await viewModel.RefreshAsync(requestedRoot, SprintId, CancellationToken.None)
             .ConfigureAwait(true);
         StatusLabel.Text = snapshot.StatusText;
         ProjectRootLabel.Text = snapshot.ProjectRootText;
@@ -107,10 +113,10 @@ public partial class MainPage : ContentPage
         // Same reasoning again, for the last poll's rendered page -- but only reset it on the
         // condition that actually invalidates it (a project-root switch), not on every refresh:
         // see the lastPolledEventsProjectRoot field's own comment.
-        if (!string.Equals(ProjectRoot, lastPolledEventsProjectRoot, StringComparison.Ordinal))
+        if (!string.Equals(requestedRoot, lastPolledEventsProjectRoot, StringComparison.Ordinal))
         {
             EventsLabel.Text = string.Empty;
-            lastPolledEventsProjectRoot = ProjectRoot;
+            lastPolledEventsProjectRoot = requestedRoot;
         }
     }
 

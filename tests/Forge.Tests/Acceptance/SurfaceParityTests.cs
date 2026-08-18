@@ -238,13 +238,19 @@ public sealed class SurfaceParityTests
         string method = MethodBody("public async Task RefreshAsync()");
 
         int guardIndex = method.IndexOf(
-            "!string.Equals(ProjectRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
+            "!string.Equals(requestedRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "RefreshAsync no longer guards EventsLabel's reset by project root.");
         int ifIndex = method.LastIndexOf("if (", guardIndex, StringComparison.Ordinal);
         Assert.True(ifIndex >= 0, "The project-root guard is no longer an `if` condition.");
         string guardBlock = BracedBlock(method, ifIndex);
 
         Assert.Contains("EventsLabel.Text = string.Empty;", guardBlock, StringComparison.Ordinal);
+        // Round 3 review found the block-containment check above alone still let a mutation
+        // deleting this assignment pass: without it, lastPolledEventsProjectRoot never advances
+        // past its initial null, so the guard is true on every refresh against any typed project
+        // root -- round 1's exact defect, verified empirically to leave the whole suite green.
+        Assert.Contains(
+            "lastPolledEventsProjectRoot = requestedRoot;", guardBlock, StringComparison.Ordinal);
     }
 
     private static string MethodBody(string signature)
