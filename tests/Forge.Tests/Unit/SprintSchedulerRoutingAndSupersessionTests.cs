@@ -360,6 +360,47 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
             "Original instruction.", supersededEvent.Arguments[WorkflowEvent.SupersessionInstructionArgument]);
     }
 
+    /// <summary>Regression: an earlier version recomputed the replacement attempt's deterministic id
+    /// from <c>node.AttemptCount</c> on every call instead of finding it by linkage. Once an ordinary
+    /// <see cref="SprintScheduler.StartAttemptAsync"/> picks the replacement up, that count moves, so
+    /// a late replay of the original supersede call recomputed a different, unrelated id -- creating
+    /// a second, orphaned replacement and forcing the node's already in-flight run back through
+    /// `failed` to `ready`, discarding it.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncReplayAfterTheReplacementAlreadyStartedDoesNotCreateAnOrphanOrInterruptIt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Guid key = SprintScheduler.SupersedeAttemptKey(sprintId, attempt);
+
+        CompleteAttemptResult first = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Try a different approach.", cancellationToken);
+        Assert.True(first.Succeeded);
+
+        // The replacement is picked up by an ordinary StartAttemptAsync call, exactly as intended:
+        // the node re-enters `running` under the replacement, not the superseded attempt.
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", first.Node!.Version, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+
+        // A late replay of the original supersede call (e.g. a retried response) must not disturb
+        // the replacement's own in-flight run.
+        CompleteAttemptResult replay = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, key, confirmed: true,
+            "Try a different approach.", cancellationToken);
+
+        Assert.True(replay.Succeeded, $"diag={replay.DiagnosticCode}");
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot onlyReplacement =
+            Assert.Single(finalState.Attempts.Values, candidate => candidate.Id != attempt.Id);
+        Assert.Equal(started.AttemptId, onlyReplacement.Id);
+        Assert.Equal(NodeState.Running, finalState.Nodes["a"].State);
+    }
+
     private static async Task<(SprintScheduler Scheduler, ISprintStore Store, SprintId SprintId, AttemptSnapshot Attempt)>
         StartImplementationAttemptAsync(TestEnvironment environment)
     {

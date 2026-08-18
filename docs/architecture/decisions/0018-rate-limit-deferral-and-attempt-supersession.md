@@ -74,20 +74,21 @@ attemptId, inputDigest, cancellationToken)`: finds the `Routed`
 `RoutingLedger.GetRouteDecisionsAsync` + last-match on attempt id — no
 decision found means the caller is deferring an attempt that was never
 routed through the ledger, a caller error surfaced as
-`WorkflowEventConflict`), calls `RoutingLedger.RecordDeferralAsync` with
-`clock.UtcNow + DefaultRateLimitBackoff` (one minute — see "no structured
-provider metadata" below), then delegates to the existing
+`WorkflowEventConflict`), delegates to the existing
 `CompleteAttemptAsync(succeeded: false, ...)` with a
-`ProviderDiagnosticCodes.RateLimited` diagnostic. It does not invent new
-node/attempt transition logic: "abandons the failed attempt... leaves the
-node ready but routing-deferred" is exactly what an ordinary failed
-completion already does; deferral only adds the ledger bookkeeping ordinary
-failure does not need. `RecordDeferralAsync` only accepts a decision whose
-`Outcome == Routed` and never refunds the shared retry budget it already
-consumed — "repeated deferral cannot spin or bypass the sprint retry budget"
-holds because a deferred attempt consumes the same shared per-sprint budget
-`DecideAsync` already enforces for every other failure, with no separate
-allowance.
+`ProviderDiagnosticCodes.RateLimited` diagnostic, and only once that reports
+success calls `RoutingLedger.RecordDeferralAsync` with `clock.UtcNow +
+DefaultRateLimitBackoff` (one minute — see "no structured provider
+metadata" below) — see "review also found" further down for why the
+ordering matters. It does not invent new node/attempt transition logic:
+"abandons the failed attempt... leaves the node ready but routing-deferred"
+is exactly what an ordinary failed completion already does; deferral only
+adds the ledger bookkeeping ordinary failure does not need.
+`RecordDeferralAsync` only accepts a decision whose `Outcome == Routed` and
+never refunds the shared retry budget it already consumed — "repeated
+deferral cannot spin or bypass the sprint retry budget" holds because a
+deferred attempt consumes the same shared per-sprint budget `DecideAsync`
+already enforces for every other failure, with no separate allowance.
 
 No structured provider metadata parser was added: no vendor JSON field name
 for a rate-limit reset time is verified anywhere in this codebase (the same
@@ -203,6 +204,29 @@ inside the store before any version check runs, and a call this permissive
 check lets through for the wrong reason still lands on an illegal
 transition there. Caught by a new regression test
 (`SupersedeAttemptAsyncResumesAfterACrashBetweenCancellationAndReplacementCreation`).
+
+### The replacement attempt is found by linkage, never recomputed from a moving count
+
+A third, later review round found that the fix above still had a gap one
+step further downstream: the replacement attempt's deterministic id was
+recomputed on every call as `currentNode.AttemptCount + 1`. That count is
+not stable across the replay window this ADR's whole "idempotent replay"
+section is about — it advances the moment a later, ordinary
+`StartAttemptAsync` call legitimately picks the replacement up and the node
+re-enters `running`. A replay of `SupersedeAttemptAsync` arriving *after*
+that point recomputed a different, unrelated id (creating a second,
+orphaned replacement attempt still linking back to the original, already-
+cancelled one) and then — because it saw the node `running` again — walked
+the `running -> failed -> ready` re-arm path a second time, forcibly ending
+the replacement's own legitimate, already in-flight run. The fix: find the
+replacement by linkage (`SupersedesAttemptId == attemptId`) instead of
+recomputing it. When one already exists, the call has nothing left to do —
+both attempt creation and the node re-arm are skipped entirely, regardless
+of how far the node or the replacement has since progressed. Computing the
+deterministic id from `currentNode.AttemptCount` remains correct, but only
+inside the branch that already established no replacement exists yet, where
+the node still carries only the consequence of this same call's own cancel
+transition.
 
 ### Deliberately deferred
 

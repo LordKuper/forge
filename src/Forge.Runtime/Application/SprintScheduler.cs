@@ -708,14 +708,25 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             .ConfigureAwait(false);
         NodeSnapshot currentNode = afterCancel.Nodes[nodeId];
 
-        // The exact same deterministic-id formula `StartAttemptAsync` itself uses for a brand-new
-        // attempt on this node: a later ordinary `StartAttemptAsync` call for this now-`ready` node
-        // resolves to this very attempt instead of creating an unrelated duplicate.
-        int attemptNumber = currentNode.AttemptCount + 1;
-        AttemptId freshAttemptId = DeterministicAttemptId(
-            $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
-        if (!afterCancel.Attempts.ContainsKey(freshAttemptId.Value.ToString("D")))
+        // Found by linkage, not recomputed from `currentNode.AttemptCount`: that count moves the
+        // moment a later, ordinary `StartAttemptAsync` call picks the replacement up, so recomputing
+        // the "next" deterministic id from it on a late replay would land on a brand-new, unrelated
+        // id instead of the one this same call already created -- creating a second, orphaned
+        // replacement and (below) wrongly forcing the node's already-legitimate re-run back to
+        // `ready`, discarding whatever it had in flight.
+        AttemptSnapshot? existingReplacement = afterCancel.Attempts.Values
+            .FirstOrDefault(candidate => candidate.SupersedesAttemptId == attemptId);
+        if (existingReplacement is null)
         {
+            // The exact same deterministic-id formula `StartAttemptAsync` itself uses for a
+            // brand-new attempt on this node: a later ordinary `StartAttemptAsync` call for this
+            // now-`ready` node resolves to this very attempt instead of creating an unrelated
+            // duplicate. Safe to compute from `currentNode.AttemptCount` here specifically because
+            // nothing yet exists that supersedes this attempt -- the node has not progressed past
+            // the point this call itself cancelled.
+            int attemptNumber = currentNode.AttemptCount + 1;
+            AttemptId freshAttemptId = DeterministicAttemptId(
+                $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
             Dictionary<string, string?> creationArguments = new(StringComparer.Ordinal)
             {
                 [WorkflowEvent.NodeIdArgument] = nodeId,
@@ -734,34 +745,37 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             {
                 return new(false, currentNode, creationOutcome.DiagnosticCode);
             }
-        }
 
-        // The node state machine has no direct `running` -> `ready` edge (only `running` ->
-        // `failed` -> `ready`, the same two-step path an ordinary auto-retry already takes) — so
-        // this always walks both steps, and each is independently checked against the node's
-        // *current* state (not gated on a single flag) so a retry resumed after a crash between
-        // the two steps finishes only the remaining one instead of getting stuck in `failed`.
-        if (currentNode.State == NodeState.Running)
-        {
-            AppendOutcome failedOutcome = await AppendNodeAsync(
-                projectRoot, sprintId, nodeId, "workflow.node_superseded", NodeState.Failed, currentNode.Version,
-                cancellationToken).ConfigureAwait(false);
-            if (!failedOutcome.Succeeded)
+            // The node state machine has no direct `running` -> `ready` edge (only `running` ->
+            // `failed` -> `ready`, the same two-step path an ordinary auto-retry already takes) — so
+            // this always walks both steps, and each is independently checked against the node's
+            // *current* state (not gated on a single flag) so a retry resumed after a crash between
+            // the two steps finishes only the remaining one instead of getting stuck in `failed`.
+            // Reached only when no replacement existed yet, so the node here still carries the
+            // consequence of the cancel transition above (`running`, from the now-`cancelled`
+            // attempt), never a later, unrelated `running` the replacement itself has since entered.
+            if (currentNode.State == NodeState.Running)
             {
-                return new(false, currentNode, failedOutcome.DiagnosticCode);
+                AppendOutcome failedOutcome = await AppendNodeAsync(
+                    projectRoot, sprintId, nodeId, "workflow.node_superseded", NodeState.Failed,
+                    currentNode.Version, cancellationToken).ConfigureAwait(false);
+                if (!failedOutcome.Succeeded)
+                {
+                    return new(false, currentNode, failedOutcome.DiagnosticCode);
+                }
+
+                currentNode = failedOutcome.State!.Nodes[nodeId];
             }
 
-            currentNode = failedOutcome.State!.Nodes[nodeId];
-        }
-
-        if (currentNode.State == NodeState.Failed)
-        {
-            AppendOutcome readyOutcome = await AppendNodeAsync(
-                projectRoot, sprintId, nodeId, "workflow.node_retried", NodeState.Ready, currentNode.Version,
-                cancellationToken).ConfigureAwait(false);
-            if (!readyOutcome.Succeeded)
+            if (currentNode.State == NodeState.Failed)
             {
-                return new(false, currentNode, readyOutcome.DiagnosticCode);
+                AppendOutcome readyOutcome = await AppendNodeAsync(
+                    projectRoot, sprintId, nodeId, "workflow.node_retried", NodeState.Ready, currentNode.Version,
+                    cancellationToken).ConfigureAwait(false);
+                if (!readyOutcome.Succeeded)
+                {
+                    return new(false, currentNode, readyOutcome.DiagnosticCode);
+                }
             }
         }
 
