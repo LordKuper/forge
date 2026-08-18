@@ -533,15 +533,19 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         Assert.Equal(AttemptState.Created, finalState.Attempts[startedThirdGeneration.AttemptId!.Value.ToString("D")].State);
     }
 
-    /// <summary>Regression: an earlier version always computed a new replacement's number as
-    /// `currentNode.AttemptCount + 1`, which is correct only when the attempt being superseded was
-    /// itself started through an ordinary <see cref="SprintScheduler.StartAttemptAsync"/> call.
-    /// Superseding a replacement that was never started (itself created by an earlier supersession,
-    /// so its own number was never reflected in `AttemptCount`) recomputed that *same* number again
-    /// -- colliding with the very attempt being cancelled. The resulting version conflict was
-    /// silently swallowed as a benign replay, so the second supersession reported success while
-    /// creating nothing: a later `StartAttemptAsync` would have resolved back to the first,
-    /// already-cancelled replacement instead of a genuine new one.</summary>
+    /// <summary>Regression, two layers. First: an earlier version always computed a new
+    /// replacement's number as `currentNode.AttemptCount + 1`, which is correct only when the
+    /// attempt being superseded was itself started through an ordinary
+    /// <see cref="SprintScheduler.StartAttemptAsync"/> call. Superseding a replacement that was
+    /// never started (itself created by an earlier supersession, so its own number was never
+    /// reflected in `AttemptCount`) recomputed that *same* number again -- colliding with the very
+    /// attempt being cancelled, a conflict silently swallowed as a benign replay. Second, found
+    /// immediately after fixing the first by making `SupersedeAttemptAsync`'s own creation step skip
+    /// past such collisions: `StartAttemptAsync`'s *own* fresh-id derivation had no equivalent skip,
+    /// so once a number was consumed this way without `AttemptCount` ever reflecting it, a later
+    /// ordinary start (after the skipped-past replacement was itself picked up and failed) collided
+    /// with that same, now-terminal attempt -- again silently swallowed, again reported as
+    /// success.</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SupersedingAReplacementThatWasNeverStartedCreatesAGenuinelyDistinctSecondReplacement()
@@ -584,6 +588,30 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
             environment.ProjectRoot, sprintId, "a", secondSupersede.Node.Version, cancellationToken);
         Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
         Assert.Equal(secondReplacement.Id, started.AttemptId);
+
+        // Regression: an earlier version derived a genuinely fresh attempt's id straight from
+        // `AttemptCount + 1` with no collision check, unlike `SupersedeAttemptAsync`'s own creation
+        // step. Since the second replacement above was minted by skipping past a collision without
+        // ever bumping `AttemptCount` to match, `AttemptCount` undershoots the true next-free number
+        // once that replacement is later picked up, fails, and auto-retries -- a subsequent ordinary
+        // start recomputed the very same, now-terminal attempt's id, and the resulting conflict was
+        // silently swallowed as a benign replay: `StartAttemptAsync` reported success for an attempt
+        // that had already failed, and any later `CompleteAttemptAsync` call either wedged on a
+        // conflict or silently reused the terminal attempt's stale `NodeResult`.
+        CompleteAttemptResult failedSecond = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", started.AttemptId!, false, SampleDigest, [], [],
+            cancellationToken);
+        Assert.True(failedSecond.Succeeded);
+        Assert.Equal(NodeState.Ready, failedSecond.Node!.State);
+
+        StartAttemptResult startedThird = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", failedSecond.Node.Version, cancellationToken);
+
+        Assert.True(startedThird.Succeeded, $"diag={startedThird.DiagnosticCode}");
+        Assert.NotEqual(secondReplacement.Id, startedThird.AttemptId);
+        SprintWorkflowState afterThird = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot thirdAttempt = afterThird.Attempts[startedThird.AttemptId!.Value.ToString("D")];
+        Assert.Equal(AttemptState.Created, thirdAttempt.State);
     }
 
     private static async Task<(SprintScheduler Scheduler, ISprintStore Store, SprintId SprintId, AttemptSnapshot Attempt)>

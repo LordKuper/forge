@@ -304,8 +304,22 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
         else
         {
-            attemptId = DeterministicAttemptId(
+            // `AttemptCount` can undershoot the true next-free number once a number has been
+            // consumed without ever bumping it (`SupersedeAttemptAsync`'s own collision-avoidance
+            // skip, minting a replacement's id past a number a still-pending, never-started earlier
+            // replacement already occupies) -- walking forward here past any number that already
+            // belongs to an existing attempt keeps this branch's id fresh regardless, the same
+            // discipline `SupersedeAttemptAsync`'s creation step already applies.
+            AttemptId candidateId = DeterministicAttemptId(
                 $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            while (state.Attempts.ContainsKey(candidateId.Value.ToString("D")))
+            {
+                attemptNumber++;
+                candidateId = DeterministicAttemptId(
+                    $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            }
+
+            attemptId = candidateId;
         }
 
         if (!nodeAlreadyRunning)

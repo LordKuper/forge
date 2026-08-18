@@ -297,6 +297,36 @@ id directly covers the "started, still genuinely in flight, `state` still
 its own. Either condition is sufficient; re-arm proceeds only when neither
 holds.
 
+### `StartAttemptAsync`'s own fresh-id path needed the same collision skip
+
+A sixth review round (critical-findings-only), reviewing this new design
+fresh, found one asymmetry the redesign itself introduced:
+`SupersedeAttemptAsync`'s creation step walks forward past any number that
+already collides with an existing attempt, but `StartAttemptAsync`'s own
+fresh-attempt path (reached when no pending replacement exists) still
+derived an id straight from `AttemptCount + 1` with no equivalent check.
+Since a collision-skip in `SupersedeAttemptAsync` never bumps
+`AttemptCount` to match the number it actually consumed (deliberately —
+that count only advances when something is actually *started*),
+`AttemptCount` can undershoot the true next-free number. Concretely: a
+replacement minted at a skipped-forward number, once later picked up and
+failed (an ordinary auto-retry, unrelated to supersession), leaves
+`AttemptCount` still short of that number; a subsequent ordinary start then
+recomputes that same, now-terminal attempt's id — the round-5 collision
+shape, recurring on the other side of the mechanism. The conflict this
+produces is silently swallowed by the same "conflict on attempt creation
+might just be a benign replay" tolerance both call sites already rely on
+for legitimate resumability, so `StartAttemptAsync` reports success for an
+attempt that already failed, and a later `CompleteAttemptAsync` call either
+wedges on a version conflict or silently reuses the terminal attempt's
+stale `NodeResult`. Fixed by giving `StartAttemptAsync`'s fresh-id path the
+identical collision-skipping walk `SupersedeAttemptAsync`'s creation step
+already has, so every place that mints a new attempt id now shares the same
+guarantee regardless of how approximate `AttemptCount` has become. Extends
+the existing regression test
+(`SupersedingAReplacementThatWasNeverStartedCreatesAGenuinelyDistinctSecondReplacement`)
+to reproduce this exact sequence.
+
 ### Deliberately deferred
 
 - **Process-tree cancellation and worktree discard.** ADR 0006 says
