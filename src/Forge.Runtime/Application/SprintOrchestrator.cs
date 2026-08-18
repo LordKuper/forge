@@ -259,10 +259,26 @@ public sealed class SprintOrchestrator(
             ProjectRootStatus status = await rootResolver
                 .ResolveAsync(command.ProjectRoot, cancellationToken)
                 .ConfigureAwait(false);
-            SprintWorkflowState advanced = await scheduler
-                .AdvanceGraphAsync(status.Root, command.SprintId, cancellationToken)
-                .ConfigureAwait(false);
-            return result with { Sprint = advanced.Sprint };
+            try
+            {
+                SprintWorkflowState advanced = await scheduler
+                    .AdvanceGraphAsync(status.Root, command.SprintId, cancellationToken)
+                    .ConfigureAwait(false);
+                return result with { Sprint = advanced.Sprint };
+            }
+            catch (InvalidOperationException)
+            {
+                // AdvanceGraphAsync's own internal invariants (e.g. `RequireDefinitionAsync`) throw
+                // when durable state disagrees with itself in a way that should never happen — a
+                // sprint whose event log exists but whose frozen definition does not. The transition
+                // to `running` immediately above already committed durably regardless; only this
+                // *side effect* failed. Reporting that already-committed result instead of letting an
+                // internal invariant violation crash the caller matches every other mutation here:
+                // fail closed with a result, never an unhandled exception, whether this method is
+                // called in-process or dispatched through the Host (ControlPlaneHostedService's own
+                // dispatch has a matching defensive catch for the same reason).
+                return result;
+            }
         }
 
         return result;

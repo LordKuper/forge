@@ -212,6 +212,45 @@ public sealed class SprintOrchestrationTests
         Assert.Equal(fresh.Version, toRunning.Sprint.Version);
     }
 
+    /// <summary>Regression: `AdvanceGraphAsync`'s own internal invariant (`RequireDefinitionAsync`
+    /// throws for a sprint with durable event state but no readable frozen definition -- the
+    /// "invisible, safely resumable sprint" `CreateSprintAsync` itself documents leaving behind when
+    /// a create is interrupted before `SaveDefinitionAsync`) must never crash `RunSprintAsync` after
+    /// its own transition to `running` has already committed durably.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunSurvivesAMissingFrozenDefinitionAfterItsOwnTransitionAlreadyCommitted()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        // Bypasses CreateSprintAsync entirely -- durable event state exists, but
+        // SaveDefinitionAsync/MarkSprintCreatedAsync never ran, so no frozen definition exists.
+        SprintId sprintId = SprintId.New();
+        await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        SprintSnapshot draft =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, draft.Version, SprintOrchestrator.RunSprintKey(draft)),
+            cancellationToken);
+
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+
+        // The transition itself committed durably; AdvanceGraphAsync's side effect failing on the
+        // missing definition must be absorbed, not thrown.
+        Assert.True(toRunning.Succeeded, $"diag={toRunning.DiagnosticCode}");
+        Assert.Equal(SprintState.Running, toRunning.Sprint!.State);
+        SprintSnapshot fresh =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Running, fresh.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task TransitioningAnUnknownSprintReportsSprintNotFound()

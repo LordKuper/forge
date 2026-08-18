@@ -47,15 +47,28 @@ with `Guid.NewGuid()` per call. This means a **stateless CLI retry of a
 crashed `forge sprint create` invocation is not guaranteed idempotent** — a
 second invocation with no memory of the first's key creates a *second*
 sprint rather than resuming the first. This is an accepted trade-off, not a
-silent gap: `CreateSprintAsync`'s own remarks already describe an
-interrupted-before-`MarkSprintCreatedAsync` create as leaving "an invisible,
-safely resumable sprint behind" — worst case, a crash-then-retry orphans one
-inert, never-listed sprint directory, not a duplicate *visible* sprint or
-corrupted state. A future slice could expose an explicit
-`--idempotency-key` option for scripted/automated callers that need true
-crash-safety, matching how several external CLIs (e.g. cloud provider
-`create` commands) expose a client token for exactly this reason; nothing
-here forecloses that.
+silent gap, but its actual worst case is worse than "merely orphans an
+invisible directory": that softer outcome only holds when the crash lands
+*before* `store.MarkSprintCreatedAsync` durably commits (`CreateSprintAsync`'s
+own remarks describe exactly that narrower case as leaving "an invisible,
+safely resumable sprint behind"). If instead the create fully commits and
+only the *response* is lost — the Host restarts, the pipe breaks, the CLI is
+killed after `MarkSprintCreatedAsync` runs — `RemoteForgeMutations` reports
+`HostUnavailable`, indistinguishable to the caller from "nothing happened".
+A retry then mints a fresh key, derives a different `SprintId`, and
+completes normally: the result is **two fully visible, non-terminal
+sprints**, both returned by `ISprintStore.ListAsync`. That also has a
+downstream effect worth naming: `StatusAdvisor.DetermineActiveSprint`
+returns `null` whenever more than one non-terminal sprint exists ("Forge
+never silently chooses among multiple candidates"), so `forge status`/
+`forge next` lose their active-sprint target until the operator cancels one
+of the duplicates (`forge sprint cancel`) — the recovery path, not a
+permanent gap. A future slice could expose an explicit `--idempotency-key`
+option for scripted/automated callers that need true crash-safety, matching
+how several external CLIs (e.g. cloud provider `create` commands) expose a
+client token for exactly this reason; nothing here forecloses that, and this
+severity is exactly why that follow-up is worth doing rather than merely
+theoretical.
 
 ### `run`/`resume` are not confirmable; `cancel` is — but not human-only
 
@@ -146,6 +159,31 @@ exercised `run`/`resume` against that fake. Fixed by only rendering the
 state-suffixed message when `result.Sprint` is not `null`, falling back to
 the plain `successKey` text otherwise — the same defensive shape
 `CreateSprintAsync`'s own output already needed for `result.SprintId`.
+
+### `RunSprintAsync`'s `AdvanceGraphAsync` call could crash a caller after its own transition already committed
+
+`SprintScheduler.AdvanceGraphAsync` starts with `RequireDefinitionAsync`,
+which throws `InvalidOperationException` for a sprint that has durable
+event state but no readable frozen definition — reachable via a corrupted
+`definition.json`, or the narrow "invisible, safely resumable sprint"
+window `CreateSprintAsync` itself documents leaving behind when a create is
+interrupted before `SaveDefinitionAsync`. `RunSprintAsync` calls
+`AdvanceGraphAsync` *after* its own transition to `running` has already
+committed durably, so that exception — if left to propagate — would crash
+the caller (a raw stack trace for the local, in-process CLI path; a torn
+down pipe connection reported as `HostUnavailable` for the Host-routed
+path, both indistinguishable from "the run didn't happen" even though it
+did) instead of reporting the result Forge's other mutations always report.
+This shape is pre-existing and shared with `DispatchResolveGateAsync`, but
+this slice's `run` is the first verb that reaches it *after* a durable
+transition already landed. Fixed at two points: `RunSprintAsync` itself now
+catches `InvalidOperationException` from its `AdvanceGraphAsync` call and
+returns the already-committed transition result instead of propagating
+(closing the local-path crash for good, at the source every caller shares);
+and `ControlPlaneHostedService.DispatchAsync`'s existing IO-failure catch
+now also covers `InvalidOperationException` generally, as defense in depth
+for the same pre-existing shape in other dispatch handlers this PR did not
+otherwise touch.
 
 ## Deliberately deferred
 

@@ -317,11 +317,17 @@ public sealed class ControlPlaneHostedService(
                 request.CorrelationId,
                 new ControlDiagnostic(ControlDiagnosticCode.Malformed, exception.Message));
         }
-        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             // Unlike the client-caused branch above, this means the Host itself failed to read its
-            // own durable state (a locked or unreadable sprint journal) — never the client's fault.
-            // The detail stays generic rather than echoing exception.Message: that message can
+            // own durable state (a locked or unreadable sprint journal, or -- InvalidOperationException,
+            // e.g. SprintScheduler.RequireDefinitionAsync -- a sprint with durable event state but no
+            // readable frozen definition) -- never the client's fault. Left uncaught, an exception
+            // thrown after a mutation's own transition already committed (e.g. RunSprintAsync's
+            // trailing AdvanceGraphAsync call) would otherwise escape this dispatch entirely, tearing
+            // the connection down and reporting HostUnavailable to a caller whose mutation actually
+            // landed. The detail stays generic rather than echoing exception.Message: that message can
             // contain a local filesystem path, which the client-caused branch's messages never do.
             LogDispatchFailed(logger, request.Kind, exception);
             return new ControlResponse(
