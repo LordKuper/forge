@@ -53,6 +53,15 @@ public sealed class SurfaceParityTests
             "IntegrationRemoveButton",
             "IntegrationWriteResultLabel",
         ],
+        [CapabilityIds.SprintManage] =
+        [
+            "SprintIdEntry",
+            "SprintCreateButton",
+            "SprintRunButton",
+            "SprintResumeButton",
+            "SprintCancelButton",
+            "SprintManageResultLabel",
+        ],
     };
 
     [Fact]
@@ -207,6 +216,19 @@ public sealed class SurfaceParityTests
             StringComparison.Ordinal);
         Assert.Contains(
             "viewModel.InitializePrompt(", MethodBody("private async Task RemoveIntegrationAsync()"),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>Same reasoning as the checks above, applied proactively for `sprint.manage`'s
+    /// `cancel` verb (ADR 0027) rather than waiting for a review round to catch it: cancelling a
+    /// sprint is destructive, so its dialog must name the sprint it targets, not repeat the action
+    /// name.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SprintCancelConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        Assert.Contains(
+            "viewModel.SprintCancelPrompt(", MethodBody("private async Task CancelSprintAsync()"),
             StringComparison.Ordinal);
     }
 
@@ -539,6 +561,200 @@ public sealed class SurfaceParityTests
         Assert.Contains("fake", desktop, StringComparison.Ordinal);
         Assert.Contains("written", desktop, StringComparison.Ordinal);
         Assert.Contains("rules/broken.md", desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as the notification/integration parity tests above, for
+    /// `SurfaceFormatting.SprintCreatedMessage` (ADR 0027). Unlike those, `create` cannot use
+    /// literal text equality: each call mints a fresh <see cref="Guid"/>, so the two sides'
+    /// messages can never be byte-identical even when the formatting is correct. Compares the
+    /// format instead -- the fixed prefix and a well-formed `"D"`-format id after it -- which is
+    /// the only property that can actually drift between the two call sites.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintCreatedMessageFormat()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Assert.True((await cliEnvironment.InitializeAsync(
+            cliEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
+        Assert.True((await desktopEnvironment.InitializeAsync(
+            desktopEnvironment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse(["sprint", "create", "--project-root", cliEnvironment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
+            .CreateSprintAsync(desktopEnvironment.ProjectRoot, cancellationToken);
+
+        Assert.Empty(diagnostics.ToString());
+        string cli = cliOutput.ToString().TrimEnd();
+        // Round 1 review found the original check ("starts with the prefix" plus "the tail parses
+        // as a Guid") independently on each side never actually compared the two surfaces against
+        // each other -- and skipped exactly one unasserted separator character, so a drifted
+        // separator (e.g. "prefix:id" instead of "prefix id") would still slip through on both
+        // sides. A "D"-format Guid is always exactly 36 characters, so everything before the last
+        // 36 characters -- prefix AND separator together -- is compared directly for equality
+        // between the two surfaces, and the tail is independently confirmed to actually be a Guid.
+        Assert.Equal(cli[..^36], desktop[..^36]);
+        Assert.True(Guid.TryParse(cli[^36..], out _), $"CLI message did not end in a well-formed id: {cli}");
+        Assert.True(
+            Guid.TryParse(desktop[^36..], out _), $"Desktop message did not end in a well-formed id: {desktop}");
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameSprintCreatedMessageFormat"/>,
+    /// for `SurfaceFormatting.SprintTransitionMessage`'s `run` shape (`includeResultingState:
+    /// true`). Two separate projects, matching the write-parity test's own established shape --
+    /// each side's freshly created sprint deterministically reaches `ready` on its first `run`, so
+    /// (unlike `create`) the rendered text is genuinely comparable by full equality.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintRunMessageForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId cliSprintId = await CreateDraftSprintAsync(cliEnvironment, cancellationToken);
+        SprintId desktopSprintId = await CreateDraftSprintAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse([
+                "sprint", "run", "--sprint", cliSprintId.Value.ToString(), "--project-root",
+                cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
+            .RunSprintAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value.ToString(), cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture, so pin that this is genuinely the
+        // "advanced with a known resulting state" branch, not the unknown-state fallback.
+        Assert.Contains(SurfaceFormatting.Machine(SprintState.Ready), desktop, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameSprintRunMessageForOneSnapshot"/>,
+    /// for `resume`'s fixed-text shape (`includeResultingState: false`). A genuinely blocked sprint
+    /// (a rejected human gate, matching `SprintLifecycleCliTests`'s own fixture shape), not a fresh
+    /// one: `resume` against a non-blocked sprint fails, and a failure renders nothing but the
+    /// diagnostic on both sides -- exactly the "an empty state on both sides would pass too"
+    /// pattern round 1 review of PR #65 rejected for the events parity test.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintResumeMessageForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId cliSprintId = await CreateBlockedSprintAsync(cliEnvironment, cancellationToken);
+        SprintId desktopSprintId = await CreateBlockedSprintAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse([
+                "sprint", "resume", "--sprint", cliSprintId.Value.ToString(), "--project-root",
+                cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
+            .ResumeSprintAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value.ToString(), cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        Assert.Equal(text.Resolve(MessageKeys.SprintResumed), desktop);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameSprintRunMessageForOneSnapshot"/>,
+    /// for `cancel`'s fixed-text shape. Confirmation is passed through directly (`true`), matching
+    /// `install`/`remove`'s own ordinarily-bypassable shape rather than the human-only pair's.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSprintCancelMessageForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId cliSprintId = await CreateDraftSprintAsync(cliEnvironment, cancellationToken);
+        SprintId desktopSprintId = await CreateDraftSprintAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse([
+                "sprint", "cancel", "--yes", "--sprint", cliSprintId.Value.ToString(), "--project-root",
+                cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
+            .CancelSprintAsync(
+                desktopEnvironment.ProjectRoot, desktopSprintId.Value.ToString(), true, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        Assert.Equal(text.Resolve(MessageKeys.SprintCancelled), desktop);
+    }
+
+    private static readonly IReadOnlyList<NodeDefinition> SprintManageParityGraph = [new("a", NodeKind.Work, [])];
+
+    private static readonly IReadOnlyList<NodeDefinition> SprintManageGateGraph =
+        [new("gate", NodeKind.HumanGate, [])];
+
+    private static async Task<SprintId> CreateDraftSprintAsync(
+        TestEnvironment environment, CancellationToken cancellationToken)
+    {
+        Assert.True((await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        return (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: SprintManageParityGraph),
+            cancellationToken)).SprintId!;
+    }
+
+    /// <summary>Matches `SprintLifecycleCliTests.SprintResumeCommandUnblocksASprintBlockedByARejectedGate`'s
+    /// own fixture shape: run a single-gate sprint to `running`, then reject its gate directly
+    /// through <see cref="SprintScheduler"/> (bypassing the CLI/Desktop capability this ADR itself
+    /// covers, so the fixture setup can never accidentally exercise the thing under test).</summary>
+    private static async Task<SprintId> CreateBlockedSprintAsync(
+        TestEnvironment environment, CancellationToken cancellationToken)
+    {
+        Assert.True((await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: SprintManageGateGraph),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        NodeSnapshot gate = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["gate"];
+        await scheduler.ResolveHumanGateAsync(
+            environment.ProjectRoot, sprintId, "gate", false, gate.Version,
+            SprintScheduler.ResolveHumanGateKey(sprintId, gate), cancellationToken);
+        SprintSnapshot blocked =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Blocked, blocked.State);
+        return sprintId;
     }
 
     /// <summary>A minimal single-provider generator so this test stays in the portable

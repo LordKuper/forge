@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.48.0
+
+### Added
+
+- The Desktop app can now create, run, resume, and cancel a sprint
+  ("Create sprint", "Run sprint", "Resume sprint", "Cancel sprint"),
+  matching `forge sprint create|run|resume|cancel`.
+
+### Changed
+
+- `sprint.manage`'s documented capability no longer lists `rebase`;
+  `forge sprint rebase` is not implemented and now has its own separate
+  capability entry (`sprint.rebase`) explaining why (no node executor
+  exists yet to trigger the git-level recovery it would perform).
+
 ## v0.47.0
 
 ### Added

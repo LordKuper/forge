@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -41,13 +41,24 @@
     {
       "id": "sprint.manage",
       "kind": "command",
-      "contract": "CreateRunResumeCancelRebaseSprint",
+      "contract": "CreateRunResumeCancelSprint",
       "events": ["SprintChanged"],
-      "cli": "forge sprint <create|run|resume|cancel|rebase>",
+      "cli": "forge sprint <create|run|resume|cancel>",
       "desktop": "Sprints/Actions",
       "permission": "workflow_mutate",
       "acceptance": "sprint-lifecycle-parity",
-      "note": "`forge sprint inspect` shares the `sprint` command group but belongs to project.snapshot (a query), not this mutation capability."
+      "note": "`forge sprint inspect` shares the `sprint` command group but belongs to project.snapshot (a query), not this mutation capability. `forge sprint rebase` is a separate capability (`sprint.rebase`) below, not one of this id's verbs."
+    },
+    {
+      "id": "sprint.rebase",
+      "kind": "command",
+      "contract": "RebaseSprint",
+      "events": ["SprintChanged"],
+      "cli": "forge sprint rebase",
+      "desktop": "Sprints/Rebase",
+      "permission": "workflow_mutate",
+      "acceptance": "sprint-rebase-parity",
+      "note": "Not implemented on either surface. `SprintGitIsolation.RebaseAttemptAsync` (the git-level primitive this would wrap) already exists but has no reachable trigger: it recovers from a concurrent-integration race that can only occur once a node executor drives attempts through `SprintGitIsolation.IntegrateAsync`, and no executor exists yet (ADR 0020, ADR 0027)."
     },
     {
       "id": "attempt.supersede",

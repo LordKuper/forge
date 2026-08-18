@@ -119,6 +119,44 @@ public static class SurfaceFormatting
         }
     }
 
+    /// <summary>`forge sprint create`'s success line, shared with the Desktop control (ADR 0027) so
+    /// the two can never drift. <see langword="null"/> when the call did not succeed -- matching the
+    /// CLI's own behavior of writing nothing but the diagnostic in that case.</summary>
+    public static string? SprintCreatedMessage(SurfaceText text, CreateSprintResult result)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(result);
+        return result is { Succeeded: true, SprintId: { } sprintId }
+            ? string.Create(CultureInfo.InvariantCulture, $"{text.Resolve(MessageKeys.SprintCreated)} {sprintId.Value:D}")
+            : null;
+    }
+
+    /// <summary>`forge sprint run|resume`'s success line, shared with the Desktop control (ADR
+    /// 0027). <paramref name="includeResultingState"/> distinguishes `run` (the sprint's own
+    /// `AdvanceGraphAsync` side effect can promote further than the one legal hop `run` itself
+    /// performs, so the message reports whatever state the sprint actually settled at) from
+    /// `resume` (always targets exactly one known state, so fixed text is enough).
+    /// <see langword="null"/> when the call did not succeed.</summary>
+    public static string? SprintTransitionMessage(
+        SurfaceText text, SprintTransitionResult result, string successKey, bool includeResultingState)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(result);
+        if (!result.Succeeded)
+        {
+            return null;
+        }
+
+        return includeResultingState
+            ? result.Sprint is not null
+                ? string.Create(CultureInfo.InvariantCulture, $"{text.Resolve(successKey)} {Machine(result.Sprint.State)}")
+                // successKey (e.g. SprintAdvanced) is a sentence PREFIX for this branch, not a
+                // complete sentence on its own -- falling back to it alone would print a dangling
+                // fragment ("Sprint advanced to" with nothing after).
+                : text.Resolve(MessageKeys.SprintAdvancedUnknownState)
+            : text.Resolve(successKey);
+    }
+
     /// <summary>ADR 0005's `project -> sprint -> node -> attempt` hierarchy as one ordered line
     /// list, shared by `forge tree` and the Desktop sprint view so the two projections of the same
     /// snapshot can never drift. <paramref name="details"/> expands exactly the sprint it names;

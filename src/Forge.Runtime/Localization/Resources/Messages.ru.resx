@@ -113,4 +113,10 @@
   <data name="IntegrationGenerateAction" xml:space="preserve"><value>Предпросмотр интеграции</value></data>
   <data name="IntegrationInstallAction" xml:space="preserve"><value>Установить интеграцию</value></data>
   <data name="IntegrationRemoveAction" xml:space="preserve"><value>Удалить интеграцию</value></data>
+  <data name="SprintCreateAction" xml:space="preserve"><value>Создать спринт</value></data>
+  <data name="SprintRunAction" xml:space="preserve"><value>Запустить спринт</value></data>
+  <data name="SprintResumeAction" xml:space="preserve"><value>Возобновить спринт</value></data>
+  <data name="SprintCancelAction" xml:space="preserve"><value>Отменить спринт</value></data>
+  <data name="SprintManageFailed" xml:space="preserve"><value>Действие со спринтом не выполнено.</value></data>
+  <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы выполнить действие.</value></data>
 </root>

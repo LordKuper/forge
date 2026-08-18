@@ -113,4 +113,10 @@
   <data name="IntegrationGenerateAction" xml:space="preserve"><value>Preview integration</value></data>
   <data name="IntegrationInstallAction" xml:space="preserve"><value>Install integration</value></data>
   <data name="IntegrationRemoveAction" xml:space="preserve"><value>Remove integration</value></data>
+  <data name="SprintCreateAction" xml:space="preserve"><value>Create sprint</value></data>
+  <data name="SprintRunAction" xml:space="preserve"><value>Run sprint</value></data>
+  <data name="SprintResumeAction" xml:space="preserve"><value>Resume sprint</value></data>
+  <data name="SprintCancelAction" xml:space="preserve"><value>Cancel sprint</value></data>
+  <data name="SprintManageFailed" xml:space="preserve"><value>Sprint action failed.</value></data>
+  <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to act on it.</value></data>
 </root>

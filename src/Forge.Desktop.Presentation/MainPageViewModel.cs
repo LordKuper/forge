@@ -439,6 +439,111 @@ public sealed class MainPageViewModel(
         }).ConfigureAwait(false);
     }
 
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `create` verb. Not confirmable
+    /// (additive, not destructive), matching the CLI's own `forge sprint create`. No sprint id to
+    /// resolve: create always mints a new one.</summary>
+    public async Task<string> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    {
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            CreateSprintResult result = await mutations
+                .CreateSprintAsync(projectRoot, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                SurfaceFormatting.SprintCreatedMessage(text, result) ?? text.Resolve(MessageKeys.SprintManageFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `run` verb, sharing
+    /// <see cref="ResolveSprintIdAsync"/>/<see cref="SprintTarget"/> (the same blank-means-active-
+    /// sprint/ambiguity resolution <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>
+    /// already established and hardened). Not confirmable: advancing a sprint is additive.</summary>
+    public Task<string> RunSprintAsync(string? projectRoot, string? sprintId, CancellationToken cancellationToken) =>
+        TransitionSprintAsync(
+            projectRoot, sprintId, (mutations, root, id, ct) => mutations.RunSprintAsync(root, id, ct),
+            MessageKeys.SprintAdvanced, includeResultingState: true, cancellationToken);
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `resume` verb, same shape as
+    /// <see cref="RunSprintAsync"/>.</summary>
+    public Task<string> ResumeSprintAsync(
+        string? projectRoot, string? sprintId, CancellationToken cancellationToken) =>
+        TransitionSprintAsync(
+            projectRoot, sprintId, (mutations, root, id, ct) => mutations.ResumeSprintAsync(root, id, ct),
+            MessageKeys.SprintResumed, includeResultingState: false, cancellationToken);
+
+    private async Task<string> TransitionSprintAsync(
+        string? projectRoot,
+        string? sprintId,
+        Func<IForgeMutations, string?, Guid, CancellationToken, Task<SprintTransitionResult>> transition,
+        string successKey,
+        bool includeResultingState,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.SprintManageSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.SprintManageFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            SprintTransitionResult result = await transition(
+                    mutations, projectRoot, resolvedSprintId, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                SurfaceFormatting.SprintTransitionMessage(text, result, successKey, includeResultingState) ??
+                    text.Resolve(MessageKeys.SprintManageFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0027's `sprint.manage` capability -- the `cancel` verb. Ordinarily bypassable
+    /// (`workflow_mutate`, not one of <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/>'s
+    /// human-only capabilities), matching <see cref="RecoverAsync"/>/<see cref="InstallIntegrationAsync"/>'s
+    /// shape exactly -- the dialog's own answer is still passed through as <paramref name="confirmed"/>,
+    /// but a decline does not itself short-circuit the call the way it does for the human-only
+    /// pair.</summary>
+    public async Task<string> CancelSprintAsync(
+        string? projectRoot, string? sprintId, bool confirmed, CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.SprintManageSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.SprintManageFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            SprintTransitionResult result = await mutations
+                .CancelSprintAsync(projectRoot, resolvedSprintId, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                result.Succeeded
+                    ? text.Resolve(MessageKeys.SprintCancelled)
+                    : text.Resolve(MessageKeys.SprintManageFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint <see cref="CancelSprintAsync"/> would act
+    /// on, mirroring <see cref="GatePrompt"/>/<see cref="AttemptSupersedePrompt"/>'s own shape and
+    /// defaulting rules exactly.</summary>
+    public string SprintCancelPrompt(string? sprintId) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}");
+
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
     /// it succeeds or throws — a resolved Host connection is scoped to one action, never kept alive
     /// across calls. A no-op for the local <see cref="ForgeApplication"/> fallback, which implements
