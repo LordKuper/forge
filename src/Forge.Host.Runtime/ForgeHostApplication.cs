@@ -60,6 +60,10 @@ public static class ForgeHostApplication
                 // that loses the lease race never runs a tick against durable state it doesn't own.
                 services.AddSingleton(new ResumeSchedulerOptions(projectRoot));
                 services.AddSingleton<ResumeSchedulerHostedService>();
+                // Same reasoning as ResumeSchedulerHostedService above: ControlPlaneHostedService
+                // owns its lifetime directly, starting it only after winning the project lease.
+                services.AddSingleton(new NotificationDeliveryOptions(projectRoot));
+                services.AddSingleton<NotificationDeliveryHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

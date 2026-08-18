@@ -138,4 +138,9 @@ public static class MessageKeys
     public const string AttemptIdMissingPlaceholder = "AttemptIdMissingPlaceholder";
     public const string AttemptSupersedeSprintAmbiguous = "AttemptSupersedeSprintAmbiguous";
     public const string AttemptInstructionRequired = "AttemptInstructionRequired";
+    public const string NotificationAwaitingHumanTitle = "NotificationAwaitingHumanTitle";
+    public const string NotificationBlockedTitle = "NotificationBlockedTitle";
+    public const string NotificationFailedTitle = "NotificationFailedTitle";
+    public const string NotificationCompletedTitle = "NotificationCompletedTitle";
+    public const string NotificationSprintLabel = "NotificationSprintLabel";
 }

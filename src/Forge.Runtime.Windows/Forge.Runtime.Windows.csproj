@@ -3,6 +3,10 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ForgeOsAdapter>true</ForgeOsAdapter>
+    <!-- ADR 0024: WindowsNotificationService uses System.Windows.Forms.NotifyIcon, a framework
+         reference (already part of the Windows Desktop shared framework this TFM pulls in), not a
+         new NuGet package, deliberately chosen over the Windows App SDK's heavier bootstrap. -->
+    <UseWindowsForms>true</UseWindowsForms>
     <!-- tests/Forge.Tests references this project from its Windows TFM group; restoring that multi-targeted
          project on Linux/macOS (see .github/scripts/test-portable.ps1) evaluates this project too, which the SDK
          refuses without this flag (NETSDK1100). Scoped here rather than repository-wide so the ADR 0007
