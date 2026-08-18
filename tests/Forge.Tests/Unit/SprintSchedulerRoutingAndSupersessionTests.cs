@@ -533,6 +533,59 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         Assert.Equal(AttemptState.Created, finalState.Attempts[startedThirdGeneration.AttemptId!.Value.ToString("D")].State);
     }
 
+    /// <summary>Regression: an earlier version always computed a new replacement's number as
+    /// `currentNode.AttemptCount + 1`, which is correct only when the attempt being superseded was
+    /// itself started through an ordinary <see cref="SprintScheduler.StartAttemptAsync"/> call.
+    /// Superseding a replacement that was never started (itself created by an earlier supersession,
+    /// so its own number was never reflected in `AttemptCount`) recomputed that *same* number again
+    /// -- colliding with the very attempt being cancelled. The resulting version conflict was
+    /// silently swallowed as a benign replay, so the second supersession reported success while
+    /// creating nothing: a later `StartAttemptAsync` would have resolved back to the first,
+    /// already-cancelled replacement instead of a genuine new one.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedingAReplacementThatWasNeverStartedCreatesAGenuinelyDistinctSecondReplacement()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CompleteAttemptResult firstSupersede = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, attempt), confirmed: true, "Try a different approach.",
+            cancellationToken);
+        Assert.True(firstSupersede.Succeeded, $"diag={firstSupersede.DiagnosticCode}");
+        SprintWorkflowState afterFirst = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot firstReplacement =
+            Assert.Single(afterFirst.Attempts.Values, candidate => candidate.Id != attempt.Id);
+        Assert.Equal(AttemptState.Created, firstReplacement.State);
+
+        // The first replacement is never started -- superseded again while still `created`.
+        CompleteAttemptResult secondSupersede = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, firstReplacement.Id, firstReplacement.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, firstReplacement), confirmed: true,
+            "Try yet another approach.", cancellationToken);
+
+        Assert.True(secondSupersede.Succeeded, $"diag={secondSupersede.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, secondSupersede.Node!.State);
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(3, finalState.Attempts.Count);
+        AttemptSnapshot reloadedFirstReplacement = finalState.Attempts[firstReplacement.Id.Value.ToString("D")];
+        Assert.Equal(AttemptState.Cancelled, reloadedFirstReplacement.State);
+        AttemptSnapshot secondReplacement = Assert.Single(
+            finalState.Attempts.Values, candidate => candidate.Id != attempt.Id && candidate.Id != firstReplacement.Id);
+        Assert.Equal(AttemptState.Created, secondReplacement.State);
+        Assert.Equal(firstReplacement.Id, secondReplacement.SupersedesAttemptId);
+
+        // A later ordinary start resolves to the genuinely live second replacement, not back to the
+        // first, already-cancelled one.
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", secondSupersede.Node.Version, cancellationToken);
+        Assert.True(started.Succeeded, $"diag={started.DiagnosticCode}");
+        Assert.Equal(secondReplacement.Id, started.AttemptId);
+    }
+
     private static async Task<(SprintScheduler Scheduler, ISprintStore Store, SprintId SprintId, AttemptSnapshot Attempt)>
         StartImplementationAttemptAsync(TestEnvironment environment)
     {

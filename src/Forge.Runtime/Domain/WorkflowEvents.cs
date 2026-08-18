@@ -48,6 +48,13 @@ public sealed record WorkflowEvent(
     /// <summary>Carried on a node's own transition events so retry policy needs no attempt lookup.</summary>
     public const string AttemptNumberArgument = "attempt_number";
 
+    /// <summary>Carried on a node's `running` transition: the id of the attempt it was started
+    /// with, so <see cref="NodeSnapshot.CurrentAttemptId"/> can answer "which attempt does this
+    /// node's `running` state belong to" directly, without re-deriving an id from
+    /// <see cref="NodeSnapshot.AttemptCount"/> and risking a mismatch once a replacement attempt
+    /// (Stage 11, P11.48-P11.55) is involved.</summary>
+    public const string CurrentAttemptIdArgument = "current_attempt_id";
+
     /// <summary>Carried on an attempt's creation event so its owning node is a durable fact, not
     /// something only the caller who happens to pair matching ids remembers.</summary>
     public const string NodeIdArgument = "node_id";
@@ -195,19 +202,24 @@ public static class WorkflowFold
                         blockedReason);
                     break;
                 case AggregateKind.Node:
+                    nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previousNode);
                     int attemptCount = current.Arguments.TryGetValue(
                         WorkflowEvent.AttemptNumberArgument,
                         out string? countText) && countText is not null
                         ? int.Parse(countText, NumberStyles.Integer, CultureInfo.InvariantCulture)
-                        : nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previous)
-                            ? previous.AttemptCount
-                            : 0;
+                        : previousNode?.AttemptCount ?? 0;
+                    string? currentAttemptId = current.Arguments.TryGetValue(
+                        WorkflowEvent.CurrentAttemptIdArgument,
+                        out string? currentAttemptIdValue) && currentAttemptIdValue is not null
+                        ? currentAttemptIdValue
+                        : previousNode?.CurrentAttemptId;
                     nodes[current.Aggregate.Id] = new(
                         new(current.Aggregate.Id),
                         WorkflowStateNames.Parse<NodeState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
-                        attemptCount);
+                        attemptCount,
+                        currentAttemptId);
                     break;
                 case AggregateKind.Attempt:
                     attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? previousAttempt);

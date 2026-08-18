@@ -218,80 +218,84 @@ check lets through for the wrong reason still lands on an illegal
 transition there. Caught by a new regression test
 (`SupersedeAttemptAsyncResumesAfterACrashBetweenCancellationAndReplacementCreation`).
 
-### The replacement attempt is found by linkage, never recomputed from a moving count
+### Superseded design attempts: reconstructing the replacement's id from a count
 
-A third review round found that the fix above still had a gap one step
-further downstream: the replacement attempt's deterministic id was
-recomputed on every call as `currentNode.AttemptCount + 1`. That count is
-not stable across the replay window this ADR's whole "idempotent replay"
-section is about — it advances the moment a later, ordinary
-`StartAttemptAsync` call legitimately picks the replacement up and the node
-re-enters `running`. A replay of `SupersedeAttemptAsync` arriving *after*
-that point recomputed a different, unrelated id (creating a second,
-orphaned replacement attempt still linking back to the original, already-
-cancelled one) and then — because it saw the node `running` again — walked
-the `running -> failed -> ready` re-arm path a second time, forcibly ending
-the replacement's own legitimate, already in-flight run. The fix: find the
-replacement by linkage (`SupersedesAttemptId == attemptId`) instead of
-recomputing it. Computing the deterministic id from `currentNode.AttemptCount`
-remains correct only when no replacement exists yet, where the node still
-carries only the consequence of this same call's own cancel transition.
+Three successive review rounds (2 through 4) each fixed a real bug in the
+same idea — find "the" pending replacement, and tell whether it has
+started, by recomputing a deterministic id from `currentNode.AttemptCount`
+and comparing it to the replacement's own id. In order: recomputing the id
+fresh on every call instead of caching it broke once `AttemptCount` moved
+past the replacement's own number (an ordinary auto-retry, or a second
+supersession) — fixed by finding the replacement through its
+`SupersedesAttemptId` linkage instead of recomputing anything. Gating *both*
+creation and re-arm on that linkage then broke resumability across the
+crash window between the two — fixed by gating them independently, re-arm
+on the replacement having "started" as told apart from the count via
+another id-reconstruction. Comparing only the *current* count for equality
+then broke once the count moved even further past the replacement's own
+generation (an auto-retry of the replacement itself, or a later, second
+supersession) — fixed by searching the whole range of numbers the node had
+ever used instead of just the current one. Each fix genuinely closed the
+gap the round before it found and shipped with its own regression test; the
+pattern across all three was the same shape of bug recurring one layer
+further out, because the id was always being *reconstructed* from a single
+counter that cannot, on its own, distinguish "which generation is this"
+once more than one attempt has ever been created for the same node without
+starting.
 
-### Re-arming is gated on the replacement having started, not merely existing
+### The node tracks which attempt it started directly, instead of reconstructing one
 
-That same fix, in its first form, skipped *both* attempt creation and the
-node re-arm together whenever a replacement already existed — an
-independent, later pass reviewing that exact change found this regressed
-the crash-window fix two sections up. Creation and re-arm are two separate
-durable steps; a crash can land between them, with the replacement already
-created but the node still `running` from the cancel transition's own
-consequence, waiting to be re-armed. Skipping re-arm whenever a replacement
-merely *exists* left that window permanently stuck: the replacement is
-durably created, but nothing ever re-arms the node to `ready`, and no other
-verb can move a `running` node — the sprint wedged with a `created`
-replacement its own node can never start, short of aborting the sprint.
-Creation and re-arm are gated independently: creation on whether a
-replacement exists at all (unchanged), re-arm on whether it has actually
-**started**. The replacement attempt's own `State` cannot answer that:
-nothing in this codebase yet drives an attempt past `created` (no node
-executor exists), so `StartAttemptAsync` picking the replacement up leaves
-its `State` at `created` regardless — only the *node* moves, to `running`,
-carrying the attempt number it started as an argument. The reliable signal
-is therefore the node's current attempt number: `currentNode.AttemptCount`
-is untouched by the cancel transition above, so re-deriving the attempt id
-that number resolves to (the exact same deterministic-id formula used to
-create the replacement) and comparing it against the replacement's own id
-tells the two cases apart. A replacement not yet picked up still needs the
-node re-armed to `ready` so an ordinary `StartAttemptAsync` can reach it
-(covering both "just created by this same call" and "created by an earlier,
-crash-interrupted call"); only once it has genuinely been picked up must
-re-arming stay hands-off — the original bug this whole three-round chain
-traces back to.
+A fifth review round (critical-findings-only, following the fourth) found
+the reconstruction approach broken a fourth time, from an entirely
+different angle: superseding a replacement that was never started at all.
+Its own number is always `currentNode.AttemptCount + 1` (nothing advances
+that count until something is actually started), so superseding it again
+naively recomputes the *same* number for the new replacement — a genuine id
+collision with the very attempt just cancelled. The resulting version
+conflict was swallowed by the existing "conflict on attempt creation might
+just be a benign replay" tolerance, so the second supersession reported
+success while creating nothing.
 
-### The re-arm signal searches every attempt number the node has used, not just its current one
+Caught by a new regression test
+(`SupersedingAReplacementThatWasNeverStartedCreatesAGenuinelyDistinctSecondReplacement`)
+before it could reach a real caller. Rather than patch this fourth variant
+of the same underlying problem, the mechanism was replaced instead of
+extended further. Two durable facts, tracked directly rather than
+reconstructed:
 
-A fourth review round — the last full-scope round already used, this one
-critical-findings-only per this repository's review-gate rules — found that
-comparing the node's *current* attempt number against the replacement's own
-for plain equality was still one step short. That number only ever grows:
-an ordinary auto-retry of the replacement itself (a ordinary provider
-failure, nothing to do with supersession) or a later, second supersession
-both advance `currentNode.AttemptCount` further without ever moving it
-back. A replay of the original supersede call arriving after such further
-progress compares the node's now-*later* generation against the
-replacement's own, fixed generation, finds no match, and wrongly concludes
-"not picked up yet" — re-arming the node out from under whatever later,
-genuinely in-flight generation is actually running. Exactly the class of
-bug the two sections above this one already fixed, recurring one layer
-further out. The fix: since `StartAttemptAsync` increments
-`currentNode.AttemptCount` by exactly one on every call, the set of attempt
-numbers the node has ever actually used is precisely the dense range
-`1..currentNode.AttemptCount` — no gaps, nothing skipped or reused — so the
-check searches that whole range for whichever number's deterministic id
-matches the replacement's own, rather than only the current one. A match
-anywhere in the range means the node reached that generation at some point
-and, being monotonic, never un-reached it, so its `running` now belongs to
-it or a later descendant either way.
+- **`NodeSnapshot.CurrentAttemptId`** (new field, carried by a new
+  `current_attempt_id` argument on the node's own `running` transition):
+  the exact attempt id `StartAttemptAsync` just started, set every time it
+  starts one — fresh or a picked-up pending replacement alike. No id is
+  ever guessed from a count.
+- **`StartAttemptAsync` finds a pending replacement by direct query**, not
+  by recomputing its id: `state.Attempts.Values.FirstOrDefault(a =>
+  a.NodeId == nodeId && a.State == AttemptState.Created)`. A `created`
+  attempt already linked to a `ready` node *is* the thing waiting to be
+  picked up, unambiguously, regardless of which number it happened to be
+  minted at or how many prior supersessions came before it.
+
+With `StartAttemptAsync` no longer depending on any particular number,
+`SupersedeAttemptAsync`'s own creation step no longer needs to agree with
+it on one either — it now walks forward from `currentNode.AttemptCount + 1`
+skipping any number that already collides with an existing attempt
+(trivially resolving the round-5 collision), and the replacement's number
+becomes purely an implementation detail of how its id is minted, not a
+contract any other call site has to reconstruct.
+
+Detecting whether an existing replacement has already been picked up
+(`SupersedeAttemptAsync`'s own re-arm gate) now combines the two durable
+facts instead of reconstructing anything: the replacement's own `State` no
+longer being `created` means a real completion
+(`CompleteAttemptAsync`/`ResolveHumanGateAsync`) has already walked it
+through `preparing`/`running`/`validating` to a terminal state — covering
+the "started, then failed, retried, or superseded again" case even once
+the node has moved on to a later generation the replacement is no longer
+current for; `currentNode.CurrentAttemptId` matching the replacement's own
+id directly covers the "started, still genuinely in flight, `state` still
+`created`" case, since nothing drives an attempt through those states on
+its own. Either condition is sufficient; re-arm proceeds only when neither
+holds.
 
 ### Deliberately deferred
 

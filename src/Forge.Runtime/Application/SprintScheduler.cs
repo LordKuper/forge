@@ -267,11 +267,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.WorkflowBlocked);
         }
 
-        // `running` with the node's *current* attempt number is a legitimate resume point: a prior
-        // call already moved the node but the attempt record itself did not land (a crash, or a
-        // conflicting append). Basing the deterministic id on the number the node already carries —
-        // rather than count + 1 — keeps a retry's id stable across that transition instead of
-        // shifting to a new, unrelated one every time it is recomputed.
+        // `running` with the node's own recorded `CurrentAttemptId` is a legitimate resume point: a
+        // prior call already moved the node but the attempt record itself did not land (a crash, or
+        // a conflicting append). Reusing that recorded id — rather than re-deriving one — keeps a
+        // retry's id stable across that transition instead of shifting to a new, unrelated one every
+        // time it is recomputed.
         // ponytail: on this resume path `expectedNodeVersion` is not re-checked against the node's
         // current version — there is no prior version to check it against once the node has already
         // moved. A caller with an arbitrarily stale version is handed the real, already-in-flight
@@ -279,9 +279,34 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // ownership and state independently), so this trades a slightly looser staleness guarantee
         // on this one path for actually being resumable. Revisit if that trade stops being safe.
         bool nodeAlreadyRunning = node.State == NodeState.Running;
-        int attemptNumber = nodeAlreadyRunning ? node.AttemptCount : node.AttemptCount + 1;
-        AttemptId attemptId = DeterministicAttemptId(
-            $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+        int attemptNumber = node.AttemptCount + 1;
+
+        // A non-`null` `node.CurrentAttemptId` while `nodeAlreadyRunning` is trusted directly (the
+        // resume case above). Otherwise, a `created` attempt already recorded against this node is a
+        // pending human-initiated replacement (`SupersedeAttemptAsync`, Stage 11, P11.48-P11.55)
+        // waiting to be picked up — looked up by that direct linkage rather than re-derived from a
+        // deterministic id built from `attemptNumber`: a replacement's own id was minted from
+        // whatever number was free *at its own creation time*, which does not have to be
+        // `attemptNumber` here (a second, later replacement of a still-pending first one advances
+        // past a number `AttemptCount` never itself reflects, precisely because nothing has started
+        // it yet to bump that count). Only when neither applies — an ordinary fresh node, never
+        // superseded — is a new id actually derived from `attemptNumber`.
+        AttemptId attemptId;
+        if (nodeAlreadyRunning && node.CurrentAttemptId is { } resumedAttemptId)
+        {
+            attemptId = new(Guid.Parse(resumedAttemptId));
+        }
+        else if (!nodeAlreadyRunning && state.Attempts.Values.FirstOrDefault(
+                     candidate => candidate.NodeId == nodeId && candidate.State == AttemptState.Created) is
+        { } pendingReplacement)
+        {
+            attemptId = pendingReplacement.Id;
+        }
+        else
+        {
+            attemptId = DeterministicAttemptId(
+                $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+        }
 
         if (!nodeAlreadyRunning)
         {
@@ -322,6 +347,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
                     [WorkflowEvent.AttemptNumberArgument] = attemptNumber.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.CurrentAttemptIdArgument] = attemptId.Value.ToString("D"),
                 }).ConfigureAwait(false);
             if (!nodeOutcome.Succeeded)
             {
@@ -723,25 +749,35 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             .ConfigureAwait(false);
         NodeSnapshot currentNode = afterCancel.Nodes[nodeId];
 
-        // Found by linkage, not recomputed from `currentNode.AttemptCount`: that count moves the
-        // moment a later, ordinary `StartAttemptAsync` call picks the replacement up, so recomputing
-        // the "next" deterministic id from it on a late replay would land on a brand-new, unrelated
-        // id instead of the one this same call already created -- creating a second, orphaned
-        // replacement and (below) wrongly forcing the node's already-legitimate re-run back to
-        // `ready`, discarding whatever it had in flight.
+        // Found by linkage, not recomputed from `currentNode.AttemptCount`: that count only ever
+        // advances when `StartAttemptAsync` actually *starts* something, never merely because an
+        // attempt was created, so a replacement still waiting to be picked up leaves it unchanged —
+        // recomputing "the next" id from it on a later call would at best re-derive the same pending
+        // replacement and at worst (superseding that still-pending replacement itself, before it was
+        // ever started) collide with its own number, since nothing has retired that slot yet.
         AttemptSnapshot? existingReplacement = afterCancel.Attempts.Values
             .FirstOrDefault(candidate => candidate.SupersedesAttemptId == attemptId);
         if (existingReplacement is null)
         {
-            // The exact same deterministic-id formula `StartAttemptAsync` itself uses for a
-            // brand-new attempt on this node: a later ordinary `StartAttemptAsync` call for this
-            // now-`ready` node resolves to this very attempt instead of creating an unrelated
-            // duplicate. Safe to compute from `currentNode.AttemptCount` here specifically because
-            // nothing yet exists that supersedes this attempt -- the node has not progressed past
-            // the point this call itself cancelled.
+            // Starts from the same `AttemptCount + 1` `StartAttemptAsync` itself would use for a
+            // brand-new attempt, but does not stop there: that number can already belong to another
+            // attempt this node has minted without ever starting it (most directly, `attempt` itself,
+            // when it was already an unstarted pending replacement being superseded again) — walking
+            // forward until a genuinely free number is found avoids colliding with it. `StartAttemptAsync`
+            // no longer needs to independently agree on which number this is: it finds this node's
+            // pending replacement by direct linkage (`NodeId`+`created`), not by recomputing the id
+            // from `AttemptCount`, so nothing here depends on the exact number chosen beyond it being
+            // free and reproducible on a replay of this same call.
             int attemptNumber = currentNode.AttemptCount + 1;
             AttemptId freshAttemptId = DeterministicAttemptId(
                 $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            while (afterCancel.Attempts.ContainsKey(freshAttemptId.Value.ToString("D")))
+            {
+                attemptNumber++;
+                freshAttemptId = DeterministicAttemptId(
+                    $"start_attempt|{sprintId.Value:D}|{nodeId}|{attemptNumber.ToString(CultureInfo.InvariantCulture)}");
+            }
+
             Dictionary<string, string?> creationArguments = new(StringComparer.Ordinal)
             {
                 [WorkflowEvent.NodeIdArgument] = nodeId,
@@ -766,41 +802,26 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         // `StartAttemptAsync` call, not merely on whether it exists: creation and the node re-arm
         // are two separate durable steps, and a crash can land between them -- with the replacement
         // created but the node still `running` from the cancelled attempt's own transition, waiting
-        // to be re-armed. Gating this on "no replacement exists" (an earlier version of this fix)
-        // missed exactly that window: the replacement would be durably created, but nothing would
-        // ever re-arm the node, and no other verb can move a `running` node to `ready` -- the sprint
-        // stuck with a `created` replacement its own node can never start. Checking the replacement
-        // attempt's own *state* does not work either: nothing in this codebase yet drives an attempt
-        // past `created` (no node executor exists), so `StartAttemptAsync` picking the replacement up
-        // leaves it `created` still -- only the node moves, to `running`, carrying the attempt number
-        // it started as an argument. The reliable signal is therefore the *node's* current attempt
-        // number, but *equality* against it is not enough: `currentNode.AttemptCount` only ever
-        // grows (a later ordinary retry, or a later second supersession, both advance it further
-        // without moving it back), so a replay of this call arriving after such further progress
-        // would see a *later* number than the one the replacement itself started at and wrongly
-        // conclude "not picked up yet" for a replacement one or more generations behind that further
-        // progress. Instead, every attempt number the node has ever actually used is exactly the
-        // dense range `1..currentNode.AttemptCount` (each `StartAttemptAsync` call increments it by
-        // exactly one, never skipping or reusing a number), so this searches that whole range for
-        // whichever number's deterministic id matches the replacement's own — found anywhere in it
-        // means the node reached (and, being monotonic, never un-reached) the replacement's own
-        // generation, so its `running` now belongs to it or a later descendant, not to whatever this
-        // cancel transition left behind; re-arming must not touch it, the case the linkage check
-        // above still guards against.
-        bool replacementStarted = false;
-        if (existingReplacement is not null)
-        {
-            for (int number = 1; number <= currentNode.AttemptCount; number++)
-            {
-                if (DeterministicAttemptId(
-                        $"start_attempt|{sprintId.Value:D}|{nodeId}|{number.ToString(CultureInfo.InvariantCulture)}") ==
-                    existingReplacement.Id)
-                {
-                    replacementStarted = true;
-                    break;
-                }
-            }
-        }
+        // to be re-armed. Gating this on "no replacement exists" missed exactly that window: the
+        // replacement would be durably created, but nothing would ever re-arm the node, and no other
+        // verb can move a `running` node to `ready` -- the sprint stuck with a `created` replacement
+        // its own node can never start. Re-deriving a number from `currentNode.AttemptCount` and
+        // comparing deterministic ids does not work robustly either: `AttemptCount` only reflects the
+        // *count* of attempts actually started, not which specific one, so once a node has been
+        // superseded more than once (a not-yet-started replacement itself superseded again) no fixed
+        // arithmetic on that count reliably reconstructs any particular generation's own id. Two
+        // independent, durable signals together cover every case without reconstructing anything:
+        // `CurrentAttemptId` (set directly by `StartAttemptAsync` to the exact attempt it started)
+        // catches a replacement that is *currently* running, still `created` because nothing in this
+        // codebase drives an attempt through `preparing`/`running`/`validating` on its own — only a
+        // real completion (`CompleteAttemptAsync`/`ResolveHumanGateAsync`) walks it there; the
+        // replacement's own `State` no longer being `created` catches exactly that completed case,
+        // including when the node has since moved on to a *later* generation the replacement itself
+        // is no longer the current one for.
+        bool replacementStarted = existingReplacement is not null &&
+            (existingReplacement.State != AttemptState.Created ||
+                (currentNode.State == NodeState.Running &&
+                    currentNode.CurrentAttemptId == existingReplacement.Id.Value.ToString("D")));
         if (!replacementStarted)
         {
             // The node state machine has no direct `running` -> `ready` edge (only `running` ->
@@ -1936,11 +1957,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         string messageKey,
         NodeState toState,
         long expectedVersion,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string?>? extraArguments = null) =>
         await store.AppendTransitionAsync(
             projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", messageKey,
-            WorkflowStateNames.ToSnakeCase(toState), expectedVersion, Guid.NewGuid(), cancellationToken)
-            .ConfigureAwait(false);
+            WorkflowStateNames.ToSnakeCase(toState), expectedVersion, Guid.NewGuid(), cancellationToken,
+            extraArguments).ConfigureAwait(false);
 
     private async Task<AppendOutcome> WalkAttemptAsync(
         string projectRoot,
