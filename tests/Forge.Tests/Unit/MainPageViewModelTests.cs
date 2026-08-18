@@ -447,9 +447,9 @@ public sealed class MainPageViewModelTests
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         string nodeId = ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
-        await orchestrator.CreateSprintAsync(
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.HumanGate, [])]),
-            cancellationToken);
+            cancellationToken)).SprintId!;
         FakeForgeMutations mutations = new();
         MainPageViewModel viewModel = new(
             Text(),
@@ -461,6 +461,56 @@ public sealed class MainPageViewModelTests
 
         Assert.Equal(1, mutations.ResolveGateCalls);
         Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
+        // Not just "some sprint" -- the specific one the blank entry should resolve to.
+        Assert.Equal(sprintId.Value, mutations.LastGateSprintId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncWithABlankSprintIdAndNoSprintsReportsSprintNotFound()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, null, null, true, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.ResolveGateCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Regression: `StatusAdvisor.DetermineActiveSprint` returns `null` both when no sprint
+    /// is non-terminal and when more than one is (ADR 0005: "Forge never silently chooses among
+    /// multiple candidates"). A blank sprint id must not report the same "not found" message for
+    /// both -- the sprints exist and are visible in the tree, so the user needs to be told to enter
+    /// an id, not that nothing was found.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, null, null, true, true, cancellationToken);
+
+        Assert.Equal(0, mutations.ResolveGateCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.GateSprintAmbiguous), message);
+        Assert.DoesNotContain(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
     }
 
     [Fact]

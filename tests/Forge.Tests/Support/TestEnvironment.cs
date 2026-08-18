@@ -330,6 +330,8 @@ internal sealed class FakeForgeMutations : IForgeMutations
 
     public string? LastGateNodeId { get; private set; }
 
+    public Guid? LastGateSprintId { get; private set; }
+
     public int SupersedeAttemptCalls { get; private set; }
 
     public Task<NodeActionResult> ResolveGateAsync(
@@ -344,6 +346,7 @@ internal sealed class FakeForgeMutations : IForgeMutations
         LastGateApproved = approved;
         LastGateConfirmed = confirmed;
         LastGateNodeId = nodeId;
+        LastGateSprintId = sprintId;
         return Task.FromResult(new NodeActionResult(true, null, DiagnosticCodes.None));
     }
 

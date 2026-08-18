@@ -125,6 +125,7 @@ public static class MessageKeys
     public const string GateRejectAction = "GateRejectAction";
     public const string GateConfirmationRequired = "GateConfirmationRequired";
     public const string GateActiveSprintPlaceholder = "GateActiveSprintPlaceholder";
+    public const string GateSprintAmbiguous = "GateSprintAmbiguous";
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";

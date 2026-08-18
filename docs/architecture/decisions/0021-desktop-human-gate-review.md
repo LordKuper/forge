@@ -121,11 +121,26 @@ the active sprint's tree already visible and its gate node showing
 page most invites approving/rejecting a gate was exactly the moment doing
 so was guaranteed to fail. Independent review found this and it was fixed
 before merge: a blank `sprintId` now resolves the active sprint via
-`ForgeApplication.GetProjectSnapshotAsync(...).ActiveSprintId` (returning
-`SprintNotFound` if there is none), while a non-blank, unparsable value is
-still reported the same way `forge gate approve|reject` reports an
-unparsable `--sprint` — matching `RefreshAsync`'s own rule exactly instead
-of a rule unique to this one action.
+`ForgeApplication.GetProjectSnapshotAsync(...).ActiveSprintId`, while a
+non-blank, unparsable value is still reported the same way `forge gate
+approve|reject` reports an unparsable `--sprint` — matching `RefreshAsync`'s
+own rule exactly instead of a rule unique to this one action.
+
+`StatusAdvisor.DetermineActiveSprint` returns `null` for two materially
+different reasons (ADR 0005: "the active sprint is an explicit selection or
+the only non-terminal sprint; Forge never silently chooses among multiple
+candidates") — zero non-terminal sprints, or more than one. A second review
+round found the first fix above collapsed both to `SprintNotFound`, so a
+project with several running sprints and a blank entry was told "not
+found" while those very sprints were rendered in the tree directly above
+the button — wrong information, not merely terse, and with no hint that
+typing an id was what the action needed. Fixed by distinguishing the two:
+`ResolveSprintIdAsync` now also counts non-terminal sprints when
+`ActiveSprintId` is `null`, and `ResolveGateAsync` reports a dedicated
+`GateSprintAmbiguous` message (no diagnostic code — this is resolved
+entirely client-side, before `IForgeMutations` is ever reached) instead of
+`SprintNotFound` when more than one exists. Both branches (genuinely none,
+and more than one) now have their own regression test.
 
 ### The confirmation dialog names its target, and a stale result never survives an unrelated refresh
 
@@ -180,10 +195,16 @@ Two further review findings, both fixed before merge:
   `RecoverAsync`/`SetConfigurationAsync`'s existing
   resolve-mutations/`UseMutationsAsync`/`Message(...)` pattern exactly.
 - New message keys: `GateResolutionFailed`, `GateNodeIdLabel`,
-  `GateApproveAction`, `GateRejectAction` (en/ru). `GateResolved` already
-  existed from the CLI slice and is reused for the success case.
+  `GateApproveAction`, `GateRejectAction`, `GateConfirmationRequired`,
+  `GateActiveSprintPlaceholder`, `GateSprintAmbiguous` (en/ru). `GateResolved`
+  already existed from the CLI slice and is reused for the success case.
 - No new diagnostic codes — `DiagnosticCodes.SprintNotFound` is reused for
-  an unparsable sprint id, matching the CLI's own behavior.
+  an unparsable sprint id or a genuinely absent active sprint, matching the
+  CLI's own behavior. The distinct "more than one non-terminal sprint"
+  case (see "A blank sprint id targets the active sprint" above) carries
+  no diagnostic code at all: it is resolved entirely client-side, before
+  `IForgeMutations` is ever reached, so there is nothing for a wire-level
+  code to describe.
 
 ## References
 

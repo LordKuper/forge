@@ -3,6 +3,7 @@ using System.Text;
 using Forge.Application;
 using Forge.Compiler;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Localization;
 
 namespace Forge.Desktop.Presentation;
@@ -222,11 +223,18 @@ public sealed class MainPageViewModel(
         bool confirmed,
         CancellationToken cancellationToken)
     {
-        Guid? targetSprintId = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (targetSprintId is not { } resolvedSprintId)
+        if (target.SprintId is not { } resolvedSprintId)
         {
-            return Message(text.Resolve(MessageKeys.GateResolutionFailed), DiagnosticCodes.SprintNotFound);
+            // Two different reasons collapse to "no id" (StatusAdvisor.DetermineActiveSprint):
+            // nothing non-terminal exists, or more than one does and Forge never silently picks
+            // among them (ADR 0005). The latter needs a message that actually tells the user what
+            // to do next -- "not found" would be wrong information, not merely terse, since the
+            // candidate sprints are the ones already rendered in the tree above this action.
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.GateSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.GateResolutionFailed), DiagnosticCodes.SprintNotFound);
         }
 
         string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
@@ -255,18 +263,29 @@ public sealed class MainPageViewModel(
                 $"{text.Resolve(MessageKeys.GateNodeIdLabel)} " +
                 $"{nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId}");
 
-    private async Task<Guid?> ResolveSprintIdAsync(
+    /// <summary><paramref name="Ambiguous"/> distinguishes "more than one non-terminal sprint, Forge
+    /// never silently picks one" (<see cref="SprintId"/> is <see langword="null"/> but a sprint id
+    /// entry would resolve it) from "genuinely none" (entering one would not help either).</summary>
+    private readonly record struct SprintTarget(Guid? SprintId, bool Ambiguous);
+
+    private async Task<SprintTarget> ResolveSprintIdAsync(
         string? projectRoot, string? sprintId, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(sprintId))
         {
-            return Guid.TryParse(sprintId, out Guid parsed) ? parsed : null;
+            return new(Guid.TryParse(sprintId, out Guid parsed) ? parsed : null, false);
         }
 
         ProjectSnapshot snapshot = await application
             .GetProjectSnapshotAsync(projectRoot, cancellationToken)
             .ConfigureAwait(false);
-        return snapshot.ActiveSprintId;
+        if (snapshot.ActiveSprintId is { } activeSprintId)
+        {
+            return new(activeSprintId, false);
+        }
+
+        bool ambiguous = snapshot.Sprints.Count(sprint => !WorkflowStateMachines.IsTerminal(sprint.State)) > 1;
+        return new(null, ambiguous);
     }
 
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
