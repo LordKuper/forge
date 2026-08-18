@@ -370,7 +370,8 @@ Independent review found five issues, all fixed:
    `UnauthorizedAccessException`, not `IOException` as originally assumed
    when the fix was written — both are already in the hosted service's own
    catch filter, so the delivery-side behavior was never wrong, only the
-   test's assumed exception type.
+   test's assumed exception type. (Round 4 review found this exact-type
+   assertion was itself not portable — see "Round 4 review" below.)
 5. **`MaxCatchUpReads`'s doc comment and `LogCatchUpBoundReached`'s log
    message both inaccurately described unresolved events as later being
    "caught up on."** They are not: once the bound is hit, the persisted
@@ -378,6 +379,36 @@ Independent review found five issues, all fixed:
    remaining events are delivered by a later tick as ordinary *new*
    notifications — from that tick's perspective there is no "catch-up"
    happening at all. Fixed by rewording both to state this precisely.
+
+### Round 4 review (critical-only): round 3's own new test was not portable
+
+Round 3 completed AGENTS.md's cap of three full-scope rounds; round 4 is
+critical-findings-only. One critical issue found and fixed:
+
+1. **(Critical) The round-3 cursor-cleanup test broke the portable CI job on
+   Linux and macOS.** `SaveAsyncCleansUpItsTempFileWhenTheFinalMoveFailsAndPropagatesTheOriginalException`
+   asserted an exact `UnauthorizedAccessException` type, confirmed only by
+   running it locally on Windows. Moving a file onto an existing directory
+   raises `IOException` (`EISDIR`) on Linux/macOS instead — confirmed from
+   the actual CI failure log for the round-3 commit, not inferred:
+   `Validate portable core (ubuntu-24.04)` failed with
+   `System.IO.IOException : Is a directory`, and the `macos-14` job was
+   cancelled by fail-fast. This violated AGENTS.md's "build and test neutral
+   code on Windows, Linux, and macOS" and "pass all checks before review"
+   rules — a genuine gap this repository's own local (Windows-only)
+   validation could never have caught, exactly the class of check an
+   independent review pass exists to add. Fixed by asserting the thrown
+   exception is one of the two types the hosted service's own catch filter
+   already accepts (`IOException or UnauthorizedAccessException`) instead
+   of one exact type: the platform difference is real and expected, and the
+   test's actual job — proving both are handled without leaking a `.tmp`
+   file — holds on every OS either way.
+
+The same round re-verified, from scratch, that every code path reachable
+from `TickAsync` is covered by its try/catch (the recurring round-1→2→3
+defect class) and found no fourth instance; it also re-checked test
+soundness, secret/PII exposure, and contract-version consistency across the
+full feature diff, all clean.
 
 ## Consequences
 
