@@ -299,6 +299,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             // ordinary one-pass progress through however many model-bearing nodes and review
             // iterations a sprint happens to have.
             ExecutionPhase? modelPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
+            RouteDecision? routedDecision = null;
             if (modelPhase is { } phase &&
                 definition.ExecutionProfiles.TryGetValue(phase, out ExecutionProfile? profile))
             {
@@ -310,6 +311,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 {
                     return new(false, null, RouteDiagnosticCode(decision.Outcome));
                 }
+
+                routedDecision = decision;
             }
 
             AppendOutcome nodeOutcome = await store.AppendTransitionAsync(
@@ -322,6 +325,18 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 }).ConfigureAwait(false);
             if (!nodeOutcome.Succeeded)
             {
+                // The node transition this routed decision was meant to authorize never actually
+                // landed (a stale pre-check, or a genuine race against a concurrent caller) -- refund
+                // the unit `DecideAsync` already consumed, exactly like `CompleteAttemptAsync` does
+                // on a real success, so a run of conflicts here can never permanently exhaust the
+                // shared budget for work that never happened.
+                if (routedDecision is not null)
+                {
+                    await routingLedger.RecordOutcomeAsync(
+                        projectRoot, sprintId, routedDecision, true, null, cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
                 return new(false, null, nodeOutcome.DiagnosticCode);
             }
         }
@@ -745,15 +760,38 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             {
                 return new(false, currentNode, creationOutcome.DiagnosticCode);
             }
+        }
 
+        // Re-arming is gated on whether the replacement has actually been picked up by a
+        // `StartAttemptAsync` call, not merely on whether it exists: creation and the node re-arm
+        // are two separate durable steps, and a crash can land between them -- with the replacement
+        // created but the node still `running` from the cancelled attempt's own transition, waiting
+        // to be re-armed. Gating this on "no replacement exists" (an earlier version of this fix)
+        // missed exactly that window: the replacement would be durably created, but nothing would
+        // ever re-arm the node, and no other verb can move a `running` node to `ready` -- the sprint
+        // stuck with a `created` replacement its own node can never start. Checking the replacement
+        // attempt's own *state* does not work either: nothing in this codebase yet drives an attempt
+        // past `created` (no node executor exists), so `StartAttemptAsync` picking the replacement up
+        // leaves it `created` still -- only the node moves, to `running`, carrying the attempt number
+        // it started as an argument. The reliable signal is therefore the *node's* current attempt
+        // number: `currentNode.AttemptCount` is unchanged by the cancel transition above, so a value
+        // that still resolves (via the exact same deterministic-id formula used to create the
+        // replacement) to some *other* attempt means the node has not picked the replacement up yet
+        // (whatever its current state — leftover `running`, or already re-armed to `failed`); a
+        // value that resolves to the replacement itself means it has, and the node's `running` now
+        // belongs to it, not to whatever this cancel transition left behind — re-arming must not
+        // touch it, the case the linkage check above still guards against.
+        bool replacementStarted = existingReplacement is not null &&
+            DeterministicAttemptId(
+                $"start_attempt|{sprintId.Value:D}|{nodeId}|{currentNode.AttemptCount.ToString(CultureInfo.InvariantCulture)}") ==
+            existingReplacement.Id;
+        if (!replacementStarted)
+        {
             // The node state machine has no direct `running` -> `ready` edge (only `running` ->
             // `failed` -> `ready`, the same two-step path an ordinary auto-retry already takes) — so
             // this always walks both steps, and each is independently checked against the node's
             // *current* state (not gated on a single flag) so a retry resumed after a crash between
             // the two steps finishes only the remaining one instead of getting stuck in `failed`.
-            // Reached only when no replacement existed yet, so the node here still carries the
-            // consequence of the cancel transition above (`running`, from the now-`cancelled`
-            // attempt), never a later, unrelated `running` the replacement itself has since entered.
             if (currentNode.State == NodeState.Running)
             {
                 AppendOutcome failedOutcome = await AppendNodeAsync(

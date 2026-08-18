@@ -66,6 +66,19 @@ treats `Succeeded` the same as `Excluded`. Caught by a new regression test
 (`CompleteAttemptAsyncRefundsTheRoutingBudgetOnSuccessSoOrdinaryProgressNeverExhaustsIt`)
 before it could reach a real caller.
 
+The final review round found one more way the same unit could go
+unrefunded: `DecideAsync` commits the budget-consuming `Routed` decision
+*before* the node transition it is meant to authorize. When that node
+transition itself then fails — a stale pre-check, or a genuine race against
+a concurrent caller — the consumed unit represents work that never actually
+happened, and nothing refunded it; a `StartAttemptAsync` recorded a chain of
+`Routed` decisions for repeated conflicts on the same node, and only a
+`Succeeded` (or `Excluded`) decision the sprint could no longer reach would
+ever have refunded any of them. Fixed the same way `CompleteAttemptAsync`
+already refunds a real success: on a failed node transition,
+`RoutingLedger.RecordOutcomeAsync(decision, succeeded: true, ...)` refunds
+the unit immediately before returning the failure.
+
 ### `DeferAttemptAsync` is the rate-limit-abandonment path
 
 New `SprintScheduler.DeferAttemptAsync(projectRoot, sprintId, nodeId,
@@ -207,8 +220,8 @@ transition there. Caught by a new regression test
 
 ### The replacement attempt is found by linkage, never recomputed from a moving count
 
-A third, later review round found that the fix above still had a gap one
-step further downstream: the replacement attempt's deterministic id was
+A third review round found that the fix above still had a gap one step
+further downstream: the replacement attempt's deterministic id was
 recomputed on every call as `currentNode.AttemptCount + 1`. That count is
 not stable across the replay window this ADR's whole "idempotent replay"
 section is about — it advances the moment a later, ordinary
@@ -220,13 +233,43 @@ cancelled one) and then — because it saw the node `running` again — walked
 the `running -> failed -> ready` re-arm path a second time, forcibly ending
 the replacement's own legitimate, already in-flight run. The fix: find the
 replacement by linkage (`SupersedesAttemptId == attemptId`) instead of
-recomputing it. When one already exists, the call has nothing left to do —
-both attempt creation and the node re-arm are skipped entirely, regardless
-of how far the node or the replacement has since progressed. Computing the
-deterministic id from `currentNode.AttemptCount` remains correct, but only
-inside the branch that already established no replacement exists yet, where
-the node still carries only the consequence of this same call's own cancel
-transition.
+recomputing it. Computing the deterministic id from `currentNode.AttemptCount`
+remains correct only when no replacement exists yet, where the node still
+carries only the consequence of this same call's own cancel transition.
+
+### Re-arming is gated on the replacement having started, not merely existing
+
+That same fix, in its first form, skipped *both* attempt creation and the
+node re-arm together whenever a replacement already existed — an
+independent, later pass reviewing that exact change found this regressed
+the crash-window fix two sections up. Creation and re-arm are two separate
+durable steps; a crash can land between them, with the replacement already
+created but the node still `running` from the cancel transition's own
+consequence, waiting to be re-armed. Skipping re-arm whenever a replacement
+merely *exists* left that window permanently stuck: the replacement is
+durably created, but nothing ever re-arms the node to `ready`, and no other
+verb can move a `running` node — the sprint wedged with a `created`
+replacement its own node can never start, short of aborting the sprint.
+Creation and re-arm are gated independently: creation on whether a
+replacement exists at all (unchanged), re-arm on whether it has actually
+**started**. The replacement attempt's own `State` cannot answer that:
+nothing in this codebase yet drives an attempt past `created` (no node
+executor exists), so `StartAttemptAsync` picking the replacement up leaves
+its `State` at `created` regardless — only the *node* moves, to `running`,
+carrying the attempt number it started as an argument. The reliable signal
+is therefore the node's current attempt number: `currentNode.AttemptCount`
+is untouched by the cancel transition above, so re-deriving the attempt id
+that number resolves to (the exact same deterministic-id formula used to
+create the replacement) and comparing it against the replacement's own id
+tells the two cases apart precisely — a match means the node has picked the
+replacement up and its `running` now belongs to it; anything else means it
+has not, whatever the node's current state (leftover `running`, or already
+re-armed as far as `failed`). A replacement not yet picked up still needs
+the node re-armed to `ready` so an ordinary `StartAttemptAsync` can reach it
+(covering both "just created by this same call" and "created by an earlier,
+crash-interrupted call"); only once it has genuinely been picked up must
+re-arming stay hands-off — the original bug this whole three-round chain
+traces back to.
 
 ### Deliberately deferred
 
