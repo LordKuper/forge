@@ -88,16 +88,68 @@ answer, and that boolean is the `confirmed` argument
 `confirmed: true` without the dialog itself returning it, so the
 "never bypassed" property holds by construction, not by a separate check.
 
-### An unparsable/missing sprint id is a reported failure, not a silent fallback
+Independent review found that this property, while true, had **no test
+verifying it**: `FakeForgeMutations.ResolveGateAsync` discarded `approved`/
+`confirmed` entirely, so a hardcoded `true, true` in
+`MainPageViewModel.ResolveGateAsync` — silently deleting the "never
+bypassed" property, and making a `Reject` button that actually approved —
+would have left the whole suite green. The same class of gap ADR 0019's own
+review found and fixed on the CLI slice. Fixed by recording both values on
+the fake and asserting them, plus real end-to-end local-fallback tests for
+reject (asserting the node's resulting durable state is `Failed`, the
+mirror of the existing approve test) and for an unconfirmed decision
+(asserting `ConfirmationRequired` and that the node's state is unchanged).
 
-`RefreshAsync`'s existing handling of a malformed `--sprint`-equivalent
-already established the precedent (`sprintMalformed` reports
-`SprintNotFound` rather than silently expanding the active sprint).
-`MainPageViewModel.ResolveGateAsync` follows it: `Guid.TryParse` failure
-returns `GateResolutionFailed` with `DiagnosticCodes.SprintNotFound`
-*before* resolving mutations or calling the Host at all — matching
-`CliApplication`'s own `--sprint` parse-failure path, which also never
-reaches `IForgeMutations`.
+Review also found declining the dialog still reached `IForgeMutations` —
+for an initialized project, `RemoteForgeMutations`, meaning cancelling
+still resolved (and could launch) a Host connection and round-tripped a
+real `resolve_gate` request only to be told `confirmation_required`.
+Fixed by short-circuiting on `!confirmed` before `MainPageViewModel` is
+ever called, matching `MainPage.InitializeAsync`'s already-correct shape
+exactly (a dedicated `GateConfirmationRequired` message, no mutation call).
+
+### A blank sprint id targets the active sprint, matching the page's other reader
+
+`RefreshAsync`'s existing handling already establishes that a blank
+`SprintIdEntry` means "the active sprint", not "no sprint" —
+`sprintRequested` only becomes true for a genuinely non-blank value, and a
+*non-blank but unparsable* one is reported as `SprintNotFound` rather than
+silently falling back. `MainPageViewModel.ResolveGateAsync` originally
+diverged from this: any blank value (the page's own default state, with
+the active sprint's tree already visible and its gate node showing
+`awaiting_human`) failed with `SprintNotFound`, meaning the one moment the
+page most invites approving/rejecting a gate was exactly the moment doing
+so was guaranteed to fail. Independent review found this and it was fixed
+before merge: a blank `sprintId` now resolves the active sprint via
+`ForgeApplication.GetProjectSnapshotAsync(...).ActiveSprintId` (returning
+`SprintNotFound` if there is none), while a non-blank, unparsable value is
+still reported the same way `forge gate approve|reject` reports an
+unparsable `--sprint` — matching `RefreshAsync`'s own rule exactly instead
+of a rule unique to this one action.
+
+### The confirmation dialog names its target, and a stale result never survives an unrelated refresh
+
+Two further review findings, both fixed before merge:
+
+- The dialog originally passed the same action name as title, message, and
+  accept button (`DisplayAlertAsync(action, action, action, cancel)`), so a
+  user could not tell from it which sprint or node they were about to
+  approve/reject — for an irreversible human decision, a materially worse
+  confirmation than `InitializeAsync`'s own dialog (which already shows the
+  project root being acted on). Fixed with `MainPageViewModel.GatePrompt`,
+  which names both the sprint (or the active-sprint placeholder, avoiding
+  an extra round-trip just to resolve and display it) and the effective
+  node id, applying the identical defaulting rules `ResolveGateAsync`
+  itself uses.
+- `GateResultLabel` was assigned only inside the gate flow and never reset
+  by `RefreshAsync`, so a decision's outcome text survived every later,
+  unrelated refresh — a stale "Gate resolved." could sit next to a
+  different sprint's tree or a different project root. Fixed by clearing
+  it inside `RefreshAsync` (so any *other* trigger — the Refresh button, a
+  changed `SprintIdEntry`/`ProjectRootEntry`, `OnAppearing` — clears it)
+  and re-ordering `MainPage.ResolveGateAsync` to set the label *after*
+  calling `RefreshAsync`, so the decision just made still displays its own
+  outcome correctly.
 
 ## Deliberately deferred
 

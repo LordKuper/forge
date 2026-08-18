@@ -89,6 +89,8 @@
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>
+  <data name="GateConfirmationRequired" xml:space="preserve"><value>Подтвердите решение по контрольной точке перед его применением.</value></data>
+  <data name="GateActiveSprintPlaceholder" xml:space="preserve"><value>активный спринт</value></data>
   <data name="AttemptDescription" xml:space="preserve"><value>Команды попыток (только для человека).</value></data>
   <data name="AttemptSupersedeDescription" xml:space="preserve"><value>Отменить незавершённую попытку и создать связанную замену.</value></data>
   <data name="AttemptSuperseded" xml:space="preserve"><value>Попытка заменена.</value></data>

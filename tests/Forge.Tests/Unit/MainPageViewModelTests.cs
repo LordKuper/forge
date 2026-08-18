@@ -374,6 +374,47 @@ public sealed class MainPageViewModelTests
 
         Assert.Equal(1, mutations.ResolveGateCalls);
         Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
+        // Forwarded, not merely called: a hardcoded `true`/`true`/canonical-node-id on the ViewModel
+        // side would still reach this point without these three assertions.
+        Assert.True(mutations.LastGateApproved);
+        Assert.True(mutations.LastGateConfirmed);
+        Assert.Equal(ImplementationCriticalGraphBuilder.HumanApprovalNodeId, mutations.LastGateNodeId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncForwardsARejectedDecision()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, false, true,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(mutations.LastGateApproved);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncForwardsAnUnconfirmedDecision()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, true, false,
+            TestContext.Current.CancellationToken);
+
+        Assert.False(mutations.LastGateConfirmed);
     }
 
     [Fact]
@@ -392,6 +433,34 @@ public sealed class MainPageViewModelTests
 
         Assert.Equal(0, mutations.ResolveGateCalls);
         Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncWithABlankSprintIdTargetsTheActiveSprint()
+    {
+        // Regression: the page's default state (SprintIdEntry blank, active sprint's tree already
+        // rendered with its awaiting_human node visible) must not be exactly the state in which
+        // approve/reject cannot work -- matching RefreshAsync's own "blank means active sprint" rule.
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string nodeId = ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.HumanGate, [])]),
+            cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, "   ", null, true, true, cancellationToken);
+
+        Assert.Equal(1, mutations.ResolveGateCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
     }
 
     [Fact]
@@ -444,6 +513,72 @@ public sealed class MainPageViewModelTests
         Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
         SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(NodeState.Succeeded, state.Nodes[nodeId].State);
+    }
+
+    /// <summary>Regression: nothing in the earlier local-fallback test above distinguishes approve
+    /// from reject -- a `Reject` button that silently approved the gate would still pass it. This is
+    /// its mirror: the durable node state after a rejection must actually be `Failed`, not
+    /// `Succeeded`.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncRejectsARealAwaitingHumanGateThroughTheLocalFallback()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string nodeId = ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value.ToString(), null, false, true, cancellationToken);
+
+        Assert.Equal(Text().Resolve(MessageKeys.GateResolved), message);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Failed, state.Nodes[nodeId].State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveGateAsyncRefusesAnUnconfirmedDecisionThroughTheLocalFallbackWithoutChangingTheNode()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string nodeId = ImplementationCriticalGraphBuilder.HumanApprovalNodeId;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+
+        string message = await viewModel.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value.ToString(), null, true, false, cancellationToken);
+
+        Assert.Contains(DiagnosticCodes.ConfirmationRequired, message, StringComparison.Ordinal);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.AwaitingHuman, state.Nodes[nodeId].State);
     }
 
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.CurrentUICulture);

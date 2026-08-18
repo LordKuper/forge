@@ -205,10 +205,15 @@ public sealed class MainPageViewModel(
     }
 
     /// <summary>ADR 0005/0018's human-only `workflow.review` capability. <paramref name="sprintId"/>
-    /// reuses the same entry the sprint-tree expansion uses; an unparsable or missing value is
-    /// reported the same way `forge gate approve|reject` reports an unparsable `--sprint`, rather
-    /// than silently falling back to some other sprint. <paramref name="nodeId"/> empty means the
-    /// canonical human-approval node, matching the CLI's own `--node` default.</summary>
+    /// reuses the same entry the sprint-tree expansion uses: a blank value targets the active
+    /// sprint, matching <see cref="RefreshAsync"/>'s own "blank means active sprint" rule (the page's
+    /// default state — nothing typed yet — would otherwise always fail this action even while a
+    /// gate is visibly `awaiting_human` in the tree above it). A non-blank, unparsable value is still
+    /// reported the same way `forge gate approve|reject` reports an unparsable `--sprint`.
+    /// <paramref name="nodeId"/> defaults to the canonical human-approval node only when
+    /// <see langword="null"/>, matching the CLI's own `--node` default exactly — an empty or
+    /// whitespace-only string is forwarded as-is, the same as the CLI would (see
+    /// <see cref="GatePrompt"/>, which applies the identical rule for display).</summary>
     public async Task<string> ResolveGateAsync(
         string? projectRoot,
         string? sprintId,
@@ -217,7 +222,9 @@ public sealed class MainPageViewModel(
         bool confirmed,
         CancellationToken cancellationToken)
     {
-        if (!Guid.TryParse(sprintId, out Guid parsedSprintId))
+        Guid? targetSprintId = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (targetSprintId is not { } resolvedSprintId)
         {
             return Message(text.Resolve(MessageKeys.GateResolutionFailed), DiagnosticCodes.SprintNotFound);
         }
@@ -227,12 +234,39 @@ public sealed class MainPageViewModel(
         return await UseMutationsAsync(mutations, async () =>
         {
             NodeActionResult result = await mutations
-                .ResolveGateAsync(projectRoot, parsedSprintId, effectiveNodeId, approved, confirmed, cancellationToken)
+                .ResolveGateAsync(projectRoot, resolvedSprintId, effectiveNodeId, approved, confirmed, cancellationToken)
                 .ConfigureAwait(false);
             return Message(
                 text.Resolve(result.Succeeded ? MessageKeys.GateResolved : MessageKeys.GateResolutionFailed),
                 result.DiagnosticCode);
         }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/node a pending gate decision would act on —
+    /// shown before <see cref="ResolveGateAsync"/> so the user can verify the target before an
+    /// irreversible decision, using the same blank-means-active-sprint/human-approval defaulting
+    /// rules that call itself applies (displayed as a placeholder rather than the resolved active
+    /// sprint id, which would need its own round-trip just to render this prompt).</summary>
+    public string GatePrompt(string? sprintId, string? nodeId) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.GateNodeIdLabel)} " +
+                $"{nodeId ?? ImplementationCriticalGraphBuilder.HumanApprovalNodeId}");
+
+    private async Task<Guid?> ResolveSprintIdAsync(
+        string? projectRoot, string? sprintId, CancellationToken cancellationToken)
+    {
+        if (!string.IsNullOrWhiteSpace(sprintId))
+        {
+            return Guid.TryParse(sprintId, out Guid parsed) ? parsed : null;
+        }
+
+        ProjectSnapshot snapshot = await application
+            .GetProjectSnapshotAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        return snapshot.ActiveSprintId;
     }
 
     /// <summary>Disposes <paramref name="mutations"/> after <paramref name="action"/> completes, whether
