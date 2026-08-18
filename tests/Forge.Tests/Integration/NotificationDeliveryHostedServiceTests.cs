@@ -111,13 +111,21 @@ public sealed class NotificationDeliveryHostedServiceTests
             await service.StopAsync(cancellationToken);
         }
 
-        // Not just "a cursor file exists" -- the watermark for THIS sprint must have genuinely
-        // advanced past its awaiting_human event, proving the disabled-delivery tick still moved
-        // the cursor forward rather than merely writing an empty/unrelated one.
+        // Not just "a cursor file exists," and not just "the watermark is present" (which proves
+        // nothing about how FAR it advanced): compare against the ground truth of reading this
+        // sprint's own full event history directly, independent of the service under test, so the
+        // assertion proves the disabled tick's cursor is genuinely caught up to it -- not merely
+        // present at some smaller, stale value.
         ControlEventsCursor cursorWhileDisabled =
             await ReadCursorAsync(environment.ProjectRoot, cancellationToken);
         Assert.True(cursorWhileDisabled.Watermarks.TryGetValue(
-            sprintId.Value.ToString("D"), out long watermarkWhileDisabled) && watermarkWhileDisabled >= 0);
+            sprintId.Value.ToString("D"), out long watermarkWhileDisabled));
+        ControlEventsPage groundTruth = await environment.Resolve<ControlEventsReader>()
+            .ReadAsync(environment.ProjectRoot, null, cancellationToken);
+        Assert.True(ControlEventsCursorCodec.TryDecode(groundTruth.Cursor, out ControlEventsCursor groundTruthCursor));
+        Assert.True(groundTruthCursor.Watermarks.TryGetValue(
+            sprintId.Value.ToString("D"), out long expectedWatermark));
+        Assert.Equal(expectedWatermark, watermarkWhileDisabled);
 
         ConfigurationWriteResult enabled = await environment.Application.SetConfigurationAsync(
             ConfigurationScope.User, environment.ProjectRoot, "notifications.enabled", "true", cancellationToken);

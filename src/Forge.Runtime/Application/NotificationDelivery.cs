@@ -70,11 +70,21 @@ public static class NotificationDeliveryCursorStore
         {
             // A failed write or rename must not leave a `.tmp` file behind -- this runs on a
             // recurring timer, so a persistent failure would otherwise leak one file per tick
-            // forever. The original exception (including cancellation) still propagates to the
-            // caller's own handling unchanged.
-            if (File.Exists(temp))
+            // forever. Cleanup itself is best-effort: a failure deleting the temp file (e.g. it
+            // was never created, or is now locked) must never replace the ORIGINAL exception --
+            // `throw;` below rethrows exactly what this catch caught, unaffected by the nested
+            // try/catch, so the caller's own handling (including cancellation) always sees the
+            // real failure.
+            try
             {
-                File.Delete(temp);
+                if (File.Exists(temp))
+                {
+                    File.Delete(temp);
+                }
+            }
+            catch
+            {
+                // Best-effort; the original exception below is what actually matters.
             }
 
             throw;

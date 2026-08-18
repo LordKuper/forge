@@ -71,11 +71,16 @@ which is the opposite of "resume from now." Persisting that token as-is
 (the first version of this ADR's own mistake, found in round 1 review — see
 below) makes every historical event look unseen again, replaying the
 project's entire history as new notifications on the very next tick.
-`CatchUpToNowAsync` is the actual fix: it reads forward from a fresh anchor,
-bounded to `MaxCatchUpReads` reads, discarding every event without
-delivering it, until a page returns fewer than `ControlEventsReader
-.MaxEventsPerRead` results — i.e., the journal's current tip — and only
-that caught-up cursor is what gets persisted.
+`CatchUpToNowAsync` is the actual fix: it reads forward from a fresh
+anchor, bounded to `MaxCatchUpReads` reads, discarding every event without
+delivering it, until a read makes no further progress (the returned cursor
+equals the one just used) — i.e., the journal's current tip — and only
+that caught-up cursor is what gets persisted. Round 2 review found the
+first version of this loop instead stopped once a page returned fewer than
+`ControlEventsReader.MaxEventsPerRead` *deliverable* events, which
+undercounts whenever `ReadControlEvents` withholds an event behind a gap
+(see "Round 2 review" below) — fixed to the cursor-equality condition
+described here.
 
 ### `notifications.enabled` gates delivery, but the cursor advances regardless
 
@@ -262,6 +267,64 @@ Independent review found five issues, all fixed:
    regression test, which proves the stronger, actually-meaningful
    property) was removed rather than kept alongside a strictly weaker
    duplicate.
+
+### Round 2 review: round 1's own settings-isolation fix reintroduced round 1's own bug, plus five further findings
+
+Independent review found six issues. The first is a direct echo of round
+1's finding 4: fixing that finding folded settings-reading into `TickAsync`'s
+try/catch, but the stale-cursor branch's own `CatchUpToNowAsync` call —
+added in the *same* round 1 commit — was left outside it. All six fixed:
+
+1. **(High) `CatchUpToNowAsync` ran outside `TickAsync`'s own failure
+   isolation** — up to `MaxCatchUpReads` (1,000) journal reads with no
+   exception handling at all, reached only when the cursor is already
+   corrupt, so a single transient `IOException` there would have
+   permanently faulted `ExecuteTask` with nothing logged and nothing else
+   observing the fault (this is a plain singleton `BackgroundService`, not
+   `AddHostedService`). Fixed by restructuring `TickAsync` into one
+   try/catch wrapping the cursor load, the events read, stale-cursor
+   recovery (catch-up included), settings resolution, and delivery —
+   matching `ResumeSchedulerHostedService`'s own whole-tick-wrapped shape
+   exactly, the same standard round 1's fix should already have applied
+   everywhere.
+2. **`CatchUpToNowAsync`'s own stopping condition was wrong.** It compared
+   `page.Events.Count` against `ControlEventsReader.MaxEventsPerRead`, but
+   `Events` is only the *deliverable* subset of a read — `ReadControlEvents`
+   itself withholds events stranded behind a gap (see `ControlEvents.cs`'s
+   own "deliver exactly once, once its predecessor closes the gap"
+   comment). A full 500-event page with some withheld could report fewer
+   deliverable events than the bound, ending the catch-up loop early with
+   history still unread — silently reintroducing a smaller version of
+   finding 1's own replay bug. Fixed by terminating on cursor-value
+   stability instead (`page.Cursor == cursor`, i.e. no further progress
+   was possible on this read), which correctly reflects
+   `ReadControlEvents`'s own advancement guarantee regardless of the
+   deliverable/pending distinction.
+3. **An unreadable configuration was treated as "enabled."** `ConfigurationView.DiagnosticCode`
+   was never checked; an unreadable document resolves to an empty
+   `Values` list, and the `!= JsonValueKind.False` check on a missing key
+   defaults to `true` — silently overriding a genuine
+   `notifications.enabled=false` the user had already set during a
+   transient config-read glitch, the one case ADR 0005's
+   "user-configurable" promise cannot tolerate getting wrong. Fixed:
+   `ReadNotificationSettingsAsync` now fails closed (`Enabled: false`)
+   whenever `DiagnosticCode != DiagnosticCodes.None`.
+4. **The `.tmp`-cleanup fix from round 1 could itself throw and replace
+   the original exception** it was written to preserve — `File.Delete`
+   failing (the file was never created, or is now locked) inside the
+   cleanup `catch` block would propagate instead of the real failure.
+   Fixed with a nested try/catch around the delete alone, so `throw;`
+   always rethrows what the outer `catch` actually caught.
+5. **The round-1 contract-consistency test omitted `sensitive`** — the one
+   field with an actual security consequence if it ever silently
+   diverged. Fixed by adding it to the per-key comparison.
+6. **The "disabled" test's cursor-advance assertion still proved less than
+   it claimed**: `watermark >= 0` is true for any watermark, including a
+   stale one nowhere near "caught up." Fixed by computing the ground-truth
+   watermark independently — reading this sprint's own full event history
+   directly via `ControlEventsReader`, bypassing the service under test —
+   and asserting the disabled tick's persisted watermark equals it
+   exactly, not merely that some non-negative number exists.
 
 ## Consequences
 

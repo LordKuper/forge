@@ -11,7 +11,7 @@ public sealed class ContractTests
     /// list can drift from `ConfigurationRegistry.CreateDefaultKeys()` (it had, for the new
     /// `notifications.enabled` key) with nothing catching it. Proves both directions: every
     /// registered key is documented, and every documented key is registered, with matching scope,
-    /// session-override, inheritance, and default value.</summary>
+    /// session-override, sensitivity, inheritance, and default value.</summary>
     [Fact]
     [Trait("Category", "Contracts")]
     public void ConfigurationRegistryMatchesTheContractsKeyList()
@@ -39,6 +39,7 @@ public sealed class ContractTests
                 contractKey.GetProperty("scope").GetString());
             Assert.Equal(
                 registryKey.AllowsSessionOverride, contractKey.GetProperty("session_override").GetBoolean());
+            Assert.Equal(registryKey.Sensitive, contractKey.GetProperty("sensitive").GetBoolean());
             JsonElement inheritsProperty = contractKey.GetProperty("inherits");
             Assert.Equal(
                 registryKey.Inherits,
