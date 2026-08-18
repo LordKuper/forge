@@ -35,6 +35,11 @@ public sealed record AttemptSupervisionResult<T>(AttemptTerminationReason Reason
 /// </summary>
 public sealed class AttemptSupervisor : IDisposable
 {
+    /// <summary><see cref="Timer"/>'s due time is internally a `uint` millisecond count, capped
+    /// just under `uint.MaxValue` -- a deadline above this throws from inside the constructor
+    /// after other disposable resources already exist, which would otherwise leak them.</summary>
+    private static readonly TimeSpan MaxTimerDueTime = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
+
     private readonly object gate = new();
     private readonly CancellationTokenSource linkedCancellation;
     private readonly CancellationTokenRegistration callerRegistration;
@@ -51,6 +56,8 @@ public sealed class AttemptSupervisor : IDisposable
         // nothing.
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(sessionDeadline, TimeSpan.Zero);
         ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(idleDeadline, TimeSpan.Zero);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(sessionDeadline, MaxTimerDueTime);
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(idleDeadline, MaxTimerDueTime);
 
         this.idleDeadline = idleDeadline;
         lastActivityTimestamp = Stopwatch.GetTimestamp();
@@ -194,7 +201,14 @@ public sealed class AttemptSupervisor : IDisposable
             }
 
             disposed = true;
-            callerRegistration.Dispose();
+            // `Unregister`, not `Dispose`, on the registration: `CancellationTokenRegistration
+            // .Dispose()` blocks until any concurrently-executing callback finishes -- but that
+            // callback is `FireUnderLock`, itself blocked waiting for this very `gate` we are
+            // holding right now, which would deadlock. `Unregister` does not wait, and no wait is
+            // needed here: `FireUnderLock`/`CheckIdle` both re-check `disposed` immediately after
+            // acquiring `gate`, so once they can finally proceed (after this method releases the
+            // lock) they will see `disposed == true` and touch nothing below.
+            callerRegistration.Unregister();
             sessionTimer.Dispose();
             idleTimer.Dispose();
             linkedCancellation.Dispose();

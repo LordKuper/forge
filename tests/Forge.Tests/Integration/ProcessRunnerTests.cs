@@ -257,6 +257,10 @@ public sealed class ProcessRunnerTests
             await WaitForFileAsync(readyPath);
             int childPid = await ReadPidAsync(childPidPath);
             int grandchildPid = await ReadPidAsync(grandchildPidPath);
+            // The one assertion that would have caught either shape of the "same process twice"
+            // bug this test regresses against (a POSIX `$$`-in-subshell quirk, then a POSIX
+            // exec-in-tail-position quirk): a genuine grandchild never shares the child's pid.
+            Assert.NotEqual(childPid, grandchildPid);
             Assert.True(IsProcessAlive(childPid), "The child process should still be running before cancellation.");
             Assert.True(
                 IsProcessAlive(grandchildPid), "The grandchild process should still be running before cancellation.");
@@ -302,6 +306,7 @@ public sealed class ProcessRunnerTests
             Assert.Equal(0, result.ExitCode);
             int childPid = await ReadPidAsync(childPidPath);
             int grandchildPid = await ReadPidAsync(grandchildPidPath);
+            Assert.NotEqual(childPid, grandchildPid);
             await AssertProcessDiesAsync(childPid);
             await AssertProcessDiesAsync(grandchildPid);
         }
@@ -363,9 +368,15 @@ public sealed class ProcessRunnerTests
             sleepSeconds > 0 ? $"sleep {sleepSeconds}" : "true");
         File.WriteAllText(posixGrandchildScriptPath, posixGrandchildScript);
 
+        // Never a bare trailing `sh '<script>'` with nothing after it: several POSIX shells
+        // (including dash and bash's script-final-command path) replace the current process image
+        // in place (`exec`) for a simple command in tail position, so the "grandchild" would
+        // become the *same* process as the parent instead of a genuine child of it -- silently
+        // testing one process twice. Backgrounding with `&` always forks, never exec-replaces, so
+        // both branches use it; the no-sleep branch adds `wait` to still block for it.
         string posixScript = sleepSeconds > 0
             ? $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}' & sleep {sleepSeconds}"
-            : $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}'";
+            : $"echo $$ > '{childPidPath}'; sh '{posixGrandchildScriptPath}' & wait";
         return ("/bin/sh", ["-c", posixScript]);
     }
 

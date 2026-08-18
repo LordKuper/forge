@@ -42,9 +42,10 @@ but nothing reads them yet — this item is what would read them.
 
 New `Forge.Application.AttemptSupervisor` (`AttemptSupervision.cs`): given
 an absolute session `TimeSpan`, a sliding idle `TimeSpan`, and the caller's
-own `CancellationToken` (both deadlines validated as strictly positive
-before any disposable resource is created, so a rejected constructor call
-leaks nothing), it exposes a linked `Token` to hand to supervised work in
+own `CancellationToken` (both deadlines validated as strictly positive and
+no larger than `Timer`'s own ~49.7-day due-time ceiling, before any
+disposable resource is created, so a rejected constructor call leaks
+nothing), it exposes a linked `Token` to hand to supervised work in
 the caller's place, and an `OnActivityAsync` callback to pass as that
 work's own activity callback (e.g. `ILlmProvider.RunAsync`'s `onActivity`,
 added by P11.32-P11.40). Two `System.Threading.Timer`s back the two
@@ -89,6 +90,16 @@ unsupported. `Cancel()` is wrapped in a broad catch, not just
 registration on it (or on a further-linked token) throwing must never
 crash a timer callback thread.
 
+Holding that lock for the whole `Dispose()` body introduced its own
+deadlock, since the constructor also registers a callback on the caller's
+own token: `CancellationTokenRegistration.Dispose()` blocks until any
+concurrently-executing callback finishes, and that callback
+(`FireUnderLock`) is itself blocked waiting for the very lock `Dispose()`
+is holding. `Dispose()` calls `Unregister()` on that registration instead
+— it does not wait — which is safe precisely because `FireUnderLock`
+already re-checks `disposed` immediately after acquiring the lock, so once
+it can finally proceed it touches nothing further.
+
 ### Two new diagnostic codes, no new persistence plumbing
 
 `ProviderDiagnosticCodes.IdleTimeout` (`provider_idle_timeout`) and
@@ -119,11 +130,19 @@ invocation, not a `(...)` subshell: `$$` inside a subshell still reports
 the *invoking* shell's own pid in POSIX sh/dash/bash (fixed at shell
 startup, not re-evaluated per fork), so a `(...)`-based grandchild would
 have written the same pid as the child — silently testing the same process
-twice rather than a real second generation. Where a process was previously
-confirmed alive, its start time is captured then and death is checked
-against that exact instance (`Process.StartTime`), not the pid alone,
-since an OS can reassign a just-freed pid to an unrelated process before a
-liveness check runs.
+twice rather than a real second generation. That separate invocation is
+also never a bare trailing `sh '<script>'` with nothing after it: a simple
+command in tail position gets `exec`-replaced in place by several POSIX
+shells (including dash and bash's script-final-command path) rather than
+forked, which would again make the "grandchild" the very same process as
+the parent. Backgrounding with `&` (paired with `wait` on the no-sleep
+path, so the parent still blocks for it) always forks instead. Both tests
+assert `childPid != grandchildPid` directly — the one check that would
+have caught either shape of this bug outright. Where a process was
+previously confirmed alive, its start time is captured then and death is
+checked against that exact instance (`Process.StartTime`), not the pid
+alone, since an OS can reassign a just-freed pid to an unrelated process
+before a liveness check runs.
 
 `CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild` proves
 cancellation kills both generations; `NormalParentExitLeavesNoOrphanedGrandchildRunning`

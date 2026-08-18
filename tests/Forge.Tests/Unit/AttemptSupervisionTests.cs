@@ -140,9 +140,14 @@ public sealed class AttemptSupervisionTests
                 {
                     // Wait for the session timeout to actually latch a reason, so the
                     // misattribution this test regresses against is a real possibility, not
-                    // trivially absent because Reason was still None.
+                    // trivially absent because Reason was still None. Bounded, not an unconditional
+                    // spin: a regression that stops latching must fail this test, not hang the run.
+                    DateTime waitDeadline = DateTime.UtcNow + TimeSpan.FromSeconds(5);
                     while (supervisor.Reason == AttemptTerminationReason.None)
                     {
+                        Assert.True(
+                            DateTime.UtcNow < waitDeadline,
+                            "Expected the session timeout to latch a reason within 5 seconds.");
                         await Task.Delay(10, CancellationToken.None).ConfigureAwait(false);
                     }
 
