@@ -19,13 +19,18 @@ public static class CliApplication
         Func<CancellationToken, ValueTask<InstallationResult>>? install = null,
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null,
         Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null,
-        TextReader? input = null)
+        TextReader? input = null,
+        Func<bool>? isInteractive = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
         ArgumentNullException.ThrowIfNull(application);
         TextWriter diagnostics = error ?? output;
         TextReader effectiveInput = input ?? Console.In;
+        // ADR 0023: `Console.IsInputRedirected` is read once here, not inside the default lambda,
+        // so a caller with no override still gets a value fixed for this command tree's lifetime —
+        // matching how `effectiveInput` itself is resolved once, not re-read per invocation.
+        Func<bool> effectiveIsInteractive = isInteractive ?? (() => !Console.IsInputRedirected);
         // ADR 0005: every `.forge/` mutation routes through the project's Host once one is
         // reachable. `resolveMutations` receives the SAME `--project-root` value the invoking
         // command resolved (never a value fixed before argument parsing), so a Host connection is
@@ -47,8 +52,10 @@ public static class CliApplication
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
-        root.Subcommands.Add(CreateGateCommand(text, output, diagnostics, effectiveResolver));
-        root.Subcommands.Add(CreateAttemptCommand(text, output, diagnostics, effectiveResolver, effectiveInput));
+        root.Subcommands.Add(
+            CreateGateCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
+        root.Subcommands.Add(CreateAttemptCommand(
+            text, output, diagnostics, effectiveResolver, effectiveInput, effectiveIsInteractive));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -538,13 +545,16 @@ public static class CliApplication
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
-        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
     {
         Command command = new("gate", text.Resolve(MessageKeys.GateDescription));
         command.Subcommands.Add(CreateGateResolveCommand(
-            text, output, diagnostics, resolveMutations, "approve", MessageKeys.GateApproveDescription, approved: true));
+            text, output, diagnostics, resolveMutations, isInteractive, "approve",
+            MessageKeys.GateApproveDescription, approved: true));
         command.Subcommands.Add(CreateGateResolveCommand(
-            text, output, diagnostics, resolveMutations, "reject", MessageKeys.GateRejectDescription, approved: false));
+            text, output, diagnostics, resolveMutations, isInteractive, "reject",
+            MessageKeys.GateRejectDescription, approved: false));
         return command;
     }
 
@@ -553,6 +563,7 @@ public static class CliApplication
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive,
         string name,
         string descriptionKey,
         bool approved)
@@ -571,6 +582,13 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            // ADR 0023: refused before any argument is even validated -- the earliest possible
+            // point, and unconditional: `--yes` cannot substitute for an interactive session.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
             string? root = parseResult.GetValue(projectRoot);
             if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
             {
@@ -594,17 +612,20 @@ public static class CliApplication
     }
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
-    /// <see cref="CreateGateCommand"/>'s remark — the same policy-only, no-technical-control posture
-    /// applies here.</summary>
+    /// <see cref="CreateGateCommand"/>'s remark — both commands now share ADR 0023's same
+    /// interactive-session technical control, on top of the mandatory, never-bypassed confirmation
+    /// this remark used to describe as the only control.</summary>
     private static Command CreateAttemptCommand(
         SurfaceText text,
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        TextReader input)
+        TextReader input,
+        Func<bool> isInteractive)
     {
         Command command = new("attempt", text.Resolve(MessageKeys.AttemptDescription));
-        command.Subcommands.Add(CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input));
+        command.Subcommands.Add(
+            CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input, isInteractive));
         return command;
     }
 
@@ -613,7 +634,8 @@ public static class CliApplication
         TextWriter output,
         TextWriter diagnostics,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        TextReader input)
+        TextReader input,
+        Func<bool> isInteractive)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
         Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
@@ -632,6 +654,13 @@ public static class CliApplication
         command.Options.Add(confirm);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
+            // ADR 0023: same earliest-possible, unconditional refusal as the gate commands -- before
+            // argument validation and before reading the instruction file/stdin.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
             if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
             {
                 return Report(diagnostics, DiagnosticCodes.SprintNotFound);

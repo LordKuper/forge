@@ -15,6 +15,7 @@ public static class ExitCodes
     public const int Platform = 5;
     public const int Update = 6;
     public const int Provider = 7;
+    public const int Authorization = 8;
     public const int Confirmation = 9;
     public const int Concurrency = 10;
     public const int Internal = 13;
@@ -35,6 +36,7 @@ public static class ExitCodes
         DiagnosticCodes.ProviderPreflightPending or DiagnosticCodes.ProviderUpdateFailed or
             DiagnosticCodes.IntegrationLanguageUnsupported or DiagnosticCodes.IntegrationPartiallyRefused =>
             Provider,
+        DiagnosticCodes.PermissionDenied => Authorization,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
         _ => Internal,
