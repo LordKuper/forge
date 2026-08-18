@@ -181,6 +181,67 @@ public sealed class SurfaceParityTests
         Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
     }
 
+    /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
+    /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
+    /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's
+    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the code-behind
+    /// text.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog()
+    {
+        string method = SupersedeAttemptMethodBody();
+
+        int guardIndex = method.IndexOf("AttemptId is null", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank attempt id.");
+        Assert.True(
+            guardIndex < dialogIndex, "The blank-attempt-id guard must run before the confirmation dialog.");
+    }
+
+    /// <summary>Round 3 review: a blank replacement instruction was refused only after the user
+    /// confirmed the irreversible action, asymmetric with the attempt-id guard immediately above and
+    /// its own "ask before, not after" rationale.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog()
+    {
+        string method = SupersedeAttemptMethodBody();
+
+        int guardIndex = method.IndexOf("AttemptInstructionEntry.Text", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank instruction.");
+        Assert.True(
+            guardIndex < dialogIndex, "The blank-instruction guard must run before the confirmation dialog.");
+    }
+
+    private static string SupersedeAttemptMethodBody()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+        int start = codeBehind.IndexOf("private async Task SupersedeAttemptAsync()", StringComparison.Ordinal);
+        Assert.True(start >= 0, "MainPage.xaml.cs no longer declares SupersedeAttemptAsync().");
+        int bodyStart = codeBehind.IndexOf('{', start);
+        int depth = 0;
+        for (int index = bodyStart; index < codeBehind.Length; index++)
+        {
+            if (codeBehind[index] == '{')
+            {
+                depth++;
+            }
+            else if (codeBehind[index] == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    return codeBehind[bodyStart..(index + 1)];
+                }
+            }
+        }
+
+        throw new InvalidOperationException("SupersedeAttemptAsync's closing brace was not found.");
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task DesktopAndCliRenderTheSameSprintTreeAndDetailForOneSnapshot()

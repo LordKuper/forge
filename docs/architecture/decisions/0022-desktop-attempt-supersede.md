@@ -109,6 +109,23 @@ one); and `AttemptSupersedePrompt` itself now renders an explicit
 `AttemptIdMissingPlaceholder` for a `null`/blank id as defense in depth,
 for any caller that reaches it without going through that guard.
 
+Round 3 review found this guard had shipped with no regression test: deleting
+it left the full suite green, since `AttemptIdRequired` was reachable from
+exactly one code path and asserted by none. The same round found a second,
+asymmetric gap the guard's own rationale should have already ruled out: a
+*blank instruction* was still refused only after the user confirmed the
+irreversible action, not before — `MainPage.SupersedeAttemptAsync` now
+checks `string.IsNullOrWhiteSpace(AttemptInstructionEntry.Text)` before the
+dialog too, reporting a new `AttemptInstructionRequired` message the same
+way the attempt-id guard does. The instruction's *length* bound stays
+server-validated in `MainPageViewModel.SupersedeAttemptAsync` — only
+emptiness makes the target itself meaningless the way a blank attempt id
+does, so only emptiness is checked pre-dialog. No MAUI control can be
+instantiated headlessly in this test suite (the same constraint every prior
+Desktop-slice ADR has noted), so both guards are pinned by a code-behind
+text assertion proving the guard text appears, and appears *before*
+`DisplayAlertAsync`, inside `SupersedeAttemptAsync`'s own method body.
+
 ### An unparsable attempt id reports `WorkflowEventConflict`, matching the CLI's own choice
 
 `CliApplication.CreateAttemptSupersedeCommand` reports an unparsable
@@ -208,9 +225,9 @@ in this document. Fixed by completing the list.
 - New message keys: `AttemptSupersedeFailed`, `AttemptIdLabel`,
   `AttemptInstructionLabel`, `AttemptSupersedeAction`,
   `AttemptSupersedeConfirmationRequired`, `AttemptIdRequired`,
-  `AttemptIdMissingPlaceholder`, `AttemptSupersedeSprintAmbiguous` (en/ru).
-  `AttemptSuperseded` already existed from the CLI slice and is reused for
-  the success case.
+  `AttemptIdMissingPlaceholder`, `AttemptSupersedeSprintAmbiguous`,
+  `AttemptInstructionRequired` (en/ru). `AttemptSuperseded` already existed
+  from the CLI slice and is reused for the success case.
 - No new diagnostic codes — `SprintNotFound`, `WorkflowEventConflict`,
   `SupersessionInstructionRequired`/`TooLong`, and `ConfirmationRequired`
   are all reused, matching the CLI's own behavior for each.

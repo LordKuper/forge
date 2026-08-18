@@ -103,4 +103,5 @@
   <data name="AttemptIdRequired" xml:space="preserve"><value>Введите идентификатор попытки.</value></data>
   <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(идентификатор попытки не указан)</value></data>
   <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы заменить его попытку.</value></data>
+  <data name="AttemptInstructionRequired" xml:space="preserve"><value>Введите инструкцию для замены.</value></data>
 </root>
