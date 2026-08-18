@@ -409,13 +409,26 @@ public sealed class NotificationDeliveryHostedServiceTests
         string path = NotificationDeliveryCursorStore.CursorFilePath(projectRoot);
         for (int attempt = 0; attempt < 40; attempt++)
         {
-            if (File.Exists(path))
+            // Unlike every other cursor read in this file, this one runs WHILE the service is
+            // still ticking -- SaveCursorAsync's own File.Move(overwrite: true) can be replacing
+            // this exact file underneath a concurrent read (round 6 review reproduced the resulting
+            // IOException empirically). Tolerate it exactly as NotificationDeliveryCursorStore's own
+            // LoadAsync does, and just retry on the next poll.
+            try
             {
-                string content = await File.ReadAllTextAsync(path, cancellationToken);
-                if (ControlEventsCursorCodec.TryDecode(content, out ControlEventsCursor cursor) && isReady(cursor))
+                if (File.Exists(path))
                 {
-                    return;
+                    string content = await File.ReadAllTextAsync(path, cancellationToken);
+                    if (ControlEventsCursorCodec.TryDecode(content, out ControlEventsCursor cursor) &&
+                        isReady(cursor))
+                    {
+                        return;
+                    }
                 }
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                // Transient: a concurrent SaveCursorAsync is mid-rename. Retry on the next poll.
             }
 
             await Task.Delay(TimeSpan.FromMilliseconds(50), cancellationToken);

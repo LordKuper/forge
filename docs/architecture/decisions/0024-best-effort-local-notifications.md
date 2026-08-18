@@ -440,6 +440,34 @@ not reliable in CI. Fixed:
    rather than merely widening the existing fixed-delay tolerance the way
    the sibling tests happen to (safely, but only by chance) avoid it.
 
+### Round 6 review (critical-only): round 5's own new poll helper raced the same writer it was polling
+
+Round 6 confirmed CI stayed green on the round-5 commit, reran the affected
+test file 27 consecutive times locally with zero failures, then found one
+further critical issue — a sixth instance of the "passes locally, not
+reliably under CI-shaped load" pattern, this time in the very helper round
+5 added to fix the fifth instance. Fixed:
+
+1. **(Critical) `WaitForCursorAsync` is the only cursor read in this file
+   that runs WHILE the service is still ticking** — every other read
+   happens after `StopAsync` (which awaits `ExecuteTask`), so has no
+   concurrent writer. `TickAsync` calls `SaveCursorAsync` on every tick
+   regardless of whether anything happened, so `NotificationDeliveryCursorStore.SaveAsync`'s
+   own `File.Move(overwrite: true)` can be replacing `cursor.json` at the
+   exact moment this helper's unguarded `File.ReadAllTextAsync` reads it —
+   on Windows the replacing rename briefly opens the destination for
+   delete, and a read landing in that window throws `IOException`, failing
+   the test outright before its retry loop gets a chance. Reproduced
+   empirically at this file's actual 50 ms poll cadence: 0.075% per read
+   under low contention, 2.9% under CI-shaped heavy contention — load-
+   dependent, exactly why it would surface on a busy runner and not on a
+   quiet dev box. Fixed by wrapping the read in the identical
+   `catch (Exception error) when (error is IOException or UnauthorizedAccessException)`
+   tolerance `NotificationDeliveryCursorStore.LoadAsync` itself already
+   uses for this exact file — a transient mid-rename read simply retries
+   on the next poll, matching production's own established tolerance for
+   reading a file this service writes to concurrently.
+
 ## Consequences
 
 - `Forge.Application.INotificationService` (port) and
