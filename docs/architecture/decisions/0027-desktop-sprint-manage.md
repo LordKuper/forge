@@ -174,6 +174,28 @@ Independent review found three issues, all fixed:
    the inaccurate appositive; the `Changed` entry itself was correct and
    is kept.
 
+## Round 3 review (final full-scope round)
+
+Independent review found one issue, fixed:
+
+1. **The PR body's own Verification section claimed
+   `SprintLifecycleCliTests`'s "existing 215-test suite"** — the file
+   actually has 8 tests (confirmed by a filtered run); no suite in this
+   repository has 215 tests. Corrected in the PR body.
+
+The reviewer independently re-verified every prior round's claims (the
+`rebase` zero-caller investigation, the `a7be09f` contract-version
+history, the ru-RU substring coincidence behind round 2 finding 2, TOCTOU
+safety, and all four branches of the `TransitionSprintAsync`/
+`CancelSprintAsync` duplication) and mutation-tested six regressions, all
+caught. Two non-blocking observations, named rather than silently
+dropped: the `SprintManageFailed`/`RecoveryFailed`/etc. mutation-failure
+fallback messages have no dedicated test anywhere in this codebase — a
+pre-existing, repo-wide gap this slice did not introduce; and
+`README.md`'s Desktop paragraph is stale documentation accumulated across
+ADR 0021/0022/0025/0026 that this slice compounds but did not cause.
+Neither blocks this PR.
+
 ## Deliberately deferred
 
 - **`forge sprint rebase` and Desktop `sprint.rebase` controls.** Not a
