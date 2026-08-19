@@ -145,13 +145,36 @@ public sealed class IntakeExecutionHostedService(
                 throw;
             }
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
-                or InvalidDataException or InvalidOperationException)
+                or InvalidDataException or InvalidOperationException or FormatException
+                or ArgumentNullException or NullReferenceException or OverflowException
+                or KeyNotFoundException)
             {
-                // Matches ResumeSchedulerHostedService's filter exactly, and for the same reasons:
-                // one sprint's unreadable journal or definition, or a race with its own concurrent
-                // deletion, must never stop every other sprint's intake from running. Nothing this
-                // method reaches is outside this boundary — the whole body, including the `.forge/`
-                // parse and the manifest compilation, is inside it.
+                // Matches ResumeSchedulerHostedService's filter for the shared reasons (IOException/
+                // UnauthorizedAccessException/InvalidOperationException/InvalidDataException: one
+                // sprint's unreadable journal or definition, or a race with its own concurrent
+                // deletion, must never stop every other sprint's intake from running), widened past
+                // it for one this service alone needs.
+                //
+                // Round 7 review found an eleventh instance of a defect class six prior rounds spent
+                // patching one call site at a time inside FileSprintEventLog's Persisted* DTO reads:
+                // SprintScheduler.StartAttemptAsync's `running`-node resume path parses
+                // NodeSnapshot.CurrentAttemptId with a bare Guid.Parse — that value is a free-form
+                // event-journal argument (event.schema.json types it as string|number|boolean|null,
+                // never validated as a GUID), not a Persisted* DTO field, so no amount of auditing
+                // FileSprintEventLog's own deserialization would ever have caught it. That is the
+                // actual lesson eleven rounds converge on: this service cannot enumerate every way a
+                // *different* corrupt durable-state shape could reach it through SprintScheduler's own
+                // internals, which this service does not own and must not have to re-audit every time
+                // they change. The service's own outer per-sprint boundary — the one place every one
+                // of the eleven instances escaped through, regardless of which inner method or file
+                // threw — is caught here instead: every exception type any instance has actually
+                // produced (FormatException, ArgumentNullException, NullReferenceException,
+                // OverflowException, KeyNotFoundException), on top of the corrupt-durable-state
+                // exceptions ResumeSchedulerHostedService's own precedent already established. This
+                // does not replace FileSprintEventLog's own per-method normalization (ADR 0028's still-
+                // deferred audit remains worth doing, for better error messages and because other
+                // future callers benefit from it too) — it is the backstop for whatever that audit,
+                // wherever it eventually lands, has not yet reached.
                 LogSprintFailed(logger, sprintId.Value, exception);
             }
         }

@@ -458,7 +458,69 @@ slice (design a validated read path plus the field-by-field nullability
 audit round 6's trace already started), not merely "worth doing
 eventually."
 
-## Deliberately deferred
+## Round 7 review (critical-only) — the eleventh instance, outside `FileSprintEventLog` entirely, and the actual systematic fix
+
+Round 7 first verified round 6's own fix directly (the `graph`-throws /
+others-coalesce asymmetry, the widened catch filter's scoping, and both
+new tests) and found nothing wrong with it. It then found an eleventh
+instance of the defect class — but this one broke the pattern the
+previous six rounds had all shared, and that break is the actually
+useful finding:
+
+**`SprintScheduler.StartAttemptAsync`'s own `running`-node resume path
+(`new(Guid.Parse(resumedAttemptId))`) parses `NodeSnapshot.CurrentAttemptId`
+without a guard.** That value is not a `Persisted*` DTO field at all —
+it is a free-form event-journal argument
+(`docs/contracts/v1/schemas/event.schema.json` types every argument as
+`string|number|boolean|null`, never validated as a GUID), copied
+verbatim by `WorkflowFold.Apply` from whatever a `workflow.node_running`
+event's `current_attempt_id` argument says. A corrupted (non-GUID) value
+there throws an unguarded `FormatException` that no `FileSprintEventLog`
+fix — including the still-deferred `RespectNullableAnnotations`/
+`Deserialize<T>` redesign from rounds 4 through 6 — would ever have
+caught, because it targets `Persisted*` deserialization specifically,
+and this value never passes through a `Persisted*` type at all.
+
+This is the finding that actually settles the "narrow patch vs.
+systematic fix" question rounds 4 through 6 kept re-litigating one call
+site at a time: **the eleven instances do not share a single root cause
+narrow enough to fix at its source, but they do share a single place
+they all become observable** — `IntakeExecutionHostedService`'s own
+per-sprint boundary in `TickAsync`, the one point every one of the eleven
+exceptions, from whichever inner method or file, has to pass through
+before reaching the loop that would otherwise fault silently. Fixed
+there instead of at an twelfth (or first-of-many-more) inner call site:
+the per-sprint catch filter is widened to
+`IOException`/`UnauthorizedAccessException`/`InvalidDataException`/
+`InvalidOperationException` (unchanged, `ResumeSchedulerHostedService`'s
+own precedent) plus every exception type any of the eleven instances has
+actually produced — `FormatException`, `ArgumentNullException`,
+`NullReferenceException`, `OverflowException`, `KeyNotFoundException`.
+This does not replace the individual `FileSprintEventLog` fixes already
+made (they still produce a specific, contextual `InvalidDataException`
+message rather than a bare BCL exception, which is worth keeping for
+diagnosability) — it is the backstop that makes a twelfth instance, wherever
+it turns out to live, land as a logged-and-skipped sprint instead of a
+silently faulted service, without this service having to re-audit
+`SprintScheduler`'s or `FileSprintEventLog`'s internals every time either
+one changes.
+
+Regression-tested with
+`ASprintWithACorruptCurrentAttemptIdDoesNotFaultTheServiceOrStopAnotherSprintsIntake`,
+which required a genuinely targeted corruption technique: naively
+replacing the attempt id's bare GUID text throughout `events.jsonl`
+also corrupts the `AttemptChanged` event's own `aggregate_id` (the
+identical GUID value, recorded separately) — `WorkflowFold.Apply` parses
+*that* unconditionally on every load, so a broad replace makes
+`LoadAsync` itself fail closed through the already-existing
+`InvalidDataException` path, proving nothing about the resume-path
+hazard the test exists to reproduce. The corruption is scoped to the
+`"current_attempt_id":"<guid>"` substring specifically. Mutation-verified:
+reverting the filter widening reproduces the exact silent-fault symptom
+(`WaitForLogAsync` times out, `ExecuteTask` never observed to fault
+because nothing polls it) rather than a clean assertion failure — the
+same "test correctly proves absence of the fix" shape every prior
+round's mutation verification has required.
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None
   execute. They need prompt assembly, the ADR 0016 provider I/O protocol, ADR
@@ -510,22 +572,28 @@ eventually."
   interval forever. Logged, not rate-limited.
 - **A shared, systematic deserialization-validation helper for
   `FileSprintEventLog`'s `Persisted*` DTOs, plus a field-by-field
-  nullability audit of every `Persisted*` type.** Ten instances of the
-  identical "unwrapped exception escapes the catch filter" defect were
-  found and fixed one call site at a time across six review rounds; the
-  tenth (round 6) was reached with the explicit trigger condition round
-  5 set already met, and was deliberately still fixed narrowly rather
-  than via the systematic redesign — see the Round 6 section above for
-  the full reasoning (in short: `RespectNullableAnnotations` is only as
-  correct as every type's own annotations, which nothing has yet
-  audited end to end). No eleventh instance is guaranteed not to exist
-  in code this PR did not touch. A concrete future slice: audit every
-  `Persisted*` type's field nullability against what its own consumer
-  actually requires, then either enable `RespectNullableAnnotations` on
-  a store-read-scoped options clone or build the shared validating
-  `Deserialize<T>` helper — either closes the whole defect class at
-  once, which no further one-off patch can. Out of this PR's own scope
-  (intake execution, not a `FileSprintEventLog` redesign).
+  nullability audit of every `Persisted*` type — now explicitly a
+  diagnosability improvement, not a correctness backstop.** Eleven
+  instances of the identical "unwrapped exception escapes the catch
+  filter" defect were found and fixed one call site at a time across
+  seven review rounds; round 7's own eleventh instance broke the pattern
+  the first ten shared (a `Persisted*` DTO nullability gap) — it was a
+  free-form event-journal argument instead, which no `FileSprintEventLog`
+  redesign could ever have caught, proving the systematic fix that
+  actually closes this defect class for `IntakeExecutionHostedService`
+  is the widened per-sprint catch filter in that round's own section
+  above, not a `FileSprintEventLog`-level one. This item is downgraded
+  accordingly: a `FileSprintEventLog`-level fix would still produce
+  better, more specific `InvalidDataException` messages than the bare
+  BCL exceptions the outer filter now settles for, and would benefit
+  other future `ISprintStore` callers beyond this one service, but it is
+  no longer load-bearing for this service's own correctness. A concrete
+  future slice, at whatever priority that diagnosability improvement
+  warrants: audit every `Persisted*` type's field nullability against
+  what its own consumer actually requires, then either enable
+  `RespectNullableAnnotations` on a store-read-scoped options clone or
+  build the shared validating `Deserialize<T>` helper. Out of this PR's
+  own scope (intake execution, not a `FileSprintEventLog` redesign).
 
 ## Consequences
 
@@ -547,7 +615,19 @@ eventually."
 - `FileSprintEventLog.GetNodeResultsAsync` (round 1 review) now normalizes
   `JsonException`/`FormatException`/`OverflowException` into
   `InvalidDataException` per file, matching `LoadAsync`'s own contract —
-  every `ISprintStore` caller, not just this service, benefits.
+  every `ISprintStore` caller, not just this service, benefits. Rounds
+  2-6 extended the same normalization to `GetFindingsAsync`,
+  `GetConfirmationsAsync`, `MigrateLegacyFindingsAsync`,
+  `LoadValidatedEventsAsync`/`MigrateLegacyRoutingAsync`, and
+  `LoadDefinitionAsync`.
+- `IntakeExecutionHostedService.TickAsync`'s own per-sprint catch filter
+  (round 7 review) is widened past `IOException`/
+  `UnauthorizedAccessException`/`InvalidDataException`/
+  `InvalidOperationException` to also catch `FormatException`,
+  `ArgumentNullException`, `NullReferenceException`, `OverflowException`,
+  and `KeyNotFoundException` — the actual systematic closure for this
+  service's own correctness, since round 7 found a corrupt-durable-state
+  exception that no `FileSprintEventLog` fix could ever reach.
 - No behavior change for a project with no sprints, a project whose sprints
   are all draft/terminal, or a sprint created with a custom graph that has no
   intake-role node.

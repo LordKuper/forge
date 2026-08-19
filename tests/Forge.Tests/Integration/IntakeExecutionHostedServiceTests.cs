@@ -232,6 +232,71 @@ public sealed class IntakeExecutionHostedServiceTests
         }
     }
 
+    // Round 7 review of PR #68: the eleventh instance of the same defect class, and the first found
+    // outside FileSprintEventLog's Persisted* DTO reads entirely. NodeSnapshot.CurrentAttemptId is a
+    // free-form event-journal argument (event.schema.json types it as string|number|boolean|null,
+    // never validated as a GUID) -- SprintScheduler.StartAttemptAsync's own `running`-node resume
+    // path parses it with a bare Guid.Parse, so a corrupt (non-GUID) value there threw an unguarded
+    // FormatException no FileSprintEventLog fix could ever have caught. Fixed by widening this
+    // service's own per-sprint boundary instead of chasing another inner call site.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASprintWithACorruptCurrentAttemptIdDoesNotFaultTheServiceOrStopAnotherSprintsIntake()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        WriteDocument(environment, "rules", "testing.md", Frontmatter("testing", "Testing") + "Implement first.");
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId corruptId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+        SprintWorkflowState ready = (await store.LoadAsync(environment.ProjectRoot, corruptId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, corruptId, IntakeNodeId, ready.Nodes[IntakeNodeId].Version, cancellationToken);
+        Assert.True(started.Succeeded);
+
+        // Targeted at the node_running event's own "current_attempt_id" argument specifically --
+        // not a blind replace of the bare guid text, which would also corrupt the Attempt
+        // aggregate's own "aggregate_id" (the same guid value, recorded in a separate
+        // AttemptChanged event WorkflowFold.Apply parses eagerly on every load, unconditionally,
+        // via a Guid.Parse of its own -- corrupting that instead would make LoadAsync itself fail
+        // closed with the pre-existing InvalidDataException path, proving nothing about the
+        // resume-path hazard this test exists to reproduce).
+        string eventsPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, corruptId), "events.jsonl");
+        string events = await File.ReadAllTextAsync(eventsPath, cancellationToken);
+        string needle = $"\"current_attempt_id\":\"{started.AttemptId!.Value.ToString("D")}\"";
+        string corrupted = events.Replace(needle, "\"current_attempt_id\":\"not-a-guid\"", StringComparison.Ordinal);
+        Assert.NotEqual(events, corrupted);
+        await File.WriteAllTextAsync(eventsPath, corrupted, cancellationToken);
+
+        SprintWorkflowState debugState =
+            (await store.LoadAsync(environment.ProjectRoot, corruptId, cancellationToken))!;
+        Assert.Equal("not-a-guid", debugState.Nodes[IntakeNodeId].CurrentAttemptId);
+
+        // Same ListAsync-ordering reasoning as the corrupt-definition test above.
+        RecordingLogger logger = new();
+        IntakeExecutionHostedService service = new(
+            new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
+            store, scheduler, logger);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForLogAsync(logger, "IntakeExecutionSprintFailed", cancellationToken);
+            SprintId healthyId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+            await WaitForNodeStateAsync(store, environment, healthyId, NodeState.Succeeded, cancellationToken);
+            Assert.Null(service.ExecuteTask!.Exception);
+            Assert.Single(await store.GetNodeResultsAsync(environment.ProjectRoot, healthyId, cancellationToken));
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+    }
+
     // Round 1 review of PR #68: CompleteAttemptAsync reads existing results via
     // ISprintStore.GetNodeResultsAsync, which -- unlike LoadAsync/LoadDefinitionAsync -- did not
     // normalize a corrupt on-disk result into InvalidDataException, so it escaped this service's own
