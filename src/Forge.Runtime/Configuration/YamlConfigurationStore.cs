@@ -12,7 +12,16 @@ public sealed class YamlConfigurationStore(
     ConfigurationScope scope,
     IConfigurationRegistry registry) : IConfigurationStore
 {
-    private readonly IDeserializer rawDeserializer = new DeserializerBuilder().Build();
+    // Without this, YamlDotNet's untyped Deserialize<object> stringifies every scalar -- the same
+    // verified behavior ForgeDocumentCompiler's own typedDeserializer comment documents -- which
+    // would silently turn `token_budget: 40000` into the JSON string "40000" and fail
+    // project-manifest.schema.json's `"type": "integer"` (ADR 0029). This store cannot deserialize
+    // directly into a typed DTO the way ForgeDocumentCompiler does, since NormalizeYaml/
+    // StripLegacySprintRegistry must inspect the raw shape before any typed schema applies; this
+    // builder option makes the untyped pass itself scalar-type-aware instead.
+    private readonly IDeserializer rawDeserializer = new DeserializerBuilder()
+        .WithAttemptingUnquotedStringTypeDeserialization()
+        .Build();
     private readonly ISerializer serializer = new SerializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
@@ -55,7 +64,9 @@ public sealed class YamlConfigurationStore(
         ValidateScope(document);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
             ConfigurationSchemaCodec.ToProject(document);
+        Console.Error.WriteLine($"DIAG persisted.Context={(persisted.Context is null ? "null" : $"TokenBudget={persisted.Context.TokenBudget}")}");
         string yaml = serializer.Serialize(persisted);
+        Console.Error.WriteLine($"DIAG yaml=[{yaml}]");
         await AtomicConfigurationFile.WriteAsync(
             path,
             Encoding.UTF8.GetBytes(yaml),

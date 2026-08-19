@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "project_id", "workflow", "artifacts"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
     "project_id": {"type": "string", "format": "uuid"},
     "workflow": {"const": "implementation-critical"},
     "artifacts": {
@@ -24,6 +24,11 @@
           }
         }
       }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"token_budget": {"type": "integer", "minimum": 1}}
     }
   },
   "$defs": {

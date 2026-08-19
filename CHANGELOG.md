@@ -2,6 +2,26 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.50.0
+
+### Added
+
+- A new project-scoped `context.token_budget` configuration key controls
+  how much of a project's `.forge/` rules and knowledge content the
+  `intake` node admits into a sprint's context manifest before truncating.
+  Settable via `forge config project set context.token_budget <value>` (a
+  positive integer); defaults to `32000` when unset, matching the
+  previous fixed behavior. An unreadable or invalid project configuration
+  falls back to the same default rather than failing the node.
+
+### Fixed
+
+- Writing an integer project configuration value (only reachable through
+  this release's new `context.token_budget` key) could silently fail to
+  persist: a pre-existing YAML round-trip step treated every configured
+  value as text, so a written number failed re-validation on the very
+  next read and was silently discarded in favor of the prior value.
+
 ## v0.49.0
 
 ### Changed

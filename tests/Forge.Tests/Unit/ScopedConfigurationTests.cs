@@ -160,6 +160,55 @@ public sealed class ScopedConfigurationTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task TokenBudgetRoundTripsAsAProjectScopedIntegerDefaultingToTheRegisteredValue()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        IReadOnlyList<EffectiveConfigurationValue> defaults =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(40000),
+            TestContext.Current.CancellationToken);
+        IReadOnlyList<EffectiveConfigurationValue> updated =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.Equal(32000, Value(defaults, "context.token_budget").Value.GetInt32());
+        Assert.True(write.Succeeded);
+        Assert.Equal(40000, Value(updated, "context.token_budget").Value.GetInt32());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ANonPositiveTokenBudgetIsRejected()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(0),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(write.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task ProjectConfigurationRequiresAnInitializedProject()
     {
         using TestEnvironment environment = new();
