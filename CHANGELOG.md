@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.49.0
+
+### Changed
+
+- A running sprint's first node (`intake`) now actually executes: Forge
+  parses the project's `.forge/` rules and knowledge and freezes the
+  sprint's context manifest automatically. Previously this node stayed
+  `ready` forever with nothing to advance it, so `forge tree`/`forge sprint
+  inspect` and the Desktop sprint views now show real progress on a freshly
+  run sprint instead of a permanent stall. A malformed `.forge/` document is
+  recorded as a diagnostic on the node result rather than blocking
+  progress. Every other node role (planning, implementation, review,
+  confirmation, test work, finalization) still has no executor.
+
 ## v0.48.0
 
 ### Added
