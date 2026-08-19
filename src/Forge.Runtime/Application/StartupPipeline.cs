@@ -162,9 +162,12 @@ public sealed class StartupPipeline(
             migrator.Migrate(document, ConfigurationScope.Project, ScopedConfigurationStores.SchemaVersion);
             return StartupCheck.Passed(StartupCheckId.ProjectConfiguration);
         }
+        // JsonException (round 2 review of PR #69): the same out-of-Int32-range-integer hazard
+        // ProjectRootResolver.ReadManifestAsync's own catch filter already documents.
         catch (Exception error) when (
             error is YamlException or InvalidDataException or ConfigurationMigrationException or
-                FormatException or ConfigurationScopeException or IOException or UnauthorizedAccessException)
+                FormatException or JsonException or ConfigurationScopeException or IOException or
+                UnauthorizedAccessException)
         {
             return new(
                 StartupCheckId.ProjectConfiguration,

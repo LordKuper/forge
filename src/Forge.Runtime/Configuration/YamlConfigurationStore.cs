@@ -12,16 +12,28 @@ public sealed class YamlConfigurationStore(
     ConfigurationScope scope,
     IConfigurationRegistry registry) : IConfigurationStore
 {
-    // Without this, YamlDotNet's untyped Deserialize<object> stringifies every scalar -- the same
-    // verified behavior ForgeDocumentCompiler's own typedDeserializer comment documents -- which
-    // would silently turn `token_budget: 40000` into the JSON string "40000" and fail
+    // YamlDotNet's untyped Deserialize<object> stringifies every scalar -- the same verified
+    // behavior ForgeDocumentCompiler's own typedDeserializer comment documents -- which would
+    // silently turn `token_budget: 40000` into the JSON string "40000" and fail
     // project-manifest.schema.json's `"type": "integer"` (ADR 0029). This store cannot deserialize
     // directly into a typed DTO the way ForgeDocumentCompiler does, since NormalizeYaml/
-    // StripLegacySprintRegistry must inspect the raw shape before any typed schema applies; this
-    // builder option makes the untyped pass itself scalar-type-aware instead.
-    private readonly IDeserializer rawDeserializer = new DeserializerBuilder()
-        .WithAttemptingUnquotedStringTypeDeserialization()
-        .Build();
+    // StripLegacySprintRegistry must inspect the raw shape before any typed schema applies.
+    //
+    // Round 2 review of PR #69: the obvious fix (YamlDotNet's own
+    // WithAttemptingUnquotedStringTypeDeserialization() builder option, making the untyped pass
+    // itself scalar-type-aware) was tried first and reverted -- it is too broad, reproducibly
+    // introducing two new hazards for every OTHER string-typed scalar this store already handles
+    // correctly: `true`/`false` string values silently stop round-tripping (YamlDotNet coerces
+    // them to bool, then schema validation's "type": "string" check fails, and the SAME
+    // .previous-recovery path this PR's own bug report is about silently discards the write again
+    // -- reintroducing that exact defect for a different field); and YAML float specials
+    // (`.inf`/`.nan`) get parsed as `double.PositiveInfinity`/`NaN`, which
+    // JsonSerializer.SerializeToElement then throws ArgumentException on -- unguarded by any catch
+    // filter in this codebase, a strictly worse crash than the one this whole PR exists to fix.
+    // CoerceTokenBudgetToNumber below is the narrow alternative: it touches only the one known
+    // integer field this PR introduces, leaving every string field's round-trip exactly as it was
+    // before this PR, with no broad type-inference risk at all.
+    private readonly IDeserializer rawDeserializer = new DeserializerBuilder().Build();
     private readonly ISerializer serializer = new SerializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
@@ -79,6 +91,7 @@ public sealed class YamlConfigurationStore(
         object? raw = rawDeserializer.Deserialize<object>(yaml);
         object? normalized = NormalizeYaml(raw);
         StripLegacySprintRegistry(normalized);
+        CoerceTokenBudgetToNumber(normalized);
         JsonElement rawElement = JsonSerializer.SerializeToElement(normalized);
         ConfigurationSchemaCodec.ValidateProject(rawElement);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
@@ -121,6 +134,31 @@ public sealed class YamlConfigurationStore(
         {
             throw new InvalidDataException("The legacy project sprint registry is invalid.");
         }
+    }
+
+    // The narrow alternative to YamlDotNet's broad type-inference option (see rawDeserializer's own
+    // comment for why that option was reverted): touches only `context.token_budget`, the one
+    // integer field this store's schema declares, leaving every other scalar's round-trip
+    // (including `true`/`false`-valued strings) exactly as NormalizeYaml already produces it. A
+    // string that does not parse as a `long` is left untouched -- ConfigurationSchemaCodec.
+    // ValidateProject's own `"type": "integer"` check rejects it with the same InvalidDataException
+    // a garbled value already produced before this coercion existed. `long`, not `int`, deliberately:
+    // an out-of-Int32-range value (e.g. "3000000000") must still reach the JSON Schema `"maximum"`
+    // check as a genuine number so it fails there with a clean, expected InvalidDataException,
+    // rather than staying a string and failing the unrelated `"type"` check instead.
+    private static void CoerceTokenBudgetToNumber(object? normalized)
+    {
+        if (normalized is not Dictionary<string, object?> root ||
+            !root.TryGetValue("context", out object? contextValue) ||
+            contextValue is not Dictionary<string, object?> context ||
+            !context.TryGetValue("token_budget", out object? tokenBudgetValue) ||
+            tokenBudgetValue is not string text ||
+            !long.TryParse(text, out long parsed))
+        {
+            return;
+        }
+
+        context["token_budget"] = parsed;
     }
 
     private static object? NormalizeYaml(object? value) =>

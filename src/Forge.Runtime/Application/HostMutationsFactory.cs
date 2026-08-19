@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Forge.Configuration;
 using Forge.Host.Client;
 
@@ -67,9 +68,11 @@ public static class HostMutationsFactory
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is YamlDotNet.Core.YamlException or InvalidDataException
-            or FormatException or ConfigurationScopeException or IOException or UnauthorizedAccessException
-            or InvalidOperationException)
+            or FormatException or JsonException or ConfigurationScopeException or IOException
+            or UnauthorizedAccessException or InvalidOperationException)
         {
+            // JsonException (round 2 review of PR #69): the same out-of-Int32-range-integer hazard
+            // ProjectRootResolver.ReadManifestAsync's own catch filter already documents.
             // The same unreadable-manifest condition ControlPlaneHostedService itself treats as
             // "this project cannot be served" — with no project id to key a Host connection on,
             // the caller falls back to the local ForgeApplication, which will independently hit

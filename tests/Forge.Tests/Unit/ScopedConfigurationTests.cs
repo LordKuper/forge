@@ -233,6 +233,69 @@ public sealed class ScopedConfigurationTests
         Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
     }
 
+    // Round 2 review of PR #69: the first fix attempt for the token-budget round-trip bug used
+    // YamlDotNet's broad WithAttemptingUnquotedStringTypeDeserialization() builder option, which
+    // was reverted after being shown to coerce `true`/`false`-valued strings to bool -- breaking
+    // this exact round trip for any string field that happens to hold one of those two literal
+    // values (a real regression for artifacts.language.*, which permits "true" as a valid 4-letter
+    // BCP-47 subtag). The replacement fix (CoerceTokenBudgetToNumber, scoped only to
+    // context.token_budget) must not reintroduce this.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AStringValuedFieldThatLooksLikeABooleanRoundTripsAsAStringUnchanged()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "artifacts.language.agent_facing",
+            JsonSerializer.SerializeToElement("true"),
+            TestContext.Current.CancellationToken);
+        IReadOnlyList<EffectiveConfigurationValue> project =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.True(write.Succeeded);
+        Assert.Equal("true", Value(project, "artifacts.language.agent_facing").Value.GetString());
+    }
+
+    // Round 2 review of PR #69: the same reverted fix attempt above also parsed YAML float specials
+    // (`.inf`/`.nan`) as `double.PositiveInfinity`/`NaN`, which JsonSerializer.SerializeToElement
+    // then threw an unguarded ArgumentException on -- reproduced directly against YamlDotNet 18.1.0
+    // with this store's exact configuration. The replacement fix never invokes YamlDotNet's own
+    // type inference at all, so a `.inf`-like scalar in any field is just a string that fails its
+    // own schema type/pattern check like any other garbled value, not a crash.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AYamlFloatSpecialInAnyFieldDegradesGracefullyInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string manifest = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            manifestPath,
+            manifest.Replace("workflow: implementation-critical", "workflow: .inf"),
+            TestContext.Current.CancellationToken);
+
+        ConfigurationView result = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        // Degrades via ProjectRootResolver.ReadManifestAsync's own recoverable-error path (reached
+        // before GetProjectConfigurationAsync's own try block even begins), not via
+        // ConfigurationInvalid -- the exact call-order finding round 1 traced for the int-overflow
+        // bug. What matters here is that it degrades cleanly at all, not which of the two codes.
+        Assert.Equal(DiagnosticCodes.ProjectDirectoryUnknown, result.DiagnosticCode);
+        Assert.Empty(result.Values);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ProjectConfigurationRequiresAnInitializedProject()

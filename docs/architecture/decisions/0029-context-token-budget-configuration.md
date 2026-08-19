@@ -222,6 +222,79 @@ since `GetProjectConfigurationAsync` returns an empty `Values` list on
 every failure path regardless -- is recorded honestly in that test's own
 comment rather than papered over with a claim the test cannot back.
 
+## Round 2 review (full-scope) -- round 1's own fix was itself unsafe
+
+Round 2 found that round 1's fix for the write-time silent-discard bug
+-- YamlDotNet's `.WithAttemptingUnquotedStringTypeDeserialization()`
+builder option -- was too broad and, reproduced directly against
+YamlDotNet 18.1.0 with this store's exact configuration, introduced two
+new regressions of its own:
+
+1. **A new, worse crash.** The option infers YAML float specials
+   (`.inf`, `-.inf`, `.nan`) as `double.PositiveInfinity`/`NegativeInfinity`/
+   `NaN`. `JsonSerializer.SerializeToElement` then throws an unguarded
+   `ArgumentException` for any of those values -- standard JSON has no
+   representation for them -- in ANY field, not just
+   `context.token_budget`, and before schema validation ever runs.
+   `ArgumentException` was in none of this codebase's guarding filters
+   (not `YamlConfigurationStore.IsRecoverable`, not
+   `ProjectRootResolver.ReadManifestAsync`'s, not `ForgeApplication`'s,
+   not `ControlPlaneHostedService`'s) -- reachable through
+   `ControlPlaneHostedService.ExecuteAsync`, this could crash a whole
+   Host process, strictly worse than the write-time-discard bug round 1
+   fixed.
+2. **A quieter regression for existing fields.** The same option also
+   coerces the literal strings `true`/`false` to `bool`. Any
+   string-typed field that legitimately holds one of those two values
+   -- `artifacts.language.user_facing`/`agent_facing` permit `"true"`
+   as a valid four-letter BCP-47 subtag class -- would fail
+   `project-manifest.schema.json`'s `"type": "string"` check on the very
+   next read after being written, and `YamlConfigurationStore`'s own
+   `.previous`-recovery path would silently discard that write. The
+   exact defect class this whole ADR exists to fix, reintroduced for a
+   different field by the fix itself.
+
+Both reproduced directly (not inferred): reverting the narrow
+replacement fix below back to the broad option and re-running
+`AStringValuedFieldThatLooksLikeABooleanRoundTripsAsAStringUnchanged`
+and `AYamlFloatSpecialInAnyFieldDegradesGracefullyInsteadOfThrowing`
+fails both, the second with the exact predicted `ArgumentException`.
+
+**Replaced with a narrow, targeted fix**: `rawDeserializer` no longer
+uses any YamlDotNet type-inference option at all -- reverted to plain
+`new DeserializerBuilder().Build()`, restoring every OTHER field's
+round-trip to exactly its pre-this-PR behavior. A new
+`CoerceTokenBudgetToNumber` step, run once after `NormalizeYaml`/
+`StripLegacySprintRegistry` and before JSON conversion, touches only
+`normalized["context"]["token_budget"]`: if present and a `string` that
+parses as a `long` (not `int` -- an out-of-`Int32.MaxValue` value must
+still reach the schema's own `"maximum"` check as a genuine number, so
+it fails there with the expected clean `InvalidDataException`, not by
+silently staying a string and failing an unrelated `"type"` check
+instead), it is replaced with the parsed number; anything else is left
+untouched and falls through to the same `"type": "integer"` schema
+rejection a garbled value already produced before either fix existed.
+Verified by reverting `CoerceTokenBudgetToNumber`'s own call site in
+isolation and confirming
+`TokenBudgetRoundTripsAsAProjectScopedIntegerDefaultingToTheRegisteredValue`
+fails with the original `Actual: 32000` symptom, then restoring it.
+
+Also fixed in the same round: the schema `"maximum": 2147483647` bound
+(round 1's own overflow fix) had zero direct test coverage of its own
+-- reverting just that bound left the suite green, since the two
+catch-filter widenings alone already mask it -- closed with a new
+`contract-cases.json` case, "project manifest rejects a token budget
+exceeding Int32.MaxValue"; three files with stale comments claiming
+catch-filter parity with `ProjectRootResolver.ReadManifestAsync`'s own
+filter, which had since diverged (`ControlPlaneHostedService.ExecuteAsync`,
+`HostMutationsFactory`, `StartupPipeline`'s project-configuration
+check) -- all three also read the manifest through the same
+`YamlConfigurationStore`/`ProjectIdentity.ReadProjectIdAsync` path with
+no try/catch of their own between them and it, so each genuinely needed
+the same `JsonException` widening, not just a comment fix; and a
+grammar nit ("must be a integer") in `ConfigurationSchemaCodec
+.InvalidType`'s five call sites.
+
 ## Consequences
 
 - `docs/contracts/v1/configuration.json`: `contract_version` 1.2.0 ->
@@ -234,14 +307,19 @@ comment rather than papered over with a claim the test cannot back.
 - `ConfigurationSchemaCodec`: `ProjectContractVersion` 1.0.0 -> 1.1.0;
   new `GetOptionalInt32`/`Add(..., int?)` helpers; new `ProjectContext`
   DTO wired into `ToProject`/`FromProject`.
-- `YamlConfigurationStore`: `rawDeserializer` now built with
-  `.WithAttemptingUnquotedStringTypeDeserialization()` (see the bug
-  above) -- a correctness fix for the store generally, not specific to
-  this one key; `IsRecoverable` also widened to include `JsonException`
-  (round 1).
-- `ProjectRootResolver.ReadManifestAsync`'s catch filter widened to
-  include `JsonException` (round 1) -- the actual escape point for the
-  out-of-int32-range bug above.
+- `YamlConfigurationStore`: `rawDeserializer` stays plain
+  `new DeserializerBuilder().Build()` (round 1's broad
+  `.WithAttemptingUnquotedStringTypeDeserialization()` fix was reverted
+  in round 2 -- see that section); a new `CoerceTokenBudgetToNumber`
+  step, scoped only to `context.token_budget`, is the actual fix;
+  `IsRecoverable` widened to include `JsonException` (round 1).
+- `ProjectRootResolver.ReadManifestAsync`, `HostMutationsFactory`,
+  `StartupPipeline`'s project-configuration check, and
+  `ControlPlaneHostedService.ExecuteAsync`: catch filters widened to
+  include `JsonException` (round 1 for the first, round 2 for the other
+  three, all four reading the manifest through the same
+  `YamlConfigurationStore`/`ProjectIdentity.ReadProjectIdAsync` path
+  with no intermediate try/catch).
 - `IntakeExecutionHostedService`: new `ForgeApplication` constructor
   dependency; `DefaultTokenBudget` is now the documented fallback, not
   an unconditional literal; `ResolveTokenBudgetAsync` resolves the

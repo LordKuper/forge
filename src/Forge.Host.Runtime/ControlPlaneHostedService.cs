@@ -92,11 +92,13 @@ public sealed class ControlPlaneHostedService(
                 .ConfigureAwait(false);
         }
         catch (Exception exception) when (exception is YamlException or InvalidDataException or FormatException
-            or ConfigurationScopeException or IOException or UnauthorizedAccessException
+            or JsonException or ConfigurationScopeException or IOException or UnauthorizedAccessException
             or InvalidOperationException)
         {
-            // Matches ProjectRootResolver's manifest-read failure filter, plus InvalidOperationException: that's
-            // what ProjectIdentity.ReadProjectIdAsync itself throws for an initialized project missing a project
+            // Matches ProjectRootResolver's manifest-read failure filter (round 2 review of PR #69:
+            // JsonException added there for an out-of-Int32-range integer configuration value, widened
+            // here too for the same reason), plus InvalidOperationException: that's what
+            // ProjectIdentity.ReadProjectIdAsync itself throws for an initialized project missing a project
             // ID. Every case here means the same thing: this project cannot be served. Report it the same way
             // instead of letting an exception type this handler didn't anticipate crash the process via the
             // generic unhandled-BackgroundService-exception path.

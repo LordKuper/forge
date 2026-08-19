@@ -149,7 +149,7 @@ internal static class ConfigurationSchemaCodec
 
         return value.ValueKind == JsonValueKind.String
             ? value.GetString()
-            : throw InvalidType(key, "string");
+            : throw InvalidType(key, "a string");
     }
 
     private static string GetRequiredString(ConfigurationDocument document, string key) =>
@@ -165,7 +165,7 @@ internal static class ConfigurationSchemaCodec
 
         return value.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? value.GetBoolean()
-            : throw InvalidType(key, "boolean");
+            : throw InvalidType(key, "a boolean");
     }
 
     private static int? GetOptionalInt32(ConfigurationDocument document, string key)
@@ -177,7 +177,7 @@ internal static class ConfigurationSchemaCodec
 
         return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int result)
             ? result
-            : throw InvalidType(key, "integer");
+            : throw InvalidType(key, "an integer");
     }
 
     private static List<string>? GetOptionalStringArray(ConfigurationDocument document, string key)
@@ -189,16 +189,16 @@ internal static class ConfigurationSchemaCodec
 
         if (value.ValueKind != JsonValueKind.Array)
         {
-            throw InvalidType(key, "array");
+            throw InvalidType(key, "an array");
         }
 
         return [.. value.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String
             ? item.GetString()!
-            : throw InvalidType(key, "array of strings"))];
+            : throw InvalidType(key, "an array of strings"))];
     }
 
     private static InvalidDataException InvalidType(string key, string expected) =>
-        new($"Configuration key '{key}' must be a {expected}.");
+        new($"Configuration key '{key}' must be {expected}.");
 
     private static void Add(
         Dictionary<string, JsonElement> values,
