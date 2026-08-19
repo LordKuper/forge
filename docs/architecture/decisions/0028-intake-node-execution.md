@@ -349,6 +349,49 @@ seventh patched call site. Recorded as deferred cleanup below rather
 than attempted in this PR, whose own scope is intake execution, not a
 `FileSprintEventLog` deserialization redesign.
 
+## Round 5 review (critical-only)
+
+Independent review found two further critical issues — the seventh and
+eighth instances of the same defect class, a different variant of it
+this time:
+
+1. **`GetNodeResultsAsync`'s `?? []` (round 2) guards a null *list*, not
+   a null *element* inside a present one.** `"diagnostics": [null]`
+   survives the coalesce untouched, and `FromPersisted(PersistedDiagnostic)`
+   dereferences the null element directly, throwing
+   `NullReferenceException`, uncaught by every prior round's filter.
+   Fixed by adding `NullReferenceException` to the catch filter (not by
+   filtering the null element out — a null diagnostic entry is corrupt
+   data, matching this file's own "treat as corrupt, do not guess"
+   convention, not something to silently drop). Regression-tested with
+   `GetNodeResultsAsyncWrapsANullDiagnosticElementInAnInvalidDataException`;
+   mutation-verified.
+2. **Identical case for `GetConfirmationsAsync`'s `Evidence`**, on the
+   exact line round 3 patched with `?? []`. Fixed the same way.
+   Regression-tested with
+   `GetConfirmationsAsyncWrapsANullEvidenceElementInAnInvalidDataException`;
+   mutation-verified.
+
+While closing these two, a **ninth** instance was self-identified before
+launching the next round rather than left for it to find: `LoadDefinitionAsync`
+has the identical null-list-element hazard across its own `graph`/
+`dependencies`/`execution_profiles` arrays — and `LoadDefinitionAsync`
+is `IntakeExecutionHostedService.ExecuteIntakeAsync`'s own *first* read,
+ahead of `GetNodeResultsAsync`/`GetConfirmationsAsync` entirely, so an
+unwrapped exception there escapes straight to `TickAsync`'s own filter.
+Fixed the same way (`NullReferenceException` added to
+`LoadDefinitionAsync`'s catch filter). Regression-tested with
+`LoadDefinitionAsyncWrapsANullGraphElementInAnInvalidDataException`;
+mutation-verified.
+
+Nine instances of the same defect class across five review rounds
+confirms rather than merely suggests the round-4 assessment above: this
+is not converging by one-off patches. The deferred shared-validation-helper
+item below is upgraded from "worth doing eventually" to the load-bearing
+justification for why round 6, if it finds a tenth instance, should
+trigger that redesign rather than a tenth narrow patch — recorded here
+so that decision is not made silently in the moment.
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None
@@ -400,13 +443,15 @@ than attempted in this PR, whose own scope is intake execution, not a
   service produces, but a future corruption could), the tick retries it every
   interval forever. Logged, not rate-limited.
 - **A shared, systematic deserialization-validation helper for
-  `FileSprintEventLog`'s `Persisted*` DTOs.** Round 4 named this
-  directly: six instances of the identical "unwrapped exception escapes
-  the catch filter" defect were found and fixed one call site at a time
-  across four review rounds, and no seventh instance is guaranteed not
-  to exist in code this PR did not touch. A single read path that
-  validates required-field presence and type before any per-field
-  access would close the whole defect class at once. Out of this PR's
+  `FileSprintEventLog`'s `Persisted*` DTOs.** Nine instances of the
+  identical "unwrapped exception escapes the catch filter" defect were
+  found and fixed one call site at a time across five review rounds
+  (round 5 upgraded this from "worth doing eventually" to the explicit
+  trigger condition for a tenth instance — see that section), and no
+  tenth instance is guaranteed not to exist in code this PR did not
+  touch. A single read path that validates required-field presence and
+  type before any per-field access would close the whole defect class
+  at once. Out of this PR's
   own scope (intake execution, not a `FileSprintEventLog` redesign).
 
 ## Consequences

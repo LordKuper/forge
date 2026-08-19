@@ -156,8 +156,19 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.FrozenProviders,
                 executionProfiles.ToDictionary(profile => profile.Phase, profile => profile));
         }
-        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException
+            or NullReferenceException)
         {
+            // NullReferenceException (round 5 review, self-identified while closing that round's
+            // findings): the same "null element inside an otherwise-present list" hazard found in
+            // GetNodeResultsAsync/GetConfirmationsAsync also applies here -- "graph": [null],
+            // "dependencies": [null], or "execution_profiles": [null] all survive deserialization
+            // (DefinitionJsonOptions does not respect nullable annotations) and this method's own
+            // FromPersisted(PersistedNode)/FromPersisted(PersistedDependency)/
+            // FromPersisted(PersistedExecutionProfile) each dereference the element directly. This
+            // method is IntakeExecutionHostedService.ExecuteIntakeAsync's own first read (before
+            // GetNodeResultsAsync/GetConfirmationsAsync are ever reached), so an unwrapped exception
+            // here escapes straight to TickAsync's per-sprint filter.
             throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
         }
     }
@@ -248,7 +259,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [.. (persisted.Diagnostics ?? []).Select(FromPersisted)]));
             }
             catch (Exception error) when (error is JsonException or FormatException or OverflowException
-                or ArgumentNullException)
+                or ArgumentNullException or NullReferenceException)
             {
                 // Matches LoadAsync's own exception-normalization contract: every ISprintStore
                 // caller is entitled to treat a corrupt on-disk record as InvalidDataException, not
@@ -261,6 +272,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 // same reason PersistedNodeResult.Outputs/Diagnostics needed round 2's fix), and
                 // Guid.Parse(null) throws it -- the identical hazard round 3 already named and fixed
                 // for LoadValidatedEventsAsync's own Guid.Parse, left uncovered here.
+                // NullReferenceException (round 5 review): a null *element* inside "diagnostics"
+                // (e.g. "diagnostics": [null]) survives the `?? []` list-level coalesce -- that only
+                // guards a null list, not a null entry inside a present one -- and FromPersisted
+                // dereferences it directly.
                 throw new InvalidDataException($"The node result at '{path}' is corrupt.", error);
             }
         }
@@ -430,12 +445,16 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     throw new InvalidDataException($"The confirmation at '{path}' is empty.");
                 confirmations.Add(FromPersisted(sprintId, persisted));
             }
-            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or NullReferenceException)
             {
                 // Same normalization as GetNodeResultsAsync/GetFindingsAsync, and for the same
                 // reason: a caller on an autonomous loop (AdvanceGraphAsync's own
                 // IsTestWorkEligibleAsync reads this) must be able to catch a corrupt record as
-                // InvalidDataException, not a raw parse exception.
+                // InvalidDataException, not a raw parse exception. NullReferenceException (round 5
+                // review): a null *element* inside "evidence" (e.g. "evidence": [null]) survives the
+                // `?? []` list-level coalesce and FromPersisted(PersistedEvidence) dereferences it
+                // directly -- the null-element case round 3's list-level fix did not cover.
                 throw new InvalidDataException($"The confirmation at '{path}' is corrupt.", error);
             }
         }

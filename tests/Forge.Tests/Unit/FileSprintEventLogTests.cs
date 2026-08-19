@@ -7,6 +7,33 @@ namespace Forge.UnitTests;
 
 public sealed class FileSprintEventLogTests
 {
+    // Round 5 review of PR #68: self-identified while closing that round's two reported findings --
+    // the same "null element inside an otherwise-present list" hazard also applies to
+    // LoadDefinitionAsync's own "graph"/"dependencies"/"execution_profiles" arrays, and
+    // LoadDefinitionAsync is IntakeExecutionHostedService.ExecuteIntakeAsync's own first read, ahead
+    // of GetNodeResultsAsync/GetConfirmationsAsync entirely.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadDefinitionAsyncWrapsANullGraphElementInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        ((JsonArray)persisted["graph"]!).Add((JsonNode?)null);
+        await File.WriteAllTextAsync(definitionPath, persisted.ToJsonString(), cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
     // Round 4 review of PR #68: unlike Outputs/Diagnostics (round 2) and Evidence (round 3), an
     // explicit "attempt_id": null is not a legitimate empty value -- it is corrupt data, since
     // AttemptId is required and non-nullable in the domain. Guid.Parse(null) threw the same
@@ -35,6 +62,39 @@ public sealed class FileSprintEventLogTests
             Path.Combine(FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "results")).Single();
         JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(resultPath, cancellationToken))!;
         persisted["attempt_id"] = null;
+        await File.WriteAllTextAsync(resultPath, persisted.ToJsonString(), cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    // Round 5 review of PR #68: round 2's `persisted.Diagnostics ?? []` only guards a null LIST --
+    // "diagnostics": [null] (a null ELEMENT inside a present list) survives it untouched, and
+    // FromPersisted(PersistedDiagnostic) dereferences the null element directly, throwing
+    // NullReferenceException -- uncaught by every prior round's filter. The seventh instance of the
+    // same defect class across FileSprintEventLog.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetNodeResultsAsyncWrapsANullDiagnosticElementInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        NodeResult result = new(
+            sprintId, new("intake"), new(Guid.NewGuid()), NodeOutcome.Succeeded, now, now,
+            $"sha256:{new string('a', 64)}", [], []);
+        await store.SaveNodeResultAsync(environment.ProjectRoot, result, cancellationToken);
+
+        string resultPath = Directory.EnumerateFiles(
+            Path.Combine(FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "results")).Single();
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(resultPath, cancellationToken))!;
+        persisted["diagnostics"] = new JsonArray((JsonNode?)null);
         await File.WriteAllTextAsync(resultPath, persisted.ToJsonString(), cancellationToken);
 
         await Assert.ThrowsAsync<InvalidDataException>(
@@ -112,6 +172,37 @@ public sealed class FileSprintEventLogTests
         IReadOnlyList<ConfirmationArtifact> confirmations =
             await store.GetConfirmationsAsync(environment.ProjectRoot, sprintId, cancellationToken);
         Assert.Empty(Assert.Single(confirmations).Evidence);
+    }
+
+    // Round 5 review of PR #68: the null-list case above (round 3's `?? []`) does not cover a null
+    // ELEMENT inside a present list -- "evidence": [null] survives the coalesce untouched, and
+    // FromPersisted(PersistedEvidence) dereferences the null element directly, throwing
+    // NullReferenceException. The eighth instance of the same defect class across FileSprintEventLog.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetConfirmationsAsyncWrapsANullEvidenceElementInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        ConfirmationArtifact confirmation = new(
+            Guid.NewGuid(), sprintId, new("confirmation"), ConfirmationOutcome.Confirmed, "Done.",
+            [new(ConfirmationEvidenceKind.Inspection, "Read the diff.")], DateTimeOffset.UtcNow);
+        await store.SaveConfirmationAsync(environment.ProjectRoot, confirmation, cancellationToken);
+
+        string confirmationPath = Directory.EnumerateFiles(Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "confirmations")).Single();
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(confirmationPath, cancellationToken))!;
+        persisted["evidence"] = new JsonArray((JsonNode?)null);
+        await File.WriteAllTextAsync(confirmationPath, persisted.ToJsonString(), cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetConfirmationsAsync(environment.ProjectRoot, sprintId, cancellationToken));
     }
 
     // Round 2 review of PR #68: GetFindingsAsync/GetConfirmationsAsync had the same unwrapped
