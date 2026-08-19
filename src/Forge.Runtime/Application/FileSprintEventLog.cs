@@ -568,7 +568,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            List<WorkflowEvent> events =
+                [.. await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false)];
             ValidateJournal(events);
             await MigrateLegacyRoutingAsync(directory, decision.SprintId, events, cancellationToken)
                 .ConfigureAwait(false);
@@ -595,7 +596,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         try
         {
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
             long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
@@ -634,7 +635,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         try
         {
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
 
@@ -707,7 +708,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             try
             {
                 List<WorkflowEvent> events =
-                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken).ConfigureAwait(false)];
+                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken, callerHoldsLock: true)
+                        .ConfigureAwait(false)];
                 ValidateJournal(events);
                 await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
                 return events;
@@ -799,7 +801,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             }
 
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
             if (currentVersion != expectedAggregateVersion)
@@ -842,7 +844,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             await WriteIdempotencyAsync(idempotencyPath, applied, cancellationToken).ConfigureAwait(false);
 
             IReadOnlyList<WorkflowEvent> persisted =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             return new(true, WorkflowFold.Apply(sprintId, persisted), DiagnosticCodes.None);
         }
         catch (IOException)
@@ -1471,15 +1473,94 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// newline-terminated line that still fails to parse is real corruption, not a torn write —
     /// this store never produces one, so that always propagates rather than being silently dropped.
     /// </summary>
+    // A torn tail (no trailing newline) here has two possible causes that must not be treated the
+    // same way: genuine crash residue from a PRIOR process run (safe, and correct, to truncate
+    // away), or a same-process AppendLineAsync call still mid-flight (this read is deliberately
+    // unlocked and can observe its bytes before the write completes). Retrying the whole read gives
+    // an in-flight append the same short window ReadAllBytesWithRetryAsync already grants an
+    // AV-scanner-style transient lock, so a real in-flight write has time to finish and become
+    // visible as a complete line before this method concludes the tail is actually torn. Getting
+    // this wrong in the other direction is not merely a spurious error: truncating on the first
+    // sighting, before an in-flight writer finishes, would cut off that writer's own event as soon
+    // as it does land — a durable, already-reported-successful event silently deleted from the
+    // journal, not just a transient failure surfaced to its caller.
+    //
+    // Even after retrying, the *decision* to truncate must not itself race a concurrent append: the
+    // per-directory Locks semaphore that every mutator (AppendLineAsync's callers, and this method's
+    // own truncate) must hold is what actually prevents that collision -- callerHoldsLock is false
+    // for genuinely unlocked callers (LoadAsync), which acquire it here, immediately before a final
+    // re-check that could only now still be torn if the corruption is real. It is true for every
+    // caller that already holds the same directory's lock itself (AppendTransitionAsync and its own
+    // internal helpers) -- re-acquiring a non-reentrant SemaphoreSlim already held on the same async
+    // flow would deadlock forever, not merely block.
+    private const int MaxTornTailAttempts = 5;
+
     private static async Task<IReadOnlyList<WorkflowEvent>> ReadEventsAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool callerHoldsLock = false)
     {
         if (!File.Exists(path))
         {
             return [];
         }
 
+        for (int attempt = 1; ; attempt++)
+        {
+            (List<WorkflowEvent> events, bool torn, int offset) =
+                await ReadEventsOnceAsync(path, cancellationToken).ConfigureAwait(false);
+            if (!torn)
+            {
+                return events;
+            }
+
+            if (attempt < MaxTornTailAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            if (callerHoldsLock)
+            {
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
+                return events;
+            }
+
+            string? directory = Path.GetDirectoryName(path);
+            if (directory is null)
+            {
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
+                return events;
+            }
+
+            SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Re-checked under the lock: a concurrent append that was still in flight when the
+                // last unlocked attempt above ran may have completed and released it just before
+                // this wait returned, in which case the file is no longer torn at all.
+                (List<WorkflowEvent> finalEvents, bool stillTorn, int finalOffset) =
+                    await ReadEventsOnceAsync(path, cancellationToken).ConfigureAwait(false);
+                if (!stillTorn)
+                {
+                    return finalEvents;
+                }
+
+                await TruncateAsync(path, finalOffset, cancellationToken).ConfigureAwait(false);
+                return finalEvents;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+    }
+
+    private static async Task<(List<WorkflowEvent> Events, bool Torn, int Offset)> ReadEventsOnceAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
         byte[] bytes = await ReadAllBytesWithRetryAsync(path, cancellationToken).ConfigureAwait(false);
         List<WorkflowEvent> events = [];
         int offset = 0;
@@ -1488,8 +1569,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             int newlineIndex = Array.IndexOf(bytes, (byte)'\n', offset);
             if (newlineIndex < 0)
             {
-                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
-                return events;
+                return (events, true, offset);
             }
 
             int lineLength = newlineIndex - offset;
@@ -1501,7 +1581,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             offset = newlineIndex + 1;
         }
 
-        return events;
+        return (events, false, offset);
     }
 
     /// <summary>
@@ -1544,23 +1624,48 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    // This append is always made while the caller holds this same directory's Locks entry, so it
+    // can never race another in-process append or truncate for the same sprint. It has nonetheless
+    // been observed to intermittently throw IOException here under sustained concurrent load (round
+    // 8 review of PR #68, reproduced directly: a background executor ticking every 50ms against the
+    // same sprint a foreground command is simultaneously advancing) — the exact mechanism was not
+    // conclusively identified (every writer for this file is already lock-protected, by inspection),
+    // but is most plausibly a short-lived OS-level handle-close/reopen window rather than a second
+    // logical writer genuinely running concurrently. Retried the same way ReadAllBytesWithRetryAsync
+    // already retries the read side of this exact file for the identical class of transient
+    // contention, rather than surfacing workflow_store_busy for something that resolves within
+    // milliseconds.
     private static async Task AppendLineAsync(string path, string line, CancellationToken cancellationToken)
     {
         string directory = Path.GetDirectoryName(path) ??
             throw new InvalidOperationException("The event log path has no directory.");
         Directory.CreateDirectory(directory);
         byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
-        await using (FileStream stream = new(
-            path,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.Read,
-            4096,
-            FileOptions.Asynchronous | FileOptions.WriteThrough))
+
+        const int maxAttempts = 5;
+        for (int attempt = 1; ; attempt++)
         {
-            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            stream.Flush(true);
+            try
+            {
+                await using (FileStream stream = new(
+                    path,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    4096,
+                    FileOptions.Asynchronous | FileOptions.WriteThrough))
+                {
+                    await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
+                    await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    stream.Flush(true);
+                }
+
+                break;
+            }
+            catch (IOException) when (attempt < maxAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+            }
         }
 
         DirectoryFlusher.Flush(directory);

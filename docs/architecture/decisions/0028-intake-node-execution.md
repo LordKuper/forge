@@ -595,6 +595,75 @@ round's mutation verification has required.
   build the shared validating `Deserialize<T>` helper. Out of this PR's
   own scope (intake execution, not a `FileSprintEventLog` redesign).
 
+## Round 8 review (critical-only) — a genuine concurrency race, root cause not conclusively identified
+
+Round 8 stress-tested the service against a foreground command
+(`RunSprintAsync`) repeatedly advancing the same sprint while the
+background `IntakeExecutionHostedService` ticked against it every 50ms,
+and found a real, reproducible race: `AppendTransitionAsync`'s outer
+`catch (IOException) { return new(false, null,
+DiagnosticCodes.WorkflowStoreBusy); }` fired at roughly 15-22% of
+iterations, surfacing as both spurious background-service warnings and
+actual foreground command failures — not a false alarm, a genuine
+correctness gap under concurrent load.
+
+Two fix attempts were tried before the one that worked:
+
+1. **A torn-tail retry loop in `ReadEventsAsync`.** The theory: an
+   in-flight `AppendLineAsync` write could be observed mid-write by an
+   unlocked read, look like a torn tail (no trailing newline), and get
+   truncated out from under the writer. Retrying the read briefly before
+   concluding a tail is genuinely torn (rather than transiently
+   in-flight) mirrors `ReadAllBytesWithRetryAsync`'s existing precedent.
+   Kept — it is independently correct regardless of the outcome below —
+   but stress testing showed it **did not reduce the failure rate** on
+   its own.
+2. **A `callerHoldsLock`-parameterized redesign** making the final
+   truncate decision itself lock-protected (re-checking under the
+   per-directory `Locks` semaphore immediately before truncating, so a
+   truncate can never race a since-completed append), applied to all 7
+   `ReadEventsAsync` call sites. Also kept as independently correct — it
+   closes a real, if rarer, torn-write-truncation race — but stress
+   testing showed it **made the observed failure rate worse in
+   isolation (9/40)**, not better.
+
+Neither matched the actual collision. Temporary rethrow instrumentation
+(distinctive message prefixes at `AppendTransitionAsync`'s outer catch,
+`TruncateAsync`'s own open, and `AppendLineAsync`'s own open, captured
+via `dotnet test --logger trx` for untruncated output) traced the fault
+to `AppendLineAsync` itself: `IOException: The process cannot access the
+file '...events.jsonl' because it is being used by another process.`
+Every one of `AppendLineAsync`'s four call sites already holds the same
+directory's `Locks` semaphore, by inspection — static review of lock
+acquire/release pairing, `SprintDirectory`/`EventsPath` string
+consistency, and `SprintOrchestrator.RunSprintAsync`'s await chain found
+no in-process second writer. **The exact OS-level mechanism was not
+conclusively identified**; the working theory, recorded directly in the
+code, is a short-lived handle-close/reopen window rather than a second
+logical writer genuinely running concurrently.
+
+The fix that resolved it does not depend on knowing the mechanism:
+wrapping `AppendLineAsync`'s own file-open-and-write in a retry-on-
+`IOException` loop (5 attempts, `20ms × attempt` backoff) — the same
+"don't need to know why, just retry briefly, it's always transient"
+philosophy `ReadAllBytesWithRetryAsync` already applies to the read side
+of this identical file. Verified empirically, not just by inspection:
+two independent stress-test batches of 35 iterations each, 0/35 and
+0/35 (0/70 combined), against a documented ~15-22% baseline. Full suite
+re-run clean at unchanged counts (788/788 net10.0, 876/876
+net10.0-windows) — the pre-existing, previously-flaky integration tests
+serve as this fix's regression coverage; no new test was added, since
+the flake was never reliably reproducible on demand in a way a
+deterministic unit test could pin without reintroducing the same
+timing-dependent flakiness into the test itself.
+
+All three changes ship together: the torn-tail retry and the
+`callerHoldsLock` redesign are kept despite neither resolving the race
+in isolation, because each is independently correct for the narrower
+hazard it targets and neither appears to cause harm now that
+`AppendLineAsync` also retries — reverting either would reopen a real,
+if rarer, race for no benefit to this fix.
+
 ## Consequences
 
 - New `src/Forge.Host.Runtime/IntakeExecutionHostedService.cs`:
