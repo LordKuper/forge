@@ -119,6 +119,22 @@ behavior; verified by reverting the fix in isolation and confirming
 `TokenBudgetRoundTripsAsAProjectScopedIntegerDefaultingToTheRegisteredValue`
 fails with the exact `Actual: 32000` (silently-discarded-write) symptom.
 
+Round 1 review of this PR probed the option directly against YamlDotNet
+18.1.0 rather than trusting this claim on inspection alone: it does
+**not** coerce YAML 1.1's other boolean-like tokens (`yes`/`no`/`on`/`off`/
+`y`/`n` -- a real hazard for `language.ui: "no"`, a genuine Norwegian
+language tag, had this option been applied to `user-config.schema.json`'s
+own `rawDeserializer` too, which it was not), UUID-shaped strings, or
+version-shaped strings like `1.1.0`. The claim holds, but not because the
+deserializer itself refuses to touch those shapes on principle -- it
+holds because `YamlConfigurationStore`'s own serializer writes every
+string scalar unquoted (`project_id: af33aba4-...`, not
+`project_id: "af33aba4-..."`), and the *schema*'s own `format: "uuid"`/
+`pattern`/`const` constraints are what actually catch a genuine
+misinterpretation, not the deserializer's type inference. Recorded here
+so a future field added without a matching schema constraint cannot rely
+on the same accidental protection.
+
 **Named, not silently fixed and forgotten**: the underlying
 recovery-swallows-the-real-error behavior in `YamlConfigurationStore
 .ReadAsync` is a separate, pre-existing risk this ADR did not fix --
@@ -130,6 +146,82 @@ addition, not a `YamlConfigurationStore` redesign); flagged as a
 candidate for a future slice that gives this failure mode an actual
 diagnostic path instead of a silent revert.
 
+## Round 1 review (full-scope) -- a second real bug, this time genuinely new
+
+Round 1 found and confirmed by direct reproduction a second, more
+serious bug distinct from the write-time-discard one above: a
+`context.token_budget` value satisfying `project-manifest.schema.json`'s
+original `"integer, minimum: 1"` (JSON Schema's `"integer"` type has no
+bit-width of its own) but exceeding `Int32.MaxValue` -- reachable only
+by hand-editing `manifest.yaml` directly, since
+`ConfigurationSchemaCodec.GetOptionalInt32`'s own `TryGetInt32` check
+already rejects it cleanly on the normal write path -- threw an
+unguarded `JsonException` from the later typed
+`Deserialize<ProjectConfiguration>` call. That exception escaped
+`ProjectRootResolver.ReadManifestAsync`'s own catch filter (which listed
+`FormatException` but not `JsonException`) entirely uncaught, propagating
+out through `ForgeApplication.GetProjectConfigurationAsync` -- reachable
+through `rootResolver.ResolveAsync`, called before that method's own
+try block even begins, not through the read wrapped by its try -- and
+into `IntakeExecutionHostedService.ResolveTokenBudgetAsync`, which has
+no try/catch of its own and assumes `GetProjectConfigurationAsync`
+already degrades every failure. The result: `TickAsync`'s per-sprint
+catch filter does not include `JsonException` either, so the whole
+`BackgroundService` faulted and no sprint's intake ran again until a
+Host restart -- strictly worse than the graceful degradation this ADR's
+own "falls back... on any untrusted value" decision claims to guarantee.
+
+Reproduced directly against the built assembly (not inferred from
+reading code): a probe test writing `context: {token_budget:
+3000000000}` into a real `manifest.yaml` and calling
+`ForgeApplication.GetProjectConfigurationAsync` threw exactly the
+predicted `JsonException`/inner `FormatException`, with a stack trace
+confirming the escape path through `ProjectRootResolver.ReadManifestAsync`.
+
+Fixed at the root and in depth, three layers:
+
+1. `project-manifest.schema.json`'s `token_budget` property gains an
+   explicit `"maximum": 2147483647` (`Int32.MaxValue`), so schema
+   validation itself now rejects an out-of-range value *before* it ever
+   reaches typed deserialization -- the value never gets far enough to
+   throw `JsonException` at all for this specific field.
+2. `ProjectRootResolver.ReadManifestAsync`'s catch filter gains
+   `JsonException`, so even without the schema bound, a corrupt manifest
+   degrades to `DiagnosticCodes.ProjectDirectoryUnknown` instead of
+   faulting the caller.
+3. `YamlConfigurationStore.IsRecoverable` (the filter guarding its own
+   `.previous`-recovery attempt) gains `JsonException` too, for the same
+   reason -- a second, independent place a caller can observe
+   `ReadFileAsync`'s typed-deserialization throw.
+
+Each layer verified independently by reverting it in isolation and
+confirming `AnOutOfInt32RangeTokenBudgetInTheManifestFallsBackToTheDefaultWithoutFailingIntake`
+still passes on layers 2+3 alone (schema bound reverted), then
+confirming all three reverted together reproduces the original fault
+exactly (`WaitForNodeStateAsync` times out with the node stuck at
+`Running`, matching the "no sprint runs again" symptom), then restoring
+all three. A companion unit test,
+`AnOutOfInt32RangeTokenBudgetIsRejected`, pins that the normal write
+path was never actually vulnerable -- confirming the corruption really
+does require a hand-edited file, not a gap in `SetConfigurationAsync`.
+
+Two further findings from the same round, both addressed without new
+production risk: `docs/architecture/overview.md`'s explicit
+"Project scope owns:" list had not been updated for
+`context.token_budget` (fixed); and this ADR's own claim that
+`WithAttemptingUnquotedStringTypeDeserialization()` leaves "every other
+project-manifest field" unaffected was verified directly against
+YamlDotNet 18.1.0 rather than trusted on inspection, and narrowed to
+state precisely *why* it holds (see the "Fixed with YamlDotNet's own
+builder option" paragraph above, extended with this round's findings).
+A fifth, moderate finding -- that
+`AnUnreadableProjectConfigurationFallsBackToTheDefaultTokenBudgetWithoutFailingIntake`
+cannot by itself distinguish `ResolveTokenBudgetAsync`'s explicit
+diagnostic-code guard from simply falling through to the same default,
+since `GetProjectConfigurationAsync` returns an empty `Values` list on
+every failure path regardless -- is recorded honestly in that test's own
+comment rather than papered over with a claim the test cannot back.
+
 ## Consequences
 
 - `docs/contracts/v1/configuration.json`: `contract_version` 1.2.0 ->
@@ -137,14 +229,19 @@ diagnostic path instead of a silent revert.
   32000, session_override: false, sensitive: false`).
 - `docs/contracts/v1/schemas/project-manifest.schema.json`:
   `schema_version` enum gains `"1.1.0"`; new optional `context` object
-  with `token_budget` (`integer, minimum: 1`).
+  with `token_budget` (`integer, minimum: 1, maximum: 2147483647` --
+  the upper bound is round 1's own fix, see above).
 - `ConfigurationSchemaCodec`: `ProjectContractVersion` 1.0.0 -> 1.1.0;
   new `GetOptionalInt32`/`Add(..., int?)` helpers; new `ProjectContext`
   DTO wired into `ToProject`/`FromProject`.
 - `YamlConfigurationStore`: `rawDeserializer` now built with
   `.WithAttemptingUnquotedStringTypeDeserialization()` (see the bug
   above) -- a correctness fix for the store generally, not specific to
-  this one key.
+  this one key; `IsRecoverable` also widened to include `JsonException`
+  (round 1).
+- `ProjectRootResolver.ReadManifestAsync`'s catch filter widened to
+  include `JsonException` (round 1) -- the actual escape point for the
+  out-of-int32-range bug above.
 - `IntakeExecutionHostedService`: new `ForgeApplication` constructor
   dependency; `DefaultTokenBudget` is now the documented fallback, not
   an unconditional literal; `ResolveTokenBudgetAsync` resolves the

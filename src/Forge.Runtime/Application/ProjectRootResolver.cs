@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Forge.Configuration;
 using YamlDotNet.Core;
 
@@ -65,9 +66,16 @@ public sealed class ProjectRootResolver(
                 : new(root, true, true, false, DiagnosticCodes.None);
         }
         catch (Exception error) when (
-            error is YamlException or InvalidDataException or FormatException or
+            error is YamlException or InvalidDataException or FormatException or JsonException or
                 ConfigurationScopeException or IOException or UnauthorizedAccessException)
         {
+            // JsonException (round 1 review of PR #69): a schema-valid-but-out-of-C#-int32-range
+            // integer configuration value (JSON Schema's "integer" type has no bit-width of its
+            // own) passes ConfigurationSchemaCodec.ValidateProject but throws from the later typed
+            // Deserialize<ProjectConfiguration> call. project-manifest.schema.json now bounds
+            // context.token_budget to Int32.MaxValue so this specific field can no longer trigger
+            // it, but the filter stays widened as a backstop for any future integer field that
+            // does the same.
             return new(root, true, false, true, DiagnosticCodes.ProjectDirectoryUnknown);
         }
     }

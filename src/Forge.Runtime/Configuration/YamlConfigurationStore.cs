@@ -64,9 +64,7 @@ public sealed class YamlConfigurationStore(
         ValidateScope(document);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
             ConfigurationSchemaCodec.ToProject(document);
-        Console.Error.WriteLine($"DIAG persisted.Context={(persisted.Context is null ? "null" : $"TokenBudget={persisted.Context.TokenBudget}")}");
         string yaml = serializer.Serialize(persisted);
-        Console.Error.WriteLine($"DIAG yaml=[{yaml}]");
         await AtomicConfigurationFile.WriteAsync(
             path,
             Encoding.UTF8.GetBytes(yaml),
@@ -100,8 +98,13 @@ public sealed class YamlConfigurationStore(
         }
     }
 
+    // JsonException (round 1 review of PR #69): the same out-of-int32-range-integer hazard
+    // ProjectRootResolver.ReadManifestAsync's own catch filter documents -- widened here too since
+    // this is the second, independent place a caller can observe ReadFileAsync's typed
+    // deserialization throw.
     private static bool IsRecoverable(Exception error) =>
-        error is YamlException or InvalidDataException or ConfigurationScopeException or FormatException;
+        error is YamlException or InvalidDataException or ConfigurationScopeException or
+            FormatException or JsonException;
 
     /// <summary>Migrates persisted pre-v0.11 data before validating the current pre-1.0 contract.
     /// The removed registry is not exposed by the schema or application API.</summary>

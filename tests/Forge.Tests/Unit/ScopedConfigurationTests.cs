@@ -207,6 +207,32 @@ public sealed class ScopedConfigurationTests
         Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
     }
 
+    // Round 1 review of PR #69: a value satisfying project-manifest.schema.json's "integer,
+    // minimum: 1" (JSON Schema's "integer" type has no bit-width of its own) but exceeding
+    // Int32.MaxValue used to reach ConfigurationSchemaCodec.ToProject's typed serialization
+    // unguarded. GetOptionalInt32's own TryGetInt32 check already rejects it on the write path --
+    // this proves that write-time rejection still holds now that the schema also carries an
+    // explicit "maximum" bound.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnOutOfInt32RangeTokenBudgetIsRejected()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(3_000_000_000L),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(write.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ProjectConfigurationRequiresAnInitializedProject()
