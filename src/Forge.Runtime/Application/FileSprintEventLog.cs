@@ -247,7 +247,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     persisted.Outputs ?? [],
                     [.. (persisted.Diagnostics ?? []).Select(FromPersisted)]));
             }
-            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or ArgumentNullException)
             {
                 // Matches LoadAsync's own exception-normalization contract: every ISprintStore
                 // caller is entitled to treat a corrupt on-disk record as InvalidDataException, not
@@ -255,6 +256,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 // had zero production callers until this stage's node executor), an unwrapped
                 // JsonException/FormatException here escaped every existing per-sprint failure
                 // boundary, since none of them list those types in their catch filters.
+                // ArgumentNullException (round 4 review): an explicit "attempt_id": null survives
+                // deserialization (DefinitionJsonOptions does not respect nullable annotations, the
+                // same reason PersistedNodeResult.Outputs/Diagnostics needed round 2's fix), and
+                // Guid.Parse(null) throws it -- the identical hazard round 3 already named and fixed
+                // for LoadValidatedEventsAsync's own Guid.Parse, left uncovered here.
                 throw new InvalidDataException($"The node result at '{path}' is corrupt.", error);
             }
         }

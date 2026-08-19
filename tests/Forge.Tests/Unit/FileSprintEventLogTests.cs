@@ -7,6 +7,40 @@ namespace Forge.UnitTests;
 
 public sealed class FileSprintEventLogTests
 {
+    // Round 4 review of PR #68: unlike Outputs/Diagnostics (round 2) and Evidence (round 3), an
+    // explicit "attempt_id": null is not a legitimate empty value -- it is corrupt data, since
+    // AttemptId is required and non-nullable in the domain. Guid.Parse(null) threw the same
+    // unguarded ArgumentNullException round 3 already named and fixed for LoadValidatedEventsAsync's
+    // own Guid.Parse, left uncovered here -- the fifth instance of the same defect class across
+    // FileSprintEventLog, and the first found inside code this PR's own round 1 added.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetNodeResultsAsyncWrapsAnExplicitNullAttemptIdInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        NodeResult result = new(
+            sprintId, new("intake"), new(Guid.NewGuid()), NodeOutcome.Succeeded, now, now,
+            $"sha256:{new string('a', 64)}", [], []);
+        await store.SaveNodeResultAsync(environment.ProjectRoot, result, cancellationToken);
+
+        string resultPath = Directory.EnumerateFiles(
+            Path.Combine(FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "results")).Single();
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(resultPath, cancellationToken))!;
+        persisted["attempt_id"] = null;
+        await File.WriteAllTextAsync(resultPath, persisted.ToJsonString(), cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
     // Round 2 review of PR #68: DefinitionJsonOptions' WhenWritingNull condition means the normal
     // write path (SaveNodeResultAsync always projects Outputs/Diagnostics through `[.. ...]`, never
     // null) can never itself produce "outputs": null / "diagnostics": null -- but nothing on the READ

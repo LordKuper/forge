@@ -317,6 +317,38 @@ found none remaining unnormalized; `GetHandoffsAsync`/
 genuinely unreachable from this service's own call chain today, so
 fixing them is out of this PR's scope.
 
+## Round 4 review (critical-only)
+
+Independent review found one further critical issue — a **sixth**
+instance of the same defect class, and the first found inside code
+round 1 itself added rather than in a sibling method:
+
+1. **`GetNodeResultsAsync`'s own `Guid.Parse(persisted.AttemptId)`
+   (line 242) was never covered.** An explicit `"attempt_id": null`
+   survives deserialization for the identical reason round 2/3's fixes
+   applied elsewhere (`DefinitionJsonOptions` does not respect nullable
+   annotations), and `Guid.Parse(null)` throws `ArgumentNullException` —
+   the exact hazard round 3's own fix comment for
+   `LoadValidatedEventsAsync` already named verbatim, left uncovered 425
+   lines above it in a sibling method nobody re-checked. Unlike
+   `Outputs`/`Diagnostics`/`Evidence`, a null `AttemptId` is not a
+   legitimate empty value to coalesce — it is corrupt data — so the fix
+   widens the catch filter (`ArgumentNullException` added) rather than
+   defaulting the value. Regression-tested with
+   `GetNodeResultsAsyncWrapsAnExplicitNullAttemptIdInAnInvalidDataException`;
+   mutation-verified.
+
+Six instances of the same defect class across four review rounds is
+itself the finding worth naming plainly: this was whack-a-mole, not
+systematic. A single shared deserialization helper that validates
+required-field presence before any per-field access — rather than each
+`Get*Async` method independently reading, catching, and re-checking its
+own `Persisted*` DTO — would have caught all six at once and is the
+right fix for the *next* time this class of bug appears, not merely a
+seventh patched call site. Recorded as deferred cleanup below rather
+than attempted in this PR, whose own scope is intake execution, not a
+`FileSprintEventLog` deserialization redesign.
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None
@@ -367,6 +399,15 @@ fixing them is out of this PR's scope.
   rejects a well-formed result every time (it cannot with the digests this
   service produces, but a future corruption could), the tick retries it every
   interval forever. Logged, not rate-limited.
+- **A shared, systematic deserialization-validation helper for
+  `FileSprintEventLog`'s `Persisted*` DTOs.** Round 4 named this
+  directly: six instances of the identical "unwrapped exception escapes
+  the catch filter" defect were found and fixed one call site at a time
+  across four review rounds, and no seventh instance is guaranteed not
+  to exist in code this PR did not touch. A single read path that
+  validates required-field presence and type before any per-field
+  access would close the whole defect class at once. Out of this PR's
+  own scope (intake execution, not a `FileSprintEventLog` redesign).
 
 ## Consequences
 
