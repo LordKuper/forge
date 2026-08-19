@@ -68,6 +68,12 @@ public sealed class IntakeExecutionHostedService(
     /// <see cref="SprintScheduler.DeferAttemptAsync"/>'s own `"provider"` category established.</summary>
     private const string DocumentDiagnosticCategory = "context";
 
+    /// <summary>No diagnostic code is reserved for a budget-truncated context item anywhere in this
+    /// repository (unlike a `.forge/` parse failure, which reuses <c>ForgeDocumentError.DiagnosticCode</c>
+    /// verbatim) — this is the first caller that needs one. `context_item_truncated` follows the
+    /// existing `snake_case` diagnostic-code convention.</summary>
+    private const string TruncatedDiagnosticCode = "context_item_truncated";
+
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
         LogLevel.Warning,
         new EventId(2030, "IntakeExecutionListFailed"),
@@ -243,6 +249,11 @@ public sealed class IntakeExecutionHostedService(
             .. manifest.Layers.Rules.Select(item => item.Digest),
             .. manifest.Layers.Knowledge.Select(item => item.Digest),
         ];
+        List<NodeDiagnostic> diagnostics =
+        [
+            .. documents.Errors.Select(ToDiagnostic),
+            .. manifest.Truncated.Select(ToDiagnostic),
+        ];
         CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
             options.ProjectRoot,
             sprintId,
@@ -251,7 +262,7 @@ public sealed class IntakeExecutionHostedService(
             succeeded: true,
             manifest.ManifestDigest,
             outputs,
-            [.. documents.Errors.Select(ToDiagnostic)],
+            diagnostics,
             cancellationToken).ConfigureAwait(false);
         if (!completed.Succeeded)
         {
@@ -271,4 +282,19 @@ public sealed class IntakeExecutionHostedService(
         DocumentDiagnosticCategory,
         $"diagnostic.{error.DiagnosticCode}",
         new Dictionary<string, string?>(StringComparer.Ordinal) { ["relative_path"] = error.RelativePath });
+
+    /// <summary>A budget-truncated document is degradation just like a parse error, and left the same
+    /// way for the durable record instead of being silently dropped — the whole point of recording a
+    /// `.forge/`-parse diagnostic one line above this is that a caller inspecting a "succeeded" intake
+    /// node can tell it actually saw everything intended, and a truncated item is exactly the case
+    /// where it did not.</summary>
+    private static NodeDiagnostic ToDiagnostic(ContextManifestTruncatedItem item) => new(
+        TruncatedDiagnosticCode,
+        DocumentDiagnosticCategory,
+        $"diagnostic.{TruncatedDiagnosticCode}",
+        new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["relative_path"] = item.RelativePath,
+            ["reason"] = item.Reason,
+        });
 }

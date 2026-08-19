@@ -230,20 +230,33 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         List<NodeResult> results = [];
         foreach (string path in Directory.EnumerateFiles(directory, "*.json"))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedNodeResult persisted =
-                JsonSerializer.Deserialize<PersistedNodeResult>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The node result at '{path}' is empty.");
-            results.Add(new(
-                sprintId,
-                new(persisted.NodeId),
-                new(Guid.Parse(persisted.AttemptId)),
-                WorkflowStateNames.Parse<NodeOutcome>(persisted.State),
-                persisted.StartedAt,
-                persisted.CompletedAt,
-                persisted.InputDigest,
-                persisted.Outputs,
-                [.. persisted.Diagnostics.Select(FromPersisted)]));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedNodeResult persisted =
+                    JsonSerializer.Deserialize<PersistedNodeResult>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The node result at '{path}' is empty.");
+                results.Add(new(
+                    sprintId,
+                    new(persisted.NodeId),
+                    new(Guid.Parse(persisted.AttemptId)),
+                    WorkflowStateNames.Parse<NodeOutcome>(persisted.State),
+                    persisted.StartedAt,
+                    persisted.CompletedAt,
+                    persisted.InputDigest,
+                    persisted.Outputs,
+                    [.. persisted.Diagnostics.Select(FromPersisted)]));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                // Matches LoadAsync's own exception-normalization contract: every ISprintStore
+                // caller is entitled to treat a corrupt on-disk record as InvalidDataException, not
+                // a raw parse exception. Before this method had a real caller (CompleteAttemptAsync
+                // had zero production callers until this stage's node executor), an unwrapped
+                // JsonException/FormatException here escaped every existing per-sprint failure
+                // boundary, since none of them list those types in their catch filters.
+                throw new InvalidDataException($"The node result at '{path}' is corrupt.", error);
+            }
         }
 
         return results;

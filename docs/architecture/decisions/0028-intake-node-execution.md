@@ -179,6 +179,49 @@ A rejected `StartAttemptAsync`/`CompleteAttemptAsync` (including
 idempotent path, never thrown — throwing after a start would leave a
 `running` node behind.
 
+## Round 1 review
+
+Independent review found three issues, all fixed:
+
+1. **A second, unnamed failure-boundary gap.** This ADR's own "one gap"
+   claim above was incomplete: `CompleteAttemptAsync` reads existing node
+   results via `ISprintStore.GetNodeResultsAsync`
+   (`FileSprintEventLog.cs`), which — unlike `LoadAsync`/`LoadDefinitionAsync`
+   — never normalized `JsonException`/`FormatException`/`OverflowException`
+   into `InvalidDataException`. A corrupt `results/*.json` file therefore
+   escaped this service's per-sprint catch filter entirely, permanently
+   faulting `ExecuteTask` with nothing observing it — exactly the
+   `NotificationDeliveryHostedService` defect class this ADR already cites,
+   reproduced by a path this stage's node executor is the first to reach in
+   production (`CompleteAttemptAsync` had zero production callers before
+   this PR). Fixed at the root: `GetNodeResultsAsync` now wraps those three
+   exception types into `InvalidDataException` per file, matching
+   `LoadAsync`'s own contract, so every `ISprintStore` caller — not just
+   this one — is entitled to treat a corrupt on-disk record as
+   `InvalidDataException`.
+2. **`ContextManifest.Truncated` was computed and then discarded.** A
+   budget-truncated document left no diagnostic, no log, and no durable
+   trace, while the strictly less consequential per-document token-cap
+   overflow already produced one. At `DefaultTokenBudget = 32_000`
+   (roughly 128 KB of `.forge/` text), an ordinary project of a few dozen
+   rules and ADRs could truncate silently — and silently defeated this
+   ADR's own "an unverified guess degrades by truncation, not failure"
+   argument, since the only signal that would reveal a bad guess was being
+   thrown away. Fixed: every `ContextManifestTruncatedItem` is now recorded
+   as its own `NodeDiagnostic` (new `context_item_truncated` code, no
+   diagnostic code having been reserved for this anywhere before), the same
+   way a `.forge/` parse error already was.
+3. **This ADR's own "reproducible by construction" claim, in the
+   durably-persisting-the-manifest deferral below, did not hold.** ADR
+   0012's reproducibility guarantee is conditional on a fixed
+   `ForgeDocumentSet`; this executor parses the live, editable `.forge/`
+   working tree while recording `source_commit = definition.BaseCommit`,
+   which pins the sprint's code baseline, not `.forge/` content. Corrected
+   to state the real, honest position: the manifest cannot be recomputed
+   once `.forge/` changes after intake runs, and no downstream consumer
+   exists yet to need it recomputed. The deferral itself is unchanged, only
+   its justification.
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None
@@ -206,9 +249,18 @@ idempotent path, never thrown — throwing after a start would leave a
 - **Durably persisting the manifest itself.** Only the digests reach durable
   state, through the `NodeResult`. There is no manifest store, so the
   layers, per-item token estimates, and truncation list are recomputed rather
-  than read back. Acceptable because the manifest is reproducible by
-  construction (ADR 0012), and a store is the consuming executor's concern,
-  not intake's.
+  than read back. This is **not** the reproducible-by-construction guarantee
+  ADR 0012 describes: that guarantee holds for a fixed `ForgeDocumentSet`,
+  but this executor parses the live, editable `.forge/` working tree while
+  recording `source_commit = definition.BaseCommit`, a value that pins the
+  sprint's *code* baseline and does not pin `.forge/` content at all. Once
+  `.forge/` is edited after intake runs, the recorded `input_digest`/`outputs`
+  can no longer be recomputed from the project's current state — only from
+  whatever `.forge/` looked like at the moment intake ran, which nothing
+  keeps. Accepted anyway, honestly: a store that actually pins `.forge/`
+  content (e.g. by committing or content-addressing it, not merely reading
+  the working tree) is the consuming executor's concern, not intake's, and
+  no downstream consumer of the manifest exists yet to need one.
 - **`ContextManifestCompiler.WithQueryResults` (ADR 0012's layer 4).** Needs a
   model-proposed `ContextQueryPlan`, which needs the model-bearing executor.
   `SprintSpecifications` and `Handoffs` stay empty for the same reason.
@@ -233,9 +285,15 @@ idempotent path, never thrown — throwing after a start would leave a
 - First production callers of `SprintScheduler.StartAttemptAsync`,
   `SprintScheduler.CompleteAttemptAsync`, and
   `ContextManifestCompiler.Compile`.
-- No new diagnostic codes, message keys, contracts, schemas, configuration
-  keys, or protocol verbs. The recorded diagnostics reuse
+- One new diagnostic code, `context_item_truncated` (round 1 review),
+  recorded against a budget-truncated context item exactly like a `.forge/`
+  parse error already was. No new message keys, contracts, schemas,
+  configuration keys, or protocol verbs. A parse-error diagnostic reuses
   `ForgeDocumentDiagnosticCodes`' existing values verbatim.
+- `FileSprintEventLog.GetNodeResultsAsync` (round 1 review) now normalizes
+  `JsonException`/`FormatException`/`OverflowException` into
+  `InvalidDataException` per file, matching `LoadAsync`'s own contract —
+  every `ISprintStore` caller, not just this service, benefits.
 - No behavior change for a project with no sprints, a project whose sprints
   are all draft/terminal, or a sprint created with a custom graph that has no
   intake-role node.

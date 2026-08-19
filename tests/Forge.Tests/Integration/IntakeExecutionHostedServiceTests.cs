@@ -232,6 +232,116 @@ public sealed class IntakeExecutionHostedServiceTests
         }
     }
 
+    // Round 1 review of PR #68: CompleteAttemptAsync reads existing results via
+    // ISprintStore.GetNodeResultsAsync, which -- unlike LoadAsync/LoadDefinitionAsync -- did not
+    // normalize a corrupt on-disk result into InvalidDataException, so it escaped this service's own
+    // per-sprint catch filter and permanently faulted ExecuteTask. A corrupt result file can only
+    // exist once an attempt has actually started (StartAttemptAsync always precedes it), so this
+    // starts a real attempt first and then corrupts the durable result the same crash-shaped way the
+    // resume test above does, but with garbage JSON instead of an absent file.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ACorruptNodeResultFileDoesNotFaultTheServiceOrStopAnotherSprintsIntake()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        WriteDocument(environment, "rules", "testing.md", Frontmatter("testing", "Testing") + "Implement first.");
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId corruptId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+        SprintWorkflowState ready = (await store.LoadAsync(environment.ProjectRoot, corruptId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, corruptId, IntakeNodeId, ready.Nodes[IntakeNodeId].Version, cancellationToken);
+        Assert.True(started.Succeeded);
+        string resultsDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, corruptId), "results");
+        Directory.CreateDirectory(resultsDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(resultsDirectory, "corrupt.json"), "{ not valid json", cancellationToken);
+
+        // Deliberately the only sprint present when the service starts -- same ListAsync-ordering
+        // reasoning as ASprintWithACorruptDefinitionDoesNotStopAnotherSprintsIntakeFromCompleting.
+        RecordingLogger logger = new();
+        IntakeExecutionHostedService service = new(
+            new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
+            store, scheduler, logger);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForLogAsync(logger, "IntakeExecutionSprintFailed", cancellationToken);
+            SprintId healthyId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+            await WaitForNodeStateAsync(store, environment, healthyId, NodeState.Succeeded, cancellationToken);
+            Assert.Null(service.ExecuteTask!.Exception);
+            Assert.Single(await store.GetNodeResultsAsync(environment.ProjectRoot, healthyId, cancellationToken));
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+    }
+
+    // Round 1 review of PR #68: ContextManifest.Truncated was computed by ContextManifestCompiler but
+    // discarded by this service -- a budget-truncated document left no diagnostic, no log, no durable
+    // trace at all, unlike the strictly less consequential per-document token-cap overflow one line
+    // above it. `context_limit_tokens` itself is capped at 8,000 by forge-document.schema.json, so no
+    // single document can be made big enough alone to exceed the 32,000-token intake budget -- four
+    // documents right under that per-document cap (raised via each one's own frontmatter, still well
+    // under the schema's 8,000 maximum) consume nearly all of it, leaving a fifth, ordinarily
+    // unremarkable rule with nothing left to fit in.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ABudgetTruncatedContextItemIsRecordedAsADiagnosticWithoutFailingIntake()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        // Four documents at ~7,900 estimated tokens each (31,600 chars / 4) = ~31,600 of the
+        // 32,000-token intake budget, ordered ("big-0.md".."big-3.md") ahead of "z-small.md" (rules
+        // are admitted by RelativePath, ordinal). The ~400 tokens left over is not enough for
+        // "z-small.md"'s own ~1,000-token body, so it is truncated, not admitted.
+        for (int index = 0; index < 4; index++)
+        {
+            string plain = Frontmatter($"big-{index}", $"Large rule {index}");
+            string raised = plain.Insert(
+                plain.IndexOf("\n---\n", StringComparison.Ordinal) + 1, "context_limit_tokens: 8000\n");
+            WriteDocument(environment, "rules", $"big-{index}.md", raised + new string('x', 31_600));
+        }
+
+        WriteDocument(environment, "rules", "z-small.md", Frontmatter("z-small", "Small rule") + new string('y', 4_000));
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+
+        IntakeExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        NodeDiagnostic diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("context_item_truncated", diagnostic.Code);
+        Assert.Equal("context", diagnostic.Category);
+        Assert.Equal("diagnostic.context_item_truncated", diagnostic.MessageKey);
+        Assert.Equal("rules/z-small.md", Assert.Contains("relative_path", diagnostic.Arguments));
+        // The four big rules that consumed the budget are still admitted -- only the one that no
+        // longer fit is truncated.
+        Assert.Equal(4, result.Outputs.Count);
+    }
+
     // AdvanceGraphAsync promotes a dependency-free intake node to `ready` regardless of the sprint's
     // own state, so a draft sprint has a `ready` intake node the moment it is created. Executing it
     // would drive an attempt on a sprint the operator never ran -- and the service must skip it
