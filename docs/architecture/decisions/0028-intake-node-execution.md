@@ -753,9 +753,20 @@ this PR's own established honesty pattern for timing-dependent gaps
 (round 8's own root-cause acknowledgment) rather than adding a
 production-only test seam to close it artificially.
 
-Both fixes were mutation-verified individually before being combined:
-each one reverted in isolation reproduces its own specific symptom
-against its own new test, with the other fix left in place.
+Both fixes were mutation-verified individually before being combined.
+The deadlock fix's full reversion (`callerHoldsLock: true` back to
+`false`) reproduces its exact symptom against its own new test, with
+the other fix left in place. The write-retry fix's mutation coverage is
+narrower than that, precisely because of the honest gap named above: a
+full reversion (deleting the whole truncate block) does reproduce a
+failure against its own test, but the test cannot distinguish that from
+reverting only the `SetLength` branch specifically, since a sharing
+violation on open never grows the file past `originalLength` in the
+first place — the `truncate.Length > originalLength` branch itself has
+no test that forces it true. Round 10 review confirmed this precisely;
+it is a documentation-precision gap on a defensive branch for a
+mechanism this PR already records as never conclusively identified, not
+a correctness gap.
 
 ## Consequences
 
