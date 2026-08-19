@@ -82,6 +82,91 @@ public sealed class SprintEventStoreTests
         Assert.Equal(2, (await File.ReadAllLinesAsync(eventsPath, cancellationToken)).Length);
     }
 
+    // Round 9 review of PR #68: AppendTransitionAsync's idempotent-replay branch calls LoadAsync
+    // while still holding this sprint directory's Locks entry. If a torn trailing line (crash
+    // residue) is present, ReadEventsAsync's own final-truncate path re-acquires that same
+    // non-reentrant semaphore -- a self-deadlock, reachable through ordinary crash residue plus a
+    // replayed idempotency key, both designed-for paths. Bounded with a short cancellation deadline
+    // so a regression fails the assertion instead of hanging the test run indefinitely.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReplayingAnIdempotencyKeyAfterATornTrailingLineDoesNotDeadlock()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        string sprintKey = sprintId.Value.ToString("D");
+        Guid idempotencyKey = Guid.NewGuid();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        AppendOutcome first = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, idempotencyKey, cancellationToken);
+        Assert.True(first.Succeeded);
+
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        await File.AppendAllTextAsync(eventsPath, "{\"event_id\":\"partial", cancellationToken);
+
+        using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        AppendOutcome replay = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, idempotencyKey, timeout.Token);
+
+        Assert.True(replay.Succeeded);
+        Assert.Equal(2, replay.State!.Sprint.Version);
+    }
+
+    // Round 9 review of PR #68: AppendLineAsync's own IOException retry (added to absorb transient
+    // contention under CI-shaped load) re-opens the file and rewrites the whole line on every
+    // attempt, which is only safe if no attempt already wrote any of those bytes to disk -- fixed by
+    // truncating back to the pre-attempt length on every attempt. This test forces a real,
+    // reproducible IOException on the write's own open, via the same exclusive-lock technique
+    // LoadAsyncRecoversFromATransientSharingViolationOnTheJournal already uses for the read side, and
+    // proves the retry recovers to exactly one well-formed new line rather than a duplicate. Honestly
+    // scoped: a sharing violation on open never leaves partial bytes on disk, so this does not by
+    // itself exercise the truncate-on-retry branch -- no production hook exists to interrupt a
+    // FileStream between WriteAsync and disposal to force that specific case deterministically.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AppendTransitionAsyncRecoversFromATransientSharingViolationWithoutDuplicatingTheLine()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            // FileShare.None sharing-violation enforcement is reliably a hard failure only on
+            // Windows; .NET's FileStream does not emulate it on Unix.
+            return;
+        }
+
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        string sprintKey = sprintId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+
+        string eventsPath = Path.Combine(FileSprintEventLog.SprintDirectory(root.Path, sprintId), "events.jsonl");
+        await using FileStream exclusiveLock = new(eventsPath, FileMode.Open, FileAccess.Read, FileShare.None);
+        Task<AppendOutcome> appendTask = log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+
+        // Released well within the retry helper's wall-clock deadline, so both the read and the
+        // write inside AppendTransitionAsync must recover rather than exhaust it.
+        await Task.Delay(TimeSpan.FromMilliseconds(100), cancellationToken);
+        await exclusiveLock.DisposeAsync();
+
+        AppendOutcome outcome = await appendTask;
+        Assert.True(outcome.Succeeded);
+        Assert.Equal(SprintState.Ready, outcome.State!.Sprint.State);
+        string[] lines = await File.ReadAllLinesAsync(eventsPath, cancellationToken);
+        Assert.Equal(2, lines.Length);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ATransitionMissingToStateFailsClosedWithoutAppendingFromStaleState()

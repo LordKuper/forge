@@ -48,16 +48,26 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ReadOnlyMemory<byte>.Empty,
             cancellationToken);
 
-    public async Task<SprintWorkflowState?> LoadAsync(
+    public Task<SprintWorkflowState?> LoadAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+        LoadCoreAsync(projectRoot, id, cancellationToken, callerHoldsLock: false);
+
+    // AppendTransitionAsync's idempotent-replay branch reads the just-applied state while still
+    // holding the directory's Locks entry; calling the public LoadAsync there would have it
+    // re-acquire that same non-reentrant semaphore on the same async flow and hang forever (round 9
+    // review of PR #68, reproduced directly). This overload lets that one caller pass
+    // callerHoldsLock: true straight through to ReadEventsAsync instead.
+    private static async Task<SprintWorkflowState?> LoadCoreAsync(
         string projectRoot,
         SprintId id,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool callerHoldsLock = false)
     {
         try
         {
             IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
                 EventsPath(SprintDirectory(projectRoot, id)),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                callerHoldsLock).ConfigureAwait(false);
             return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException)
@@ -795,8 +805,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
             if (applied.ContainsKey(idempotencyKey))
             {
-                SprintWorkflowState? replayed =
-                    await LoadAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+                SprintWorkflowState? replayed = await LoadCoreAsync(
+                    projectRoot,
+                    sprintId,
+                    cancellationToken,
+                    callerHoldsLock: true).ConfigureAwait(false);
                 return new(true, replayed, DiagnosticCodes.None, true);
             }
 
@@ -1655,10 +1668,28 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             throw new InvalidOperationException("The event log path has no directory.");
         Directory.CreateDirectory(directory);
         byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
+        long originalLength = File.Exists(path) ? new FileInfo(path).Length : 0;
 
         await RetryOnIOExceptionAsync(
             async ct =>
             {
+                // A prior attempt may have written some or all of `bytes` before throwing -- exactly
+                // which is not known (the failure mechanism itself is not conclusively identified, see
+                // above). Truncating back to the length recorded before the FIRST attempt, at the start
+                // of every attempt including the first, guarantees each attempt starts from the same
+                // clean state instead of risking a duplicated or torn line on retry. Safe only because
+                // the caller already holds this directory's lock for the whole call, so nothing else
+                // can observe or extend the file between attempts.
+                if (File.Exists(path))
+                {
+                    await using FileStream truncate = new(path, FileMode.Open, FileAccess.Write, FileShare.Read);
+                    if (truncate.Length > originalLength)
+                    {
+                        truncate.SetLength(originalLength);
+                        await truncate.FlushAsync(ct).ConfigureAwait(false);
+                    }
+                }
+
                 await using (FileStream stream = new(
                     path,
                     FileMode.Append,

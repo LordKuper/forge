@@ -684,7 +684,78 @@ scripted way to synthesize it was attempted and blocked by this
 environment's own tooling); the fix is the direct, previously-proven
 precedent for this exact failure shape, verified locally at 0/40 under
 ordinary load plus a clean full-suite run, with CI's own next run as the
-real confirmation.
+real confirmation. That run was green, including the previously-failing
+job.
+
+## Round 9 review (critical-only) — two defects in round 8's own unreviewed fix
+
+Round 9 reviewed the commit CI's own follow-up run had not yet been
+independently scrutinized (the wall-clock retry-budget correction) and
+found two further critical issues, both in `FileSprintEventLog.cs`:
+
+**A self-deadlock.** `AppendTransitionAsync` holds the per-directory
+`Locks` semaphore for its whole body and, in its idempotent-replay
+branch, called the *public* `LoadAsync` to return the already-applied
+state. `LoadAsync` reads with `callerHoldsLock: false` by default; if a
+torn trailing line (ordinary crash residue) is present, `ReadEventsAsync`'s
+own final-truncate path re-acquires that same non-reentrant semaphore on
+the same async flow after exhausting `MaxTornTailAttempts` — a
+self-deadlock, reachable through two entirely ordinary, designed-for
+paths (crash residue plus a replayed idempotency key) rather than an
+edge case. The method's own doc comment named `AppendTransitionAsync`
+as a `callerHoldsLock: true` caller but missed this nested `LoadAsync`
+call specifically. Round 9 reproduced it directly against `13c0676`
+(append with key K, append a torn tail, append again with key K — still
+pending at 20 seconds; the identical scenario against `86e5074`, the
+state that passed rounds 1-7, completes immediately). Fixed by
+extracting a private `LoadCoreAsync(projectRoot, id, cancellationToken,
+callerHoldsLock)` that both the public `LoadAsync` (`callerHoldsLock:
+false`) and this one replay call site (`callerHoldsLock: true`) share,
+so the replay path passes the lock-already-held flag straight through
+instead of going through the public entry point that always assumes
+otherwise. Regression-tested with
+`ReplayingAnIdempotencyKeyAfterATornTrailingLineDoesNotDeadlock`,
+bounded by a 10-second cancellation deadline so a regression fails the
+assertion instead of hanging the test run; mutation-verified (reverting
+the fix reproduces `OperationCanceledException` at the semaphore wait,
+inside `ReadEventsAsync`, exactly at the deadlock point).
+
+**Non-idempotent write retry.** `AppendLineAsync`'s own `IOException`
+retry (this PR's round-8-then-CI-follow-up fix) re-opens the file in
+`FileMode.Append` and rewrites the whole line on every attempt, which is
+only safe if a prior attempt wrote none of those bytes to disk — exactly
+what the method's own comment already says is unknown ("the exact
+mechanism was not conclusively identified"). If a prior attempt's bytes
+reached disk before it threw, a retry either produces an unparsable torn
+line (permanent `InvalidDataException`/`workflow_log_corrupted` on the
+next read) or, if the whole line landed and only the post-write
+housekeeping failed, a genuine duplicate — for a routing decision event
+specifically, `RoutingLedger.BuildBudget` counts `Routed` decisions with
+no dedup, so a duplicate silently burns a real budget unit. The CI
+follow-up's own wall-clock deadline made this materially worse: up to
+~50 retries in the worst case (10-second deadline, 200ms-capped
+backoff) versus the original ≤4. Fixed by recording the file's length
+before the first attempt and truncating back to it at the start of
+*every* attempt, including the first — safe because the caller already
+holds the directory's lock for the whole call, so nothing else can
+observe or extend the file in between. Regression-tested with
+`AppendTransitionAsyncRecoversFromATransientSharingViolationWithoutDuplicatingTheLine`,
+using the same exclusive-lock technique
+`LoadAsyncRecoversFromATransientSharingViolationOnTheJournal` already
+uses for the read side, proving the retry recovers to exactly one
+well-formed new line rather than a duplicate. Honestly scoped, not
+silently treated as complete: a sharing violation on open never leaves
+partial bytes on disk, so this test does not by itself exercise the
+truncate-on-retry branch for a genuine mid-write failure — no
+production hook exists to interrupt a `FileStream` between `WriteAsync`
+and disposal to force that specific case deterministically, matching
+this PR's own established honesty pattern for timing-dependent gaps
+(round 8's own root-cause acknowledgment) rather than adding a
+production-only test seam to close it artificially.
+
+Both fixes were mutation-verified individually before being combined:
+each one reverted in isolation reproduces its own specific symptom
+against its own new test, with the other fix left in place.
 
 ## Consequences
 
