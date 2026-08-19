@@ -123,7 +123,7 @@ public sealed class ConfigurationTests
             string yaml = await File.ReadAllTextAsync(
                 manifest,
                 TestContext.Current.CancellationToken);
-            Assert.Contains("schema_version: 1.0.0", yaml);
+            Assert.Contains("schema_version: 1.1.0", yaml);
             Assert.Contains("project_id: 7d634db2-586e-49c0-9da6-69292575be19", yaml);
             Assert.Contains("workflow: implementation-critical", yaml);
             Assert.Contains("artifacts:", yaml);

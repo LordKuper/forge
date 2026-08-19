@@ -187,6 +187,7 @@ Project scope owns:
 
 - `artifacts.language.user_facing`;
 - `artifacts.language.agent_facing`;
+- `context.token_budget`;
 - workflows, policies, and generator settings.
 
 Wrong-scope keys return `configuration_scope_violation`. Each store has its own

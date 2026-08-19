@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using Forge.Application;
 using Forge.Compiler;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host;
 using Forge.Tests.Support;
@@ -216,7 +218,7 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, logger);
+            store, scheduler, environment.Application, logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -281,7 +283,7 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, logger);
+            store, scheduler, environment.Application, logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -333,7 +335,7 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, logger);
+            store, scheduler, environment.Application, logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -407,6 +409,149 @@ public sealed class IntakeExecutionHostedServiceTests
         Assert.Equal(4, result.Outputs.Count);
     }
 
+    // ADR 0029: proves ResolveTokenBudgetAsync actually reads and applies `context.token_budget`,
+    // not just that the default is used correctly (every other test in this file leaves the key
+    // unset, which already regression-covers the default fallback). A single ~1,000-token document
+    // fits comfortably under the 32,000-token default -- no other test's fixture would ever
+    // truncate it -- but not under an explicitly configured 500-token budget, so a truncation
+    // diagnostic appearing here can only be explained by the configured value actually reaching
+    // ContextManifestCompiler.Compile.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AConfiguredTokenBudgetIsUsedInsteadOfTheDefault()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        WriteDocument(environment, "rules", "testing.md", Frontmatter("testing", "Testing rule") + new string('x', 4_000));
+
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(500),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+
+        IntakeExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+        NodeDiagnostic diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal("context_item_truncated", diagnostic.Code);
+        Assert.Empty(result.Outputs);
+    }
+
+    // A hand-edited or otherwise corrupt manifest.yaml must never fault a healthy sprint's intake --
+    // ResolveTokenBudgetAsync falls back to DefaultTokenBudget the same way every other config
+    // reader in this codebase degrades an unreadable project configuration to its defaults, rather
+    // than propagating the failure into ContextManifestCompiler.Compile. Honestly scoped (round 1
+    // review of PR #69): GetProjectConfigurationAsync returns an empty Values list on every failure
+    // path, so this test cannot by itself distinguish ResolveTokenBudgetAsync's explicit
+    // `DiagnosticCode != None` early return from simply falling through the value-lookup branch
+    // below it -- both reach DefaultTokenBudget for this specific corruption. It does prove the
+    // behavior that actually matters here: the service survives a corrupt configuration and still
+    // succeeds using the default.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AnUnreadableProjectConfigurationFallsBackToTheDefaultTokenBudgetWithoutFailingIntake()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        WriteDocument(environment, "rules", "testing.md", Frontmatter("testing", "Testing rule") + new string('x', 4_000));
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+
+        // Corrupted only after the sprint is created and running: sprint creation/promotion also
+        // reads project configuration (e.g. artifacts.language.*), so corrupting it earlier would
+        // block sprint creation itself rather than isolating this test to the token-budget read.
+        string manifestPath = Path.Combine(environment.ProjectRoot, ".forge", "manifest.yaml");
+        await File.WriteAllTextAsync(manifestPath, "not: [valid, yaml, for, the, schema", cancellationToken);
+
+        IntakeExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(result.Outputs);
+    }
+
+    // Round 1 review of PR #69, a real bug found and confirmed by direct reproduction: a
+    // hand-written token_budget satisfying project-manifest.schema.json's "integer, minimum: 1"
+    // (JSON Schema's "integer" type has no bit-width of its own) but exceeding Int32.MaxValue used
+    // to throw an unguarded JsonException from ConfigurationSchemaCodec's typed deserialization,
+    // escaping ProjectRootResolver.ReadManifestAsync's own catch filter entirely and faulting
+    // IntakeExecutionHostedService's whole BackgroundService -- no sprint's intake ran again until
+    // a Host restart. The value can never reach disk through the normal SetConfigurationAsync path
+    // (GetOptionalInt32's own TryGetInt32 check already rejects it at write time, see
+    // AnOutOfInt32RangeTokenBudgetIsRejected), so this test writes it directly, the same
+    // hand-edited-file threat model AnUnreadableProjectConfigurationFallsBackToTheDefaultTokenBudget
+    // WithoutFailingIntake already exercises for syntactically invalid YAML.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AnOutOfInt32RangeTokenBudgetInTheManifestFallsBackToTheDefaultWithoutFailingIntake()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        WriteDocument(environment, "rules", "testing.md", Frontmatter("testing", "Testing rule") + new string('x', 4_000));
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateRunningSprintAsync(environment, orchestrator, store, cancellationToken);
+
+        string manifestPath = Path.Combine(environment.ProjectRoot, ".forge", "manifest.yaml");
+        string manifest = await File.ReadAllTextAsync(manifestPath, cancellationToken);
+        await File.WriteAllTextAsync(
+            manifestPath, manifest + "context:\n  token_budget: 3000000000\n", cancellationToken);
+
+        IntakeExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(result.Outputs);
+    }
+
     // AdvanceGraphAsync promotes a dependency-free intake node to `ready` regardless of the sprint's
     // own state, so a draft sprint has a `ready` intake node the moment it is created. Executing it
     // would drive an attempt on a sprint the operator never ran -- and the service must skip it
@@ -442,7 +587,7 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, logger);
+            store, scheduler, environment.Application, logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -472,6 +617,7 @@ public sealed class IntakeExecutionHostedServiceTests
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
             store,
             scheduler,
+            environment.Application,
             NullLogger<IntakeExecutionHostedService>.Instance);
 
     private static async Task<SprintId> CreateRunningSprintAsync(

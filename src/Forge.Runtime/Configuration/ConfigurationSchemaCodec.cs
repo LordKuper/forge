@@ -10,7 +10,10 @@ internal static class ConfigurationSchemaCodec
     /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
     /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
     private const string UserContractVersion = "1.2.0";
-    private const string ProjectContractVersion = "1.0.0";
+    /// <summary>Bumped for ADR 0029's optional, nullable `context.token_budget` -- an older
+    /// document (missing `context`) still validates under `project-manifest.schema.json`'s
+    /// tolerant `schema_version` enum, matching `UserContractVersion`'s own precedent.</summary>
+    private const string ProjectContractVersion = "1.1.0";
     private const string WorkflowName = "implementation-critical";
     private static readonly JsonSchema UserSchema = LoadSchema("user-config");
     private static readonly JsonSchema ProjectSchema = LoadSchema("project-manifest");
@@ -92,6 +95,12 @@ internal static class ConfigurationSchemaCodec
                         "artifacts.language.agent_facing"),
                 },
             },
+            // Optional and nullable, like UserNotifications -- ADR 0029 added this key after
+            // schema_version 1.0.0 shipped, so a manifest written before this key existed must still
+            // validate on read with it entirely absent.
+            Context = GetOptionalInt32(document, "context.token_budget") is { } tokenBudget
+                ? new() { TokenBudget = tokenBudget }
+                : null,
         };
         Validate(
             JsonSerializer.SerializeToElement(persisted, JsonOptions),
@@ -111,6 +120,7 @@ internal static class ConfigurationSchemaCodec
             ["artifacts.language.agent_facing"] =
                 JsonSerializer.SerializeToElement(persisted.Artifacts.Language.AgentFacing),
         };
+        Add(values, "context.token_budget", persisted.Context?.TokenBudget);
         return new(
             1,
             values,
@@ -139,7 +149,7 @@ internal static class ConfigurationSchemaCodec
 
         return value.ValueKind == JsonValueKind.String
             ? value.GetString()
-            : throw InvalidType(key, "string");
+            : throw InvalidType(key, "a string");
     }
 
     private static string GetRequiredString(ConfigurationDocument document, string key) =>
@@ -155,7 +165,19 @@ internal static class ConfigurationSchemaCodec
 
         return value.ValueKind is JsonValueKind.True or JsonValueKind.False
             ? value.GetBoolean()
-            : throw InvalidType(key, "boolean");
+            : throw InvalidType(key, "a boolean");
+    }
+
+    private static int? GetOptionalInt32(ConfigurationDocument document, string key)
+    {
+        if (!document.Values.TryGetValue(key, out JsonElement value))
+        {
+            return null;
+        }
+
+        return value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out int result)
+            ? result
+            : throw InvalidType(key, "an integer");
     }
 
     private static List<string>? GetOptionalStringArray(ConfigurationDocument document, string key)
@@ -167,16 +189,16 @@ internal static class ConfigurationSchemaCodec
 
         if (value.ValueKind != JsonValueKind.Array)
         {
-            throw InvalidType(key, "array");
+            throw InvalidType(key, "an array");
         }
 
         return [.. value.EnumerateArray().Select(item => item.ValueKind == JsonValueKind.String
             ? item.GetString()!
-            : throw InvalidType(key, "array of strings"))];
+            : throw InvalidType(key, "an array of strings"))];
     }
 
     private static InvalidDataException InvalidType(string key, string expected) =>
-        new($"Configuration key '{key}' must be a {expected}.");
+        new($"Configuration key '{key}' must be {expected}.");
 
     private static void Add(
         Dictionary<string, JsonElement> values,
@@ -193,6 +215,17 @@ internal static class ConfigurationSchemaCodec
         Dictionary<string, JsonElement> values,
         string key,
         bool? value)
+    {
+        if (value.HasValue)
+        {
+            values.Add(key, JsonSerializer.SerializeToElement(value.Value));
+        }
+    }
+
+    private static void Add(
+        Dictionary<string, JsonElement> values,
+        string key,
+        int? value)
     {
         if (value.HasValue)
         {
@@ -283,6 +316,7 @@ internal static class ConfigurationSchemaCodec
 
         public ProjectArtifacts Artifacts { get; set; } = new();
 
+        public ProjectContext? Context { get; set; }
     }
 
     internal sealed class ProjectArtifacts
@@ -295,5 +329,10 @@ internal static class ConfigurationSchemaCodec
         public string UserFacing { get; set; } = string.Empty;
 
         public string AgentFacing { get; set; } = string.Empty;
+    }
+
+    internal sealed class ProjectContext
+    {
+        public int? TokenBudget { get; set; }
     }
 }

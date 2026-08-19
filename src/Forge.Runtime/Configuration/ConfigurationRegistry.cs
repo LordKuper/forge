@@ -79,6 +79,17 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             "true",
             null,
             false);
+        // ADR 0029: project-scoped, not user-scoped, because how much of a project's own `.forge/`
+        // content fits a budget is a property of that project's document set, not a per-machine
+        // preference -- matching artifacts.language.* above rather than notifications.enabled.
+        // 32000 mirrors IntakeExecutionHostedService.DefaultTokenBudget, the fallback used when this
+        // key is absent or invalid. The first integer-typed key in this registry.
+        yield return Create(
+            "context.token_budget",
+            ConfigurationScope.Project,
+            "32000",
+            null,
+            false);
     }
 
     private static ConfigurationKey Create(

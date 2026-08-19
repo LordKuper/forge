@@ -160,6 +160,209 @@ public sealed class ScopedConfigurationTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task TokenBudgetRoundTripsAsAProjectScopedIntegerDefaultingToTheRegisteredValue()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        IReadOnlyList<EffectiveConfigurationValue> defaults =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(40000),
+            TestContext.Current.CancellationToken);
+        IReadOnlyList<EffectiveConfigurationValue> updated =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.Equal(32000, Value(defaults, "context.token_budget").Value.GetInt32());
+        Assert.True(write.Succeeded);
+        Assert.Equal(40000, Value(updated, "context.token_budget").Value.GetInt32());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ANonPositiveTokenBudgetIsRejected()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(0),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(write.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
+    }
+
+    // Round 1 review of PR #69: a value satisfying project-manifest.schema.json's "integer,
+    // minimum: 1" (JSON Schema's "integer" type has no bit-width of its own) but exceeding
+    // Int32.MaxValue used to reach ConfigurationSchemaCodec.ToProject's typed serialization
+    // unguarded. GetOptionalInt32's own TryGetInt32 check already rejects it on the write path --
+    // this proves that write-time rejection still holds now that the schema also carries an
+    // explicit "maximum" bound.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnOutOfInt32RangeTokenBudgetIsRejected()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "context.token_budget",
+            JsonSerializer.SerializeToElement(3_000_000_000L),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(write.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, write.DiagnosticCode);
+    }
+
+    // Round 2 review of PR #69: the first fix attempt for the token-budget round-trip bug used
+    // YamlDotNet's broad WithAttemptingUnquotedStringTypeDeserialization() builder option, which
+    // was reverted after being shown to coerce `true`/`false`-valued strings to bool -- breaking
+    // this exact round trip for any string field that happens to hold one of those two literal
+    // values (a real regression for artifacts.language.*, which permits "true" as a valid 4-letter
+    // BCP-47 subtag). The replacement fix (CoerceTokenBudgetToNumber, scoped only to
+    // context.token_budget) must not reintroduce this.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AStringValuedFieldThatLooksLikeABooleanRoundTripsAsAStringUnchanged()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+
+        ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "artifacts.language.agent_facing",
+            JsonSerializer.SerializeToElement("true"),
+            TestContext.Current.CancellationToken);
+        IReadOnlyList<EffectiveConfigurationValue> project =
+            (await environment.Application.GetProjectConfigurationAsync(
+                environment.ProjectRoot,
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.True(write.Succeeded);
+        Assert.Equal("true", Value(project, "artifacts.language.agent_facing").Value.GetString());
+    }
+
+    // Round 2 review of PR #69: the same reverted fix attempt above also parsed a plain, untagged
+    // YAML float special (`.inf`/`.nan`) as `double.PositiveInfinity`/`NaN`, which
+    // JsonSerializer.SerializeToElement then threw an unguarded ArgumentException on -- reproduced
+    // directly against YamlDotNet 18.1.0 with this store's exact configuration. The replacement fix
+    // (CoerceTokenBudgetToNumber) never invokes YamlDotNet's own broad type-inference option, so a
+    // plain, untagged `.inf`-like scalar in any field is just a string that fails its own schema
+    // type/pattern check like any other garbled value, not a crash. This test covers only the plain
+    // form; see AnExplicitlyFloatTaggedYamlSpecialDegradesGracefullyInsteadOfThrowing for the
+    // explicitly-tagged form round 3 found this test does not cover.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AYamlFloatSpecialInAnyFieldDegradesGracefullyInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string manifest = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            manifestPath,
+            manifest.Replace("workflow: implementation-critical", "workflow: .inf"),
+            TestContext.Current.CancellationToken);
+
+        ConfigurationView result = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        // Degrades via ProjectRootResolver.ReadManifestAsync's own recoverable-error path (reached
+        // before GetProjectConfigurationAsync's own try block even begins), not via
+        // ConfigurationInvalid -- the exact call-order finding round 1 traced for the int-overflow
+        // bug. What matters here is that it degrades cleanly at all, not which of the two codes.
+        Assert.Equal(DiagnosticCodes.ProjectDirectoryUnknown, result.DiagnosticCode);
+        Assert.Empty(result.Values);
+    }
+
+    // Round 3 review of PR #69, confirmed by direct reproduction: round 2's own fix and its test
+    // above only cover a PLAIN, untagged `.inf`/`.nan` scalar. YamlDotNet's plain, option-less
+    // Deserialize<object> still honors an EXPLICIT YAML type tag (`!!float .inf`) even with no
+    // type-inference builder option enabled at all -- only untagged scalars are stringified by
+    // default. An explicitly float-tagged value still parsed as a real `double` and still crashed
+    // JsonSerializer.SerializeToElement with the identical unguarded ArgumentException, pre-existing
+    // on `main`, not introduced by this PR, but left uncovered by round 2's own claim to have closed
+    // it. Fixed at the actual point of failure: SerializeToElement is now called with
+    // JsonNumberHandling.AllowNamedFloatingPointLiterals (see RawSerializerOptions), writing the
+    // three named values as JSON strings instead of throwing, so schema validation rejects them the
+    // ordinary way instead of a crash reaching this test at all.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitlyFloatTaggedYamlSpecialDegradesGracefullyInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string manifest = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            manifestPath,
+            manifest.Replace("workflow: implementation-critical", "workflow: !!float .inf"),
+            TestContext.Current.CancellationToken);
+
+        ConfigurationView result = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DiagnosticCodes.ProjectDirectoryUnknown, result.DiagnosticCode);
+        Assert.Empty(result.Values);
+    }
+
+    // Round 3 review of PR #69: a bare long.TryParse(string, out long) used NumberStyles.Integer
+    // (permitting leading/trailing whitespace and a leading sign) under CultureInfo.CurrentCulture,
+    // so a hand-edited manifest could parse a whitespace-padded token_budget differently -- or
+    // silently succeed where it should not -- depending on the reading machine's culture settings.
+    // Pinned to InvariantCulture with only AllowLeadingSign; a whitespace-padded value is now left
+    // as a string and rejected by the ordinary schema "type": "integer" check instead of being
+    // silently trimmed and accepted.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AWhitespacePaddedTokenBudgetIsNotSilentlyAccepted()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(
+            environment.ProjectRoot, true,
+            TestContext.Current.CancellationToken);
+        string manifestPath = ProjectRootResolver.ManifestPath(environment.ProjectRoot);
+        string manifest = await File.ReadAllTextAsync(manifestPath, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(
+            manifestPath,
+            manifest + "context:\n  token_budget: \"  +40000  \"\n",
+            TestContext.Current.CancellationToken);
+
+        ConfigurationView result = await environment.Application.GetProjectConfigurationAsync(
+            environment.ProjectRoot, TestContext.Current.CancellationToken);
+
+        Assert.Equal(DiagnosticCodes.ProjectDirectoryUnknown, result.DiagnosticCode);
+        Assert.Empty(result.Values);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task ProjectConfigurationRequiresAnInitializedProject()
     {
         using TestEnvironment environment = new();
