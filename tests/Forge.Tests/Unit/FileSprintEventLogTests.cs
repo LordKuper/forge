@@ -7,6 +7,60 @@ namespace Forge.UnitTests;
 
 public sealed class FileSprintEventLogTests
 {
+    // Round 6 review of PR #68: the null-LIST variant of round 5's null-element fix -- "graph": null
+    // (the list itself, not an element inside it) reached Enumerable.Select's own null-check
+    // directly, missed when round 5 fixed only the null-element case for this exact method.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadDefinitionAsyncWrapsAnExplicitNullGraphInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        persisted["graph"] = null;
+        await File.WriteAllTextAsync(definitionPath, persisted.ToJsonString(), cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    // Deliberately asymmetric with the graph test above: unlike an empty graph (which would
+    // silently pass SprintGraphValidator.IsValid and produce a frozen definition with no executable
+    // nodes), an empty execution-profile set is already a legitimate, documented case -- a sprint
+    // frozen before execution profiles existed has none. "execution_profiles": null is therefore
+    // coalesced to empty rather than rejected, matching the pre-existing backward-compatibility
+    // comment in LoadDefinitionAsync.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadDefinitionAsyncTreatsAnExplicitNullExecutionProfilesAsEmptyRatherThanThrowing()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        persisted["execution_profiles"] = null;
+        await File.WriteAllTextAsync(definitionPath, persisted.ToJsonString(), cancellationToken);
+
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Empty(definition.ExecutionProfiles);
+    }
+
     // Round 5 review of PR #68: self-identified while closing that round's two reported findings --
     // the same "null element inside an otherwise-present list" hazard also applies to
     // LoadDefinitionAsync's own "graph"/"dependencies"/"execution_profiles" arrays, and

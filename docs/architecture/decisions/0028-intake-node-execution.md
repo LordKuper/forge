@@ -392,6 +392,72 @@ justification for why round 6, if it finds a tenth instance, should
 trigger that redesign rather than a tenth narrow patch — recorded here
 so that decision is not made silently in the moment.
 
+## Round 6 review (critical-only) — the tenth instance, and a reconsidered decision
+
+Round 6 was asked to exhaustively trace every `Persisted*` field
+reachable from `IntakeExecutionHostedService`'s call chain, specifically
+to test whether the round 5 commitment above should trigger. It found
+the tenth instance: `LoadDefinitionAsync`'s own `graph`/`dependencies`/
+`execution_profiles` — round 5 fixed this method's null-*element* case
+(`NullReferenceException`) but not the null-*list* case one level up
+(`"graph": null` itself, not `"graph": [null]`), which still reached
+`Enumerable.Select`'s own null-check as an uncaught `ArgumentNullException`.
+Round 6's own trace also surfaced two related, structurally identical
+gaps in the same method: `PersistedNode.DependsOn` (a null list inside
+one graph node) and a theoretical `PersistedNode.Id: null` reaching
+`SprintGraphValidator`'s `Regex.IsMatch`.
+
+**The round 5 commitment — that a tenth instance should trigger the
+systematic redesign rather than another narrow patch — was reconsidered
+here, not silently dropped.** Two systematic options were available: (1)
+`RespectNullableAnnotations = true` on a store-read-scoped clone of
+`DefinitionJsonOptions`, which would reject every non-nullable field's
+`null` at the deserialization layer itself, as a `JsonException` already
+covered everywhere; (2) the shared `Deserialize<T>` helper already named
+as deferred cleanup. Both were rejected for this PR, for a reason
+neither round 5's commitment nor round 6's own recommendation accounted
+for: correctness of option (1) depends on every `Persisted*` type's
+*every* field being correctly annotated (`?` exactly where, and only
+where, `null` is legitimately possible) — an audit round 6's own
+per-field trace effectively already did as a side effect, but which a
+mechanical `RespectNullableAnnotations` flip does not itself verify, and
+getting it wrong fails silently in the dangerous direction (a field that
+should reject `null` but is mis-annotated `?` continues to accept it).
+Doing that audit properly, plus the `Deserialize<T>` helper redesign, is
+real, separate design work deserving its own slice and its own review
+cycle — not a redesign folded into round 6 of an already six-round PR
+under continued review pressure, which is exactly the condition most
+likely to introduce the eleventh instance rather than close the class.
+
+Fixed instead with the same proven pattern, applied completely this
+time — but **not uniformly**, because the trace surfaced a real semantic
+difference the mechanical pattern would have gotten wrong:
+
+- `dependencies`/`execution_profiles`/`depends_on`: coalesced to `[]`,
+  matching every prior instance — an empty dependency set, execution-profile
+  set, or per-node dependency list is a legitimate value (the
+  execution-profiles case was already a documented backward-compatibility
+  rule in this method before this round).
+- **`graph`: deliberately left uncoalesced.** An empty graph trivially
+  passes `SprintGraphValidator.IsValid` (no nodes to violate any check),
+  so coalescing it to `[]` would silently produce a frozen sprint
+  definition with zero executable nodes — corrupt data masquerading as a
+  valid, empty one, the opposite of every other coalesce in this file's
+  established "treat unrecoverable corruption as corruption, not as
+  empty" convention (the same reasoning round 4 already applied to a
+  null `attempt_id`). Left to throw `ArgumentNullException` naturally,
+  now caught by this method's own filter (widened to include it).
+  Regression-tested with `LoadDefinitionAsyncWrapsAnExplicitNullGraphInAnInvalidDataException`;
+  a companion `LoadDefinitionAsyncTreatsAnExplicitNullExecutionProfilesAsEmptyRatherThanThrowing`
+  proves the asymmetry is intentional, not an oversight — mutating either
+  branch to match the other fails its own test. Both mutation-verified.
+
+Ten instances across six review rounds is recorded, not smoothed over:
+the shared-validation-helper item below is restated as a concrete future
+slice (design a validated read path plus the field-by-field nullability
+audit round 6's trace already started), not merely "worth doing
+eventually."
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None
@@ -443,16 +509,23 @@ so that decision is not made silently in the moment.
   service produces, but a future corruption could), the tick retries it every
   interval forever. Logged, not rate-limited.
 - **A shared, systematic deserialization-validation helper for
-  `FileSprintEventLog`'s `Persisted*` DTOs.** Nine instances of the
+  `FileSprintEventLog`'s `Persisted*` DTOs, plus a field-by-field
+  nullability audit of every `Persisted*` type.** Ten instances of the
   identical "unwrapped exception escapes the catch filter" defect were
-  found and fixed one call site at a time across five review rounds
-  (round 5 upgraded this from "worth doing eventually" to the explicit
-  trigger condition for a tenth instance — see that section), and no
-  tenth instance is guaranteed not to exist in code this PR did not
-  touch. A single read path that validates required-field presence and
-  type before any per-field access would close the whole defect class
-  at once. Out of this PR's
-  own scope (intake execution, not a `FileSprintEventLog` redesign).
+  found and fixed one call site at a time across six review rounds; the
+  tenth (round 6) was reached with the explicit trigger condition round
+  5 set already met, and was deliberately still fixed narrowly rather
+  than via the systematic redesign — see the Round 6 section above for
+  the full reasoning (in short: `RespectNullableAnnotations` is only as
+  correct as every type's own annotations, which nothing has yet
+  audited end to end). No eleventh instance is guaranteed not to exist
+  in code this PR did not touch. A concrete future slice: audit every
+  `Persisted*` type's field nullability against what its own consumer
+  actually requires, then either enable `RespectNullableAnnotations` on
+  a store-read-scoped options clone or build the shared validating
+  `Deserialize<T>` helper — either closes the whole defect class at
+  once, which no further one-off patch can. Out of this PR's own scope
+  (intake execution, not a `FileSprintEventLog` redesign).
 
 ## Consequences
 

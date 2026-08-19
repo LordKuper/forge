@@ -116,7 +116,20 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             PersistedDefinition persisted =
                 JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
                 throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
-            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph.Select(FromPersisted)];
+            // Deliberately NOT coalesced to `[]` the way Dependencies/ExecutionProfiles are just
+            // below: unlike an empty dependency or execution-profile set (both already-legitimate,
+            // documented empty cases), an empty graph trivially passes SprintGraphValidator.IsValid
+            // (no nodes to violate any of its checks) and would silently produce a frozen definition
+            // with no executable nodes at all -- a corrupt "graph": null must fail loudly, not
+            // degrade into one. Round 6 review: this method's list-level "graph": null case (distinct
+            // from round 5's null-*element* fix) reaches Enumerable.Select's own null-check directly;
+            // caught by this method's own catch filter, now widened to include
+            // ArgumentNullException.
+            // The null-forgiving operator is intentional: Graph is genuinely nullable at runtime
+            // (see its declaration), and this line deliberately does not guard against that --
+            // Enumerable.Select's own null-check throwing ArgumentNullException, caught by this
+            // method's own filter below, is the desired "null graph is corrupt" outcome.
+            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph!.Select(FromPersisted)];
             if (!SprintGraphValidator.IsValid(graph))
             {
                 // Node-id uniqueness, dependency existence, and acyclicity are enforced once, at
@@ -132,7 +145,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // A sprint frozen before execution profiles existed has none in its durable
             // definition.json; treated as an empty set (no phase has a profile) rather than a
             // corrupt-definition failure, matching `NodeRole`'s own backward-compatibility rule.
-            List<ExecutionProfile> executionProfiles = [.. persisted.ExecutionProfiles.Select(FromPersisted)];
+            List<ExecutionProfile> executionProfiles = [.. (persisted.ExecutionProfiles ?? []).Select(FromPersisted)];
             if (executionProfiles.Select(profile => profile.Phase).Distinct().Count() != executionProfiles.Count)
             {
                 // Same reasoning as the graph check above: an uncaught `ArgumentException` from a
@@ -148,7 +161,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.Workflow,
                 persisted.WorkflowVersion,
                 persisted.ConfigurationSnapshot,
-                [.. persisted.Dependencies.Select(FromPersisted)],
+                [.. (persisted.Dependencies ?? []).Select(FromPersisted)],
                 graph,
                 persisted.ConversationLanguage,
                 persisted.ArtifactPolicySnapshotHash,
@@ -157,7 +170,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 executionProfiles.ToDictionary(profile => profile.Phase, profile => profile));
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException
-            or NullReferenceException)
+            or NullReferenceException or ArgumentNullException)
         {
             // NullReferenceException (round 5 review, self-identified while closing that round's
             // findings): the same "null element inside an otherwise-present list" hazard found in
@@ -169,6 +182,13 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // method is IntakeExecutionHostedService.ExecuteIntakeAsync's own first read (before
             // GetNodeResultsAsync/GetConfirmationsAsync are ever reached), so an unwrapped exception
             // here escapes straight to TickAsync's per-sprint filter.
+            // ArgumentNullException (round 6 review): the null-LIST variant of the same hazard --
+            // "graph"/"dependencies"/"execution_profiles": null (not a null element, the list
+            // itself) reached Enumerable.Select's own null-check directly, missed when round 5 fixed
+            // only this method's null-element case. Now coalesced with `?? []` at each call site
+            // (matching GetNodeResultsAsync/GetConfirmationsAsync's own round 2/3 fix) so those three
+            // no longer reach this catch at all; kept here as defense-in-depth for a null "id" inside
+            // an otherwise-present node reaching SprintGraphValidator's own Regex.IsMatch.
             throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
         }
     }
@@ -1076,7 +1096,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         new(
             node.Id,
             WorkflowStateNames.Parse<NodeKind>(node.Kind),
-            node.DependsOn,
+            node.DependsOn ?? [],
             string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
 
     private static PersistedExecutionProfile ToPersisted(ExecutionProfile profile) =>
@@ -1591,9 +1611,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public Dictionary<string, string> ConfigurationSnapshot { get; set; } = new(StringComparer.Ordinal);
 
-        public List<PersistedDependency> Dependencies { get; set; } = [];
+        // Nullable, honestly (round 6 review, matching PersistedNodeResult's own round-2 fix): an
+        // explicit "dependencies"/"graph"/"execution_profiles": null in a corrupt file overwrites
+        // the `= []` default below instead of being rejected.
+        public List<PersistedDependency>? Dependencies { get; set; } = [];
 
-        public List<PersistedNode> Graph { get; set; } = [];
+        public List<PersistedNode>? Graph { get; set; } = [];
 
         public string ConversationLanguage { get; set; } = "en";
 
@@ -1603,7 +1626,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public List<string> FrozenProviders { get; set; } = [];
 
-        public List<PersistedExecutionProfile> ExecutionProfiles { get; set; } = [];
+        public List<PersistedExecutionProfile>? ExecutionProfiles { get; set; } = [];
     }
 
     private sealed class PersistedDependency
@@ -1621,7 +1644,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string Kind { get; set; } = string.Empty;
 
-        public List<string> DependsOn { get; set; } = [];
+        public List<string>? DependsOn { get; set; } = [];
 
         public string? Role { get; set; }
     }
