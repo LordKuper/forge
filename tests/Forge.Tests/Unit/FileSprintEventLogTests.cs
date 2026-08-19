@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Domain;
 using Forge.Tests.Support;
@@ -6,6 +7,96 @@ namespace Forge.UnitTests;
 
 public sealed class FileSprintEventLogTests
 {
+    // Round 2 review of PR #68: DefinitionJsonOptions' WhenWritingNull condition means the normal
+    // write path (SaveNodeResultAsync always projects Outputs/Diagnostics through `[.. ...]`, never
+    // null) can never itself produce "outputs": null / "diagnostics": null -- but nothing on the READ
+    // side enforced that either, so a hand-edited or torn-write file with an explicit null there threw
+    // ArgumentNullException from Enumerable.Select, escaping every caller's own catch filter (the
+    // exact defect class round 1 already fixed once for a corrupt/unparsable file, reproduced here by
+    // a different, syntactically-valid-JSON shape).
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetNodeResultsAsyncTreatsAnExplicitNullOutputsAndDiagnosticsAsEmptyRatherThanThrowing()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        NodeResult result = new(
+            sprintId, new("intake"), new(Guid.NewGuid()), NodeOutcome.Succeeded, now, now,
+            $"sha256:{new string('a', 64)}", [$"sha256:{new string('b', 64)}"],
+            [new("some_code", "context", "diagnostic.some_code", new Dictionary<string, string?>())]);
+        await store.SaveNodeResultAsync(environment.ProjectRoot, result, cancellationToken);
+
+        string resultPath = Directory.EnumerateFiles(
+            Path.Combine(FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "results")).Single();
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(resultPath, cancellationToken))!;
+        persisted["outputs"] = null;
+        persisted["diagnostics"] = null;
+        await File.WriteAllTextAsync(resultPath, persisted.ToJsonString(), cancellationToken);
+
+        IReadOnlyList<NodeResult> results =
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        NodeResult read = Assert.Single(results);
+        Assert.Empty(read.Outputs);
+        Assert.Empty(read.Diagnostics);
+    }
+
+    // Round 2 review of PR #68: GetFindingsAsync/GetConfirmationsAsync had the same unwrapped
+    // JsonException gap round 1 fixed for GetNodeResultsAsync -- latent today only because no
+    // executor can yet drive a sprint far enough to make AdvanceGraphAsync's own
+    // IsTestWorkEligibleAsync (reads confirmations) or CompleteAttemptAsync's own
+    // EvaluateCompletionAsync (reads findings) actually reach a corrupt file, but exactly the same
+    // permanent-ExecuteTask-fault shape once one does.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetFindingsAsyncWrapsACorruptFindingFileInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string findingsDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "findings");
+        Directory.CreateDirectory(findingsDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(findingsDirectory, "corrupt.json"), "{ not valid json", cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetFindingsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetConfirmationsAsyncWrapsACorruptConfirmationFileInAnInvalidDataException()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        string confirmationsDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "confirmations");
+        Directory.CreateDirectory(confirmationsDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(confirmationsDirectory, "corrupt.json"), "{ not valid json", cancellationToken);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => store.GetConfirmationsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
     // A Windows CI runner's virus scanner/indexer can transiently hold an incompatible handle on
     // events.jsonl right after it's written, even though every writer here opens with
     // FileShare.Read (observed as a real, reproducible CI failure, not a hypothetical). This

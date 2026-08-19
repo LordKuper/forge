@@ -222,6 +222,49 @@ Independent review found three issues, all fixed:
    exists yet to need it recomputed. The deferral itself is unchanged, only
    its justification.
 
+## Round 2 review
+
+Independent review found two further issues, both fixed at the root in
+`FileSprintEventLog`, not just in this service's own catch filter:
+
+1. **Round 1's `GetNodeResultsAsync` fix was incomplete.** It normalized a
+   syntactically-invalid file into `InvalidDataException`, but a
+   syntactically-*valid* file with an explicit `"outputs": null` or
+   `"diagnostics": null` — `DefinitionJsonOptions` does not set
+   `RespectNullableAnnotations`, so a hand-edited or torn-write file can
+   carry that value despite `PersistedNodeResult`'s declared (but
+   unenforced) non-nullable `List<T>` types — still threw a raw
+   `ArgumentNullException` from `Enumerable.Select`, escaping every catch
+   filter the same way the round-1 defect did. Fixed at both ends:
+   `PersistedNodeResult.Outputs`/`Diagnostics` are now honestly typed
+   `List<T>?`, and `GetNodeResultsAsync` null-coalesces both to `[]` before
+   use. Regression-tested with
+   `GetNodeResultsAsyncTreatsAnExplicitNullOutputsAndDiagnosticsAsEmptyRatherThanThrowing`;
+   mutation-verified by reverting to the unguarded reads and confirming the
+   test reproduces the exact `ArgumentNullException`.
+2. **The "nothing this method reaches is outside this boundary" claim was
+   still false, one call further out.** `AdvanceGraphAsync`'s own
+   `IsTestWorkEligibleAsync` reads confirmations
+   (`ISprintStore.GetConfirmationsAsync`), and `CompleteAttemptAsync`'s own
+   `EvaluateCompletionAsync` reads findings (`GetFindingsAsync`, including
+   its own unguarded `MigrateLegacyFindingsAsync` deserialize) — neither
+   normalized a corrupt file the way `GetNodeResultsAsync` now does. Latent
+   only because no executor can yet drive a sprint far enough for either
+   read to reach a real corrupt file, so the gap would have gone live
+   silently at the next node-executor slice. Fixed with the identical
+   normalization pattern in `GetFindingsAsync`, `GetConfirmationsAsync`,
+   and `MigrateLegacyFindingsAsync`, restoring the boundary comment's claim
+   to actually true rather than removing it.
+   Regression-tested with `GetFindingsAsyncWrapsACorruptFindingFileInAnInvalidDataException`/
+   `GetConfirmationsAsyncWrapsACorruptConfirmationFileInAnInvalidDataException`;
+   both mutation-verified. `MigrateLegacyFindingsAsync`'s own narrower fix
+   (its legacy-file deserialize is reached only once, before a project's
+   first-ever findings migration) shares the same fix but has no dedicated
+   test — accepted, named rather than silently skipped, since duplicating
+   `GetFindingsAsync`'s own coverage for a corner already exercised by the
+   identical exception-normalization code path was judged not worth a
+   third near-identical fixture.
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None

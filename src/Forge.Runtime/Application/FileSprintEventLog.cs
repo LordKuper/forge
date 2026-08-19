@@ -244,8 +244,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     persisted.StartedAt,
                     persisted.CompletedAt,
                     persisted.InputDigest,
-                    persisted.Outputs,
-                    [.. persisted.Diagnostics.Select(FromPersisted)]));
+                    persisted.Outputs ?? [],
+                    [.. (persisted.Diagnostics ?? []).Select(FromPersisted)]));
             }
             catch (Exception error) when (error is JsonException or FormatException or OverflowException)
             {
@@ -307,10 +307,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         List<Finding> findings = [];
         foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedFinding persisted = JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The finding at '{path}' is empty.");
-            findings.Add(FromPersisted(sprintId, persisted));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedFinding persisted =
+                    JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The finding at '{path}' is empty.");
+                findings.Add(FromPersisted(sprintId, persisted));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                // Same normalization as GetNodeResultsAsync, and for the same reason: a caller on an
+                // autonomous loop (CompleteAttemptAsync's own EvaluateCompletionAsync reads this) must
+                // be able to catch a corrupt record as InvalidDataException, not a raw parse exception.
+                throw new InvalidDataException($"The finding at '{path}' is corrupt.", error);
+            }
         }
 
         return findings;
@@ -405,11 +416,22 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         // closed on a `RecordedAt` tie regardless of the order artifacts arrive in).
         foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedConfirmation persisted =
-                JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The confirmation at '{path}' is empty.");
-            confirmations.Add(FromPersisted(sprintId, persisted));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedConfirmation persisted =
+                    JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The confirmation at '{path}' is empty.");
+                confirmations.Add(FromPersisted(sprintId, persisted));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                // Same normalization as GetNodeResultsAsync/GetFindingsAsync, and for the same
+                // reason: a caller on an autonomous loop (AdvanceGraphAsync's own
+                // IsTestWorkEligibleAsync reads this) must be able to catch a corrupt record as
+                // InvalidDataException, not a raw parse exception.
+                throw new InvalidDataException($"The confirmation at '{path}' is corrupt.", error);
+            }
         }
 
         return confirmations;
@@ -840,8 +862,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             }
 
             byte[] bytes = await File.ReadAllBytesAsync(legacyPath, cancellationToken).ConfigureAwait(false);
-            Dictionary<Guid, PersistedFinding> legacy =
-                JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ?? new();
+            Dictionary<Guid, PersistedFinding> legacy;
+            try
+            {
+                legacy =
+                    JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ??
+                    new();
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                throw new InvalidDataException($"The legacy findings file at '{legacyPath}' is corrupt.", error);
+            }
 
             string directory = FindingsDirectory(sprintDirectory);
             Directory.CreateDirectory(directory);
@@ -1576,9 +1607,13 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string InputDigest { get; set; } = string.Empty;
 
-        public List<string> Outputs { get; set; } = [];
+        // Nullable, honestly: DefinitionJsonOptions does not set RespectNullableAnnotations, so an
+        // explicit `"outputs": null`/`"diagnostics": null` in a corrupt or hand-edited file
+        // overwrites the `= []` default below instead of being rejected — the declared type must
+        // say so, or a caller reading this class believes a check it needs is already impossible.
+        public List<string>? Outputs { get; set; } = [];
 
-        public List<PersistedDiagnostic> Diagnostics { get; set; } = [];
+        public List<PersistedDiagnostic>? Diagnostics { get; set; } = [];
     }
 
     private sealed class PersistedDiagnostic
