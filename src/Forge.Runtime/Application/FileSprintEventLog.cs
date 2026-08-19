@@ -48,16 +48,26 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             ReadOnlyMemory<byte>.Empty,
             cancellationToken);
 
-    public async Task<SprintWorkflowState?> LoadAsync(
+    public Task<SprintWorkflowState?> LoadAsync(string projectRoot, SprintId id, CancellationToken cancellationToken) =>
+        LoadCoreAsync(projectRoot, id, cancellationToken, callerHoldsLock: false);
+
+    // AppendTransitionAsync's idempotent-replay branch reads the just-applied state while still
+    // holding the directory's Locks entry; calling the public LoadAsync there would have it
+    // re-acquire that same non-reentrant semaphore on the same async flow and hang forever (round 9
+    // review of PR #68, reproduced directly). This overload lets that one caller pass
+    // callerHoldsLock: true straight through to ReadEventsAsync instead.
+    private static async Task<SprintWorkflowState?> LoadCoreAsync(
         string projectRoot,
         SprintId id,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool callerHoldsLock = false)
     {
         try
         {
             IReadOnlyList<WorkflowEvent> events = await ReadEventsAsync(
                 EventsPath(SprintDirectory(projectRoot, id)),
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                callerHoldsLock).ConfigureAwait(false);
             return events.Count == 0 ? null : WorkflowFold.Apply(id, events);
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException)
@@ -116,7 +126,20 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             PersistedDefinition persisted =
                 JsonSerializer.Deserialize<PersistedDefinition>(bytes, DefinitionJsonOptions) ??
                 throw new InvalidDataException($"The definition for sprint '{id.Value}' is empty.");
-            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph.Select(FromPersisted)];
+            // Deliberately NOT coalesced to `[]` the way Dependencies/ExecutionProfiles are just
+            // below: unlike an empty dependency or execution-profile set (both already-legitimate,
+            // documented empty cases), an empty graph trivially passes SprintGraphValidator.IsValid
+            // (no nodes to violate any of its checks) and would silently produce a frozen definition
+            // with no executable nodes at all -- a corrupt "graph": null must fail loudly, not
+            // degrade into one. Round 6 review: this method's list-level "graph": null case (distinct
+            // from round 5's null-*element* fix) reaches Enumerable.Select's own null-check directly;
+            // caught by this method's own catch filter, now widened to include
+            // ArgumentNullException.
+            // The null-forgiving operator is intentional: Graph is genuinely nullable at runtime
+            // (see its declaration), and this line deliberately does not guard against that --
+            // Enumerable.Select's own null-check throwing ArgumentNullException, caught by this
+            // method's own filter below, is the desired "null graph is corrupt" outcome.
+            IReadOnlyList<NodeDefinition> graph = [.. persisted.Graph!.Select(FromPersisted)];
             if (!SprintGraphValidator.IsValid(graph))
             {
                 // Node-id uniqueness, dependency existence, and acyclicity are enforced once, at
@@ -132,7 +155,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             // A sprint frozen before execution profiles existed has none in its durable
             // definition.json; treated as an empty set (no phase has a profile) rather than a
             // corrupt-definition failure, matching `NodeRole`'s own backward-compatibility rule.
-            List<ExecutionProfile> executionProfiles = [.. persisted.ExecutionProfiles.Select(FromPersisted)];
+            List<ExecutionProfile> executionProfiles = [.. (persisted.ExecutionProfiles ?? []).Select(FromPersisted)];
             if (executionProfiles.Select(profile => profile.Phase).Distinct().Count() != executionProfiles.Count)
             {
                 // Same reasoning as the graph check above: an uncaught `ArgumentException` from a
@@ -148,7 +171,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.Workflow,
                 persisted.WorkflowVersion,
                 persisted.ConfigurationSnapshot,
-                [.. persisted.Dependencies.Select(FromPersisted)],
+                [.. (persisted.Dependencies ?? []).Select(FromPersisted)],
                 graph,
                 persisted.ConversationLanguage,
                 persisted.ArtifactPolicySnapshotHash,
@@ -156,8 +179,26 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.FrozenProviders,
                 executionProfiles.ToDictionary(profile => profile.Phase, profile => profile));
         }
-        catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+        catch (Exception error) when (error is JsonException or FormatException or OverflowException
+            or NullReferenceException or ArgumentNullException)
         {
+            // NullReferenceException (round 5 review, self-identified while closing that round's
+            // findings): the same "null element inside an otherwise-present list" hazard found in
+            // GetNodeResultsAsync/GetConfirmationsAsync also applies here -- "graph": [null],
+            // "dependencies": [null], or "execution_profiles": [null] all survive deserialization
+            // (DefinitionJsonOptions does not respect nullable annotations) and this method's own
+            // FromPersisted(PersistedNode)/FromPersisted(PersistedDependency)/
+            // FromPersisted(PersistedExecutionProfile) each dereference the element directly. This
+            // method is IntakeExecutionHostedService.ExecuteIntakeAsync's own first read (before
+            // GetNodeResultsAsync/GetConfirmationsAsync are ever reached), so an unwrapped exception
+            // here escapes straight to TickAsync's per-sprint filter.
+            // ArgumentNullException (round 6 review): the null-LIST variant of the same hazard --
+            // "graph"/"dependencies"/"execution_profiles": null (not a null element, the list
+            // itself) reached Enumerable.Select's own null-check directly, missed when round 5 fixed
+            // only this method's null-element case. Now coalesced with `?? []` at each call site
+            // (matching GetNodeResultsAsync/GetConfirmationsAsync's own round 2/3 fix) so those three
+            // no longer reach this catch at all; kept here as defense-in-depth for a null "id" inside
+            // an otherwise-present node reaching SprintGraphValidator's own Regex.IsMatch.
             throw new InvalidDataException($"The frozen definition for sprint '{id.Value}' is corrupt.", error);
         }
     }
@@ -230,20 +271,43 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         List<NodeResult> results = [];
         foreach (string path in Directory.EnumerateFiles(directory, "*.json"))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedNodeResult persisted =
-                JsonSerializer.Deserialize<PersistedNodeResult>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The node result at '{path}' is empty.");
-            results.Add(new(
-                sprintId,
-                new(persisted.NodeId),
-                new(Guid.Parse(persisted.AttemptId)),
-                WorkflowStateNames.Parse<NodeOutcome>(persisted.State),
-                persisted.StartedAt,
-                persisted.CompletedAt,
-                persisted.InputDigest,
-                persisted.Outputs,
-                [.. persisted.Diagnostics.Select(FromPersisted)]));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedNodeResult persisted =
+                    JsonSerializer.Deserialize<PersistedNodeResult>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The node result at '{path}' is empty.");
+                results.Add(new(
+                    sprintId,
+                    new(persisted.NodeId),
+                    new(Guid.Parse(persisted.AttemptId)),
+                    WorkflowStateNames.Parse<NodeOutcome>(persisted.State),
+                    persisted.StartedAt,
+                    persisted.CompletedAt,
+                    persisted.InputDigest,
+                    persisted.Outputs ?? [],
+                    [.. (persisted.Diagnostics ?? []).Select(FromPersisted)]));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or ArgumentNullException or NullReferenceException)
+            {
+                // Matches LoadAsync's own exception-normalization contract: every ISprintStore
+                // caller is entitled to treat a corrupt on-disk record as InvalidDataException, not
+                // a raw parse exception. Before this method had a real caller (CompleteAttemptAsync
+                // had zero production callers until this stage's node executor), an unwrapped
+                // JsonException/FormatException here escaped every existing per-sprint failure
+                // boundary, since none of them list those types in their catch filters.
+                // ArgumentNullException (round 4 review): an explicit "attempt_id": null survives
+                // deserialization (DefinitionJsonOptions does not respect nullable annotations, the
+                // same reason PersistedNodeResult.Outputs/Diagnostics needed round 2's fix), and
+                // Guid.Parse(null) throws it -- the identical hazard round 3 already named and fixed
+                // for LoadValidatedEventsAsync's own Guid.Parse, left uncovered here.
+                // NullReferenceException (round 5 review): a null *element* inside "diagnostics"
+                // (e.g. "diagnostics": [null]) survives the `?? []` list-level coalesce -- that only
+                // guards a null list, not a null entry inside a present one -- and FromPersisted
+                // dereferences it directly.
+                throw new InvalidDataException($"The node result at '{path}' is corrupt.", error);
+            }
         }
 
         return results;
@@ -294,10 +358,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         List<Finding> findings = [];
         foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedFinding persisted = JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The finding at '{path}' is empty.");
-            findings.Add(FromPersisted(sprintId, persisted));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedFinding persisted =
+                    JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The finding at '{path}' is empty.");
+                findings.Add(FromPersisted(sprintId, persisted));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                // Same normalization as GetNodeResultsAsync, and for the same reason: a caller on an
+                // autonomous loop (CompleteAttemptAsync's own EvaluateCompletionAsync reads this) must
+                // be able to catch a corrupt record as InvalidDataException, not a raw parse exception.
+                throw new InvalidDataException($"The finding at '{path}' is corrupt.", error);
+            }
         }
 
         return findings;
@@ -392,11 +467,26 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         // closed on a `RecordedAt` tie regardless of the order artifacts arrive in).
         foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
         {
-            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
-            PersistedConfirmation persisted =
-                JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
-                throw new InvalidDataException($"The confirmation at '{path}' is empty.");
-            confirmations.Add(FromPersisted(sprintId, persisted));
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedConfirmation persisted =
+                    JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The confirmation at '{path}' is empty.");
+                confirmations.Add(FromPersisted(sprintId, persisted));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or NullReferenceException)
+            {
+                // Same normalization as GetNodeResultsAsync/GetFindingsAsync, and for the same
+                // reason: a caller on an autonomous loop (AdvanceGraphAsync's own
+                // IsTestWorkEligibleAsync reads this) must be able to catch a corrupt record as
+                // InvalidDataException, not a raw parse exception. NullReferenceException (round 5
+                // review): a null *element* inside "evidence" (e.g. "evidence": [null]) survives the
+                // `?? []` list-level coalesce and FromPersisted(PersistedEvidence) dereferences it
+                // directly -- the null-element case round 3's list-level fix did not cover.
+                throw new InvalidDataException($"The confirmation at '{path}' is corrupt.", error);
+            }
         }
 
         return confirmations;
@@ -488,7 +578,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            List<WorkflowEvent> events = [.. await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false)];
+            List<WorkflowEvent> events =
+                [.. await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false)];
             ValidateJournal(events);
             await MigrateLegacyRoutingAsync(directory, decision.SprintId, events, cancellationToken)
                 .ConfigureAwait(false);
@@ -515,7 +606,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         try
         {
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
             long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
@@ -554,7 +645,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         try
         {
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             string attemptKey = attemptId.Value.ToString("D");
 
@@ -627,12 +718,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             try
             {
                 List<WorkflowEvent> events =
-                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken).ConfigureAwait(false)];
+                    [.. await ReadEventsAsync(EventsPath(directory), cancellationToken, callerHoldsLock: true)
+                        .ConfigureAwait(false)];
                 ValidateJournal(events);
                 await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
                 return events;
             }
-            catch (JsonException error)
+            // Round 3 review of PR #68: this previously caught only JsonException, matching
+            // ReadEventsAsync's own parse failures but not the wider set MigrateLegacyRoutingAsync's
+            // hand-rolled `JsonElement.GetProperty`/`.GetGuid`/`Guid.Parse` reads over a legacy
+            // pre-v0.11 routing sidecar can raise on a damaged file: KeyNotFoundException (a missing
+            // property), FormatException (a malformed guid/date), or ArgumentNullException
+            // (`Guid.Parse(null)` when `GetString()` returns null for a JSON null value). Matches
+            // LoadAsync's own normalization contract, widened for this method's own extra readers.
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or KeyNotFoundException or ArgumentNullException)
             {
                 throw new InvalidDataException($"The sprint journal for '{sprintId.Value}' is corrupt.", error);
             }
@@ -705,13 +805,16 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
             if (applied.ContainsKey(idempotencyKey))
             {
-                SprintWorkflowState? replayed =
-                    await LoadAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+                SprintWorkflowState? replayed = await LoadCoreAsync(
+                    projectRoot,
+                    sprintId,
+                    cancellationToken,
+                    callerHoldsLock: true).ConfigureAwait(false);
                 return new(true, replayed, DiagnosticCodes.None, true);
             }
 
             IReadOnlyList<WorkflowEvent> events =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             ValidateJournal(events);
             long currentVersion = CurrentVersion(events, aggregateKind, aggregateId);
             if (currentVersion != expectedAggregateVersion)
@@ -754,7 +857,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             await WriteIdempotencyAsync(idempotencyPath, applied, cancellationToken).ConfigureAwait(false);
 
             IReadOnlyList<WorkflowEvent> persisted =
-                await ReadEventsAsync(eventsPath, cancellationToken).ConfigureAwait(false);
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
             return new(true, WorkflowFold.Apply(sprintId, persisted), DiagnosticCodes.None);
         }
         catch (IOException)
@@ -827,8 +930,17 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             }
 
             byte[] bytes = await File.ReadAllBytesAsync(legacyPath, cancellationToken).ConfigureAwait(false);
-            Dictionary<Guid, PersistedFinding> legacy =
-                JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ?? new();
+            Dictionary<Guid, PersistedFinding> legacy;
+            try
+            {
+                legacy =
+                    JsonSerializer.Deserialize<Dictionary<Guid, PersistedFinding>>(bytes, DefinitionJsonOptions) ??
+                    new();
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException)
+            {
+                throw new InvalidDataException($"The legacy findings file at '{legacyPath}' is corrupt.", error);
+            }
 
             string directory = FindingsDirectory(sprintDirectory);
             Directory.CreateDirectory(directory);
@@ -935,7 +1047,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             new(confirmation.NodeId),
             WorkflowStateNames.Parse<ConfirmationOutcome>(confirmation.Outcome),
             confirmation.DefinitionOfDone,
-            [.. confirmation.Evidence.Select(FromPersisted)],
+            [.. (confirmation.Evidence ?? []).Select(FromPersisted)],
             confirmation.RecordedAt);
 
     private static PersistedNormalizedFindingKey ToPersisted(NormalizedFindingKey key) =>
@@ -999,7 +1111,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         new(
             node.Id,
             WorkflowStateNames.Parse<NodeKind>(node.Kind),
-            node.DependsOn,
+            node.DependsOn ?? [],
             string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
 
     private static PersistedExecutionProfile ToPersisted(ExecutionProfile profile) =>
@@ -1374,15 +1486,94 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// newline-terminated line that still fails to parse is real corruption, not a torn write —
     /// this store never produces one, so that always propagates rather than being silently dropped.
     /// </summary>
+    // A torn tail (no trailing newline) here has two possible causes that must not be treated the
+    // same way: genuine crash residue from a PRIOR process run (safe, and correct, to truncate
+    // away), or a same-process AppendLineAsync call still mid-flight (this read is deliberately
+    // unlocked and can observe its bytes before the write completes). Retrying the whole read gives
+    // an in-flight append the same short window ReadAllBytesWithRetryAsync already grants an
+    // AV-scanner-style transient lock, so a real in-flight write has time to finish and become
+    // visible as a complete line before this method concludes the tail is actually torn. Getting
+    // this wrong in the other direction is not merely a spurious error: truncating on the first
+    // sighting, before an in-flight writer finishes, would cut off that writer's own event as soon
+    // as it does land — a durable, already-reported-successful event silently deleted from the
+    // journal, not just a transient failure surfaced to its caller.
+    //
+    // Even after retrying, the *decision* to truncate must not itself race a concurrent append: the
+    // per-directory Locks semaphore that every mutator (AppendLineAsync's callers, and this method's
+    // own truncate) must hold is what actually prevents that collision -- callerHoldsLock is false
+    // for genuinely unlocked callers (LoadAsync), which acquire it here, immediately before a final
+    // re-check that could only now still be torn if the corruption is real. It is true for every
+    // caller that already holds the same directory's lock itself (AppendTransitionAsync and its own
+    // internal helpers) -- re-acquiring a non-reentrant SemaphoreSlim already held on the same async
+    // flow would deadlock forever, not merely block.
+    private const int MaxTornTailAttempts = 5;
+
     private static async Task<IReadOnlyList<WorkflowEvent>> ReadEventsAsync(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool callerHoldsLock = false)
     {
         if (!File.Exists(path))
         {
             return [];
         }
 
+        for (int attempt = 1; ; attempt++)
+        {
+            (List<WorkflowEvent> events, bool torn, int offset) =
+                await ReadEventsOnceAsync(path, cancellationToken).ConfigureAwait(false);
+            if (!torn)
+            {
+                return events;
+            }
+
+            if (attempt < MaxTornTailAttempts)
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+                continue;
+            }
+
+            if (callerHoldsLock)
+            {
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
+                return events;
+            }
+
+            string? directory = Path.GetDirectoryName(path);
+            if (directory is null)
+            {
+                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
+                return events;
+            }
+
+            SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+            await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                // Re-checked under the lock: a concurrent append that was still in flight when the
+                // last unlocked attempt above ran may have completed and released it just before
+                // this wait returned, in which case the file is no longer torn at all.
+                (List<WorkflowEvent> finalEvents, bool stillTorn, int finalOffset) =
+                    await ReadEventsOnceAsync(path, cancellationToken).ConfigureAwait(false);
+                if (!stillTorn)
+                {
+                    return finalEvents;
+                }
+
+                await TruncateAsync(path, finalOffset, cancellationToken).ConfigureAwait(false);
+                return finalEvents;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+    }
+
+    private static async Task<(List<WorkflowEvent> Events, bool Torn, int Offset)> ReadEventsOnceAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
         byte[] bytes = await ReadAllBytesWithRetryAsync(path, cancellationToken).ConfigureAwait(false);
         List<WorkflowEvent> events = [];
         int offset = 0;
@@ -1391,8 +1582,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             int newlineIndex = Array.IndexOf(bytes, (byte)'\n', offset);
             if (newlineIndex < 0)
             {
-                await TruncateAsync(path, offset, cancellationToken).ConfigureAwait(false);
-                return events;
+                return (events, true, offset);
             }
 
             int lineLength = newlineIndex - offset;
@@ -1404,7 +1594,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             offset = newlineIndex + 1;
         }
 
-        return events;
+        return (events, false, offset);
     }
 
     /// <summary>
@@ -1416,18 +1606,33 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// treating it as real corruption — a genuinely corrupt file fails the same way after retrying,
     /// just slightly later.
     /// </summary>
-    private static async Task<byte[]> ReadAllBytesWithRetryAsync(string path, CancellationToken cancellationToken)
+    private static Task<byte[]> ReadAllBytesWithRetryAsync(string path, CancellationToken cancellationToken) =>
+        RetryOnIOExceptionAsync(ct => File.ReadAllBytesAsync(path, ct), cancellationToken);
+
+    // A fixed attempt count is only as good as the load it was measured under: 5 attempts at
+    // 20ms-per-attempt backoff (round 8's original fix for this exact file, verified locally at
+    // 0/70) still exhausted under real CI contention -- ADR 0024's rounds 7-8 hit the identical
+    // "fixed budget survives local stress testing but not CI-shaped load" shape for a different
+    // hosted service's own file, and the fix there was the same one applied here: stop counting
+    // attempts and retry against a wall-clock deadline instead, so the budget scales with however
+    // contended the actual host turns out to be rather than a number picked from one measurement.
+    private static readonly TimeSpan IOContentionRetryBudget = TimeSpan.FromSeconds(10);
+
+    private static async Task<T> RetryOnIOExceptionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
     {
-        const int maxAttempts = 5;
+        DateTime deadline = DateTime.UtcNow + IOContentionRetryBudget;
         for (int attempt = 1; ; attempt++)
         {
             try
             {
-                return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                return await action(cancellationToken).ConfigureAwait(false);
             }
-            catch (IOException) when (attempt < maxAttempts)
+            catch (IOException) when (DateTime.UtcNow < deadline)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(20 * attempt, 200)), cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
     }
@@ -1447,24 +1652,60 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    // This append is always made while the caller holds this same directory's Locks entry, so it
+    // can never race another in-process append or truncate for the same sprint. It has nonetheless
+    // been observed to intermittently throw IOException here under sustained concurrent load (round
+    // 8 review of PR #68, reproduced directly: a background executor ticking every 50ms against the
+    // same sprint a foreground command is simultaneously advancing) — the exact mechanism was not
+    // conclusively identified (every writer for this file is already lock-protected, by inspection),
+    // but is most plausibly a short-lived OS-level handle-close/reopen window rather than a second
+    // logical writer genuinely running concurrently. Retried against the same IOContentionRetryBudget
+    // wall-clock deadline ReadAllBytesWithRetryAsync already retries the read side of this exact file
+    // with, rather than surfacing workflow_store_busy for something that resolves given enough time.
     private static async Task AppendLineAsync(string path, string line, CancellationToken cancellationToken)
     {
         string directory = Path.GetDirectoryName(path) ??
             throw new InvalidOperationException("The event log path has no directory.");
         Directory.CreateDirectory(directory);
         byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
-        await using (FileStream stream = new(
-            path,
-            FileMode.Append,
-            FileAccess.Write,
-            FileShare.Read,
-            4096,
-            FileOptions.Asynchronous | FileOptions.WriteThrough))
-        {
-            await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
-            stream.Flush(true);
-        }
+        long originalLength = File.Exists(path) ? new FileInfo(path).Length : 0;
+
+        await RetryOnIOExceptionAsync(
+            async ct =>
+            {
+                // A prior attempt may have written some or all of `bytes` before throwing -- exactly
+                // which is not known (the failure mechanism itself is not conclusively identified, see
+                // above). Truncating back to the length recorded before the FIRST attempt, at the start
+                // of every attempt including the first, guarantees each attempt starts from the same
+                // clean state instead of risking a duplicated or torn line on retry. Safe only because
+                // the caller already holds this directory's lock for the whole call, so nothing else
+                // can observe or extend the file between attempts.
+                if (File.Exists(path))
+                {
+                    await using FileStream truncate = new(path, FileMode.Open, FileAccess.Write, FileShare.Read);
+                    if (truncate.Length > originalLength)
+                    {
+                        truncate.SetLength(originalLength);
+                        await truncate.FlushAsync(ct).ConfigureAwait(false);
+                    }
+                }
+
+                await using (FileStream stream = new(
+                    path,
+                    FileMode.Append,
+                    FileAccess.Write,
+                    FileShare.Read,
+                    4096,
+                    FileOptions.Asynchronous | FileOptions.WriteThrough))
+                {
+                    await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+                    await stream.FlushAsync(ct).ConfigureAwait(false);
+                    stream.Flush(true);
+                }
+
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
 
         DirectoryFlusher.Flush(directory);
     }
@@ -1514,9 +1755,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public Dictionary<string, string> ConfigurationSnapshot { get; set; } = new(StringComparer.Ordinal);
 
-        public List<PersistedDependency> Dependencies { get; set; } = [];
+        // Nullable, honestly (round 6 review, matching PersistedNodeResult's own round-2 fix): an
+        // explicit "dependencies"/"graph"/"execution_profiles": null in a corrupt file overwrites
+        // the `= []` default below instead of being rejected.
+        public List<PersistedDependency>? Dependencies { get; set; } = [];
 
-        public List<PersistedNode> Graph { get; set; } = [];
+        public List<PersistedNode>? Graph { get; set; } = [];
 
         public string ConversationLanguage { get; set; } = "en";
 
@@ -1526,7 +1770,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public List<string> FrozenProviders { get; set; } = [];
 
-        public List<PersistedExecutionProfile> ExecutionProfiles { get; set; } = [];
+        public List<PersistedExecutionProfile>? ExecutionProfiles { get; set; } = [];
     }
 
     private sealed class PersistedDependency
@@ -1544,7 +1788,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string Kind { get; set; } = string.Empty;
 
-        public List<string> DependsOn { get; set; } = [];
+        public List<string>? DependsOn { get; set; } = [];
 
         public string? Role { get; set; }
     }
@@ -1563,9 +1807,13 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string InputDigest { get; set; } = string.Empty;
 
-        public List<string> Outputs { get; set; } = [];
+        // Nullable, honestly: DefinitionJsonOptions does not set RespectNullableAnnotations, so an
+        // explicit `"outputs": null`/`"diagnostics": null` in a corrupt or hand-edited file
+        // overwrites the `= []` default below instead of being rejected — the declared type must
+        // say so, or a caller reading this class believes a check it needs is already impossible.
+        public List<string>? Outputs { get; set; } = [];
 
-        public List<PersistedDiagnostic> Diagnostics { get; set; } = [];
+        public List<PersistedDiagnostic>? Diagnostics { get; set; } = [];
     }
 
     private sealed class PersistedDiagnostic
@@ -1644,7 +1892,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string DefinitionOfDone { get; set; } = string.Empty;
 
-        public List<PersistedEvidence> Evidence { get; set; } = [];
+        // Nullable for the same reason PersistedNodeResult's own lists are (round 2 review): an
+        // explicit `"evidence": null` in a corrupt or hand-edited file overwrites the `= []` default
+        // below instead of being rejected.
+        public List<PersistedEvidence>? Evidence { get; set; } = [];
 
         public DateTimeOffset RecordedAt { get; set; }
     }

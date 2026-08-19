@@ -558,6 +558,36 @@ public sealed class RoutingLedgerTests
         Assert.True(File.Exists(Path.Combine(routingDirectory, "migrated-to-sprint-journal")));
     }
 
+    // Round 3 review of PR #68: LoadValidatedEventsAsync (which GetRouteDecisionsAsync/GetEventsAsync
+    // both share) caught only JsonException around this migration, not the wider set its own
+    // hand-rolled JsonElement.GetProperty/.GetGuid/Guid.Parse reads over a legacy pre-v0.11 sidecar
+    // can raise -- a missing required property (KeyNotFoundException) escaped every catch filter
+    // reachable from IntakeExecutionHostedService's own tick, permanently faulting it the same way
+    // round 1/2's node-result/finding/confirmation defects did.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyRoutingSidecarMissingARequiredPropertyIsWrappedInAnInvalidDataException()
+    {
+        using TestRoot root = new();
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string routingDirectory = Path.Combine(
+            FileSprintEventLog.SprintDirectory(root.Path, sprintId), "routing");
+        Directory.CreateDirectory(routingDirectory);
+        // "decision_id" omitted entirely -- the exact shape GetProperty("decision_id") throws
+        // KeyNotFoundException for, rather than a JsonException a naive fix might only guard against.
+        await File.WriteAllTextAsync(
+            Path.Combine(routingDirectory, "decisions.jsonl"),
+            $$"""
+            {"node_id":"a","attempt_id":"{{attemptId.Value:D}}","provider":"claude_code","model":"sonnet","surface":"sprint","outcome":"routed","failure_class":null,"decided_at":"1970-01-01T00:00:00+00:00"}
+            """ + "\n",
+            TestContext.Current.CancellationToken);
+        RoutingLedger ledger = new(new FileSprintEventLog(new FakeClock()), new FakeClock());
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => ledger.GetRouteDecisionsAsync(root.Path, sprintId, TestContext.Current.CancellationToken));
+    }
+
     [Theory]
     [Trait("Category", "Unit")]
     [InlineData(true)]

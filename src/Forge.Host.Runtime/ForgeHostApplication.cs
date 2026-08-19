@@ -64,6 +64,11 @@ public static class ForgeHostApplication
                 // owns its lifetime directly, starting it only after winning the project lease.
                 services.AddSingleton(new NotificationDeliveryOptions(projectRoot));
                 services.AddSingleton<NotificationDeliveryHostedService>();
+                // Same reasoning again, and it matters most here: this is the one service that
+                // executes a node — a Host that lost the lease race must never drive an attempt
+                // against durable state another Host owns.
+                services.AddSingleton(new IntakeExecutionOptions(projectRoot));
+                services.AddSingleton<IntakeExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();
