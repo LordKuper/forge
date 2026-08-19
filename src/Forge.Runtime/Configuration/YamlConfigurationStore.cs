@@ -1,6 +1,8 @@
 using System.Collections;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using YamlDotNet.Core;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
@@ -32,7 +34,27 @@ public sealed class YamlConfigurationStore(
     // filter in this codebase, a strictly worse crash than the one this whole PR exists to fix.
     // CoerceTokenBudgetToNumber below is the narrow alternative: it touches only the one known
     // integer field this PR introduces, leaving every string field's round-trip exactly as it was
-    // before this PR, with no broad type-inference risk at all.
+    // before this PR.
+    //
+    // Round 3 review of PR #69: "no broad type-inference risk at all" above overclaimed what
+    // reverting the builder option actually achieves. YamlDotNet's plain, option-less
+    // Deserialize<object> still honors an EXPLICIT YAML type tag (e.g. `workflow: !!float .inf`) --
+    // only untagged/plain scalars are stringified by default. Reproduced directly: an explicitly
+    // float-tagged `.inf`/`.nan`/`-.inf` anywhere in a hand-edited manifest still parses as
+    // `double.PositiveInfinity`/`NaN`/`NegativeInfinity`, which the default
+    // JsonSerializer.SerializeToElement(object) below still throws ArgumentException on -- the
+    // same crash round 2 believed it had eliminated, pre-existing on `main` (this PR did not
+    // introduce it, but did ship a test overclaiming it was closed). Fixed at the actual point of
+    // failure instead of by another type-inference change: SerializeToElement is called with
+    // JsonNumberHandling.AllowNamedFloatingPointLiterals, which writes those three values as the
+    // JSON strings "Infinity"/"NaN"/"-Infinity" instead of throwing. Every field's own schema type/
+    // pattern/const constraint then rejects that string exactly like any other garbled scalar
+    // value, through the same InvalidDataException path a plain corrupt value already used.
+    private static readonly JsonSerializerOptions RawSerializerOptions = new()
+    {
+        NumberHandling = JsonNumberHandling.AllowNamedFloatingPointLiterals,
+    };
+
     private readonly IDeserializer rawDeserializer = new DeserializerBuilder().Build();
     private readonly ISerializer serializer = new SerializerBuilder()
         .WithNamingConvention(UnderscoredNamingConvention.Instance)
@@ -92,7 +114,7 @@ public sealed class YamlConfigurationStore(
         object? normalized = NormalizeYaml(raw);
         StripLegacySprintRegistry(normalized);
         CoerceTokenBudgetToNumber(normalized);
-        JsonElement rawElement = JsonSerializer.SerializeToElement(normalized);
+        JsonElement rawElement = JsonSerializer.SerializeToElement(normalized, RawSerializerOptions);
         ConfigurationSchemaCodec.ValidateProject(rawElement);
         ConfigurationSchemaCodec.ProjectConfiguration persisted =
             rawElement.Deserialize<ConfigurationSchemaCodec.ProjectConfiguration>(
@@ -146,6 +168,13 @@ public sealed class YamlConfigurationStore(
     // an out-of-Int32-range value (e.g. "3000000000") must still reach the JSON Schema `"maximum"`
     // check as a genuine number so it fails there with a clean, expected InvalidDataException,
     // rather than staying a string and failing the unrelated `"type"` check instead.
+    // Round 3 review of PR #69: a bare long.TryParse(string, out long) uses NumberStyles.Integer
+    // (permits leading/trailing whitespace and a leading sign) under CultureInfo.CurrentCulture
+    // (whose NegativeSign/positive-sign glyphs vary by locale), so the same hand-edited manifest
+    // could parse a token_budget differently -- or not at all -- depending on the machine's culture
+    // settings. Pinned to InvariantCulture with only AllowLeadingSign, so parsing is deterministic
+    // across machines and a value padded with whitespace is left as a string for the ordinary
+    // schema "type": "integer" rejection instead of being silently trimmed and accepted.
     private static void CoerceTokenBudgetToNumber(object? normalized)
     {
         if (normalized is not Dictionary<string, object?> root ||
@@ -153,7 +182,7 @@ public sealed class YamlConfigurationStore(
             contextValue is not Dictionary<string, object?> context ||
             !context.TryGetValue("token_budget", out object? tokenBudgetValue) ||
             tokenBudgetValue is not string text ||
-            !long.TryParse(text, out long parsed))
+            !long.TryParse(text, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out long parsed))
         {
             return;
         }

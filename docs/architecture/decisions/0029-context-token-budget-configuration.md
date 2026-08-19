@@ -295,6 +295,76 @@ the same `JsonException` widening, not just a comment fix; and a
 grammar nit ("must be a integer") in `ConfigurationSchemaCodec
 .InvalidType`'s five call sites.
 
+## Round 3 review (final full-scope round) -- round 2's own safety claim was itself wrong
+
+Given two consecutive rounds had each found a real defect in the
+immediately-preceding fix, round 3 was explicitly briefed to distrust
+every claim and reproduce directly rather than read through. It found
+that round 2's central claim -- "the replacement fix never invokes
+YamlDotNet's own type inference at all" -- was itself false, confirmed
+by direct reproduction against branch HEAD, not by re-reading the code.
+
+YamlDotNet's plain, option-less `Deserialize<object>` still honors an
+**explicit YAML type tag** (`workflow: !!float .inf`) even with the
+`WithAttemptingUnquotedStringTypeDeserialization()` builder option
+removed entirely -- only *untagged, plain* scalars are stringified by
+default. An explicitly float-tagged `.inf`/`.nan`/`-.inf` anywhere in a
+hand-edited manifest still parses as a real `double`, and
+`JsonSerializer.SerializeToElement` still threw the identical unguarded
+`ArgumentException` round 2 believed it had eliminated. Reproduced with
+a throwaway test writing `workflow: !!float .inf` and confirming the
+exact crash and stack trace round 2 already described for the *plain*
+form. **This specific vector is pre-existing on `main`** -- it predates
+this PR entirely, since `YamlConfigurationStore` has always used
+option-less `Deserialize<object>` for every non-integer field -- this
+PR did not introduce it, but round 2's own test and claim overclaimed
+that reverting the builder option closed it.
+
+Fixed at the actual point of failure, not by another type-inference
+change: `JsonSerializer.SerializeToElement` is now called with
+`JsonNumberHandling.AllowNamedFloatingPointLiterals`
+(`RawSerializerOptions`), which writes `Infinity`/`-Infinity`/`NaN` as
+JSON strings instead of throwing. Every field's own schema type/pattern/
+const constraint then rejects that string the ordinary way, through the
+same `InvalidDataException` path a ordinary corrupt value already used
+-- no crash reaches any caller. Verified by reverting
+`RawSerializerOptions`'s use in isolation and confirming a new test,
+`AnExplicitlyFloatTaggedYamlSpecialDegradesGracefullyInsteadOfThrowing`,
+reproduces the exact original `ArgumentException` and stack trace; the
+existing round-2 test (renamed in its own comment to clarify it only
+ever covered the *plain*, untagged form) is kept alongside it.
+
+Two further findings from the same round: `AYamlFloatSpecialInAnyField
+DegradesGracefullyInsteadOfThrowing`'s own comment overclaimed coverage
+of the tagged form it never exercised -- corrected, and the new sibling
+test added; and `CoerceTokenBudgetToNumber`'s bare
+`long.TryParse(text, out long)` used `NumberStyles.Integer` (permits
+leading/trailing whitespace and a leading sign) under
+`CultureInfo.CurrentCulture` (whose sign glyphs vary by locale), so a
+whitespace-padded value could be silently accepted, and the same
+manifest could parse differently across machines. Pinned to
+`NumberStyles.AllowLeadingSign` with `CultureInfo.InvariantCulture`;
+verified with a new test proving a whitespace-padded value is now left
+as a string and rejected by the ordinary schema check rather than
+silently trimmed and accepted.
+
+Round 3 also independently re-audited every caller of
+`YamlConfigurationStore.ReadAsync`/`ProjectIdentity.ReadProjectIdAsync`
+for a sixth still-unguarded call site (none found -- `ForgeApplication
+.IsRecoverable` and `StartupRecovery.IsUnreadable` already included
+`JsonException`; `SprintOrchestrator.CreateSprintAsync`'s own read is
+gated by a prior successful `ResolveAsync`), re-reproduced round 1's
+int-overflow scenario directly against the current code (still degrades
+cleanly), and probed 37 additional hand-edited YAML shapes against
+`CoerceTokenBudgetToNumber` (non-dictionary `context`, non-scalar
+`token_budget`, duplicate keys, anchors/aliases, merge keys, multi-
+document manifests, out-of-`long`-range values) with no further hazard
+found. One item was deliberately not filed as a finding: `NormalizeYaml`
+expands YAML anchors/aliases by deep-copying, which is a pre-existing,
+unrelated exponential-memory vector for a maliciously-crafted "billion
+laughs" manifest -- the same local-file-write threat model every other
+finding in this ADR already assumes, out of this PR's own scope.
+
 ## Consequences
 
 - `docs/contracts/v1/configuration.json`: `contract_version` 1.2.0 ->
@@ -311,7 +381,12 @@ grammar nit ("must be a integer") in `ConfigurationSchemaCodec
   `new DeserializerBuilder().Build()` (round 1's broad
   `.WithAttemptingUnquotedStringTypeDeserialization()` fix was reverted
   in round 2 -- see that section); a new `CoerceTokenBudgetToNumber`
-  step, scoped only to `context.token_budget`, is the actual fix;
+  step, scoped only to `context.token_budget` and using
+  `NumberStyles.AllowLeadingSign`/`CultureInfo.InvariantCulture` (round
+  3), is the actual fix; `SerializeToElement`'s raw-object pass now uses
+  `RawSerializerOptions` (`JsonNumberHandling
+  .AllowNamedFloatingPointLiterals`, round 3) so an explicitly
+  float-tagged YAML special degrades instead of crashing;
   `IsRecoverable` widened to include `JsonException` (round 1).
 - `ProjectRootResolver.ReadManifestAsync`, `HostMutationsFactory`,
   `StartupPipeline`'s project-configuration check, and
