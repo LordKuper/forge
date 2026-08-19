@@ -1593,18 +1593,33 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// treating it as real corruption — a genuinely corrupt file fails the same way after retrying,
     /// just slightly later.
     /// </summary>
-    private static async Task<byte[]> ReadAllBytesWithRetryAsync(string path, CancellationToken cancellationToken)
+    private static Task<byte[]> ReadAllBytesWithRetryAsync(string path, CancellationToken cancellationToken) =>
+        RetryOnIOExceptionAsync(ct => File.ReadAllBytesAsync(path, ct), cancellationToken);
+
+    // A fixed attempt count is only as good as the load it was measured under: 5 attempts at
+    // 20ms-per-attempt backoff (round 8's original fix for this exact file, verified locally at
+    // 0/70) still exhausted under real CI contention -- ADR 0024's rounds 7-8 hit the identical
+    // "fixed budget survives local stress testing but not CI-shaped load" shape for a different
+    // hosted service's own file, and the fix there was the same one applied here: stop counting
+    // attempts and retry against a wall-clock deadline instead, so the budget scales with however
+    // contended the actual host turns out to be rather than a number picked from one measurement.
+    private static readonly TimeSpan IOContentionRetryBudget = TimeSpan.FromSeconds(10);
+
+    private static async Task<T> RetryOnIOExceptionAsync<T>(
+        Func<CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
     {
-        const int maxAttempts = 5;
+        DateTime deadline = DateTime.UtcNow + IOContentionRetryBudget;
         for (int attempt = 1; ; attempt++)
         {
             try
             {
-                return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                return await action(cancellationToken).ConfigureAwait(false);
             }
-            catch (IOException) when (attempt < maxAttempts)
+            catch (IOException) when (DateTime.UtcNow < deadline)
             {
-                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
+                await Task.Delay(TimeSpan.FromMilliseconds(Math.Min(20 * attempt, 200)), cancellationToken)
+                    .ConfigureAwait(false);
             }
         }
     }
@@ -1631,10 +1646,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     // same sprint a foreground command is simultaneously advancing) — the exact mechanism was not
     // conclusively identified (every writer for this file is already lock-protected, by inspection),
     // but is most plausibly a short-lived OS-level handle-close/reopen window rather than a second
-    // logical writer genuinely running concurrently. Retried the same way ReadAllBytesWithRetryAsync
-    // already retries the read side of this exact file for the identical class of transient
-    // contention, rather than surfacing workflow_store_busy for something that resolves within
-    // milliseconds.
+    // logical writer genuinely running concurrently. Retried against the same IOContentionRetryBudget
+    // wall-clock deadline ReadAllBytesWithRetryAsync already retries the read side of this exact file
+    // with, rather than surfacing workflow_store_busy for something that resolves given enough time.
     private static async Task AppendLineAsync(string path, string line, CancellationToken cancellationToken)
     {
         string directory = Path.GetDirectoryName(path) ??
@@ -1642,10 +1656,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         Directory.CreateDirectory(directory);
         byte[] bytes = Encoding.UTF8.GetBytes(line + "\n");
 
-        const int maxAttempts = 5;
-        for (int attempt = 1; ; attempt++)
-        {
-            try
+        await RetryOnIOExceptionAsync(
+            async ct =>
             {
                 await using (FileStream stream = new(
                     path,
@@ -1655,18 +1667,14 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     4096,
                     FileOptions.Asynchronous | FileOptions.WriteThrough))
                 {
-                    await stream.WriteAsync(bytes, cancellationToken).ConfigureAwait(false);
-                    await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+                    await stream.WriteAsync(bytes, ct).ConfigureAwait(false);
+                    await stream.FlushAsync(ct).ConfigureAwait(false);
                     stream.Flush(true);
                 }
 
-                break;
-            }
-            catch (IOException) when (attempt < maxAttempts)
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(20 * attempt), cancellationToken).ConfigureAwait(false);
-            }
-        }
+                return true;
+            },
+            cancellationToken).ConfigureAwait(false);
 
         DirectoryFlusher.Flush(directory);
     }

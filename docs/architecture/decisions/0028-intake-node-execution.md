@@ -664,6 +664,28 @@ hazard it targets and neither appears to cause harm now that
 `AppendLineAsync` also retries — reverting either would reopen a real,
 if rarer, race for no benefit to this fix.
 
+**CI proved the fixed 5-attempt budget itself insufficient.** The first
+push of this fix (0/70 against local stress testing) still failed CI's
+`Validate .NET solution` (Windows) job: `ReadAllBytesWithRetryAsync`
+itself exhausted its own 5 attempts and surfaced the raw `IOException`
+through `LoadAsync`, on a real CI runner, not a hypothetical one — the
+same "a fixed attempt count or time budget survives local stress
+testing but not CI-shaped load" shape ADR 0024's rounds 7-8 already hit
+for a different hosted service's own file, measured there at 6.5x-20x
+local slowdown under oversubscription. Fixed the same way ADR 0024 was:
+replaced the fixed attempt counts on both `ReadAllBytesWithRetryAsync`
+and `AppendLineAsync` with a single shared `RetryOnIOExceptionAsync`
+helper retrying against a 10-second wall-clock deadline (capped
+per-attempt backoff, `min(20ms × attempt, 200ms)`), so the budget scales
+with however contended the actual host turns out to be rather than a
+number picked from one local measurement. No local reproduction of the
+CI-level contention that exposed the original gap was available (a
+scripted way to synthesize it was attempted and blocked by this
+environment's own tooling); the fix is the direct, previously-proven
+precedent for this exact failure shape, verified locally at 0/40 under
+ordinary load plus a clean full-suite run, with CI's own next run as the
+real confirmation.
+
 ## Consequences
 
 - New `src/Forge.Host.Runtime/IntakeExecutionHostedService.cs`:
