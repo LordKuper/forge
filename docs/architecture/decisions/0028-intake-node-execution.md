@@ -265,6 +265,58 @@ Independent review found two further issues, both fixed at the root in
    identical exception-normalization code path was judged not worth a
    third near-identical fixture.
 
+## Round 3 review (final full-scope round)
+
+Independent review found two further issues — the same defect class
+recurring a third time across `FileSprintEventLog`, both fixed at the
+root:
+
+1. **Round 2's null-list fix (`PersistedNodeResult`) was applied to only
+   one of the two structurally identical types it should have covered.**
+   `PersistedConfirmation.Evidence` had the same gap: an explicit
+   `"evidence": null` threw `ArgumentNullException` from
+   `FromPersisted`'s `confirmation.Evidence.Select(...)`, unguarded by
+   `GetConfirmationsAsync`'s own catch filter, reachable from
+   `AdvanceGraphAsync`'s own `IsTestWorkEligibleAsync`.
+   `PersistedFinding.Evidence` was independently confirmed **not**
+   affected — its own `FromPersisted` assigns the list directly, with no
+   `.Select` to throw on a null source. Fixed the same way as round 2:
+   `PersistedConfirmation.Evidence` is now `List<PersistedEvidence>?`,
+   coalesced to `[]` before use. Regression-tested with
+   `GetConfirmationsAsyncTreatsAnExplicitNullEvidenceAsEmptyRatherThanThrowing`;
+   mutation-verified.
+2. **A fourth failure-boundary gap, in a different `FileSprintEventLog`
+   method this PR had not touched before this round.**
+   `CompleteAttemptAsync` calls `RoutingLedger.GetRouteDecisionsAsync` on
+   every successful completion (to refund the routing budget unit),
+   reaching `LoadValidatedEventsAsync`, which caught only `JsonException`
+   — narrower than `LoadAsync`'s own `JsonException or FormatException or
+   OverflowException`. Its own `MigrateLegacyRoutingAsync` (a one-time
+   migration for a pre-v0.11 routing sidecar) reads hand-parsed
+   `JsonElement.GetProperty`/`.GetGuid`/`Guid.Parse` values that can also
+   raise `KeyNotFoundException` (a missing property) or
+   `ArgumentNullException` (`Guid.Parse(null)` from a JSON `null` where a
+   string was expected) on a damaged legacy file — none of which were
+   caught. Fixed by widening `LoadValidatedEventsAsync`'s catch to
+   `JsonException or FormatException or OverflowException or
+   KeyNotFoundException or ArgumentNullException`. Regression-tested with
+   `ALegacyRoutingSidecarMissingARequiredPropertyIsWrappedInAnInvalidDataException`
+   (`tests/Forge.Tests/Unit/RoutingLedgerTests.cs`, reusing that file's
+   own existing legacy-sidecar fixture pattern); mutation-verified.
+
+After three full-scope rounds, five distinct instances of the same
+"unwrapped JSON/parse exception escapes a per-sprint catch filter"
+defect class have been found and fixed across `FileSprintEventLog`
+(`GetNodeResultsAsync` twice, `GetFindingsAsync`, `GetConfirmationsAsync`
+twice, `MigrateLegacyFindingsAsync`, `LoadValidatedEventsAsync`/
+`MigrateLegacyRoutingAsync`). Round 3 traced every `ISprintStore` read
+method reachable from `TickAsync` (directly or transitively through
+`AdvanceGraphAsync`, `StartAttemptAsync`, `CompleteAttemptAsync`) and
+found none remaining unnormalized; `GetHandoffsAsync`/
+`GetReviewIterationsAsync` share the same historical gap but are
+genuinely unreachable from this service's own call chain today, so
+fixing them is out of this PR's scope.
+
 ## Deliberately deferred
 
 - **Every model-bearing role: `planning`, `implementation`, `review`.** None

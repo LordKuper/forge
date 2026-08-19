@@ -47,6 +47,39 @@ public sealed class FileSprintEventLogTests
         Assert.Empty(read.Diagnostics);
     }
 
+    // Round 3 review of PR #68: round 2's null-list fix (above) was applied to PersistedNodeResult
+    // only. PersistedConfirmation.Evidence had the identical gap -- an explicit "evidence": null threw
+    // ArgumentNullException from FromPersisted's `confirmation.Evidence.Select(...)`, unguarded by
+    // GetConfirmationsAsync's own JsonException/FormatException/OverflowException filter, reachable
+    // from AdvanceGraphAsync's own IsTestWorkEligibleAsync.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetConfirmationsAsyncTreatsAnExplicitNullEvidenceAsEmptyRatherThanThrowing()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        ConfirmationArtifact confirmation = new(
+            Guid.NewGuid(), sprintId, new("confirmation"), ConfirmationOutcome.Confirmed, "Done.",
+            [new(ConfirmationEvidenceKind.Inspection, "Read the diff.")], DateTimeOffset.UtcNow);
+        await store.SaveConfirmationAsync(environment.ProjectRoot, confirmation, cancellationToken);
+
+        string confirmationPath = Directory.EnumerateFiles(Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "confirmations")).Single();
+        JsonNode persisted = JsonNode.Parse(await File.ReadAllTextAsync(confirmationPath, cancellationToken))!;
+        persisted["evidence"] = null;
+        await File.WriteAllTextAsync(confirmationPath, persisted.ToJsonString(), cancellationToken);
+
+        IReadOnlyList<ConfirmationArtifact> confirmations =
+            await store.GetConfirmationsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Empty(Assert.Single(confirmations).Evidence);
+    }
+
     // Round 2 review of PR #68: GetFindingsAsync/GetConfirmationsAsync had the same unwrapped
     // JsonException gap round 1 fixed for GetNodeResultsAsync -- latent today only because no
     // executor can yet drive a sprint far enough to make AdvanceGraphAsync's own

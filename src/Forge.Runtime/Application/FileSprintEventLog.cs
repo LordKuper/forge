@@ -667,7 +667,15 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 await MigrateLegacyRoutingAsync(directory, sprintId, events, cancellationToken).ConfigureAwait(false);
                 return events;
             }
-            catch (JsonException error)
+            // Round 3 review of PR #68: this previously caught only JsonException, matching
+            // ReadEventsAsync's own parse failures but not the wider set MigrateLegacyRoutingAsync's
+            // hand-rolled `JsonElement.GetProperty`/`.GetGuid`/`Guid.Parse` reads over a legacy
+            // pre-v0.11 routing sidecar can raise on a damaged file: KeyNotFoundException (a missing
+            // property), FormatException (a malformed guid/date), or ArgumentNullException
+            // (`Guid.Parse(null)` when `GetString()` returns null for a JSON null value). Matches
+            // LoadAsync's own normalization contract, widened for this method's own extra readers.
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or KeyNotFoundException or ArgumentNullException)
             {
                 throw new InvalidDataException($"The sprint journal for '{sprintId.Value}' is corrupt.", error);
             }
@@ -979,7 +987,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             new(confirmation.NodeId),
             WorkflowStateNames.Parse<ConfirmationOutcome>(confirmation.Outcome),
             confirmation.DefinitionOfDone,
-            [.. confirmation.Evidence.Select(FromPersisted)],
+            [.. (confirmation.Evidence ?? []).Select(FromPersisted)],
             confirmation.RecordedAt);
 
     private static PersistedNormalizedFindingKey ToPersisted(NormalizedFindingKey key) =>
@@ -1692,7 +1700,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
 
         public string DefinitionOfDone { get; set; } = string.Empty;
 
-        public List<PersistedEvidence> Evidence { get; set; } = [];
+        // Nullable for the same reason PersistedNodeResult's own lists are (round 2 review): an
+        // explicit `"evidence": null` in a corrupt or hand-edited file overwrites the `= []` default
+        // below instead of being rejected.
+        public List<PersistedEvidence>? Evidence { get; set; } = [];
 
         public DateTimeOffset RecordedAt { get; set; }
     }
