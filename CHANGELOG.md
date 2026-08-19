@@ -21,6 +21,11 @@ User-facing Forge changes are listed by release, newest first.
   persist: a pre-existing YAML round-trip step treated every configured
   value as text, so a written number failed re-validation on the very
   next read and was silently discarded in favor of the prior value.
+- A hand-edited project manifest (`.forge/manifest.yaml`) containing an
+  explicit YAML float tag with a value like `.inf` or `.nan` in any field
+  could crash the background service that keeps sprints moving, or in
+  rarer cases the whole local Host process, until it was restarted. Such
+  a manifest is now rejected as invalid configuration instead.
 
 ## v0.49.0
 
