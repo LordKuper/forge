@@ -102,6 +102,54 @@ to review — the node is left untouched rather than starting an attempt
 with nothing to show the reviewer, the same missing-precondition guard
 every other executor in this file already applies before `StartAttemptAsync`.
 
+## Round 1 review
+
+Independent review found two issues, both fixed:
+
+1. **`GitWorktreeManager.DiffAsync`'s 50,000-character truncation could
+   split a UTF-16 surrogate pair**, producing an invalid string that would
+   flow straight into the review prompt — the same bug class ADR 0032's
+   own review already found and fixed in commit-subject truncation, not
+   reused here. Fixed with the identical surrogate-safe pattern
+   (`GitWorktreeManager.TruncateSafely`, backing the cut index off by one
+   whenever it would split a pair) and a new real-`git.exe` regression
+   test, `GitIsolationTests.ReadDiffTruncatesWithoutSplittingASurrogatePair`,
+   built from an all-astral-character diff so the split reproduces
+   deterministically regardless of the diff header's own length.
+2. **No test exercised `DiffAsync`'s real truncation behavior at all** —
+   `FakeWorktreeManager.DiffAsync` hardcoded `truncated: false`, so
+   `ReviewExecutionHostedServiceTests` never ran the executor's own
+   `... (truncated)` prompt marker against a truncated diff. Fixed by
+   making the fake's truncation flag configurable
+   (`FakeWorktreeManager.DiffTruncated`) and asserting the marker appears
+   in `AnApprovedVerdictSucceedsOnTheFirstIteration`.
+
+## Round 2 review
+
+A second independent round found two more issues, both fixed:
+
+1. **The new `WorktreeDiffFailed` failure path had zero test coverage.**
+   `FakeWorktreeManager.FailNextDiff`/`DiffFailureCode` existed but no
+   test ever set `FailNextDiff = true`, so the branch that discards the
+   attempt worktree and fails the attempt when the diff itself cannot be
+   read only ever compiled, never ran. Fixed with a new test,
+   `ADiffReadFailureIsRecordedAsAFailureWithoutRunningTheProvider`.
+2. **A dead guard clause in `RunReviewAttemptAsync`.** The check
+   `!recorded.Succeeded && recorded.DiagnosticCode is not
+   (ReviewIterationLimit or ReviewRepeatedFindings)` reads as though a
+   convergence-gate trip could be reported with `Succeeded: false`, but
+   `RecordReviewIterationAsync` only ever pairs those two diagnostic codes
+   with `Succeeded: true` — every `Succeeded: false` return in that method
+   uses a different code. The second clause could never actually exclude
+   anything. Simplified to a plain `!recorded.Succeeded` check with a
+   comment explaining why, so a future reader does not go looking for a
+   case the callee's contract does not allow.
+
+A third, full-scope round (the last allowed by AGENTS.md's own review
+rules) found no further issues in either the implementation or the two
+rounds of fixes above, and separately confirmed VERSION/CHANGELOG/DI
+registration consistency.
+
 ## Consequences
 
 - New `src/Forge.Host.Runtime/ReviewExecutionHostedService.cs` and
