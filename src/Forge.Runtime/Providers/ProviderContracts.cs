@@ -77,6 +77,36 @@ public static class ProviderDiagnosticCodes
     /// attempt is abandoned as a retryable rate limit (<see cref="ProviderFailureKind.RateLimited"/>)
     /// rather than an ordinary provider failure.</summary>
     public const string RateLimited = "provider_rate_limited";
+
+    /// <summary>A model-bearing node executor's run-time mapping of the remaining
+    /// <see cref="ProviderFailureKind"/> values (Stage 11's planning executor is the first
+    /// production caller of <see cref="ILlmProvider.RunAsync"/>) — one durable diagnostic code per
+    /// kind, so a recorded <see cref="Forge.Domain.NodeDiagnostic"/> names which failure actually
+    /// happened rather than collapsing every non-timeout, non-rate-limit failure into one generic
+    /// code.</summary>
+    public const string RunNotReady = "provider_run_not_ready";
+
+    public const string QuotaExceeded = "provider_quota_exceeded";
+
+    public const string RunPolicyViolation = "provider_run_policy_violation";
+
+    public const string RunTransientFailure = "provider_run_transient_failure";
+
+    public const string RunMalformedOutput = "provider_run_malformed_output";
+
+    public const string MissingTerminalResult = "provider_missing_terminal_result";
+
+    public const string DuplicateTerminalResult = "provider_duplicate_terminal_result";
+
+    public const string RunUnknownFailure = "provider_run_unknown_failure";
+
+    /// <summary>The provider reported success (zero exit, exactly one terminal-result event) but
+    /// that event's own extracted text was empty or whitespace-only — a schema-valid run with
+    /// nothing a caller can actually use as a <see cref="Forge.Domain.Handoff"/> summary
+    /// (`handoff.schema.json` requires `minLength: 1`). Distinct from
+    /// <see cref="MissingTerminalResult"/>, which means no terminal event was ever emitted at
+    /// all.</summary>
+    public const string EmptyTerminalSummary = "provider_empty_terminal_summary";
 }
 
 /// <summary>
