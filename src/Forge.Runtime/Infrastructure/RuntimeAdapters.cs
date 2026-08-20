@@ -277,6 +277,42 @@ public sealed class GitRepository(IProcessRunner processRunner) : IRepository
 
         return head;
     }
+
+    public async Task<string?> GetCurrentBranchAsync(string projectRoot, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await processRunner
+            .RunAsync(new("git", ["symbolic-ref", "--short", "HEAD"], projectRoot), cancellationToken)
+            .ConfigureAwait(false);
+        string branch = result.StandardOutput.Trim();
+        return result.ExitCode == 0 && branch.Length > 0 ? branch : null;
+    }
+
+    public async Task<GitOperationResult> MergeSprintIntoDefaultBranchAsync(
+        string projectRoot, string defaultBranch, string sourceBranch, CancellationToken cancellationToken)
+    {
+        ProcessResult status = await processRunner
+            .RunAsync(new("git", ["status", "--porcelain"], projectRoot), cancellationToken).ConfigureAwait(false);
+        if (status.ExitCode != 0 || status.StandardOutput.Trim().Length > 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.RepositoryDirty, status.StandardError);
+        }
+
+        string? currentBranch = await GetCurrentBranchAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(currentBranch, defaultBranch, StringComparison.Ordinal))
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.RepositoryBranchMismatch);
+        }
+
+        ProcessResult merged = await processRunner
+            .RunAsync(new("git", ["merge", "--ff-only", "--", sourceBranch], projectRoot), cancellationToken)
+            .ConfigureAwait(false);
+        if (merged.ExitCode != 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeIntegrationDiverged, merged.StandardError);
+        }
+
+        return GitOperationResult.Ok(await GetHeadAsync(projectRoot, cancellationToken).ConfigureAwait(false));
+    }
 }
 
 public sealed class NetworkClient(HttpClient client) : INetworkClient

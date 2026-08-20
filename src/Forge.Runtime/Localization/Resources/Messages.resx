@@ -94,6 +94,8 @@
   <data name="TestWorkAddedDescription" xml:space="preserve"><value>Record that new tests were added to protect the scope.</value></data>
   <data name="TestWorkNoNewTestsDescription" xml:space="preserve"><value>Record a justified decision that no new tests were needed.</value></data>
   <data name="TestWorkRecorded" xml:space="preserve"><value>Test-work decision recorded.</value></data>
+  <data name="FinalizeDescription" xml:space="preserve"><value>Human-only sprint finalization command.</value></data>
+  <data name="SprintFinalized" xml:space="preserve"><value>Sprint finalized.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Gate node id (empty: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Approve gate</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Reject gate</value></data>

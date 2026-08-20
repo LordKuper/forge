@@ -42,9 +42,20 @@ public sealed record SprintDependency(SprintDependencyKind Kind, string Referenc
 /// creation (ADR 0014). A node with no matching phase (intake, confirmation, test-work, human
 /// approval, finalization) has none; nothing widens or re-resolves an entry once frozen.
 /// </summary>
+/// <summary>
+/// <see cref="DefaultBranch"/> is the branch checked out in the project's own working directory
+/// when this sprint was created (ADR 0036) — frozen alongside <see cref="BaseCommit"/> so
+/// finalization later knows where a sprint's real changes land, without ever having to guess a
+/// branch name or re-resolve one that may have changed since. <see langword="null"/> for a sprint
+/// frozen with a detached `HEAD` (creation itself refuses that case) or one frozen before this
+/// field existed;
+/// either way, finalization has nothing to merge into and fails closed. The diagnostic code is
+/// `sprint_default_branch_unavailable` (`Forge.Application.DiagnosticCodes.SprintDefaultBranchUnavailable`).
+/// </summary>
 public sealed record SprintDefinition(
     SprintId Id,
     string BaseCommit,
+    string? DefaultBranch,
     string Workflow,
     string WorkflowVersion,
     IReadOnlyDictionary<string, string> ConfigurationSnapshot,

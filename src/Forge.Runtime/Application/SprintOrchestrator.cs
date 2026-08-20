@@ -161,6 +161,17 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.RepositoryHeadUnavailable);
         }
 
+        // Frozen alongside the base commit (ADR 0036): finalization later needs to know where this
+        // sprint's real changes should land, and a detached HEAD has no branch name to freeze --
+        // refusing here, once, is simpler and safer than letting every sprint carry a `null`
+        // DefaultBranch that finalization would then have to fail closed on individually.
+        string? defaultBranch = await repository.GetCurrentBranchAsync(status.Root, cancellationToken)
+            .ConfigureAwait(false);
+        if (defaultBranch is null)
+        {
+            return new(false, null, DiagnosticCodes.RepositoryDetachedHead);
+        }
+
         // Every write below targets the final, deterministic id directly — never a separate staging
         // id — and every one of them is safe to repeat: the first event replays through the store's
         // own idempotency key, `InitializeGraphAsync` tolerates a node that a prior, interrupted call
@@ -210,6 +221,7 @@ public sealed class SprintOrchestrator(
             definition = new(
                 sprintId,
                 baseCommit,
+                defaultBranch,
                 ProjectInitializer.WorkflowName,
                 ProjectInitializer.WorkflowContractVersion,
                 configurationSnapshot,

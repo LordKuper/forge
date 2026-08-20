@@ -94,6 +94,8 @@
   <data name="TestWorkAddedDescription" xml:space="preserve"><value>Зафиксировать, что новые тесты были добавлены для защиты области изменений.</value></data>
   <data name="TestWorkNoNewTestsDescription" xml:space="preserve"><value>Зафиксировать обоснованное решение о том, что новые тесты не требовались.</value></data>
   <data name="TestWorkRecorded" xml:space="preserve"><value>Решение по тестовой работе зафиксировано.</value></data>
+  <data name="FinalizeDescription" xml:space="preserve"><value>Команда завершения спринта (только для человека).</value></data>
+  <data name="SprintFinalized" xml:space="preserve"><value>Спринт завершён.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>

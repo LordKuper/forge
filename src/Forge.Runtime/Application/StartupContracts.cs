@@ -33,6 +33,30 @@ public static class DiagnosticCodes
     public const string SprintTransitionInvalid = "sprint_transition_invalid";
     public const string WorkflowEventConflict = "workflow_event_conflict";
     public const string RepositoryHeadUnavailable = "repository_head_unavailable";
+
+    /// <summary>A new sprint's `HEAD` was resolvable (<see cref="RepositoryHeadUnavailable"/>
+    /// covers that separately) but detached — no branch name to freeze as
+    /// <c>SprintDefinition.DefaultBranch</c>, which finalization later needs to identify where a
+    /// sprint's real changes land. Sprint creation fails closed rather than freezing a
+    /// <see langword="null"/> the sprint could never finalize.</summary>
+    public const string RepositoryDetachedHead = "repository_detached_head";
+
+    /// <summary>Finalization refuses to merge into the project's own working directory
+    /// (<c>projectRoot</c> itself, never a worktree) while it has uncommitted changes — the same
+    /// "never touch a dirty tree" discipline every worktree-scoped git primitive already follows,
+    /// applied here for the first time to the main checkout itself.</summary>
+    public const string RepositoryDirty = "repository_dirty";
+
+    /// <summary>Finalization refuses to check out a different branch in the project's own working
+    /// directory — it only ever fast-forward-merges into whatever branch is already checked out,
+    /// and only when that already matches the sprint's frozen <c>DefaultBranch</c>.</summary>
+    public const string RepositoryBranchMismatch = "repository_branch_mismatch";
+
+    /// <summary>Finalization has nothing to merge into: this sprint's own
+    /// `SprintDefinition.DefaultBranch` is <see langword="null"/> (frozen before this field
+    /// existed). Checked before the finalization attempt even starts, rather than starting one that
+    /// could never succeed.</summary>
+    public const string SprintDefaultBranchUnavailable = "sprint_default_branch_unavailable";
     public const string SprintDependencyInvalid = "sprint_dependency_invalid";
     public const string SprintDependencyNotPublished = "sprint_dependency_not_published";
     public const string SprintGraphInvalid = "sprint_graph_invalid";

@@ -2,6 +2,27 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.57.0
+
+### Added
+
+- A running sprint's `finalization` node can now be resolved by a human
+  operator: `forge finalize --sprint <id> --yes` merges the sprint's real
+  code changes into the project's own default branch (a fast-forward-only
+  merge, refusing if the working directory is dirty, on the wrong branch,
+  or has diverged — never running a branch checkout on its own) and marks
+  the sprint completed. This is the step that actually lands a sprint's
+  work; every earlier stage kept it isolated. Requires an interactive
+  session and explicit `--yes`, matching every other human-only command.
+
+### Changed
+
+- A new sprint now also freezes the branch checked out in the project's
+  working directory at creation time, alongside its base commit, so
+  finalization later knows where to land the sprint's changes. Creating a
+  sprint while the project's working directory has no branch checked out
+  (a detached `HEAD`) is no longer allowed.
+
 ## v0.56.0
 
 ### Added

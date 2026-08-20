@@ -731,6 +731,53 @@ public sealed class ControlPlaneTests
         Assert.Equal(NodeState.Succeeded, state.Nodes["test_work"].State);
     }
 
+    // Unlike every other round-trip test in this file, `finalize_sprint`'s real action is genuine
+    // git I/O against `environment.ProjectRoot` itself -- and unlike this fixture's other sprints
+    // (created in-process against `environment`'s own FakeRepository), the real Host this test talks
+    // to runs a REAL GitWorktreeManager-adjacent GitRepository against that same path, which is not
+    // an actual git repository here. This deliberately does not assert the happy path (already
+    // covered end to end by FinalizeSprintTests.cs against a FakeRepository) -- it proves the wire
+    // path itself: the request serializes, reaches the real dispatch handler, runs real `git`, and a
+    // well-formed `FinalizeSprintResult` structure comes back over the pipe, not a crash or a
+    // malformed payload.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task FinalizeSprintRoundTripsThroughTheHostAndReturnsAWellFormedResult()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("finalization", NodeKind.Work, [], NodeRole.Finalization)]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        FinalizeSprintResult result = await mutations.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", confirmed: true, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.NotEqual(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.NotEqual(DiagnosticCodes.HostUnavailable, result.DiagnosticCode);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task SupersedeAttemptRoundTripsThroughTheHostAndLinksAReplacement()

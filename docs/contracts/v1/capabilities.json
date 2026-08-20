@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.4.0",
+  "contract_version": "1.5.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -101,6 +101,17 @@
       "permission": "human_test_work_confirm",
       "acceptance": "test-work-parity",
       "note": "CLI-only for now, same reason as `workflow.confirm` above: not yet in `CapabilityIds.Implemented`. Settles a `NodeRole.TestWork` node's own attempt lifecycle (no executor exists for this role either -- `ExecutionProfilePolicy.PhaseFor` returns null for it too) rather than through a human gate. Unlike `workflow.confirm`, no downstream eligibility gate reads the recorded artifact's content -- `review`'s own graph dependency on this node is satisfied by the node reaching `succeeded` alone."
+    },
+    {
+      "id": "workflow.finalize",
+      "kind": "command",
+      "contract": "FinalizeSprint",
+      "events": ["SprintFinalized", "SprintChanged"],
+      "cli": "forge finalize --sprint <id> [--node <id>] [--yes]",
+      "desktop": "Sprints/Finalize",
+      "permission": "human_finalize_confirm",
+      "acceptance": "finalize-parity",
+      "note": "CLI-only for now, same reason as `workflow.confirm`/`workflow.test_work` above: not yet in `CapabilityIds.Implemented`. Merges the sprint's isolated integration branch into the project's own default branch (frozen as `SprintDefinition.DefaultBranch` at sprint creation) and completes the sprint -- fast-forward-only, refusing on a dirty or wrong-branch working directory, never running `git checkout` itself (ADR 0036). This is the first Forge operation of any kind that mutates the project's own working directory rather than an isolated worktree, so it stays human-only with no config-driven confirmation bypass, matching `workflow.review`/`attempt.supersede`/`workflow.confirm`/`workflow.test_work`."
     },
     {
       "id": "configuration.manage",

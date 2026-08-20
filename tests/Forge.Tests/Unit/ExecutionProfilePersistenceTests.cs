@@ -39,6 +39,7 @@ public sealed class ExecutionProfilePersistenceTests
         SprintDefinition definition = new(
             sprintId,
             new string('a', 40),
+            "main",
             "implementation-critical",
             "1.0.0",
             new Dictionary<string, string>(),

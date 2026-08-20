@@ -89,6 +89,32 @@ public interface IRepository
 {
     /// <summary>Resolves the current commit a new sprint would freeze as its immutable base.</summary>
     Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken);
+
+    /// <summary>Resolves the branch currently checked out in <paramref name="projectRoot"/> itself
+    /// (`git symbolic-ref --short HEAD`) — a new sprint freezes this as
+    /// <see cref="SprintDefinition.DefaultBranch"/>, alongside its base commit.
+    /// <see langword="null"/> for a detached `HEAD`, which has no branch name to freeze.</summary>
+    Task<string?> GetCurrentBranchAsync(string projectRoot, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Finalization's own merge primitive (ADR 0036) — the first operation in this codebase that
+    /// ever mutates <paramref name="projectRoot"/>'s own checked-out content rather than an isolated
+    /// worktree's. Deliberately as narrow as <see cref="IWorktreeManager.IntegrateFastForwardAsync"/>'s
+    /// own fast-forward-only philosophy, extended with two guards that primitive never needed
+    /// (a worktree is always created fresh at a known commit; the main checkout is not): refuses with
+    /// <see cref="DiagnosticCodes.RepositoryDirty"/> if <paramref name="projectRoot"/> has
+    /// uncommitted changes, and with <see cref="DiagnosticCodes.RepositoryBranchMismatch"/> if the
+    /// branch currently checked out there is not <paramref name="defaultBranch"/> — this method
+    /// never runs `git checkout` itself, so the project's own working directory never changes which
+    /// branch it is on because Forge ran. Only then does it attempt
+    /// `git merge --ff-only -- &lt;sourceBranch&gt;`, failing closed with
+    /// <see cref="DiagnosticCodes.WorktreeIntegrationDiverged"/> — the same diagnostic
+    /// <see cref="IWorktreeManager.IntegrateFastForwardAsync"/> already uses for the identical
+    /// failure shape — on any divergence, never a real three-way merge or automatic conflict
+    /// resolution.
+    /// </summary>
+    Task<GitOperationResult> MergeSprintIntoDefaultBranchAsync(
+        string projectRoot, string defaultBranch, string sourceBranch, CancellationToken cancellationToken);
 }
 
 /// <summary>
