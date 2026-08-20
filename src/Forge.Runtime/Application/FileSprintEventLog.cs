@@ -492,6 +492,63 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         return confirmations;
     }
 
+    public async Task SaveTestWorkAsync(
+        string projectRoot,
+        TestWorkArtifact testWork,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(testWork);
+        WorkflowRecordCodec.ValidateTestWork(testWork);
+        string directory = TestWorkDirectory(SprintDirectory(projectRoot, testWork.SprintId));
+        Directory.CreateDirectory(directory);
+        PersistedTestWork persisted = new()
+        {
+            TestWorkId = testWork.TestWorkId,
+            NodeId = testWork.NodeId.Value,
+            Outcome = WorkflowStateNames.ToSnakeCase(testWork.Outcome),
+            Justification = testWork.Justification,
+            RecordedAt = testWork.RecordedAt,
+        };
+        await AtomicConfigurationFile.WriteAsync(
+            Path.Combine(directory, $"{testWork.TestWorkId:N}.json"),
+            JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions),
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task<IReadOnlyList<TestWorkArtifact>> GetTestWorkAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        string directory = TestWorkDirectory(SprintDirectory(projectRoot, sprintId));
+        if (!Directory.Exists(directory))
+        {
+            return [];
+        }
+
+        List<TestWorkArtifact> results = [];
+        // Deterministic enumeration order, matching GetConfirmationsAsync's own reasoning.
+        foreach (string path in Directory.EnumerateFiles(directory, "*.json").OrderBy(item => item, StringComparer.Ordinal))
+        {
+            try
+            {
+                byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+                PersistedTestWork persisted =
+                    JsonSerializer.Deserialize<PersistedTestWork>(bytes, DefinitionJsonOptions) ??
+                    throw new InvalidDataException($"The test-work record at '{path}' is empty.");
+                results.Add(FromPersisted(sprintId, persisted));
+            }
+            catch (Exception error) when (error is JsonException or FormatException or OverflowException
+                or NullReferenceException)
+            {
+                // Same normalization as GetConfirmationsAsync's own catch, for the same reason.
+                throw new InvalidDataException($"The test-work record at '{path}' is corrupt.", error);
+            }
+        }
+
+        return results;
+    }
+
     public async Task SaveReviewIterationAsync(
         string projectRoot,
         ReviewIterationRecord record,
@@ -898,6 +955,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private static string ConfirmationsDirectory(string sprintDirectory) =>
         Path.Combine(sprintDirectory, "confirmations");
 
+    private static string TestWorkDirectory(string sprintDirectory) =>
+        Path.Combine(sprintDirectory, "test-work");
+
     private static string ReviewIterationsDirectory(string sprintDirectory) =>
         Path.Combine(sprintDirectory, "review-iterations");
 
@@ -1049,6 +1109,15 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             confirmation.DefinitionOfDone,
             [.. (confirmation.Evidence ?? []).Select(FromPersisted)],
             confirmation.RecordedAt);
+
+    private static TestWorkArtifact FromPersisted(SprintId sprintId, PersistedTestWork testWork) =>
+        new(
+            testWork.TestWorkId,
+            sprintId,
+            new(testWork.NodeId),
+            WorkflowStateNames.Parse<TestWorkOutcome>(testWork.Outcome),
+            testWork.Justification,
+            testWork.RecordedAt);
 
     private static PersistedNormalizedFindingKey ToPersisted(NormalizedFindingKey key) =>
         new() { File = key.File, Line = key.Line, Rule = key.Rule, MessageFingerprint = key.MessageFingerprint };
@@ -1896,6 +1965,19 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         // explicit `"evidence": null` in a corrupt or hand-edited file overwrites the `= []` default
         // below instead of being rejected.
         public List<PersistedEvidence>? Evidence { get; set; } = [];
+
+        public DateTimeOffset RecordedAt { get; set; }
+    }
+
+    private sealed class PersistedTestWork
+    {
+        public Guid TestWorkId { get; set; }
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public string Justification { get; set; } = string.Empty;
 
         public DateTimeOffset RecordedAt { get; set; }
     }

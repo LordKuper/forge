@@ -68,6 +68,8 @@ public static class CliApplication
             text, output, diagnostics, effectiveResolver, effectiveInput, effectiveIsInteractive));
         root.Subcommands.Add(
             CreateConfirmCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
+        root.Subcommands.Add(
+            CreateTestWorkCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -734,6 +736,97 @@ public static class CliApplication
         "existing-check" => ConfirmationEvidenceKind.ExistingCheck,
         _ => null,
     };
+
+    /// <summary>The human-only `workflow.test_work` capability. Deliberately shaped exactly like
+    /// <see cref="CreateConfirmCommand"/>: one noun, two verb subcommands matching
+    /// <see cref="TestWorkOutcome"/>'s own two values, mandatory `--yes` with no config-driven
+    /// bypass, and the same ADR 0023 interactive-session check every human-only command
+    /// shares.</summary>
+    private static Command CreateTestWorkCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
+    {
+        Command command = new("test-work", text.Resolve(MessageKeys.TestWorkDescription));
+        command.Subcommands.Add(CreateTestWorkRecordCommand(
+            text, output, diagnostics, resolveMutations, isInteractive, "added",
+            MessageKeys.TestWorkAddedDescription, outcome: TestWorkOutcome.TestsAdded));
+        command.Subcommands.Add(CreateTestWorkRecordCommand(
+            text, output, diagnostics, resolveMutations, isInteractive, "no-new-tests",
+            MessageKeys.TestWorkNoNewTestsDescription, outcome: TestWorkOutcome.NoNewTestsJustified));
+        return command;
+    }
+
+    private static Command CreateTestWorkRecordCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive,
+        string name,
+        string descriptionKey,
+        TestWorkOutcome outcome)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<string> node = new("--node")
+        {
+            Description = "Test-work node id. Defaults to the canonical test_work node.",
+        };
+        Option<string> justification = new("--justification")
+        {
+            Description = "Why new tests were added, or why none were needed.",
+            Required = true,
+        };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the decision." };
+        Command command = new(name, text.Resolve(descriptionKey));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(node);
+        command.Options.Add(justification);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            // ADR 0023: same earliest-reachable, unconditional refusal every human-only command
+            // shares -- before this action's own sprint-id/justification validation.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            string justificationValue = parseResult.GetValue(justification) ?? string.Empty;
+            // Checked here, before StartAttemptAsync ever runs (inside RecordTestWorkAsync below) --
+            // `test-work-result.schema.json`'s own `minLength: 1` would eventually reject an empty
+            // value too, but only after the node was already durably moved to `running`.
+            if (string.IsNullOrWhiteSpace(justificationValue))
+            {
+                return Report(diagnostics, DiagnosticCodes.TestWorkJustificationRequired);
+            }
+
+            string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.TestWorkNodeId;
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            RecordTestWorkResult result = await mutations
+                .RecordTestWorkAsync(
+                    root, sprintId, nodeId, outcome, justificationValue, parseResult.GetValue(confirm),
+                    cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.TestWorkRecorded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
     /// <see cref="CreateGateCommand"/>'s remark — both commands now share ADR 0023's same

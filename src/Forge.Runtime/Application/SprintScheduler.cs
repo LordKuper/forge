@@ -18,6 +18,8 @@ public sealed record RecordHandoffResult(bool Succeeded, Handoff? Handoff, strin
 
 public sealed record RecordConfirmationResult(bool Succeeded, ConfirmationArtifact? Confirmation, string DiagnosticCode);
 
+public sealed record RecordTestWorkResult(bool Succeeded, TestWorkArtifact? TestWork, string DiagnosticCode);
+
 public sealed record RecordReviewIterationResult(bool Succeeded, ReviewIterationRecord? Record, string DiagnosticCode);
 
 public sealed record ResolveReviewConvergenceResult(bool Succeeded, string DiagnosticCode);
@@ -1756,6 +1758,122 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         SprintId sprintId,
         CancellationToken cancellationToken) =>
         store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken);
+
+    /// <summary>
+    /// The `test_work` counterpart to <see cref="ConfirmNodeAsync"/>, identical in every structural
+    /// respect (server-derived version/idempotency key, decision-flip protection across all three
+    /// non-fresh cases, a fresh attempt always records anew regardless of any stale prior artifact):
+    /// this node also has no <see cref="ExecutionProfilePolicy.PhaseFor"/> phase ("not a model
+    /// phase") and no executor, so nothing else would ever settle its attempt. Unlike
+    /// <see cref="ConfirmNodeAsync"/>, no downstream eligibility gate reads
+    /// <see cref="TestWorkArtifact"/>'s content — `review`'s own graph dependency on this node is
+    /// satisfied by the node reaching `succeeded` alone, so recording one (either outcome) is
+    /// unconditionally this node's whole job.
+    /// </summary>
+    public async Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        long expectedNodeVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null || definedNode.Role != NodeRole.TestWork || definedNode.Kind != NodeKind.Work)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        IReadOnlyList<TestWorkArtifact> recordedForSprint = await store
+            .GetTestWorkAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        TestWorkArtifact? latestForNode = recordedForSprint
+            .Where(candidate => candidate.NodeId.Value == nodeId)
+            .OrderByDescending(candidate => candidate.RecordedAt)
+            .FirstOrDefault();
+
+        if (node.State is NodeState.Succeeded or NodeState.Failed)
+        {
+            if (latestForNode is null)
+            {
+                return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            return latestForNode.Outcome == outcome
+                ? new(true, latestForNode, DiagnosticCodes.None)
+                : new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
+        }
+
+        bool resuming = node.State == NodeState.Running;
+        if (!resuming)
+        {
+            if (node.Version != expectedNodeVersion || idempotencyKey != RecordTestWorkKey(sprintId, node))
+            {
+                return new(false, null, DiagnosticCodes.SuggestionStale);
+            }
+
+            if (node.State != NodeState.Ready)
+            {
+                return new(false, null, DiagnosticCodes.NodeTransitionInvalid);
+            }
+        }
+        else if (latestForNode is not null && latestForNode.Outcome != outcome)
+        {
+            return new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
+        }
+
+        StartAttemptResult started = await StartAttemptAsync(
+            projectRoot, sprintId, nodeId, node.Version, cancellationToken).ConfigureAwait(false);
+        if (!started.Succeeded || started.AttemptId is not { } attemptId)
+        {
+            return new(false, null, started.DiagnosticCode);
+        }
+
+        TestWorkArtifact recorded;
+        if (resuming && latestForNode is not null)
+        {
+            recorded = latestForNode;
+        }
+        else
+        {
+            recorded = new(Guid.NewGuid(), sprintId, new(nodeId), outcome, justification, clock.UtcNow);
+            try
+            {
+                await store.SaveTestWorkAsync(projectRoot, recorded, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
+            }
+        }
+
+        CompleteAttemptResult completed = await CompleteAttemptAsync(
+            projectRoot, sprintId, nodeId, attemptId, true,
+            Fingerprint(sprintId, nodeId, [outcome.ToString(), justification]), outputs: [], diagnostics: [],
+            cancellationToken).ConfigureAwait(false);
+        return completed.Succeeded
+            ? new(true, recorded, DiagnosticCodes.None)
+            : new(false, recorded, completed.DiagnosticCode);
+    }
+
+    public static Guid RecordTestWorkKey(SprintId sprintId, NodeSnapshot node) =>
+        NodeActionKey("record_test_work", sprintId, node);
+
+    public Task<IReadOnlyList<TestWorkArtifact>> GetTestWorkAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken) =>
+        store.GetTestWorkAsync(projectRoot, sprintId, cancellationToken);
 
     /// <summary>
     /// Records one review iteration's combined verdict for <paramref name="nodeId"/> (a

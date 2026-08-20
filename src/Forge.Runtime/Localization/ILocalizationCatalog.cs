@@ -130,6 +130,10 @@ public static class MessageKeys
     public const string ConfirmConfirmedDescription = "ConfirmConfirmedDescription";
     public const string ConfirmNotConfirmedDescription = "ConfirmNotConfirmedDescription";
     public const string ConfirmRecorded = "ConfirmRecorded";
+    public const string TestWorkDescription = "TestWorkDescription";
+    public const string TestWorkAddedDescription = "TestWorkAddedDescription";
+    public const string TestWorkNoNewTestsDescription = "TestWorkNoNewTestsDescription";
+    public const string TestWorkRecorded = "TestWorkRecorded";
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";

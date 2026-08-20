@@ -687,6 +687,52 @@ public sealed class ControlPlaneTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task RecordTestWorkRoundTripsThroughTheHostAndSettlesTheNode()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("test_work", NodeKind.Work, [], NodeRole.TestWork)]),
+            cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        await using RemoteForgeMutations mutations = new(client);
+
+        RecordTestWorkResult result = await mutations.RecordTestWorkAsync(
+            environment.ProjectRoot,
+            sprintId.Value,
+            "test_work",
+            TestWorkOutcome.TestsAdded,
+            "Added a regression test for the reported off-by-one.",
+            confirmed: true,
+            cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        Assert.Equal(TestWorkOutcome.TestsAdded, result.TestWork!.Outcome);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, state.Nodes["test_work"].State);
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task SupersedeAttemptRoundTripsThroughTheHostAndLinksAReplacement()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;

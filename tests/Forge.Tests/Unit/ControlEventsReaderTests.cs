@@ -249,6 +249,14 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task SaveTestWorkAsync(
+            string projectRoot, TestWorkArtifact testWork, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<IReadOnlyList<TestWorkArtifact>> GetTestWorkAsync(
+            string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task SaveReviewIterationAsync(
             string projectRoot, ReviewIterationRecord record, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

@@ -316,6 +316,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.ConfirmNodeKind =>
                     await DispatchConfirmNodeAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.RecordTestWorkKind =>
+                    await DispatchRecordTestWorkAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.CreateSprintKind =>
                     await DispatchCreateSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RunSprintKind =>
@@ -601,6 +603,32 @@ public sealed class ControlPlaneHostedService(
         "existing_check" => ConfirmationEvidenceKind.ExistingCheck,
         _ => throw new InvalidDataException($"Unknown confirmation evidence kind '{kind}'."),
     };
+
+    private async Task<ControlResponse> DispatchRecordTestWorkAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        RecordTestWorkRequest? payload = request.Payload is { } value
+            ? value.Deserialize<RecordTestWorkRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.NodeId is null || payload.Justification is null)
+        {
+            throw new InvalidDataException("The record_test_work payload is required.");
+        }
+
+        RecordTestWorkResult result = await application
+            .RecordTestWorkAsync(
+                options.ProjectRoot,
+                payload.SprintId,
+                payload.NodeId,
+                payload.Outcome ? TestWorkOutcome.TestsAdded : TestWorkOutcome.NoNewTestsJustified,
+                payload.Justification,
+                payload.Confirmed,
+                cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
 
     private async Task<ControlResponse> DispatchCreateSprintAsync(
         ControlRequest request,

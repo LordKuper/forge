@@ -45,6 +45,9 @@
       Include="..\..\docs\contracts\v1\schemas\confirmation-result.schema.json"
       LogicalName="Forge.Application.Schemas.confirmation-result.schema.json" />
     <EmbeddedResource
+      Include="..\..\docs\contracts\v1\schemas\test-work-result.schema.json"
+      LogicalName="Forge.Application.Schemas.test-work-result.schema.json" />
+    <EmbeddedResource
       Include="..\..\docs\contracts\v1\schemas\execution-profile.schema.json"
       LogicalName="Forge.Application.Schemas.execution-profile.schema.json" />
     <EmbeddedResource

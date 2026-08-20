@@ -348,6 +348,13 @@ public interface ISprintStore
         SprintId sprintId,
         CancellationToken cancellationToken);
 
+    Task SaveTestWorkAsync(string projectRoot, TestWorkArtifact testWork, CancellationToken cancellationToken);
+
+    Task<IReadOnlyList<TestWorkArtifact>> GetTestWorkAsync(
+        string projectRoot,
+        SprintId sprintId,
+        CancellationToken cancellationToken);
+
     Task SaveReviewIterationAsync(string projectRoot, ReviewIterationRecord record, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ReviewIterationRecord>> GetReviewIterationsAsync(
