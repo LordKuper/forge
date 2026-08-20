@@ -349,4 +349,34 @@ public sealed class FileSprintEventLogTests
         SprintWorkflowState? state = await readTask;
         Assert.NotNull(state);
     }
+
+    /// <summary>Stage 12's injection-safety sweep. A node id can never legitimately reach
+    /// `SetReviewFloorPinnedAsync` already containing path separators -- `SprintGraphValidator`'s own
+    /// alphabet gate refuses it at graph-freeze time (see <c>SprintSchedulerTests
+    /// .AGraphWithAPathTraversalOrShellMetacharacterNodeIdIsRejected</c>) -- but this method is the
+    /// one place in this file that interpolates a node id directly into a filename rather than
+    /// deriving it from a GUID, so it carries its own independent containment check. This calls it
+    /// directly (bypassing graph freezing entirely) to prove that second, deeper defense holds on
+    /// its own, not merely that the upstream gate happens to run first.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetReviewFloorPinnedAsyncFailsClosedOnAPathTraversalNodeId()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.SetReviewFloorPinnedAsync(
+            environment.ProjectRoot, sprintId, "../../../outside", ReviewDimension.Design, cancellationToken));
+        // The read side shares the same path construction, so it fails closed the same way rather
+        // than silently reporting "not pinned" for a payload it cannot safely resolve.
+        await Assert.ThrowsAsync<InvalidDataException>(() => store.IsReviewFloorPinnedAsync(
+            environment.ProjectRoot, sprintId, "../../../outside", ReviewDimension.Design, cancellationToken));
+    }
 }

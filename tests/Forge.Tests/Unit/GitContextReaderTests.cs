@@ -80,6 +80,39 @@ public sealed class GitContextReaderTests
         Assert.Equal(string.Empty, operation.Content);
     }
 
+    /// <summary>Stage 12's injection-safety sweep. `operation.Pattern` in a `ContextQueryPlan` is
+    /// provider-authored (a review executor builds its own query plan) -- untrusted content by ADR
+    /// 0006's own taxonomy. Two hazards a naive implementation could have: a pattern starting with
+    /// `-` being misread as a `git grep` option (option injection), or shell metacharacters being
+    /// given any special meaning at all. Neither applies here: `GrepArguments`
+    /// (`GitContextReader.cs`) already places the pattern after an explicit `-e`, and every argument
+    /// reaches `git` through `ProcessRunner`'s `ArgumentList` (never a shell), so this proves both
+    /// hazards closed by searching for the adversarial string as a literal pattern and confirming it
+    /// matches only the identical literal text committed to the repository -- not executed, not
+    /// misread as a flag.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GitGrepTreatsAShellMetacharacterAndOptionLikePatternAsLiteralText()
+    {
+        // Deliberately starts with '-': the exact shape `git` would otherwise misread as an option
+        // rather than a pattern if `-e` were ever removed from `GrepArguments`.
+        const string adversarial = "--force; rm -rf / #";
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(TestContext.Current.CancellationToken);
+        string commit = await repository.CommitFileAsync(
+            "src/note.md",
+            $"before\n{adversarial}\nafter",
+            "add adversarial line",
+            TestContext.Current.CancellationToken);
+        ContextQueryPlan plan = Plan(commit, GrepOperation("search", adversarial));
+
+        ContextQueryPlanResult result = await new GitContextReader(new ProcessRunner()).ExecuteAsync(
+            repository.Root, plan, GitGrepCapability, TestContext.Current.CancellationToken);
+
+        ContextQueryResult operation = Assert.Single(result.Bundle!.Results);
+        Assert.Equal(ContextQueryOperationDiagnostic.None, operation.Diagnostic);
+        Assert.Contains(adversarial, operation.Content, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ContentOverMaxResultBytesIsTruncatedAndFlagged()

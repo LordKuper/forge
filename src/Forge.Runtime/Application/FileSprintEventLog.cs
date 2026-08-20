@@ -619,10 +619,27 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(ReviewFloorPinPath(projectRoot, sprintId, nodeId, dimension)));
 
-    private static string ReviewFloorPinPath(string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension) =>
-        Path.Combine(
-            ReviewIterationsDirectory(SprintDirectory(projectRoot, sprintId)),
-            $"{nodeId}.{WorkflowStateNames.ToSnakeCase(dimension)}.floor-pinned.marker");
+    /// <summary>Defense-in-depth, not the primary guard: <paramref name="nodeId"/> reaches this
+    /// method only from an already-frozen graph, whose own node ids <see cref="SprintGraphValidator"/>
+    /// already constrains to a safe alphabet before freezing — but this is the one place in this
+    /// file that interpolates a node id directly into a filename rather than deriving it from a
+    /// GUID, so a path-traversal payload (`../`, an absolute path) is checked here too, failing
+    /// closed rather than trusting that upstream gate to be the only one that ever runs.</summary>
+    private static string ReviewFloorPinPath(string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension)
+    {
+        string directory = ReviewIterationsDirectory(SprintDirectory(projectRoot, sprintId));
+        string path = Path.Combine(
+            directory, $"{nodeId}.{WorkflowStateNames.ToSnakeCase(dimension)}.floor-pinned.marker");
+        string fullPath = Path.GetFullPath(path);
+        string containingDirectory = Path.GetFullPath(directory) + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(containingDirectory, StringComparison.Ordinal))
+        {
+            throw new InvalidDataException(
+                $"Node id '{nodeId}' produced a review-floor-pin path outside its sprint's review directory.");
+        }
+
+        return fullPath;
+    }
 
     public async Task AppendRouteDecisionAsync(
         string projectRoot,
