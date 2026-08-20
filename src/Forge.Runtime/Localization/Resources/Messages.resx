@@ -96,6 +96,30 @@
   <data name="TestWorkRecorded" xml:space="preserve"><value>Test-work decision recorded.</value></data>
   <data name="FinalizeDescription" xml:space="preserve"><value>Human-only sprint finalization command.</value></data>
   <data name="SprintFinalized" xml:space="preserve"><value>Sprint finalized.</value></data>
+  <data name="ConfirmFailed" xml:space="preserve"><value>Confirmation failed.</value></data>
+  <data name="ConfirmNodeIdLabel" xml:space="preserve"><value>Confirmation node id (empty: confirmation):</value></data>
+  <data name="ConfirmDefinitionOfDoneLabel" xml:space="preserve"><value>Definition of done:</value></data>
+  <data name="ConfirmEvidenceKindLabel" xml:space="preserve"><value>Evidence kind:</value></data>
+  <data name="ConfirmEvidenceLabel" xml:space="preserve"><value>Evidence:</value></data>
+  <data name="ConfirmConfirmedAction" xml:space="preserve"><value>Confirmed</value></data>
+  <data name="ConfirmNotConfirmedAction" xml:space="preserve"><value>Not confirmed</value></data>
+  <data name="ConfirmConfirmationRequired" xml:space="preserve"><value>Confirm the decision before it is applied.</value></data>
+  <data name="ConfirmSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to confirm its node.</value></data>
+  <data name="ConfirmDefinitionOfDoneRequired" xml:space="preserve"><value>Enter what was checked against the definition of done.</value></data>
+  <data name="ConfirmEvidenceRequired" xml:space="preserve"><value>Enter evidence for the decision.</value></data>
+  <data name="TestWorkFailed" xml:space="preserve"><value>Test-work decision failed.</value></data>
+  <data name="TestWorkNodeIdLabel" xml:space="preserve"><value>Test-work node id (empty: test_work):</value></data>
+  <data name="TestWorkJustificationLabel" xml:space="preserve"><value>Justification:</value></data>
+  <data name="TestWorkAddedAction" xml:space="preserve"><value>Tests added</value></data>
+  <data name="TestWorkNoNewTestsAction" xml:space="preserve"><value>No new tests</value></data>
+  <data name="TestWorkConfirmationRequired" xml:space="preserve"><value>Confirm the decision before it is applied.</value></data>
+  <data name="TestWorkSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to record its test-work decision.</value></data>
+  <data name="TestWorkJustificationRequired" xml:space="preserve"><value>Enter a justification.</value></data>
+  <data name="FinalizeFailed" xml:space="preserve"><value>Finalization failed.</value></data>
+  <data name="FinalizeNodeIdLabel" xml:space="preserve"><value>Finalization node id (empty: finalization):</value></data>
+  <data name="FinalizeAction" xml:space="preserve"><value>Finalize</value></data>
+  <data name="FinalizeConfirmationRequired" xml:space="preserve"><value>Confirm the merge before it is applied.</value></data>
+  <data name="FinalizeSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to finalize.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Gate node id (empty: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Approve gate</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Reject gate</value></data>

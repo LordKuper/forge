@@ -62,6 +62,33 @@ public sealed class SurfaceParityTests
             "SprintCancelButton",
             "SprintManageResultLabel",
         ],
+        [CapabilityIds.WorkflowConfirm] =
+        [
+            "SprintIdEntry",
+            "ConfirmNodeIdEntry",
+            "ConfirmDefinitionOfDoneEntry",
+            "ConfirmEvidenceEntry",
+            "ConfirmEvidenceKindPicker",
+            "ConfirmConfirmedButton",
+            "ConfirmNotConfirmedButton",
+            "ConfirmResultLabel",
+        ],
+        [CapabilityIds.WorkflowTestWork] =
+        [
+            "SprintIdEntry",
+            "TestWorkNodeIdEntry",
+            "TestWorkJustificationEntry",
+            "TestWorkAddedButton",
+            "TestWorkNoNewTestsButton",
+            "TestWorkResultLabel",
+        ],
+        [CapabilityIds.WorkflowFinalize] =
+        [
+            "SprintIdEntry",
+            "FinalizeNodeIdEntry",
+            "FinalizeButton",
+            "FinalizeResultLabel",
+        ],
     };
 
     [Fact]
@@ -175,6 +202,25 @@ public sealed class SurfaceParityTests
             entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
     }
 
+    /// <summary>Round 2 review of PR #78: the regex above only ever matches `&lt;Entry&gt;` elements,
+    /// so it cannot catch a `Picker` losing its screen-reader description -- the exact gap that let
+    /// `ConfirmEvidenceKindPicker` ship with none at all until round 1 review caught it. No MAUI
+    /// control can be instantiated headlessly (see the reasoning above), so this pins the fix
+    /// directly in the code-behind text the same way the other static checks on this page do,
+    /// scoped to the one `Picker` this PR actually adds rather than widening to every existing
+    /// `Picker` on the page (`ConfigurationScopePicker` predates this PR and is unrelated to
+    /// it).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ConfirmEvidenceKindPickerCarriesAScreenReaderName()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains(
+            "SemanticProperties.SetDescription(ConfirmEvidenceKindPicker, ", codeBehind, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public void GateConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
@@ -199,6 +245,77 @@ public sealed class SurfaceParityTests
             RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
 
         Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same reasoning as the gate/attempt-supersede checks above, for `workflow.confirm`
+    /// (ADR 0037).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ConfirmConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.ConfirmPrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same reasoning, for `workflow.test_work` (ADR 0037).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void TestWorkConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.TestWorkPrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same reasoning, for `workflow.finalize` (ADR 0037).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void FinalizeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains("viewModel.FinalizePrompt(", codeBehind, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same reasoning as <see cref="SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog"/>,
+    /// for `workflow.confirm`'s own required free-text fields (ADR 0037): neither has a default to
+    /// fall back to, so both must be refused before the dialog shows, not after.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ConfirmNodeRefusesBlankRequiredFieldsBeforeShowingTheConfirmationDialog()
+    {
+        string method = MethodBody("private async Task ConfirmNodeAsync(ConfirmationOutcome outcome)");
+
+        int definitionGuardIndex = method.IndexOf("ConfirmDefinitionOfDoneEntry.Text", StringComparison.Ordinal);
+        int evidenceGuardIndex = method.IndexOf("ConfirmEvidenceEntry.Text", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(definitionGuardIndex >= 0, "ConfirmNodeAsync no longer refuses a blank definition of done.");
+        Assert.True(evidenceGuardIndex >= 0, "ConfirmNodeAsync no longer refuses blank evidence.");
+        Assert.True(dialogIndex >= 0, "ConfirmNodeAsync no longer shows a confirmation dialog.");
+        Assert.True(
+            definitionGuardIndex < dialogIndex,
+            "The blank-definition-of-done guard must run before the confirmation dialog.");
+        Assert.True(
+            evidenceGuardIndex < dialogIndex, "The blank-evidence guard must run before the confirmation dialog.");
+    }
+
+    /// <summary>Same reasoning, for `workflow.test_work`'s own required justification (ADR
+    /// 0037).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void RecordTestWorkRefusesABlankJustificationBeforeShowingTheConfirmationDialog()
+    {
+        string method = MethodBody("private async Task RecordTestWorkAsync(TestWorkOutcome outcome)");
+
+        int guardIndex = method.IndexOf("TestWorkJustificationEntry.Text", StringComparison.Ordinal);
+        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "RecordTestWorkAsync no longer refuses a blank justification.");
+        Assert.True(dialogIndex >= 0, "RecordTestWorkAsync no longer shows a confirmation dialog.");
+        Assert.True(guardIndex < dialogIndex, "The blank-justification guard must run before the confirmation dialog.");
     }
 
     /// <summary>Round 1 review of PR #66: the original `integration.skill` install/remove dialogs

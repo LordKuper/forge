@@ -35,6 +35,28 @@
       <Entry x:Name="AttemptInstructionEntry" HorizontalOptions="Start" WidthRequest="360" />
       <Button x:Name="AttemptSupersedeButton" Clicked="OnAttemptSupersedeClicked" />
       <Label x:Name="AttemptSupersedeResultLabel" />
+      <!-- Reuses SprintIdEntry above as confirm's sprint context too. -->
+      <Entry x:Name="ConfirmNodeIdEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Entry x:Name="ConfirmDefinitionOfDoneEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Entry x:Name="ConfirmEvidenceEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Picker x:Name="ConfirmEvidenceKindPicker" WidthRequest="180" />
+      <HorizontalStackLayout Spacing="8">
+        <Button x:Name="ConfirmConfirmedButton" Clicked="OnConfirmConfirmedClicked" />
+        <Button x:Name="ConfirmNotConfirmedButton" Clicked="OnConfirmNotConfirmedClicked" />
+      </HorizontalStackLayout>
+      <Label x:Name="ConfirmResultLabel" />
+      <!-- Reuses SprintIdEntry above as test-work's sprint context too. -->
+      <Entry x:Name="TestWorkNodeIdEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Entry x:Name="TestWorkJustificationEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <HorizontalStackLayout Spacing="8">
+        <Button x:Name="TestWorkAddedButton" Clicked="OnTestWorkAddedClicked" />
+        <Button x:Name="TestWorkNoNewTestsButton" Clicked="OnTestWorkNoNewTestsClicked" />
+      </HorizontalStackLayout>
+      <Label x:Name="TestWorkResultLabel" />
+      <!-- Reuses SprintIdEntry above as finalize's sprint context too. -->
+      <Entry x:Name="FinalizeNodeIdEntry" HorizontalOptions="Start" WidthRequest="360" />
+      <Button x:Name="FinalizeButton" Clicked="OnFinalizeClicked" />
+      <Label x:Name="FinalizeResultLabel" />
       <Button x:Name="EventsPollButton" Clicked="OnEventsPollClicked" />
       <Label x:Name="EventsLabel" />
       <Button x:Name="IntegrationGenerateButton" Clicked="OnIntegrationGenerateClicked" />

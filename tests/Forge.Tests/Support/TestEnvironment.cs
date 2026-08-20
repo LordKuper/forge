@@ -607,6 +607,8 @@ internal sealed class FakeForgeMutations : IForgeMutations
 
     public Guid? LastConfirmSprintId { get; private set; }
 
+    public IReadOnlyList<ConfirmationEvidence>? LastConfirmEvidence { get; private set; }
+
     public Task<RecordConfirmationResult> ConfirmNodeAsync(
         string? projectRoot,
         Guid sprintId,
@@ -622,6 +624,7 @@ internal sealed class FakeForgeMutations : IForgeMutations
         LastConfirmConfirmed = confirmed;
         LastConfirmNodeId = nodeId;
         LastConfirmSprintId = sprintId;
+        LastConfirmEvidence = evidence;
         return Task.FromResult(new RecordConfirmationResult(true, null, DiagnosticCodes.None));
     }
 

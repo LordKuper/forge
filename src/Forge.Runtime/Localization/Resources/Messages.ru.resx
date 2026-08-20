@@ -96,6 +96,30 @@
   <data name="TestWorkRecorded" xml:space="preserve"><value>Решение по тестовой работе зафиксировано.</value></data>
   <data name="FinalizeDescription" xml:space="preserve"><value>Команда завершения спринта (только для человека).</value></data>
   <data name="SprintFinalized" xml:space="preserve"><value>Спринт завершён.</value></data>
+  <data name="ConfirmFailed" xml:space="preserve"><value>Не удалось записать подтверждение.</value></data>
+  <data name="ConfirmNodeIdLabel" xml:space="preserve"><value>Идентификатор узла подтверждения (пусто: confirmation):</value></data>
+  <data name="ConfirmDefinitionOfDoneLabel" xml:space="preserve"><value>Определение готовности:</value></data>
+  <data name="ConfirmEvidenceKindLabel" xml:space="preserve"><value>Тип доказательства:</value></data>
+  <data name="ConfirmEvidenceLabel" xml:space="preserve"><value>Доказательство:</value></data>
+  <data name="ConfirmConfirmedAction" xml:space="preserve"><value>Подтверждено</value></data>
+  <data name="ConfirmNotConfirmedAction" xml:space="preserve"><value>Не подтверждено</value></data>
+  <data name="ConfirmConfirmationRequired" xml:space="preserve"><value>Подтвердите решение перед его применением.</value></data>
+  <data name="ConfirmSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы подтвердить его узел.</value></data>
+  <data name="ConfirmDefinitionOfDoneRequired" xml:space="preserve"><value>Укажите, что было проверено на соответствие определению готовности.</value></data>
+  <data name="ConfirmEvidenceRequired" xml:space="preserve"><value>Укажите доказательство для решения.</value></data>
+  <data name="TestWorkFailed" xml:space="preserve"><value>Не удалось записать решение о тестах.</value></data>
+  <data name="TestWorkNodeIdLabel" xml:space="preserve"><value>Идентификатор узла тестирования (пусто: test_work):</value></data>
+  <data name="TestWorkJustificationLabel" xml:space="preserve"><value>Обоснование:</value></data>
+  <data name="TestWorkAddedAction" xml:space="preserve"><value>Тесты добавлены</value></data>
+  <data name="TestWorkNoNewTestsAction" xml:space="preserve"><value>Новые тесты не нужны</value></data>
+  <data name="TestWorkConfirmationRequired" xml:space="preserve"><value>Подтвердите решение перед его применением.</value></data>
+  <data name="TestWorkSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы записать решение о тестах.</value></data>
+  <data name="TestWorkJustificationRequired" xml:space="preserve"><value>Укажите обоснование.</value></data>
+  <data name="FinalizeFailed" xml:space="preserve"><value>Не удалось завершить спринт.</value></data>
+  <data name="FinalizeNodeIdLabel" xml:space="preserve"><value>Идентификатор узла завершения (пусто: finalization):</value></data>
+  <data name="FinalizeAction" xml:space="preserve"><value>Завершить</value></data>
+  <data name="FinalizeConfirmationRequired" xml:space="preserve"><value>Подтвердите слияние перед его применением.</value></data>
+  <data name="FinalizeSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта для завершения.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>

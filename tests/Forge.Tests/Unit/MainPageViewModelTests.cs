@@ -1300,6 +1300,381 @@ public sealed class MainPageViewModelTests
         Assert.Contains(text.Resolve(MessageKeys.AttemptIdMissingPlaceholder), prompt, StringComparison.Ordinal);
     }
 
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncRoutesThroughTheResolvedMutationsAndDefaultsTheNodeId()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.Confirmed,
+            "checked the tests", "inspection", "ran the suite", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.ConfirmNodeCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.ConfirmRecorded), message);
+        Assert.Equal(ConfirmationOutcome.Confirmed, mutations.LastConfirmOutcome);
+        Assert.True(mutations.LastConfirmConfirmed);
+        Assert.Equal(ImplementationCriticalGraphBuilder.ConfirmationNodeId, mutations.LastConfirmNodeId);
+    }
+
+    /// <summary>Round 1 review of PR #78: only `"inspection"` was ever exercised as a valid evidence
+    /// kind, so a spelling drift between `ConfirmEvidenceKindPicker`'s `ItemsSource`
+    /// (`MainPage.xaml.cs`) and `ParseEvidenceKind` (this file) or `CliApplication.ParseEvidenceKind`
+    /// for `"execution"`/`"existing-check"` would not have been caught. Pins the exact enum each of
+    /// the three documented machine values maps to, not merely that the call succeeded.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("inspection", ConfirmationEvidenceKind.Inspection)]
+    [InlineData("execution", ConfirmationEvidenceKind.Execution)]
+    [InlineData("existing-check", ConfirmationEvidenceKind.ExistingCheck)]
+    public async Task ConfirmNodeAsyncMapsEveryDocumentedEvidenceKindToItsExactEnumValue(
+        string evidenceKind, ConfirmationEvidenceKind expectedKind)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.Confirmed, "definition",
+            evidenceKind, "evidence", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.ConfirmNodeCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.ConfirmRecorded), message);
+        ConfirmationEvidence evidence = Assert.Single(mutations.LastConfirmEvidence!);
+        Assert.Equal(expectedKind, evidence.Kind);
+        Assert.Equal("evidence", evidence.Description);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncForwardsANotConfirmedOutcome()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.NotConfirmed,
+            "checked the tests", "inspection", "ran the suite", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ConfirmationOutcome.NotConfirmed, mutations.LastConfirmOutcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, "not-a-guid", null, ConfirmationOutcome.Confirmed, "text", "inspection", "text",
+            true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.ConfirmNodeCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same regression class as <see cref="SupersedeAttemptAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity"/>:
+    /// a dedicated <see cref="MessageKeys.ConfirmSprintAmbiguous"/> key, not the gate's own wording.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, null, null, ConfirmationOutcome.Confirmed, "text", "inspection", "text", true,
+            cancellationToken);
+
+        Assert.Equal(0, mutations.ConfirmNodeCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.ConfirmSprintAmbiguous), message);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null, "evidence")]
+    [InlineData("   ", "evidence")]
+    [InlineData("definition", null)]
+    [InlineData("definition", "   ")]
+    public async Task ConfirmNodeAsyncReportsConfirmationTextRequiredForBlankRequiredFieldsWithoutCallingMutations(
+        string? definitionOfDone, string? evidence)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.Confirmed,
+            definitionOfDone, "inspection", evidence, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.ConfirmNodeCalls);
+        Assert.Contains(DiagnosticCodes.ConfirmationTextRequired, message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-kind")]
+    public async Task ConfirmNodeAsyncReportsEvidenceKindInvalidForAnUnrecognizedKindWithoutCallingMutations(
+        string? evidenceKind)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.Confirmed, "definition",
+            evidenceKind, "evidence", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.ConfirmNodeCalls);
+        Assert.Contains(DiagnosticCodes.ConfirmationEvidenceKindInvalid, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void ConfirmPromptNamesTheSprintNodeDefinitionAndEvidence()
+    {
+        using TestEnvironment environment = new();
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.ConfirmPrompt(sprintId, "custom-node", "checked the tests", "ran the suite");
+
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+        Assert.Contains("custom-node", prompt, StringComparison.Ordinal);
+        Assert.Contains("checked the tests", prompt, StringComparison.Ordinal);
+        Assert.Contains("ran the suite", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordTestWorkAsyncRoutesThroughTheResolvedMutationsAndDefaultsTheNodeId()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RecordTestWorkAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, TestWorkOutcome.TestsAdded,
+            "added a regression test", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.RecordTestWorkCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.TestWorkRecorded), message);
+        Assert.Equal(TestWorkOutcome.TestsAdded, mutations.LastTestWorkOutcome);
+        Assert.True(mutations.LastTestWorkConfirmed);
+        Assert.Equal(ImplementationCriticalGraphBuilder.TestWorkNodeId, mutations.LastTestWorkNodeId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordTestWorkAsyncForwardsANoNewTestsJustifiedOutcome()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        await viewModel.RecordTestWorkAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, TestWorkOutcome.NoNewTestsJustified,
+            "existing coverage suffices", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(TestWorkOutcome.NoNewTestsJustified, mutations.LastTestWorkOutcome);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordTestWorkAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RecordTestWorkAsync(
+            environment.ProjectRoot, "not-a-guid", null, TestWorkOutcome.TestsAdded, "justification", true,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.RecordTestWorkCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RecordTestWorkAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RecordTestWorkAsync(
+            environment.ProjectRoot, null, null, TestWorkOutcome.TestsAdded, "justification", true,
+            cancellationToken);
+
+        Assert.Equal(0, mutations.RecordTestWorkCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.TestWorkSprintAmbiguous), message);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task RecordTestWorkAsyncReportsJustificationRequiredForABlankJustificationWithoutCallingMutations(
+        string? justification)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.RecordTestWorkAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, TestWorkOutcome.TestsAdded, justification,
+            true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.RecordTestWorkCalls);
+        Assert.Contains(DiagnosticCodes.TestWorkJustificationRequired, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TestWorkPromptNamesTheSprintNodeAndJustification()
+    {
+        using TestEnvironment environment = new();
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.TestWorkPrompt(sprintId, "custom-node", "added a regression test");
+
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+        Assert.Contains("custom-node", prompt, StringComparison.Ordinal);
+        Assert.Contains("added a regression test", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncRoutesThroughTheResolvedMutationsAndDefaultsTheNodeId()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.FinalizeSprintAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.FinalizeSprintCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.SprintFinalized), message);
+        Assert.True(mutations.LastFinalizeConfirmed);
+        Assert.Equal(ImplementationCriticalGraphBuilder.FinalizationNodeId, mutations.LastFinalizeNodeId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.FinalizeSprintAsync(
+            environment.ProjectRoot, "not-a-guid", null, true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.FinalizeSprintCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncWithABlankSprintIdAndMultipleNonTerminalSprintsReportsAmbiguity()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        await orchestrator.CreateSprintAsync(new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.FinalizeSprintAsync(
+            environment.ProjectRoot, null, null, true, cancellationToken);
+
+        Assert.Equal(0, mutations.FinalizeSprintCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.FinalizeSprintAmbiguous), message);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void FinalizePromptNamesTheSprintAndNode()
+    {
+        using TestEnvironment environment = new();
+        MainPageViewModel viewModel = new(Text(), environment.Application);
+        string sprintId = Guid.NewGuid().ToString();
+
+        string prompt = viewModel.FinalizePrompt(sprintId, "custom-node");
+
+        Assert.Contains(sprintId, prompt, StringComparison.Ordinal);
+        Assert.Contains("custom-node", prompt, StringComparison.Ordinal);
+    }
+
     /// <summary>ADR 0025's `control.events` capability. Proves the new logic this slice adds
     /// around the already-tested <see cref="ControlEventsReader"/> (see
     /// <c>ControlEventsReaderTests</c> for the cursor/dedup mechanics themselves): the view
