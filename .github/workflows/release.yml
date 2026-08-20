@@ -26,16 +26,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Verify toolchain
-        shell: pwsh
-        run: ./.github/scripts/assert-toolchain.ps1
-
       - name: Set up .NET
         uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5.4.0
         with:
           global-json-file: global.json
           cache: true
           cache-dependency-path: '**/packages.lock.json'
+
+      - name: Verify toolchain
+        shell: pwsh
+        run: ./.github/scripts/assert-toolchain.ps1
 
       - name: Install MAUI Windows workload
         shell: pwsh

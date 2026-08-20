@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.50.1
+
+### Fixed
+
+- Bumped the pinned release-build .NET SDK to 10.0.303 (from 10.0.302, no
+  longer available on current CI runner images).
+
 ## v0.50.0
 
 ### Added
