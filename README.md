@@ -45,7 +45,7 @@ exit codes follow [the contract table](docs/contracts/v1/README.md).
 
 ## Prerequisites
 
-- .NET SDK 10.0.302, pinned by `global.json`.
+- .NET SDK 10.0.303, pinned by `global.json`.
 - The .NET MAUI Windows workload:
 
 ```powershell
