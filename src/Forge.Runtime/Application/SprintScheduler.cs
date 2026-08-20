@@ -1723,10 +1723,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, started.DiagnosticCode);
         }
 
-        // Skips re-recording once a matching artifact already exists (the resumed, same-outcome
-        // case just validated above) rather than minting a harmless-but-avoidable duplicate --
-        // there is nothing left to durably record that isn't already durable.
-        RecordConfirmationResult recorded = latestForNode is not null
+        // Skips re-recording only on the just-validated resumed, same-outcome case above -- a
+        // *fresh* attempt (this branch's `!resuming` path, including one starting right after a
+        // supersession re-armed the node back to `ready`) always records anew regardless of any
+        // stale artifact left over from an earlier, unrelated attempt on this same node id: reusing
+        // it here without the outcome-match check the resuming branch already performed would let a
+        // stale, unrelated verdict silently win over what this fresh call actually requested.
+        RecordConfirmationResult recorded = resuming && latestForNode is not null
             ? new(true, latestForNode, DiagnosticCodes.None)
             : await RecordConfirmationAsync(
                 projectRoot, sprintId, nodeId, outcome, definitionOfDone, evidence, cancellationToken)

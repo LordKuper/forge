@@ -2,7 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-08-20
-- Contract version: 1.2.0
+- Contract version: 1.3.0
 
 ## Context
 
@@ -166,6 +166,31 @@ Independent review found real issues, all fixed:
    `running`-with-no-artifact-yet and `running`-with-a-matching-artifact
    resume paths, and for the decision-flip refusal in both the `running`
    and terminal branches.
+
+## Round 2 review
+
+A second independent round found two more issues, both fixed:
+
+1. **Round 1's decision-flip fix only covered the `running` and terminal
+   branches — the fresh (`ready`) branch still reused a stale artifact
+   unconditionally.** `ConfirmNodeAsync`'s "skip re-recording when an
+   artifact already exists" check applied to *every* path, not only the
+   just-validated resumed-with-matching-outcome case: a node re-armed to
+   `ready` by `forge attempt supersede` (permitted — `confirmation` is
+   `NodeKind.Work`) after an earlier attempt recorded an artifact but
+   crashed before completing left that artifact durable and unlinked to
+   anything the node still points at. A fresh call with a *different*
+   outcome would silently reuse the stale, unrelated verdict — skipping
+   `RecordConfirmationAsync` entirely (so its sprint-blocking side effect
+   never ran) and reporting success for the wrong outcome. Fixed:
+   reuse-instead-of-record now only ever applies when `resuming` is
+   `true` — a fresh attempt always records anew, regardless of what
+   artifact (if any) is already on file for the node. Regression-tested
+   with `ConfirmNodeAsyncNeverReusesAStaleArtifactFromASupersededAttemptOnAFreshCall`.
+2. **`capabilities.json`'s `contract_version` stayed at `1.2.0`** despite
+   adding the new `workflow.confirm` entry, breaking the pattern every
+   prior capability addition in this file followed (a MINOR bump per
+   addition). Fixed — bumped to `1.3.0`, matching this ADR's own header.
 
 ## Consequences
 
