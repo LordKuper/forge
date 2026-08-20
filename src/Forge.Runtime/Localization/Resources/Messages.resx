@@ -90,6 +90,10 @@
   <data name="ConfirmConfirmedDescription" xml:space="preserve"><value>Record that the implementation meets its definition of done.</value></data>
   <data name="ConfirmNotConfirmedDescription" xml:space="preserve"><value>Record that the implementation does not meet its definition of done.</value></data>
   <data name="ConfirmRecorded" xml:space="preserve"><value>Confirmation recorded.</value></data>
+  <data name="TestWorkDescription" xml:space="preserve"><value>Human-only test-work decision commands.</value></data>
+  <data name="TestWorkAddedDescription" xml:space="preserve"><value>Record that new tests were added to protect the scope.</value></data>
+  <data name="TestWorkNoNewTestsDescription" xml:space="preserve"><value>Record a justified decision that no new tests were needed.</value></data>
+  <data name="TestWorkRecorded" xml:space="preserve"><value>Test-work decision recorded.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Gate node id (empty: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Approve gate</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Reject gate</value></data>

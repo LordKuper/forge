@@ -90,6 +90,10 @@
   <data name="ConfirmConfirmedDescription" xml:space="preserve"><value>Зафиксировать, что реализация соответствует критериям готовности.</value></data>
   <data name="ConfirmNotConfirmedDescription" xml:space="preserve"><value>Зафиксировать, что реализация не соответствует критериям готовности.</value></data>
   <data name="ConfirmRecorded" xml:space="preserve"><value>Подтверждение зафиксировано.</value></data>
+  <data name="TestWorkDescription" xml:space="preserve"><value>Команды решений по тестовой работе (только для человека).</value></data>
+  <data name="TestWorkAddedDescription" xml:space="preserve"><value>Зафиксировать, что новые тесты были добавлены для защиты области изменений.</value></data>
+  <data name="TestWorkNoNewTestsDescription" xml:space="preserve"><value>Зафиксировать обоснованное решение о том, что новые тесты не требовались.</value></data>
+  <data name="TestWorkRecorded" xml:space="preserve"><value>Решение по тестовой работе зафиксировано.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>

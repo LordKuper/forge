@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.56.0
+
+### Added
+
+- A running sprint's `test_work` node can now be resolved by a human
+  operator: `forge test-work added --sprint <id> --justification <text>
+  --yes` records that new tests were added to protect the scope (or
+  `forge test-work no-new-tests` for a justified decision that none were
+  needed) and settles the node. Requires an interactive session and
+  explicit `--yes`, matching every other human-only command.
+
 ## v0.55.0
 
 ### Added

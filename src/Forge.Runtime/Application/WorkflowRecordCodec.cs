@@ -21,6 +21,8 @@ internal static class WorkflowRecordCodec
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.handoff.schema.json");
     private static readonly JsonSchema ConfirmationSchema =
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.confirmation-result.schema.json");
+    private static readonly JsonSchema TestWorkSchema =
+        SchemaValidation.LoadEmbedded("Forge.Application.Schemas.test-work-result.schema.json");
     private static readonly JsonSchema ExecutionProfileSchema =
         SchemaValidation.LoadEmbedded("Forge.Application.Schemas.execution-profile.schema.json");
     private static readonly JsonSchema ReviewIterationSchema =
@@ -122,6 +124,22 @@ internal static class WorkflowRecordCodec
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), ConfirmationSchema, "confirmation result");
+    }
+
+    public static void ValidateTestWork(TestWorkArtifact testWork)
+    {
+        ArgumentNullException.ThrowIfNull(testWork);
+        WireTestWork wire = new()
+        {
+            TestWorkId = testWork.TestWorkId.ToString("D"),
+            SprintId = testWork.SprintId.Value.ToString("D"),
+            NodeId = testWork.NodeId.Value,
+            Outcome = WorkflowStateNames.ToSnakeCase(testWork.Outcome),
+            Justification = testWork.Justification,
+            RecordedAt = testWork.RecordedAt,
+        };
+        SchemaValidation.Validate(
+            JsonSerializer.SerializeToElement(wire, JsonOptions), TestWorkSchema, "test-work result");
     }
 
     public static void ValidateExecutionProfile(ExecutionProfile profile)
@@ -312,6 +330,23 @@ internal static class WorkflowRecordCodec
         public string Kind { get; set; } = string.Empty;
 
         public string Description { get; set; } = string.Empty;
+    }
+
+    private sealed class WireTestWork
+    {
+        public string SchemaVersion { get; set; } = "1.0.0";
+
+        public string TestWorkId { get; set; } = string.Empty;
+
+        public string SprintId { get; set; } = string.Empty;
+
+        public string NodeId { get; set; } = string.Empty;
+
+        public string Outcome { get; set; } = string.Empty;
+
+        public string Justification { get; set; } = string.Empty;
+
+        public DateTimeOffset RecordedAt { get; set; }
     }
 
     private sealed class WireExecutionProfile

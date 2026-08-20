@@ -98,6 +98,21 @@ public interface IForgeMutations
         bool confirmed,
         CancellationToken cancellationToken);
 
+    /// <summary>The human-only `workflow.test_work` capability: records whether new tests were
+    /// added to protect the scope, or a justified decision was made that none were needed, driving
+    /// that Work node's own attempt to a terminal state in the same call — same reasoning as
+    /// <see cref="ConfirmNodeAsync"/> (no executor exists for this role either).
+    /// <paramref name="confirmed"/> must be <see langword="true"/> — the same no-config-bypass rule
+    /// as <see cref="ResolveGateAsync"/>.</summary>
+    Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: cancels a non-terminal
     /// attempt and creates a linked replacement. <paramref name="confirmed"/> must be
     /// <see langword="true"/> — the same no-config-bypass rule as <see cref="ResolveGateAsync"/>.</summary>
@@ -638,6 +653,50 @@ public sealed class ForgeApplication(
         return await scheduler
             .ConfirmNodeAsync(
                 status.Root, id, nodeId, outcome, definitionOfDone, evidence, node.Version, key, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The human-only `workflow.test_work` capability. Same server-side
+    /// version/idempotency-key derivation as <see cref="ResolveGateAsync"/>.</summary>
+    public async Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(justification);
+        if (!confirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintWorkflowState? state =
+            await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        Guid key = SprintScheduler.RecordTestWorkKey(id, node);
+        return await scheduler
+            .RecordTestWorkAsync(status.Root, id, nodeId, outcome, justification, node.Version, key, cancellationToken)
             .ConfigureAwait(false);
     }
 

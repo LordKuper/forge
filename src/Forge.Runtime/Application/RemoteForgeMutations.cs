@@ -128,6 +128,28 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, null, DiagnosticCodes.HostUnavailable);
     }
 
+    public async Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(justification);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new RecordTestWorkRequest(sprintId, nodeId, outcome == TestWorkOutcome.TestsAdded, justification, confirmed),
+            ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.RecordTestWorkKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<RecordTestWorkResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
     private static string EvidenceKindWireValue(ConfirmationEvidenceKind kind) => kind switch
     {
         ConfirmationEvidenceKind.Inspection => "inspection",

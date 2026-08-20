@@ -143,6 +143,12 @@ public static class DiagnosticCodes
     /// `running`) before rejecting the record.</summary>
     public const string ConfirmationTextRequired = "confirmation_text_required";
 
+    /// <summary>`forge test-work`'s <c>--justification</c> was empty or whitespace-only. Checked
+    /// before <see cref="SprintScheduler.RecordTestWorkAsync"/> starts the node's attempt -- the
+    /// same reason <see cref="ConfirmationTextRequired"/> is checked CLI-side rather than left to
+    /// `test-work-result.schema.json`'s own `minLength: 1` alone.</summary>
+    public const string TestWorkJustificationRequired = "test_work_justification_required";
+
     /// <summary>ADR 0011: the project's resolved `artifacts.language.agent_facing` is not in
     /// <c>ILocalizationCatalog.SupportedCultures</c>; integration generation/install/remove refuses
     /// rather than silently falling back to English.</summary>

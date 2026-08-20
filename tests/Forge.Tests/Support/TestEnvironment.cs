@@ -587,6 +587,33 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new RecordConfirmationResult(true, null, DiagnosticCodes.None));
     }
 
+    public int RecordTestWorkCalls { get; private set; }
+
+    public TestWorkOutcome? LastTestWorkOutcome { get; private set; }
+
+    public bool? LastTestWorkConfirmed { get; private set; }
+
+    public string? LastTestWorkNodeId { get; private set; }
+
+    public Guid? LastTestWorkSprintId { get; private set; }
+
+    public Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        RecordTestWorkCalls++;
+        LastTestWorkOutcome = outcome;
+        LastTestWorkConfirmed = confirmed;
+        LastTestWorkNodeId = nodeId;
+        LastTestWorkSprintId = sprintId;
+        return Task.FromResult(new RecordTestWorkResult(true, null, DiagnosticCodes.None));
+    }
+
     public int CreateSprintCalls { get; private set; }
 
     public int RunSprintCalls { get; private set; }
@@ -687,6 +714,16 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new RecordConfirmationResult(true, null, DiagnosticCodes.None));
+
+    public Task<RecordTestWorkResult> RecordTestWorkAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        TestWorkOutcome outcome,
+        string justification,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new RecordTestWorkResult(true, null, DiagnosticCodes.None));
 
     public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));

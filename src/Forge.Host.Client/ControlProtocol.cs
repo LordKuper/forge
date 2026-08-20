@@ -97,6 +97,17 @@ public sealed record ConfirmNodeRequest(
     IReadOnlyList<ConfirmationEvidenceEntry> Evidence,
     bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.RecordTestWorkKind"/>'s request payload (the human-only
+/// `workflow.test_work` capability). No expected node version travels on the wire — same reason as
+/// <see cref="ResolveGateRequest"/>. <see cref="Outcome"/> is <see langword="true"/> for
+/// <c>TestsAdded</c>, <see langword="false"/> for <c>NoNewTestsJustified</c>.</summary>
+public sealed record RecordTestWorkRequest(
+    Guid SprintId,
+    string NodeId,
+    bool Outcome,
+    string Justification,
+    bool Confirmed);
+
 /// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. Empty: the Host
 /// always creates from its own project's canonical graph, and mints its own idempotency key, so
 /// nothing travels on the wire — see <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>.</summary>
@@ -167,6 +178,13 @@ public static class ControlProtocol
     /// payload: a <see cref="ConfirmNodeRequest"/>. Response payload: a `RecordConfirmationResult`
     /// instance (<c>{"succeeded": bool, "confirmation"?: {...}, "diagnostic_code": string}</c>).</summary>
     public const string ConfirmNodeKind = "confirm_node";
+
+    /// <summary>The human-only `workflow.test_work` capability — records whether new tests were
+    /// added to protect the scope, or a justified decision was made that none were needed, and
+    /// settles that node's own attempt to a terminal state in the same call (no executor exists for
+    /// this role either). Request payload: a <see cref="RecordTestWorkRequest"/>. Response payload:
+    /// a `RecordTestWorkResult` instance (<c>{"succeeded": bool, "test_work"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string RecordTestWorkKind = "record_test_work";
 
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph (ADR
     /// 0001). Request payload: a <see cref="CreateSprintRequest"/>. Response payload: a
