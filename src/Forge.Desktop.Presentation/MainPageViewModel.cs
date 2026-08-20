@@ -90,19 +90,31 @@ public sealed class MainPageViewModel(
                 : MessageKeys.ProjectNotInitialized),
             Render(
                 text.Resolve(MessageKeys.StartupChecksTitle),
+                // Two-space indent, matching `forge doctor --startup`'s own row formatting exactly
+                // (`CliApplication.CreateDoctorCommand`) -- same bug class and fix as the provider
+                // section just below (round 1 review of PR #80 found this section had the identical,
+                // previously-unfixed divergence).
                 startup.Checks.Select(check => string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
+                    $"  {SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
             Render(
                 text.Resolve(MessageKeys.ProviderToolchainTitle),
-                snapshot.Providers.Select(SurfaceFormatting.ProviderRow)),
+                // Two-space indent, matching `forge models`'s own row formatting exactly (`CliApplication
+                // .CreateModelsCommand`) -- SurfaceParityTests.DesktopAndCliRenderTheSameProvidersForOneSnapshot
+                // pins the two surfaces to literal equality the same way the tree/events/integration
+                // sections already are.
+                snapshot.Providers.Select(entry => string.Create(
+                    CultureInfo.InvariantCulture, $"  {SurfaceFormatting.ProviderRow(entry)}"))),
             snapshot.SuggestedActions.Count == 0
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(
                     text.Resolve(MessageKeys.SuggestedActionsTitle),
+                    // Two-space indent, matching `forge status`'s own `WriteActions` row formatting
+                    // exactly -- same bug class as the startup-checks/provider sections above (round
+                    // 2 review of PR #80).
                     snapshot.SuggestedActions.Select(action => string.Create(
                         CultureInfo.InvariantCulture,
-                        $"{action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"))),
+                        $"  {action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"))),
             // Same shared projection `forge tree` renders (ADR 0005: both surfaces read one snapshot).
             Render(
                 null,
@@ -114,13 +126,18 @@ public sealed class MainPageViewModel(
             snapshot.Details is { } sprintDetails
                 ? Render(null, SurfaceFormatting.SprintDetailLines(text, sprintDetails))
                 : string.Empty,
+            // Title deliberately excluded here (`null`, unlike every other Render(...) call above) --
+            // `ConfigurationTitleLabel` in MainPage.xaml.cs's constructor already renders
+            // MessageKeys.ConfigurationTitle as its own static label, not part of this scrollable
+            // section. Rows still need the same two-space indent `forge config show`'s own
+            // `WriteValues` uses (round 2 review of PR #80).
             Render(
                 null,
                 user.Values
                     .Concat(project.Values)
                     .Select(value => string.Create(
                         CultureInfo.InvariantCulture,
-                        $"{value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"))),
+                        $"  {value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"))),
             Render(
                 text.Resolve(MessageKeys.DiagnosticsTitle),
                 new[]
