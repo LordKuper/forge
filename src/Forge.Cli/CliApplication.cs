@@ -102,11 +102,16 @@ public static class CliApplication
         Option<bool> startup = new("--startup") { Description = "Show the startup checks." };
         Option<bool> recover = new("--recover") { Description = "Quarantine unreadable configuration." };
         Option<bool> confirm = new("--yes") { Description = "Confirm the recovery." };
+        Option<bool> bundle = new("--bundle")
+        {
+            Description = "Emit an allowlisted, redacted diagnostic bundle (ADR 0005/0038) as JSON.",
+        };
         Command command = new("doctor", text.Resolve(MessageKeys.DoctorDescription));
         command.Options.Add(projectRoot);
         command.Options.Add(startup);
         command.Options.Add(recover);
         command.Options.Add(confirm);
+        command.Options.Add(bundle);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             string? root = parseResult.GetValue(projectRoot);
@@ -118,6 +123,15 @@ public static class CliApplication
                     .ConfigureAwait(false);
                 output.WriteLine(text.Resolve(RecoveryMessage(recovered)));
                 return Report(diagnostics, recovered.DiagnosticCode);
+            }
+
+            if (parseResult.GetValue(bundle))
+            {
+                DiagnosticBundle diagnosticBundle = await application
+                    .CollectDiagnosticBundleAsync(root, cancellationToken)
+                    .ConfigureAwait(false);
+                output.WriteLine(StatusJson.Serialize(diagnosticBundle));
+                return ExitCodes.Ok;
             }
 
             StartupStatus status = await application

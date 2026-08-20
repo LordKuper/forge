@@ -477,6 +477,14 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
 
     public Task<bool> DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken) =>
         Task.FromResult(true);
+
+    // No separate "orphaned" concept: RemoveAsync above already unregisters a path the same moment
+    // it removes it, so this fake has nothing corresponding to git's own registered-but-deleted
+    // window. That distinction is only meaningfully testable against real git.exe (see
+    // GitIsolationTests.cs/GitRepositoryMergeTests.cs's own precedent for this codebase).
+    public Task<IReadOnlyList<WorktreeRegistration>> ListAsync(
+        string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<WorktreeRegistration>>([.. paths.Select(path => new WorktreeRegistration(path, true))]);
 }
 
 /// <summary>A fixed, ordered `providers.enabled` selection — bypasses the real configuration

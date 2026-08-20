@@ -1,8 +1,10 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Host.Client;
 using Forge.Providers;
 using YamlDotNet.Core;
 
@@ -193,7 +195,12 @@ public sealed class ForgeApplication(
     ISprintStore sprintStore,
     SprintScheduler scheduler,
     SprintOrchestrator orchestrator,
-    IRepository repository) : IForgeMutations
+    IRepository repository,
+    RoutingLedger routingLedger,
+    IWorktreeManager worktrees,
+    IEnvironmentPaths paths,
+    IFileSystem fileSystem,
+    IClock clock) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -252,6 +259,236 @@ public sealed class ForgeApplication(
         Guid? sprintId,
         CancellationToken cancellationToken) =>
         (await GetOverviewAsync(projectRoot, detail, sprintId, cancellationToken).ConfigureAwait(false)).Snapshot;
+
+    /// <summary>ADR 0005/0038's `forge doctor --bundle`: allowlisted, redacted operational evidence
+    /// only (`diagnostic-bundle.schema.json`). Every value here is already a machine code, a count,
+    /// or a boolean — nothing free-text (prompts, provider output, diffs, source contents, raw
+    /// command lines, credentials, environment values, or unredacted paths) is ever included, so no
+    /// section needs <see cref="Infrastructure.SecretRedactor"/> the way <see cref="Infrastructure.SafeLogger"/>
+    /// does; the allowlist itself is the redaction. Each section is collected independently and, if
+    /// it throws for any reason, added to <see cref="DiagnosticBundle.Omissions"/> by name instead of
+    /// failing the whole bundle — the same "if safe collection cannot be proven, omit rather than
+    /// guess" rule ADR 0005 states for redaction specifically, applied uniformly here since a single
+    /// broken section (e.g. a corrupt sprint file) must never hide every other section's own healthy
+    /// evidence from `forge doctor --bundle`, which exists precisely to diagnose that kind of
+    /// problem.</summary>
+    public async Task<DiagnosticBundle> CollectDiagnosticBundleAsync(
+        string? projectRoot, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        List<string> omissions = [];
+
+        IReadOnlyList<DiagnosticProviderVersion> providers = [];
+        IReadOnlyList<StartupCheck> startupChecks = [];
+        DiagnosticProjectSummary project = new(false, 0);
+        try
+        {
+            ProjectOverview overview =
+                await GetOverviewAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+            startupChecks = overview.Startup.Checks;
+            providers = [.. overview.Snapshot.Providers.Select(
+                entry => new DiagnosticProviderVersion(entry.Id, entry.Version))];
+            project = new(overview.Snapshot.Project.Initialized, overview.Snapshot.Sprints.Count);
+        }
+        catch (Exception)
+        {
+            omissions.Add("startup_checks");
+            omissions.Add("providers");
+            omissions.Add("project");
+        }
+
+        IReadOnlyList<SprintId> sprintIds = [];
+        if (status.Initialized)
+        {
+            try
+            {
+                sprintIds = await sprintStore.ListAsync(status.Root, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                omissions.Add("event_log_integrity");
+                omissions.Add("circuit_breakers");
+                omissions.Add("retry_budget");
+            }
+        }
+
+        DiagnosticEventLogIntegrity eventLogIntegrity = new(true, DiagnosticCodes.None);
+        if (!omissions.Contains("event_log_integrity"))
+        {
+            try
+            {
+                eventLogIntegrity = await CollectEventLogIntegrityAsync(status.Root, sprintIds, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                omissions.Add("event_log_integrity");
+            }
+        }
+
+        DiagnosticWorktreeRegistrations worktreeRegistrations = new(0, 0);
+        try
+        {
+            IReadOnlyList<WorktreeRegistration> registrations = status.Initialized
+                ? await worktrees.ListAsync(status.Root, cancellationToken).ConfigureAwait(false)
+                : [];
+            worktreeRegistrations = new(
+                registrations.Count, registrations.Count(entry => !entry.Exists));
+        }
+        catch (Exception)
+        {
+            omissions.Add("worktree_registrations");
+        }
+
+        List<DiagnosticCircuitBreaker> circuitBreakers = [];
+        DiagnosticRetryBudget retryBudget = new(RoutingLedger.DefaultRetryBudget, RoutingLedger.DefaultRetryBudget);
+        if (!omissions.Contains("circuit_breakers"))
+        {
+            try
+            {
+                (circuitBreakers, retryBudget) = await CollectRoutingStateAsync(
+                    status.Root, sprintIds, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception)
+            {
+                omissions.Add("circuit_breakers");
+                omissions.Add("retry_budget");
+            }
+        }
+
+        List<DiagnosticWritableProbe> writableProbes = [];
+        try
+        {
+            writableProbes = await CollectWritableProbesAsync(status.Root, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            omissions.Add("writable_probes");
+        }
+
+        return new(
+            DiagnosticBundle.ContractVersion,
+            clock.UtcNow,
+            GeneratorVersion,
+            ControlProtocol.Version,
+            providers,
+            startupChecks,
+            project,
+            eventLogIntegrity,
+            worktreeRegistrations,
+            circuitBreakers,
+            retryBudget,
+            writableProbes,
+            omissions);
+    }
+
+    /// <summary>The minimal proactive integrity check this codebase has today: every persisted
+    /// sprint's definition and folded state must load without throwing. `FileSprintEventLog` already
+    /// throws <see cref="DiagnosticCodes.WorkflowLogCorrupted"/>-shaped exceptions reactively per
+    /// record (see its own read methods) — this walks every sprint once so corruption is reported
+    /// proactively by `forge doctor --bundle` instead of only being discovered the next time
+    /// something happens to touch the affected sprint.</summary>
+    private async Task<DiagnosticEventLogIntegrity> CollectEventLogIntegrityAsync(
+        string root, IReadOnlyList<SprintId> sprintIds, CancellationToken cancellationToken)
+    {
+        foreach (SprintId sprintId in sprintIds)
+        {
+            try
+            {
+                await sprintStore.LoadDefinitionAsync(root, sprintId, cancellationToken).ConfigureAwait(false);
+                await sprintStore.LoadAsync(root, sprintId, cancellationToken).ConfigureAwait(false);
+            }
+            catch (InvalidDataException)
+            {
+                return new(false, DiagnosticCodes.WorkflowLogCorrupted);
+            }
+        }
+
+        return new(true, DiagnosticCodes.None);
+    }
+
+    /// <summary>Circuit breakers are sprint-scoped (<see cref="RoutingLedger"/>'s own remarks), so a
+    /// project-wide list is every distinct <see cref="HealthKey"/> any sprint's route decisions ever
+    /// named, each resolved through the same derivation <see cref="RoutingLedger.GetCircuitBreakerAsync"/>
+    /// already performs. The retry budget is likewise per-sprint (one shared budget for every
+    /// node/attempt in that sprint) with no project-wide figure to report as-is: <see cref="DiagnosticRetryBudget.Total"/>
+    /// is <see cref="RoutingLedger.DefaultRetryBudget"/> itself, since every sprint is given the
+    /// identical fixed total, and <see cref="DiagnosticRetryBudget.Remaining"/> is the minimum
+    /// remaining across every sprint that has consumed any of it — the sprint closest to exhausting
+    /// its budget is the one worth surfacing in a diagnostic snapshot, and reporting the full total
+    /// when no sprint has route decisions yet correctly says nothing has been consumed.</summary>
+    private async Task<(List<DiagnosticCircuitBreaker> Breakers, DiagnosticRetryBudget RetryBudget)>
+        CollectRoutingStateAsync(string root, IReadOnlyList<SprintId> sprintIds, CancellationToken cancellationToken)
+    {
+        List<DiagnosticCircuitBreaker> breakers = [];
+        int? minRemaining = null;
+        foreach (SprintId sprintId in sprintIds)
+        {
+            IReadOnlyList<RouteDecision> decisions = await routingLedger
+                .GetRouteDecisionsAsync(root, sprintId, cancellationToken).ConfigureAwait(false);
+            if (decisions.Count == 0)
+            {
+                continue;
+            }
+
+            RetryBudgetRecord budget = await routingLedger
+                .GetRetryBudgetAsync(root, sprintId, cancellationToken).ConfigureAwait(false);
+            minRemaining = Math.Min(minRemaining ?? budget.Remaining, budget.Remaining);
+
+            foreach (HealthKey key in decisions.Select(decision => decision.Key).Distinct())
+            {
+                CircuitBreakerRecord? breaker = await routingLedger
+                    .GetCircuitBreakerAsync(root, sprintId, key, cancellationToken).ConfigureAwait(false);
+                if (breaker is not null)
+                {
+                    breakers.Add(new(
+                        $"{sprintId.Value:D}/{key.Canonical}", breaker.State));
+                }
+            }
+        }
+
+        return (breakers, new(RoutingLedger.DefaultRetryBudget, minRemaining ?? RoutingLedger.DefaultRetryBudget));
+    }
+
+    /// <summary>Probes exactly the two directories Forge itself ever writes durable state to: the
+    /// project's own `.forge/` directory and this instance's namespaced share of
+    /// <see cref="IEnvironmentPaths.LocalApplicationData"/> (user configuration, worktrees, and —
+    /// once they exist — logs/caches, per ADR 0005). Writes and immediately overwrites a fixed,
+    /// clearly diagnostic-named marker file rather than a randomly named one, so repeated runs leave
+    /// at most one stray file per directory instead of accumulating one per run.</summary>
+    private async Task<List<DiagnosticWritableProbe>> CollectWritableProbesAsync(
+        string root, CancellationToken cancellationToken)
+    {
+        (string Label, string Directory)[] targets =
+        [
+            ("project", ProjectRootResolver.ForgeDirectory(root)),
+            ("local_application_data", Path.Combine(paths.LocalApplicationData, "Forge", paths.InstanceId)),
+        ];
+        List<DiagnosticWritableProbe> probes = [];
+        foreach ((string label, string directory) in targets)
+        {
+            bool writable;
+            try
+            {
+                Directory.CreateDirectory(directory);
+                await fileSystem.WriteAllTextAsync(
+                    Path.Combine(directory, ".diagnostic-write-probe"),
+                    DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+                    cancellationToken).ConfigureAwait(false);
+                writable = true;
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                writable = false;
+            }
+
+            probes.Add(new(label, writable));
+        }
+
+        return probes;
+    }
 
     /// <summary>The bounded, cursor-driven incremental read behind `ReadControlEvents`. See
     /// <see cref="ControlEventsReader"/> for the merge/cursor contract. An uninitialized or

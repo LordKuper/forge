@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.0
+
+### Added
+
+- `forge doctor --bundle` produces an allowlisted, redacted diagnostic
+  bundle as JSON: Forge/protocol/provider versions, startup checks, project
+  state, event log integrity, worktree registrations, circuit-breaker and
+  retry-budget state, and writable-directory probes. It never includes
+  prompts, provider output, diffs, source contents, raw command lines,
+  credentials, environment values, or unredacted paths — a section that
+  cannot be safely collected is omitted and named rather than guessed at.
+
 ## v0.58.0
 
 ### Added
