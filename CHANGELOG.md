@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.52.0
+
+### Added
+
+- Forge can now commit an attempt's file changes onto its own isolated
+  branch, always authored as Forge itself rather than the project's own
+  configured git identity (or lack of one). Internal infrastructure only
+  in this release — no command or sprint node uses it yet.
+
 ## v0.51.0
 
 ### Added

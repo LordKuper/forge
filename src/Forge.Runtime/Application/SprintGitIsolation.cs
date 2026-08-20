@@ -129,6 +129,25 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
             .ConfigureAwait(false);
     }
 
+    /// <summary>Stages and commits every change in an attempt's own worktree, authored as Forge
+    /// itself (<see cref="IWorktreeManager.CommitAllAsync"/>) — a thin path-resolution wrapper, the
+    /// same shape as <see cref="CreateAttemptWorktreeAsync"/>. Whether committing an unmodified
+    /// (clean) attempt worktree is meaningful is the caller's own policy decision (it is not, for
+    /// a role whose whole job is producing an edit), not this class's: callers that care check
+    /// <see cref="IWorktreeManager.IsDirtyAsync"/> themselves before ever reaching this method.
+    /// </summary>
+    public Task<GitOperationResult> CommitAttemptAsync(
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        AttemptId attemptId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
+        return worktrees.CommitAllAsync(projectRoot, attemptPath, message, cancellationToken);
+    }
+
     /// <summary>
     /// Fast-forwards the sprint's integration branch to an attempt's branch tip, but only while the
     /// integration branch is still exactly at <paramref name="expectedIntegrationTip"/> — the base

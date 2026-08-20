@@ -122,6 +122,54 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return result.ExitCode != 0 || result.StandardOutput.Trim().Length > 0;
     }
 
+    // ponytail: one fixed, unconfigurable MVP author/committer identity for every commit this class
+    // makes, matching ExecutionProfilePolicy's own "one fixed MVP policy, no per-project
+    // configuration yet" precedent. A no-reply-shaped address rather than an actual mailbox, the
+    // same convention CI bot commits elsewhere use.
+    private const string CommitAuthorName = "Forge";
+
+    private const string CommitAuthorEmail = "forge@localhost";
+
+    public async Task<GitOperationResult> CommitAllAsync(
+        string projectRoot, string path, string message, CancellationToken cancellationToken)
+    {
+        ProcessResult staged = await RunInWorktreeAsync(path, ["add", "-A"], cancellationToken)
+            .ConfigureAwait(false);
+        if (staged.ExitCode != 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitFailed, staged.StandardError);
+        }
+
+        // Routed through the same RunInWorktreeAsync directory-existence guard the `add -A` step
+        // above already used -- a worktree removed out from under this call between the two `git`
+        // invocations (e.g. a racing DiscardAttemptAsync) must fail closed the same way, not throw
+        // an unhandled Win32Exception from starting `git` in a directory that no longer exists.
+        // GIT_AUTHOR_NAME/EMAIL/GIT_COMMITTER_NAME/EMAIL are merged onto the inherited environment
+        // (ProcessRequest.ReplaceEnvironment defaults to false), not a full replacement: a git
+        // commit still needs the ordinary inherited environment (PATH, HOME/USERPROFILE, credential
+        // helpers) to resolve hooks and config the same way every other `git` invocation in this
+        // class already does -- only the author/committer identity is overridden, so this commit is
+        // never silently attributed to whatever user.name/user.email (or lack of one) the project's
+        // own repository config happens to have.
+        ProcessResult committed = await RunInWorktreeAsync(
+            path,
+            ["commit", "--no-verify", "-m", message],
+            cancellationToken,
+            new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["GIT_AUTHOR_NAME"] = CommitAuthorName,
+                ["GIT_AUTHOR_EMAIL"] = CommitAuthorEmail,
+                ["GIT_COMMITTER_NAME"] = CommitAuthorName,
+                ["GIT_COMMITTER_EMAIL"] = CommitAuthorEmail,
+            }).ConfigureAwait(false);
+        if (committed.ExitCode != 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitFailed, committed.StandardError);
+        }
+
+        return GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
+    }
+
     public async Task<GitOperationResult> ResetHardAsync(
         string projectRoot,
         string path,
@@ -283,13 +331,17 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
     /// nonexistent working directory throws an unhandled `Win32Exception` instead of failing
     /// closed. Every such caller already has a defined failure path (a non-zero exit code, or
     /// `GetHeadAsync`'s own `InvalidOperationException`), so this only needs to route around the
-    /// crash — it never needs its own diagnostic code.</summary>
+    /// crash — it never needs its own diagnostic code. <paramref name="environmentVariables"/> is
+    /// merged onto the inherited environment exactly like every other <see cref="ProcessRequest"/>
+    /// this class builds (never a full replacement) — `null` for every caller but
+    /// <see cref="CommitAllAsync"/>'s own identity override.</summary>
     private Task<ProcessResult> RunInWorktreeAsync(
         string path,
         IReadOnlyList<string> arguments,
-        CancellationToken cancellationToken) =>
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null) =>
         Directory.Exists(path)
-            ? RunAsync(path, arguments, cancellationToken)
+            ? processRunner.RunAsync(new("git", arguments, path, environmentVariables), cancellationToken)
             : Task.FromResult(new ProcessResult(-1, string.Empty, $"'{path}' does not exist."));
 
     private static string NormalizePath(string path) =>

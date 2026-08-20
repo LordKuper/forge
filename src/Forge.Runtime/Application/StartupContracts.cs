@@ -80,6 +80,7 @@ public static class DiagnosticCodes
     public const string WorktreeRebaseConflict = "worktree_rebase_conflict";
     public const string WorktreeBaseMismatch = "worktree_base_mismatch";
     public const string WorktreeCommitInvalid = "worktree_commit_invalid";
+    public const string WorktreeCommitFailed = "worktree_commit_failed";
     public const string WorktreeUnavailable = "worktree_unavailable";
     public const string ControlCursorStale = "control_cursor_stale";
 

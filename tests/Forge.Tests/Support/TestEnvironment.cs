@@ -1,3 +1,4 @@
+using System.Globalization;
 using Forge.Application;
 using Forge.Bootstrap;
 using Forge.Configuration;
@@ -357,7 +358,36 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
     }
 
     public Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
-        Task.FromResult(false);
+        Task.FromResult(Dirty.Contains(path));
+
+    /// <summary>Paths <see cref="IsDirtyAsync"/> reports as dirty; empty by default, matching every
+    /// fake worktree starting clean.</summary>
+    public HashSet<string> Dirty { get; } = new(StringComparer.Ordinal);
+
+    public List<(string Path, string Message)> Commits { get; } = [];
+
+    public bool FailNextCommit { get; set; }
+
+    public string CommitFailureCode { get; set; } = DiagnosticCodes.WorktreeCommitFailed;
+
+    public Task<GitOperationResult> CommitAllAsync(
+        string projectRoot, string path, string message, CancellationToken cancellationToken)
+    {
+        if (FailNextCommit)
+        {
+            return Task.FromResult(GitOperationResult.Fail(CommitFailureCode));
+        }
+
+        Commits.Add((path, message));
+        Dirty.Remove(path);
+        // Fixed 40-hex-char length regardless of how large Commits.Count grows (a bare decimal
+        // count concatenated onto a zero-padded suffix would overflow that length once the count
+        // itself grows past a single digit) -- "c" (always a valid hex nibble) plus the count's own
+        // hex digits, left-padded to fill the remaining 39 characters.
+        string commit = "c" + Commits.Count.ToString("x", CultureInfo.InvariantCulture).PadLeft(39, '0');
+        heads[path] = commit;
+        return Task.FromResult(GitOperationResult.Ok(commit));
+    }
 
     public Task<GitOperationResult> ResetHardAsync(
         string projectRoot, string path, string commit, CancellationToken cancellationToken) =>
