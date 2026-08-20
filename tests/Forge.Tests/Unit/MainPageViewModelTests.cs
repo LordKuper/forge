@@ -1322,6 +1322,37 @@ public sealed class MainPageViewModelTests
         Assert.Equal(ImplementationCriticalGraphBuilder.ConfirmationNodeId, mutations.LastConfirmNodeId);
     }
 
+    /// <summary>Round 1 review of PR #78: only `"inspection"` was ever exercised as a valid evidence
+    /// kind, so a spelling drift between `ConfirmEvidenceKindPicker`'s `ItemsSource`
+    /// (`MainPage.xaml.cs`) and `ParseEvidenceKind` (this file) or `CliApplication.ParseEvidenceKind`
+    /// for `"execution"`/`"existing-check"` would not have been caught. Pins the exact enum each of
+    /// the three documented machine values maps to, not merely that the call succeeded.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("inspection", ConfirmationEvidenceKind.Inspection)]
+    [InlineData("execution", ConfirmationEvidenceKind.Execution)]
+    [InlineData("existing-check", ConfirmationEvidenceKind.ExistingCheck)]
+    public async Task ConfirmNodeAsyncMapsEveryDocumentedEvidenceKindToItsExactEnumValue(
+        string evidenceKind, ConfirmationEvidenceKind expectedKind)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.ConfirmNodeAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), null, ConfirmationOutcome.Confirmed, "definition",
+            evidenceKind, "evidence", true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.ConfirmNodeCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.ConfirmRecorded), message);
+        ConfirmationEvidence evidence = Assert.Single(mutations.LastConfirmEvidence!);
+        Assert.Equal(expectedKind, evidence.Kind);
+        Assert.Equal("evidence", evidence.Description);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ConfirmNodeAsyncForwardsANotConfirmedOutcome()

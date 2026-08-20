@@ -79,6 +79,9 @@ public partial class MainPage : ContentPage
         // Same reasoning: `forge confirm --evidence-kind`'s own machine vocabulary.
         ConfirmEvidenceKindPicker.ItemsSource = new List<string> { "inspection", "execution", "existing-check" };
         ConfirmEvidenceKindPicker.SelectedIndex = 0;
+        // A Picker has no adjacent visible label either (same reasoning as the free-text Entries
+        // above), so it needs its own screen-reader name too -- ADR 0005.
+        SemanticProperties.SetDescription(ConfirmEvidenceKindPicker, text.Resolve(MessageKeys.ConfirmEvidenceKindLabel));
     }
 
     private static void Describe(Entry entry, string label)
