@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.58.0
+
+### Added
+
+- The Desktop app can now record a definition-of-done confirmation, a
+  test-work decision, and a sprint finalization — the same three human-only
+  decisions previously available only from `forge confirm`/`forge
+  test-work`/`forge finalize`. Each reuses the sprint id already entered for
+  gate/attempt actions, defaults to its capability's canonical node, and
+  shows a confirmation dialog naming exactly what it is about to record
+  before applying it.
+
 ## v0.57.0
 
 ### Added

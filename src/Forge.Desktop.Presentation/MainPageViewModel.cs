@@ -368,6 +368,176 @@ public sealed class MainPageViewModel(
                 $"{text.Resolve(MessageKeys.AttemptIdLabel)} " +
                 $"{(string.IsNullOrWhiteSpace(attemptId) ? text.Resolve(MessageKeys.AttemptIdMissingPlaceholder) : attemptId)}");
 
+    /// <summary>ADR 0037's human-only `workflow.confirm` capability. Shares
+    /// <see cref="ResolveSprintIdAsync"/>'s blank-means-active-sprint/ambiguity resolution exactly
+    /// (see <see cref="ResolveGateAsync"/>). <paramref name="evidenceKind"/> is one of `inspection`,
+    /// `execution`, `existing-check` -- the same machine vocabulary `forge confirm`'s own
+    /// `--evidence-kind` accepts -- and an unrecognized value is refused the same way an unparsable
+    /// attempt id is on <see cref="SupersedeAttemptAsync"/>. Only a single evidence entry is
+    /// supported, matching the CLI's own current limit.</summary>
+    public async Task<string> ConfirmNodeAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? nodeId,
+        ConfirmationOutcome outcome,
+        string? definitionOfDone,
+        string? evidenceKind,
+        string? evidence,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.ConfirmSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.ConfirmFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        if (ParseEvidenceKind(evidenceKind) is not { } kind)
+        {
+            return Message(text.Resolve(MessageKeys.ConfirmFailed), DiagnosticCodes.ConfirmationEvidenceKindInvalid);
+        }
+
+        string definitionOfDoneValue = definitionOfDone ?? string.Empty;
+        string evidenceValue = evidence ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(definitionOfDoneValue) || string.IsNullOrWhiteSpace(evidenceValue))
+        {
+            return Message(text.Resolve(MessageKeys.ConfirmFailed), DiagnosticCodes.ConfirmationTextRequired);
+        }
+
+        string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.ConfirmationNodeId;
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            RecordConfirmationResult result = await mutations
+                .ConfirmNodeAsync(
+                    projectRoot, resolvedSprintId, effectiveNodeId, outcome, definitionOfDoneValue,
+                    [new ConfirmationEvidence(kind, evidenceValue)], confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.ConfirmRecorded : MessageKeys.ConfirmFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/node/decision a pending confirmation would
+    /// act on, mirroring <see cref="GatePrompt"/>'s own shape and defaulting rules exactly.</summary>
+    public string ConfirmPrompt(string? sprintId, string? nodeId, string? definitionOfDone, string? evidence) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.ConfirmNodeIdLabel)} " +
+                $"{nodeId ?? ImplementationCriticalGraphBuilder.ConfirmationNodeId}\n" +
+                $"{text.Resolve(MessageKeys.ConfirmDefinitionOfDoneLabel)} {definitionOfDone}\n" +
+                $"{text.Resolve(MessageKeys.ConfirmEvidenceLabel)} {evidence}");
+
+    private static ConfirmationEvidenceKind? ParseEvidenceKind(string? value) => value switch
+    {
+        "inspection" => ConfirmationEvidenceKind.Inspection,
+        "execution" => ConfirmationEvidenceKind.Execution,
+        "existing-check" => ConfirmationEvidenceKind.ExistingCheck,
+        _ => null,
+    };
+
+    /// <summary>ADR 0037's human-only `workflow.test_work` capability. Same shape as
+    /// <see cref="ConfirmNodeAsync"/>, minus the evidence-kind/definition-of-done fields: only a
+    /// justification.</summary>
+    public async Task<string> RecordTestWorkAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? nodeId,
+        TestWorkOutcome outcome,
+        string? justification,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.TestWorkSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.TestWorkFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        string justificationValue = justification ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(justificationValue))
+        {
+            return Message(text.Resolve(MessageKeys.TestWorkFailed), DiagnosticCodes.TestWorkJustificationRequired);
+        }
+
+        string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.TestWorkNodeId;
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            RecordTestWorkResult result = await mutations
+                .RecordTestWorkAsync(
+                    projectRoot, resolvedSprintId, effectiveNodeId, outcome, justificationValue, confirmed,
+                    cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.TestWorkRecorded : MessageKeys.TestWorkFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/node/decision a pending test-work record
+    /// would act on, mirroring <see cref="GatePrompt"/>'s own shape and defaulting rules
+    /// exactly.</summary>
+    public string TestWorkPrompt(string? sprintId, string? nodeId, string? justification) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.TestWorkNodeIdLabel)} " +
+                $"{nodeId ?? ImplementationCriticalGraphBuilder.TestWorkNodeId}\n" +
+                $"{text.Resolve(MessageKeys.TestWorkJustificationLabel)} {justification}");
+
+    /// <summary>ADR 0037's human-only `workflow.finalize` capability (ADR 0036's own CLI command).
+    /// Same shape as <see cref="ResolveGateAsync"/>, minus the outcome choice -- finalization only
+    /// ever attempts the same merge.</summary>
+    public async Task<string> FinalizeSprintAsync(
+        string? projectRoot,
+        string? sprintId,
+        string? nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.FinalizeSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.FinalizeFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        string effectiveNodeId = nodeId ?? ImplementationCriticalGraphBuilder.FinalizationNodeId;
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            FinalizeSprintResult result = await mutations
+                .FinalizeSprintAsync(projectRoot, resolvedSprintId, effectiveNodeId, confirmed, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.SprintFinalized : MessageKeys.FinalizeFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
+    /// <summary>A confirmation prompt naming the sprint/node a pending finalization would act on,
+    /// mirroring <see cref="GatePrompt"/>'s own shape and defaulting rules exactly.</summary>
+    public string FinalizePrompt(string? sprintId, string? nodeId) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{text.Resolve(MessageKeys.SprintIdLabel)} " +
+                $"{(string.IsNullOrWhiteSpace(sprintId) ? text.Resolve(MessageKeys.GateActiveSprintPlaceholder) : sprintId)}\n" +
+                $"{text.Resolve(MessageKeys.FinalizeNodeIdLabel)} " +
+                $"{nodeId ?? ImplementationCriticalGraphBuilder.FinalizationNodeId}");
+
     /// <summary>ADR 0005's `control.events` read-only capability, sharing <see cref="ForgeApplication.ReadControlEventsAsync"/>
     /// with `forge events` directly -- a query, so this needs no confirmation and no Host round-trip
     /// through <see cref="resolveMutations"/>. Each call advances the stored cursor and renders the

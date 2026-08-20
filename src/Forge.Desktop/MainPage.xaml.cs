@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Desktop.Presentation;
+using Forge.Domain;
 using Forge.Localization;
 
 namespace Forge.Desktop;
@@ -44,11 +45,22 @@ public partial class MainPage : ContentPage
         Describe(GateNodeIdEntry, text.Resolve(MessageKeys.GateNodeIdLabel));
         Describe(AttemptIdEntry, text.Resolve(MessageKeys.AttemptIdLabel));
         Describe(AttemptInstructionEntry, text.Resolve(MessageKeys.AttemptInstructionLabel));
+        Describe(ConfirmNodeIdEntry, text.Resolve(MessageKeys.ConfirmNodeIdLabel));
+        Describe(ConfirmDefinitionOfDoneEntry, text.Resolve(MessageKeys.ConfirmDefinitionOfDoneLabel));
+        Describe(ConfirmEvidenceEntry, text.Resolve(MessageKeys.ConfirmEvidenceLabel));
+        Describe(TestWorkNodeIdEntry, text.Resolve(MessageKeys.TestWorkNodeIdLabel));
+        Describe(TestWorkJustificationEntry, text.Resolve(MessageKeys.TestWorkJustificationLabel));
+        Describe(FinalizeNodeIdEntry, text.Resolve(MessageKeys.FinalizeNodeIdLabel));
         Describe(ConfigurationKeyEntry, text.Resolve(MessageKeys.ConfigurationKeyLabel));
         Describe(ConfigurationValueEntry, text.Resolve(MessageKeys.ConfigurationValueLabel));
         GateApproveButton.Text = text.Resolve(MessageKeys.GateApproveAction);
         GateRejectButton.Text = text.Resolve(MessageKeys.GateRejectAction);
         AttemptSupersedeButton.Text = text.Resolve(MessageKeys.AttemptSupersedeAction);
+        ConfirmConfirmedButton.Text = text.Resolve(MessageKeys.ConfirmConfirmedAction);
+        ConfirmNotConfirmedButton.Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction);
+        TestWorkAddedButton.Text = text.Resolve(MessageKeys.TestWorkAddedAction);
+        TestWorkNoNewTestsButton.Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction);
+        FinalizeButton.Text = text.Resolve(MessageKeys.FinalizeAction);
         EventsPollButton.Text = text.Resolve(MessageKeys.EventsPollAction);
         IntegrationGenerateButton.Text = text.Resolve(MessageKeys.IntegrationGenerateAction);
         IntegrationInstallButton.Text = text.Resolve(MessageKeys.IntegrationInstallAction);
@@ -64,6 +76,9 @@ public partial class MainPage : ContentPage
         // Scope names are machine identifiers and stay culture invariant.
         ConfigurationScopePicker.ItemsSource = new List<string> { "user", "project" };
         ConfigurationScopePicker.SelectedIndex = 0;
+        // Same reasoning: `forge confirm --evidence-kind`'s own machine vocabulary.
+        ConfirmEvidenceKindPicker.ItemsSource = new List<string> { "inspection", "execution", "existing-check" };
+        ConfirmEvidenceKindPicker.SelectedIndex = 0;
     }
 
     private static void Describe(Entry entry, string label)
@@ -86,6 +101,21 @@ public partial class MainPage : ContentPage
 
     private string? AttemptId =>
         string.IsNullOrWhiteSpace(AttemptIdEntry.Text) ? null : AttemptIdEntry.Text;
+
+    /// <summary>Empty means the canonical confirmation node, matching `forge confirm` with no
+    /// `--node`.</summary>
+    private string? ConfirmNodeId =>
+        string.IsNullOrWhiteSpace(ConfirmNodeIdEntry.Text) ? null : ConfirmNodeIdEntry.Text;
+
+    /// <summary>Empty means the canonical test_work node, matching `forge test-work` with no
+    /// `--node`.</summary>
+    private string? TestWorkNodeId =>
+        string.IsNullOrWhiteSpace(TestWorkNodeIdEntry.Text) ? null : TestWorkNodeIdEntry.Text;
+
+    /// <summary>Empty means the canonical finalization node, matching `forge finalize` with no
+    /// `--node`.</summary>
+    private string? FinalizeNodeId =>
+        string.IsNullOrWhiteSpace(FinalizeNodeIdEntry.Text) ? null : FinalizeNodeIdEntry.Text;
 
     public async Task RefreshAsync()
     {
@@ -117,6 +147,10 @@ public partial class MainPage : ContentPage
         GateResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above, for the attempt-supersession outcome.
         AttemptSupersedeResultLabel.Text = string.Empty;
+        // Same reasoning as GateResultLabel above, for the confirm/test-work/finalize outcomes.
+        ConfirmResultLabel.Text = string.Empty;
+        TestWorkResultLabel.Text = string.Empty;
+        FinalizeResultLabel.Text = string.Empty;
         // Same reasoning as GateResultLabel above: a preview or a write outcome carries no
         // companion state (unlike EventsLabel's cursor below), so it is safe -- and correct -- to
         // always clear both unconditionally.
@@ -160,6 +194,21 @@ public partial class MainPage : ContentPage
 
     private async void OnAttemptSupersedeClicked(object? sender, EventArgs e) =>
         await RunAsync(SupersedeAttemptAsync).ConfigureAwait(true);
+
+    private async void OnConfirmConfirmedClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ConfirmNodeAsync(ConfirmationOutcome.Confirmed)).ConfigureAwait(true);
+
+    private async void OnConfirmNotConfirmedClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => ConfirmNodeAsync(ConfirmationOutcome.NotConfirmed)).ConfigureAwait(true);
+
+    private async void OnTestWorkAddedClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => RecordTestWorkAsync(TestWorkOutcome.TestsAdded)).ConfigureAwait(true);
+
+    private async void OnTestWorkNoNewTestsClicked(object? sender, EventArgs e) =>
+        await RunAsync(() => RecordTestWorkAsync(TestWorkOutcome.NoNewTestsJustified)).ConfigureAwait(true);
+
+    private async void OnFinalizeClicked(object? sender, EventArgs e) =>
+        await RunAsync(FinalizeAsync).ConfigureAwait(true);
 
     private async void OnEventsPollClicked(object? sender, EventArgs e) =>
         await RunAsync(PollEventsAsync).ConfigureAwait(true);
@@ -321,6 +370,107 @@ public partial class MainPage : ContentPage
             .ConfigureAwait(true);
         await RefreshAsync().ConfigureAwait(true);
         AttemptSupersedeResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0037's human-only `workflow.confirm` capability: same shape as
+    /// <see cref="ResolveGateAsync"/>/<see cref="SupersedeAttemptAsync"/> -- the dialog's own answer
+    /// is the only source of `confirmed`, and declining short-circuits before <see cref="viewModel"/>
+    /// ever resolves a Host connection. A blank definition-of-done or evidence is refused *before*
+    /// the dialog shows, matching <see cref="SupersedeAttemptAsync"/>'s own blank-instruction guard:
+    /// neither field has a default to fall back to, so showing a confirmation dialog for either would
+    /// ask the user to confirm a decision with no actual content.</summary>
+    private async Task ConfirmNodeAsync(ConfirmationOutcome outcome)
+    {
+        if (string.IsNullOrWhiteSpace(ConfirmDefinitionOfDoneEntry.Text))
+        {
+            ConfirmResultLabel.Text = text.Resolve(MessageKeys.ConfirmDefinitionOfDoneRequired);
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(ConfirmEvidenceEntry.Text))
+        {
+            ConfirmResultLabel.Text = text.Resolve(MessageKeys.ConfirmEvidenceRequired);
+            return;
+        }
+
+        string action = text.Resolve(outcome == ConfirmationOutcome.Confirmed
+            ? MessageKeys.ConfirmConfirmedAction
+            : MessageKeys.ConfirmNotConfirmedAction);
+        bool confirmed = await DisplayAlertAsync(
+                action,
+                viewModel.ConfirmPrompt(
+                    SprintId, ConfirmNodeId, ConfirmDefinitionOfDoneEntry.Text, ConfirmEvidenceEntry.Text),
+                action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        if (!confirmed)
+        {
+            ConfirmResultLabel.Text = text.Resolve(MessageKeys.ConfirmConfirmationRequired);
+            return;
+        }
+
+        string message = await viewModel
+            .ConfirmNodeAsync(
+                ProjectRoot, SprintId, ConfirmNodeId, outcome, ConfirmDefinitionOfDoneEntry.Text,
+                ConfirmEvidenceKindPicker.SelectedItem as string, ConfirmEvidenceEntry.Text, confirmed,
+                CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        ConfirmResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0037's human-only `workflow.test_work` capability -- same shape as
+    /// <see cref="ConfirmNodeAsync"/>, minus the evidence-kind/definition-of-done fields.</summary>
+    private async Task RecordTestWorkAsync(TestWorkOutcome outcome)
+    {
+        if (string.IsNullOrWhiteSpace(TestWorkJustificationEntry.Text))
+        {
+            TestWorkResultLabel.Text = text.Resolve(MessageKeys.TestWorkJustificationRequired);
+            return;
+        }
+
+        string action = text.Resolve(outcome == TestWorkOutcome.TestsAdded
+            ? MessageKeys.TestWorkAddedAction
+            : MessageKeys.TestWorkNoNewTestsAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.TestWorkPrompt(SprintId, TestWorkNodeId, TestWorkJustificationEntry.Text),
+                action, text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        if (!confirmed)
+        {
+            TestWorkResultLabel.Text = text.Resolve(MessageKeys.TestWorkConfirmationRequired);
+            return;
+        }
+
+        string message = await viewModel
+            .RecordTestWorkAsync(
+                ProjectRoot, SprintId, TestWorkNodeId, outcome, TestWorkJustificationEntry.Text, confirmed,
+                CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        TestWorkResultLabel.Text = message;
+    }
+
+    /// <summary>ADR 0037's human-only `workflow.finalize` capability (ADR 0036's own CLI command) --
+    /// same shape as <see cref="ResolveGateAsync"/>, minus the outcome choice: finalization only ever
+    /// attempts the same merge.</summary>
+    private async Task FinalizeAsync()
+    {
+        string action = text.Resolve(MessageKeys.FinalizeAction);
+        bool confirmed = await DisplayAlertAsync(
+                action, viewModel.FinalizePrompt(SprintId, FinalizeNodeId), action,
+                text.Resolve(MessageKeys.CancelAction))
+            .ConfigureAwait(true);
+        if (!confirmed)
+        {
+            FinalizeResultLabel.Text = text.Resolve(MessageKeys.FinalizeConfirmationRequired);
+            return;
+        }
+
+        string message = await viewModel
+            .FinalizeSprintAsync(ProjectRoot, SprintId, FinalizeNodeId, confirmed, CancellationToken.None)
+            .ConfigureAwait(true);
+        await RefreshAsync().ConfigureAwait(true);
+        FinalizeResultLabel.Text = message;
     }
 
     /// <summary>ADR 0005's read-only `control.events` capability. Unlike every mutating action on

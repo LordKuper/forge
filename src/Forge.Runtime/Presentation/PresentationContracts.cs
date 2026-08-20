@@ -13,6 +13,9 @@ public static class CapabilityIds
     public const string ControlEvents = "control.events";
     public const string IntegrationSkill = "integration.skill";
     public const string SprintManage = "sprint.manage";
+    public const string WorkflowConfirm = "workflow.confirm";
+    public const string WorkflowTestWork = "workflow.test_work";
+    public const string WorkflowFinalize = "workflow.finalize";
 
     /// <summary>Capabilities implemented on both surfaces by the current stage.</summary>
     public static IReadOnlyList<string> Implemented { get; } =
@@ -26,6 +29,9 @@ public static class CapabilityIds
         ControlEvents,
         IntegrationSkill,
         SprintManage,
+        WorkflowConfirm,
+        WorkflowTestWork,
+        WorkflowFinalize,
     ];
 }
 
