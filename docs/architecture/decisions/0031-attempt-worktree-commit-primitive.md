@@ -82,6 +82,32 @@ silently absorbed here. `SprintGitIsolation.CommitAttemptAsync`'s own doc
 states this explicitly so the next executor slice does not have to
 re-derive it.
 
+## Round 1 review
+
+Independent review found two issues, both fixed:
+
+1. **The `git commit` call bypassed `RunInWorktreeAsync`'s own
+   directory-existence guard**, unlike the `git add -A` step right before
+   it in the same method — a worktree removed out from under this call
+   between the two invocations (e.g. a racing `DiscardAttemptAsync`) would
+   throw an unhandled `Win32Exception` from starting `git` in a directory
+   that no longer exists, instead of failing closed the same way every
+   other worktree-scoped command in this class already does. Fixed by
+   giving `RunInWorktreeAsync` itself an optional environment-variables
+   parameter (merged onto the inherited environment exactly like every
+   other `ProcessRequest` this class builds) and routing the commit call
+   through it, rather than calling `processRunner.RunAsync` directly.
+2. **`FakeWorktreeManager.CommitAllAsync`'s synthetic `HEAD` overflowed
+   the 40-hex-character commit-id invariant once `Commits.Count` reached
+   10** (a bare decimal count concatenated onto a fixed-length zero
+   suffix grows past the fixed total length as soon as the count needs a
+   second digit) — latent today (no current test drives one fake past
+   nine commits) but would have failed this codebase's own commit-id
+   regex checks the moment a future high-volume orchestration test did.
+   Fixed with a fixed-width scheme: `"c"` plus the count's own hex
+   digits, left-padded to fill the remaining 39 characters, correct for
+   any realistic count.
+
 ## Consequences
 
 - New `IWorktreeManager.CommitAllAsync` and `SprintGitIsolation.CommitAttemptAsync`,

@@ -380,8 +380,11 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
 
         Commits.Add((path, message));
         Dirty.Remove(path);
-        string commit = string.Concat(
-            "c", Commits.Count.ToString(CultureInfo.InvariantCulture), new string('0', 38));
+        // Fixed 40-hex-char length regardless of how large Commits.Count grows (a bare decimal
+        // count concatenated onto a zero-padded suffix would overflow that length once the count
+        // itself grows past a single digit) -- "c" (always a valid hex nibble) plus the count's own
+        // hex digits, left-padded to fill the remaining 39 characters.
+        string commit = "c" + Commits.Count.ToString("x", CultureInfo.InvariantCulture).PadLeft(39, '0');
         heads[path] = commit;
         return Task.FromResult(GitOperationResult.Ok(commit));
     }
