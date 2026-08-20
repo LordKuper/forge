@@ -81,6 +81,17 @@
       "acceptance": "human-gate-parity"
     },
     {
+      "id": "workflow.confirm",
+      "kind": "command",
+      "contract": "ConfirmNode",
+      "events": ["ConfirmationRecorded", "SprintChanged"],
+      "cli": "forge confirm <confirmed|not-confirmed> --sprint <id> --definition-of-done <text> --evidence-kind <inspection|execution|existing-check> --evidence <text> [--node <id>] [--yes]",
+      "desktop": "Confirmation/RecordOutcome",
+      "permission": "human_confirmation_confirm",
+      "acceptance": "confirmation-parity",
+      "note": "CLI-only for now, matching `workflow.review`/`attempt.supersede`'s own first slice (ADR 0019): not yet in `CapabilityIds.Implemented`, so `SurfaceParityTests`' Desktop-parity checks do not yet require a matching Desktop control. Confirms a `NodeRole.Confirmation` node's own attempt lifecycle (no executor exists for this role -- `ExecutionProfilePolicy.PhaseFor` returns null for it) rather than through a human gate."
+    },
+    {
       "id": "configuration.manage",
       "kind": "command",
       "contract": "GetSetScopedConfiguration",

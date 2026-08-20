@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Host.Client;
 using Forge.Presentation;
 using Microsoft.Extensions.Hosting;
@@ -313,6 +314,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchResolveGateAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.SupersedeAttemptKind =>
                     await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.ConfirmNodeKind =>
+                    await DispatchConfirmNodeAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.CreateSprintKind =>
                     await DispatchCreateSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RunSprintKind =>
@@ -561,6 +564,43 @@ public sealed class ControlPlaneHostedService(
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
     }
+
+    private async Task<ControlResponse> DispatchConfirmNodeAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        ConfirmNodeRequest? payload = request.Payload is { } value
+            ? value.Deserialize<ConfirmNodeRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.NodeId is null || payload.DefinitionOfDone is null || payload.Evidence is null)
+        {
+            throw new InvalidDataException("The confirm_node payload is required.");
+        }
+
+        IReadOnlyList<ConfirmationEvidence> evidence =
+            [.. payload.Evidence.Select(item => new ConfirmationEvidence(EvidenceKindFromWireValue(item.Kind), item.Description))];
+        RecordConfirmationResult result = await application
+            .ConfirmNodeAsync(
+                options.ProjectRoot,
+                payload.SprintId,
+                payload.NodeId,
+                payload.Outcome ? ConfirmationOutcome.Confirmed : ConfirmationOutcome.NotConfirmed,
+                payload.DefinitionOfDone,
+                evidence,
+                payload.Confirmed,
+                cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private static ConfirmationEvidenceKind EvidenceKindFromWireValue(string kind) => kind switch
+    {
+        "inspection" => ConfirmationEvidenceKind.Inspection,
+        "execution" => ConfirmationEvidenceKind.Execution,
+        "existing_check" => ConfirmationEvidenceKind.ExistingCheck,
+        _ => throw new InvalidDataException($"Unknown confirmation evidence kind '{kind}'."),
+    };
 
     private async Task<ControlResponse> DispatchCreateSprintAsync(
         ControlRequest request,

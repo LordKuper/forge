@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.55.0
+
+### Added
+
+- A running sprint's `confirmation` node can now be resolved by a human
+  operator: `forge confirm confirmed --sprint <id> --definition-of-done
+  <text> --evidence-kind <inspection|execution|existing-check> --evidence
+  <text> --yes` records whether the implementation meets its definition of
+  done (or `forge confirm not-confirmed` for the opposite verdict) and
+  settles the node. A confirmed verdict lets the sprint's test-work node
+  become eligible; a not-confirmed verdict blocks the sprint for further
+  human attention. Requires an interactive session and explicit `--yes`,
+  matching every other human-only command.
+
 ## v0.54.0
 
 ### Added

@@ -559,6 +559,34 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
     }
 
+    public int ConfirmNodeCalls { get; private set; }
+
+    public ConfirmationOutcome? LastConfirmOutcome { get; private set; }
+
+    public bool? LastConfirmConfirmed { get; private set; }
+
+    public string? LastConfirmNodeId { get; private set; }
+
+    public Guid? LastConfirmSprintId { get; private set; }
+
+    public Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ConfirmNodeCalls++;
+        LastConfirmOutcome = outcome;
+        LastConfirmConfirmed = confirmed;
+        LastConfirmNodeId = nodeId;
+        LastConfirmSprintId = sprintId;
+        return Task.FromResult(new RecordConfirmationResult(true, null, DiagnosticCodes.None));
+    }
+
     public int CreateSprintCalls { get; private set; }
 
     public int RunSprintCalls { get; private set; }
@@ -648,6 +676,17 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
+
+    public Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new RecordConfirmationResult(true, null, DiagnosticCodes.None));
 
     public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));

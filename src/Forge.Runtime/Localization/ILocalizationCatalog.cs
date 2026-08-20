@@ -126,6 +126,10 @@ public static class MessageKeys
     public const string GateConfirmationRequired = "GateConfirmationRequired";
     public const string GateActiveSprintPlaceholder = "GateActiveSprintPlaceholder";
     public const string GateSprintAmbiguous = "GateSprintAmbiguous";
+    public const string ConfirmDescription = "ConfirmDescription";
+    public const string ConfirmConfirmedDescription = "ConfirmConfirmedDescription";
+    public const string ConfirmNotConfirmedDescription = "ConfirmNotConfirmedDescription";
+    public const string ConfirmRecorded = "ConfirmRecorded";
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";

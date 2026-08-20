@@ -78,6 +78,25 @@ public sealed record ResolveGateRequest(Guid SprintId, string NodeId, bool Appro
 /// human-only `attempt.supersede`).</summary>
 public sealed record SupersedeAttemptRequest(Guid SprintId, Guid AttemptId, string Instruction, bool Confirmed);
 
+/// <summary>One <c>ConfirmNodeRequest.Evidence</c> entry. <see cref="Kind"/> is one of
+/// <c>"inspection"</c>/<c>"execution"</c>/<c>"existing_check"</c> (matching
+/// <c>confirmation-result.schema.json</c>'s own vocabulary) — a primitive string, not
+/// <c>Forge.Domain.ConfirmationEvidenceKind</c>, since <c>Forge.Host.Client</c> has no reference to
+/// <c>Forge.Domain</c>.</summary>
+public sealed record ConfirmationEvidenceEntry(string Kind, string Description);
+
+/// <summary><see cref="ControlProtocol.ConfirmNodeKind"/>'s request payload (the human-only
+/// `workflow.confirm` capability). No expected node version travels on the wire — same reason as
+/// <see cref="ResolveGateRequest"/>. <see cref="Outcome"/> is <see langword="true"/> for
+/// <c>Confirmed</c>, <see langword="false"/> for <c>NotConfirmed</c>.</summary>
+public sealed record ConfirmNodeRequest(
+    Guid SprintId,
+    string NodeId,
+    bool Outcome,
+    string DefinitionOfDone,
+    IReadOnlyList<ConfirmationEvidenceEntry> Evidence,
+    bool Confirmed);
+
 /// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. Empty: the Host
 /// always creates from its own project's canonical graph, and mints its own idempotency key, so
 /// nothing travels on the wire — see <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>.</summary>
@@ -141,6 +160,13 @@ public static class ControlProtocol
     /// <see cref="SupersedeAttemptRequest"/>. Response payload: a `CompleteAttemptResult` instance
     /// (same shape as <see cref="ResolveGateKind"/>'s response).</summary>
     public const string SupersedeAttemptKind = "supersede_attempt";
+
+    /// <summary>The human-only `workflow.confirm` capability — records whether a sprint's
+    /// `confirmation` node's implementation meets its definition of done, and settles that node's
+    /// own attempt to a terminal state in the same call (no executor exists for this role). Request
+    /// payload: a <see cref="ConfirmNodeRequest"/>. Response payload: a `RecordConfirmationResult`
+    /// instance (<c>{"succeeded": bool, "confirmation"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string ConfirmNodeKind = "confirm_node";
 
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph (ADR
     /// 0001). Request payload: a <see cref="CreateSprintRequest"/>. Response payload: a

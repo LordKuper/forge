@@ -254,6 +254,163 @@ public sealed class ConfirmationGateTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncWithConfirmedOutcomeSucceedsTheNodeAndPromotesTestWorkToReady()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["confirm"];
+        Guid key = SprintScheduler.ConfirmNodeKey(sprintId, node);
+
+        RecordConfirmationResult recorded = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot,
+            sprintId,
+            "confirm",
+            ConfirmationOutcome.Confirmed,
+            "Feature X matches its agreed definition of done.",
+            [new(ConfirmationEvidenceKind.Execution, "Ran the full test suite locally; all green.")],
+            node.Version,
+            key,
+            cancellationToken);
+
+        Assert.True(recorded.Succeeded, recorded.DiagnosticCode);
+        Assert.Equal(ConfirmationOutcome.Confirmed, recorded.Confirmation!.Outcome);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, state.Nodes["confirm"].State);
+        Assert.Equal(NodeState.Ready, state.Nodes["test_work"].State);
+    }
+
+    // The node's own job -- rendering an honest judgment -- succeeded even though the judgment
+    // itself was negative: a NotConfirmed verdict still completes the confirmation node's attempt,
+    // it does not fail it. Blocking the sprint (RecordConfirmationAsync's own side effect) is the
+    // actual stopping point for a human, not the node's own attempt outcome.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncWithNotConfirmedOutcomeStillSucceedsTheNodeButBlocksTheSprint()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["confirm"];
+        Guid key = SprintScheduler.ConfirmNodeKey(sprintId, node);
+
+        RecordConfirmationResult recorded = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot,
+            sprintId,
+            "confirm",
+            ConfirmationOutcome.NotConfirmed,
+            "Feature X does not yet match its agreed definition of done.",
+            [new(ConfirmationEvidenceKind.Inspection, "Acceptance criterion 2 is not met.")],
+            node.Version,
+            key,
+            cancellationToken);
+
+        Assert.True(recorded.Succeeded, recorded.DiagnosticCode);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, state.Nodes["confirm"].State);
+        Assert.Equal(SprintState.Blocked, state.Sprint.State);
+        Assert.Equal("confirmation", state.Sprint.BlockedReason);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncRejectsAStaleVersion()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["confirm"];
+        Guid key = SprintScheduler.ConfirmNodeKey(sprintId, node);
+
+        RecordConfirmationResult result = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot, sprintId, "confirm", ConfirmationOutcome.Confirmed, "n/a",
+            [new(ConfirmationEvidenceKind.Inspection, "n/a")], node.Version + 1, key, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SuggestionStale, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncAgainstANonConfirmationNodeIsRejected()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        RecordConfirmationResult result = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot, sprintId, "test_work", ConfirmationOutcome.Confirmed, "n/a",
+            [new(ConfirmationEvidenceKind.Inspection, "n/a")], 1, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.NodeKindMismatch, result.DiagnosticCode);
+    }
+
+    // A stateless caller (the CLI) retrying after its own response was lost presents the same,
+    // now-stale version/key the original fresh call required -- must resolve to what already
+    // happened, not a spurious SuggestionStale conflict.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConfirmNodeAsyncResumedAfterAlreadyTerminalReturnsTheRecordedArtifactInsteadOfReacting()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmThenTestWorkGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        NodeSnapshot node = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["confirm"];
+        Guid key = SprintScheduler.ConfirmNodeKey(sprintId, node);
+        RecordConfirmationResult recorded = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot, sprintId, "confirm", ConfirmationOutcome.Confirmed, "Met the DoD.",
+            [new(ConfirmationEvidenceKind.Execution, "Ran the suite.")], node.Version, key, cancellationToken);
+        Assert.True(recorded.Succeeded, recorded.DiagnosticCode);
+
+        RecordConfirmationResult replay = await scheduler.ConfirmNodeAsync(
+            environment.ProjectRoot, sprintId, "confirm", ConfirmationOutcome.Confirmed, "irrelevant on replay",
+            [new(ConfirmationEvidenceKind.Inspection, "irrelevant on replay")], node.Version, key, cancellationToken);
+
+        Assert.True(replay.Succeeded, replay.DiagnosticCode);
+        Assert.Equal(recorded.Confirmation!.ConfirmationId, replay.Confirmation!.ConfirmationId);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void ImplementationCriticalGraphBuilderProducesAValidGraphWithIsolatedRoles()
     {
         IReadOnlyList<NodeDefinition> graph = Forge.Compiler.ImplementationCriticalGraphBuilder.Build();

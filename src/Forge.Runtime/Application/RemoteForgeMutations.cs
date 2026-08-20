@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Host.Client;
 
 namespace Forge.Application;
@@ -96,6 +97,44 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
                 new(false, null, DiagnosticCodes.HostUnavailable)
             : new(false, null, DiagnosticCodes.HostUnavailable);
     }
+
+    public async Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(definitionOfDone);
+        ArgumentNullException.ThrowIfNull(evidence);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new ConfirmNodeRequest(
+                sprintId,
+                nodeId,
+                outcome == ConfirmationOutcome.Confirmed,
+                definitionOfDone,
+                [.. evidence.Select(item => new ConfirmationEvidenceEntry(EvidenceKindWireValue(item.Kind), item.Description))],
+                confirmed),
+            ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.ConfirmNodeKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<RecordConfirmationResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodes.HostUnavailable);
+    }
+
+    private static string EvidenceKindWireValue(ConfirmationEvidenceKind kind) => kind switch
+    {
+        ConfirmationEvidenceKind.Inspection => "inspection",
+        ConfirmationEvidenceKind.Execution => "execution",
+        ConfirmationEvidenceKind.ExistingCheck => "existing_check",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown confirmation evidence kind."),
+    };
 
     public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
         string? projectRoot,

@@ -82,6 +82,22 @@ public interface IForgeMutations
         bool confirmed,
         CancellationToken cancellationToken);
 
+    /// <summary>The human-only `workflow.confirm` capability: records whether a sprint's
+    /// `confirmation` node's implementation meets its definition of done, driving that Work node's
+    /// own attempt to a terminal state in the same call — no executor exists for this role (see
+    /// <see cref="ExecutionProfilePolicy.PhaseFor"/>), so nothing else ever settles it.
+    /// <paramref name="confirmed"/> must be <see langword="true"/> — the same no-config-bypass rule
+    /// as <see cref="ResolveGateAsync"/>.</summary>
+    Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: cancels a non-terminal
     /// attempt and creates a linked replacement. <paramref name="confirmed"/> must be
     /// <see langword="true"/> — the same no-config-bypass rule as <see cref="ResolveGateAsync"/>.</summary>
@@ -575,6 +591,53 @@ public sealed class ForgeApplication(
         Guid key = SprintScheduler.ResolveHumanGateKey(id, node);
         return await scheduler
             .ResolveHumanGateAsync(status.Root, id, nodeId, approved, node.Version, key, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>The human-only `workflow.confirm` capability. Same server-side
+    /// version/idempotency-key derivation as <see cref="ResolveGateAsync"/>.</summary>
+    public async Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        ArgumentNullException.ThrowIfNull(definitionOfDone);
+        ArgumentNullException.ThrowIfNull(evidence);
+        if (!confirmed)
+        {
+            return new(false, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintWorkflowState? state =
+            await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        Guid key = SprintScheduler.ConfirmNodeKey(id, node);
+        return await scheduler
+            .ConfirmNodeAsync(
+                status.Root, id, nodeId, outcome, definitionOfDone, evidence, node.Version, key, cancellationToken)
             .ConfigureAwait(false);
     }
 

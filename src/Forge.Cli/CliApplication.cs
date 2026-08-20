@@ -3,6 +3,7 @@ using System.Globalization;
 using Forge.Application;
 using Forge.Compiler;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Updater;
@@ -65,6 +66,8 @@ public static class CliApplication
             CreateGateCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         root.Subcommands.Add(CreateAttemptCommand(
             text, output, diagnostics, effectiveResolver, effectiveInput, effectiveIsInteractive));
+        root.Subcommands.Add(
+            CreateConfirmCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -613,6 +616,114 @@ public static class CliApplication
         });
         return command;
     }
+
+    /// <summary>The human-only `workflow.confirm` capability. Deliberately shaped like
+    /// <see cref="CreateGateCommand"/>: one noun, two verb subcommands (<c>confirmed</c>/
+    /// <c>not-confirmed</c>, matching <see cref="ConfirmationOutcome"/>'s own two values rather than
+    /// gate's approve/reject vocabulary, since this records a definition-of-done judgment, not a
+    /// gate decision), mandatory <c>--yes</c> with no config-driven bypass, and the same ADR 0023
+    /// interactive-session check every human-only command shares. Only a single evidence entry is
+    /// supported this slice (`--evidence-kind`/`--evidence`) — `confirmation-result.schema.json`
+    /// allows more than one, but nothing in this CLI's own vocabulary yet needs it; deferred rather
+    /// than building repeatable-option parsing this codebase has no other precedent for.</summary>
+    private static Command CreateConfirmCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
+    {
+        Command command = new("confirm", text.Resolve(MessageKeys.ConfirmDescription));
+        command.Subcommands.Add(CreateConfirmRecordCommand(
+            text, output, diagnostics, resolveMutations, isInteractive, "confirmed",
+            MessageKeys.ConfirmConfirmedDescription, outcome: ConfirmationOutcome.Confirmed));
+        command.Subcommands.Add(CreateConfirmRecordCommand(
+            text, output, diagnostics, resolveMutations, isInteractive, "not-confirmed",
+            MessageKeys.ConfirmNotConfirmedDescription, outcome: ConfirmationOutcome.NotConfirmed));
+        return command;
+    }
+
+    private static Command CreateConfirmRecordCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive,
+        string name,
+        string descriptionKey,
+        ConfirmationOutcome outcome)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<string> node = new("--node")
+        {
+            Description = "Confirmation node id. Defaults to the canonical confirmation node.",
+        };
+        Option<string> definitionOfDone = new("--definition-of-done")
+        {
+            Description = "What was checked against the definition of done.",
+            Required = true,
+        };
+        Option<string> evidenceKind = new("--evidence-kind")
+        {
+            Description = "One of: inspection, execution, existing-check.",
+            Required = true,
+        };
+        Option<string> evidence = new("--evidence") { Description = "Evidence description.", Required = true };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the decision." };
+        Command command = new(name, text.Resolve(descriptionKey));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(node);
+        command.Options.Add(definitionOfDone);
+        command.Options.Add(evidenceKind);
+        command.Options.Add(evidence);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            // ADR 0023: same earliest-reachable, unconditional refusal every human-only command
+            // shares -- before this action's own sprint-id/evidence-kind validation.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            if (ParseEvidenceKind(parseResult.GetValue(evidenceKind)) is not { } kind)
+            {
+                return Report(diagnostics, DiagnosticCodes.ConfirmationEvidenceKindInvalid);
+            }
+
+            string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.ConfirmationNodeId;
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            RecordConfirmationResult result = await mutations
+                .ConfirmNodeAsync(
+                    root, sprintId, nodeId, outcome, parseResult.GetValue(definitionOfDone) ?? string.Empty,
+                    [new ConfirmationEvidence(kind, parseResult.GetValue(evidence) ?? string.Empty)],
+                    parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ConfirmRecorded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static ConfirmationEvidenceKind? ParseEvidenceKind(string? value) => value switch
+    {
+        "inspection" => ConfirmationEvidenceKind.Inspection,
+        "execution" => ConfirmationEvidenceKind.Execution,
+        "existing-check" => ConfirmationEvidenceKind.ExistingCheck,
+        _ => null,
+    };
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. See
     /// <see cref="CreateGateCommand"/>'s remark — both commands now share ADR 0023's same
