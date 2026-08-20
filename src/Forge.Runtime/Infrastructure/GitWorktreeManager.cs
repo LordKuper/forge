@@ -122,6 +122,51 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return result.ExitCode != 0 || result.StandardOutput.Trim().Length > 0;
     }
 
+    // ponytail: one fixed, unconfigurable MVP author/committer identity for every commit this class
+    // makes, matching ExecutionProfilePolicy's own "one fixed MVP policy, no per-project
+    // configuration yet" precedent. A no-reply-shaped address rather than an actual mailbox, the
+    // same convention CI bot commits elsewhere use.
+    private const string CommitAuthorName = "Forge";
+
+    private const string CommitAuthorEmail = "forge@localhost";
+
+    public async Task<GitOperationResult> CommitAllAsync(
+        string projectRoot, string path, string message, CancellationToken cancellationToken)
+    {
+        ProcessResult staged = await RunInWorktreeAsync(path, ["add", "-A"], cancellationToken)
+            .ConfigureAwait(false);
+        if (staged.ExitCode != 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitFailed, staged.StandardError);
+        }
+
+        // Merged onto the inherited environment (ProcessRequest.ReplaceEnvironment defaults to
+        // false), not a full replacement: a git commit still needs the ordinary inherited
+        // environment (PATH, HOME/USERPROFILE, credential helpers) to resolve hooks and config the
+        // same way every other `git` invocation in this class already does -- only the author/
+        // committer identity is overridden, so this commit is never silently attributed to whatever
+        // user.name/user.email (or lack of one) the project's own repository config happens to have.
+        ProcessResult committed = await processRunner.RunAsync(
+            new(
+                "git",
+                ["commit", "--no-verify", "-m", message],
+                path,
+                new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["GIT_AUTHOR_NAME"] = CommitAuthorName,
+                    ["GIT_AUTHOR_EMAIL"] = CommitAuthorEmail,
+                    ["GIT_COMMITTER_NAME"] = CommitAuthorName,
+                    ["GIT_COMMITTER_EMAIL"] = CommitAuthorEmail,
+                }),
+            cancellationToken).ConfigureAwait(false);
+        if (committed.ExitCode != 0)
+        {
+            return GitOperationResult.Fail(DiagnosticCodes.WorktreeCommitFailed, committed.StandardError);
+        }
+
+        return GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
+    }
+
     public async Task<GitOperationResult> ResetHardAsync(
         string projectRoot,
         string path,

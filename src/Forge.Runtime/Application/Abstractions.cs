@@ -160,6 +160,20 @@ public interface IWorktreeManager
     /// untracked) change.</summary>
     Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken);
 
+    /// <summary>
+    /// Stages every tracked and untracked change in <paramref name="path"/> (`git add -A`) and
+    /// commits it with <paramref name="message"/>, authored and committed as Forge itself — never
+    /// the ambient `user.name`/`user.email` the project's own repository config happens (or fails)
+    /// to have configured, so this succeeds identically in a project that never set a git identity
+    /// at all. Fails closed (<c>worktree_commit_failed</c>) on any `git` error, including calling
+    /// this on an already-clean working tree ("nothing to commit") — a caller that means to no-op on
+    /// a clean tree checks <see cref="IsDirtyAsync"/> first rather than relying on this to do so.
+    /// Never partial: a failed `commit` after a successful `add` leaves the index staged but no new
+    /// commit created, exactly like an ordinary failed `git commit` would.
+    /// </summary>
+    Task<GitOperationResult> CommitAllAsync(
+        string projectRoot, string path, string message, CancellationToken cancellationToken);
+
     /// <summary>Discards every uncommitted change and untracked file in <paramref name="path"/>,
     /// then resets it to <paramref name="commit"/> — the dirty-recovery primitive: never continues
     /// over an unknown diff.</summary>

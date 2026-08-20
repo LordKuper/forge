@@ -175,6 +175,125 @@ public sealed class GitIsolationTests
         Assert.False(await worktrees.ExistsAsync(repository.Root, attemptPath, cancellationToken));
     }
 
+    // The commit primitive this stage's node executors need (Stage 11: "invoke a provider, commit
+    // its edits" -- ADR 0004's own class doc). Never exercised before this test: every prior test
+    // in this file that needed an attempt branch with a real commit past base used
+    // GitTestRepository.CommitFileAsync (a test-only fixture helper) precisely because nothing in
+    // production could produce one.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task CommitAttemptStagesAndCommitsEveryChangeAuthoredAsForgeRegardlessOfTheRepositorysOwnIdentity()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        IWorktreeManager worktrees = environment.Resolve<IWorktreeManager>();
+        (SprintId sprintId, Guid projectId, string tip) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        // A tracked file's edit AND an untracked new file -- `git add -A` must stage both, not just
+        // changes to files git already knows about.
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "new-feature.txt"), "hello", cancellationToken);
+
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Implement the feature", cancellationToken);
+
+        AssertSucceeded(committed);
+        Assert.NotEqual(tip, committed.Commit);
+        Assert.Equal(committed.Commit, await worktrees.GetHeadAsync(repository.Root, attemptPath, cancellationToken));
+        Assert.False(await worktrees.IsDirtyAsync(repository.Root, attemptPath, cancellationToken));
+        // Authored as Forge itself, never the repository-level identity GitTestRepository.CreateAsync
+        // configured ("Forge Tests <forge-tests@example.invalid>") -- proves CommitAllAsync's own
+        // identity override actually takes effect rather than merely falling through to whatever the
+        // ambient repository config happens to have.
+        ProcessResult authorship = await repository.RunAsync(
+            attemptPath, ["log", "-1", "--format=%an <%ae>|%cn <%ce>"], cancellationToken);
+        Assert.Equal(0, authorship.ExitCode);
+        Assert.Equal("Forge <forge@localhost>|Forge <forge@localhost>", authorship.StandardOutput.Trim());
+    }
+
+    // CommitAllAsync must never silently no-op on a clean tree: a caller that means "nothing to
+    // integrate" checks IsDirtyAsync itself first (SprintGitIsolation's own doc comment states this
+    // is the caller's policy, not this method's) -- so calling this on an unmodified worktree must
+    // fail closed and change nothing, the same "never continue over an unknown diff" discipline
+    // every other method in this class already follows.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task CommitAttemptFailsClosedAndChangesNothingWhenTheWorktreeHasNoUncommittedChanges()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        IWorktreeManager worktrees = environment.Resolve<IWorktreeManager>();
+        (SprintId sprintId, Guid projectId, _) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        GitOperationResult created = await CreateAttemptWorktreeOrFailAsync(
+            isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Nothing changed", cancellationToken);
+
+        Assert.False(committed.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorktreeCommitFailed, committed.DiagnosticCode);
+        Assert.Equal(created.Commit, await worktrees.GetHeadAsync(repository.Root, attemptPath, cancellationToken));
+    }
+
+    // End-to-end proof that CommitAllAsync's own output is exactly what IntegrateAsync's existing
+    // fast-forward contract expects -- the same scenario
+    // IntegrateFastForwardsTheAttemptsCommitIntoIntegrationAndDiscardsTheAttemptWorktree already
+    // covers, but with the real production commit primitive in place of that test's own
+    // GitTestRepository.CommitFileAsync fixture call.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ACommitMadeByCommitAttemptAsyncIntegratesCleanlyViaFastForward()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        IWorktreeManager worktrees = environment.Resolve<IWorktreeManager>();
+        (SprintId sprintId, Guid projectId, string tip) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "feature.txt"), "hello", cancellationToken);
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Implement the feature", cancellationToken);
+        AssertSucceeded(committed);
+
+        GitOperationResult integrated = await isolation.IntegrateAsync(
+            repository.Root, projectId, sprintId, attemptId, tip, cancellationToken);
+
+        AssertSucceeded(integrated);
+        Assert.Equal(committed.Commit, integrated.Commit);
+        Assert.True(integrated.CleanupSucceeded);
+        string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
+        Assert.Equal(committed.Commit, await worktrees.GetHeadAsync(repository.Root, integrationPath, cancellationToken));
+        Assert.False(await worktrees.ExistsAsync(repository.Root, attemptPath, cancellationToken));
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task IntegrateFailsClosedAndChangesNothingWhenTheIntegrationBaseHasMovedSinceTheAttemptStarted()
