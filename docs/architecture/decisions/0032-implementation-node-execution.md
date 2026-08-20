@@ -121,6 +121,40 @@ sets up real data for whenever it is built, the same "produce it now,
 consume it later" precedent `planning`'s own handoff already established
 for `implementation` itself.
 
+## Round 1 review
+
+Independent review found two issues in `CommitMessage`, both fixed — the
+same method, on the actual production path that commits real code
+changes, so both mattered more than usual:
+
+1. **A summary whose own first line was blank (but a later line had real
+   content) collapsed to an empty commit subject.** `CommitMessage` took
+   only the text before the first `\n`; if that text was blank or
+   whitespace-only, the resulting `git commit -m ""` argument is rejected
+   by git outright, discarding a real, already-verified-dirty edit as a
+   recorded failure purely because of the summary's own line breaks —
+   nothing to do with whether the edit itself was good. Fixed: the
+   subject is now the first genuinely non-blank line (splitting on `\n`,
+   trimming each, taking the first with content), falling back to the
+   same fixed text an entirely blank summary already used. Regression-tested
+   with `ASummaryWhoseFirstLineIsBlankStillProducesAUsableCommitSubjectFromALaterLine`.
+2. **The 200-character truncation could split a UTF-16 surrogate pair.**
+   A bare `text.AsSpan(0, 200)` slice cuts at a fixed code-unit count with
+   no regard for character boundaries; landing between a surrogate pair's
+   high and low halves produces a malformed string — an unpaired high
+   surrogate at the very end — fed straight into `git commit -m`. Fixed
+   with a dedicated `Truncate` helper that backs the cut point off by one
+   whenever it would split a pair, dropping the whole character instead of
+   half of it. Regression-tested with `ACommitSubjectIsNeverTruncatedInsideASurrogatePair`,
+   constructed so the boundary lands exactly on a surrogate pair.
+
+Review also stress-ran the new and sibling (`planning`) test suites well
+beyond the single observed flake (one `dotnet test` run out of nine showed
+a timeout waiting for `NodeState.Succeeded` in the happy-path test, not
+reproduced in 14 further attempts): 60 additional combined runs after the
+fixes above, all green — consistent with the review's own read of
+environment contention, not a code defect.
+
 ## Consequences
 
 - New `src/Forge.Host.Runtime/ImplementationExecutionHostedService.cs` and

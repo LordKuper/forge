@@ -130,6 +130,96 @@ public sealed class ImplementationExecutionHostedServiceTests
             item => item.NodeId.Value == ImplementationNodeId);
     }
 
+    // Round 1 review of PR #73: a real bug, found and fixed. The commit subject was extracted from
+    // the summary's own FIRST line only -- a summary whose first line happens to be blank (but a
+    // later line has real content) collapsed to an empty `git commit -m ""` argument, which git
+    // itself rejects outright, discarding a real, already-verified-dirty edit as a failure purely
+    // because of the summary's own line breaks.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASummaryWhoseFirstLineIsBlankStillProducesAUsableCommitSubjectFromALaterLine()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "\n\nAdded the feature module.";
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success([], new ProviderTerminalResult(summary)));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        (string Path, string Message) commit = Assert.Single(worktrees.Commits);
+        Assert.Equal("Added the feature module.", commit.Message);
+    }
+
+    // Round 1 review of PR #73: a second real bug in the same method, found and fixed. Truncating
+    // the commit subject at a fixed UTF-16 code-unit count with a bare span slice can land between
+    // a surrogate pair's high and low halves, producing a malformed string with an unpaired high
+    // surrogate at its end.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ACommitSubjectIsNeverTruncatedInsideASurrogatePair()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        // U+1F600 ("😀") is a surrogate pair in UTF-16. Placed so the 200-character truncation
+        // boundary falls exactly between its high and low halves.
+        string summary = new string('a', 199) + "\U0001F600" + new string('b', 50);
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success([], new ProviderTerminalResult(summary)));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        (string Path, string Message) commit = Assert.Single(worktrees.Commits);
+        // The pair's high surrogate lands exactly at the 200-char cut point (index 199, after 199
+        // 'a's) -- the fix must drop the whole pair rather than keep the lone high surrogate, so
+        // the kept subject is 199 'a's plus the ellipsis, never a malformed 200th character.
+        Assert.Equal(new string('a', 199) + "…", commit.Message);
+    }
+
     // ADR 0006/0018's durable rate-limit wait, mirroring PlanningExecutionHostedServiceTests' own
     // coverage of the identical routing for the implementation phase.
     [Fact]

@@ -478,10 +478,36 @@ public sealed class ImplementationExecutionHostedService(
     /// terminal text never produces an unreasonable `git log` entry.</summary>
     private static string CommitMessage(string summary)
     {
-        int newline = summary.IndexOf('\n', StringComparison.Ordinal);
-        string subject = newline < 0 ? summary : summary[..newline];
-        subject = subject.Trim();
-        return subject.Length <= 200 ? subject : string.Concat(subject.AsSpan(0, 200), "…");
+        // The first genuinely non-blank line, not merely the first line: a summary whose own first
+        // line happens to be blank (but a later line has real content) must never collapse to an
+        // empty subject -- `git commit -m ""` is rejected by git outright, which would discard a
+        // real, already-verified-dirty edit as a failure purely because of the summary's own line
+        // breaks. Falls back to the same fixed text an entirely blank summary already uses.
+        string subject = summary
+            .Split('\n')
+            .Select(line => line.Trim())
+            .FirstOrDefault(line => line.Length > 0) ?? FallbackSummary;
+        return Truncate(subject, 200);
+    }
+
+    /// <summary>Never splits a UTF-16 surrogate pair at the truncation boundary: cutting a string
+    /// at a fixed code-unit count with a bare <see cref="ReadOnlySpan{T}"/> slice can land between a
+    /// high and low surrogate, producing a malformed string with an unpaired high surrogate at its
+    /// end -- exactly the kind of text a `git commit -m` argument must never carry.</summary>
+    private static string Truncate(string text, int maxLength)
+    {
+        if (text.Length <= maxLength)
+        {
+            return text;
+        }
+
+        int length = maxLength;
+        if (length > 0 && char.IsHighSurrogate(text[length - 1]))
+        {
+            length--;
+        }
+
+        return string.Concat(text.AsSpan(0, length), "…");
     }
 
     /// <summary>Unlike planning's prompt, this one invites edits and carries planning's own real
