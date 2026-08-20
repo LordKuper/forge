@@ -81,6 +81,13 @@ public static class DiagnosticCodes
     public const string WorktreeBaseMismatch = "worktree_base_mismatch";
     public const string WorktreeCommitInvalid = "worktree_commit_invalid";
     public const string WorktreeCommitFailed = "worktree_commit_failed";
+
+    /// <summary>The review node executor's own read-only diff primitive
+    /// (<see cref="Forge.Application.IWorktreeManager.DiffAsync"/>) failed — `git diff` itself
+    /// returned a non-zero exit, distinct from <see cref="WorktreeCommitInvalid"/> (a malformed
+    /// commit-id argument, checked before any process ever runs).</summary>
+    public const string WorktreeDiffFailed = "worktree_diff_failed";
+
     public const string WorktreeUnavailable = "worktree_unavailable";
 
     /// <summary>The implementation node executor's own outcome: the provider run succeeded (a

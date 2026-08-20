@@ -393,6 +393,19 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
         string projectRoot, string path, string commit, CancellationToken cancellationToken) =>
         Task.FromResult(GitOperationResult.Ok(commit));
 
+    /// <summary>Returned by every <see cref="DiffAsync"/> call; a test overrides it to exercise a
+    /// specific diff a review executor's own prompt-building/parsing should see.</summary>
+    public string Diff { get; set; } = "diff --git a/file.txt b/file.txt\n+changed";
+
+    public bool FailNextDiff { get; set; }
+
+    public string DiffFailureCode { get; set; } = DiagnosticCodes.WorktreeDiffFailed;
+
+    public Task<GitDiffResult> DiffAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken) =>
+        Task.FromResult(
+            FailNextDiff ? GitDiffResult.Fail(DiffFailureCode) : GitDiffResult.Ok(Diff, truncated: false));
+
     public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
         heads.TryGetValue(path, out string? head)
             ? Task.FromResult(head)

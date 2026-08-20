@@ -119,6 +119,38 @@ public sealed record GitOperationResult(
 }
 
 /// <summary>
+/// <paramref name="Diff"/> is <see langword="null"/> exactly when <paramref name="Succeeded"/> is
+/// <see langword="false"/>. <paramref name="Truncated"/> is meaningful only on success: the diff
+/// itself was cut to a bound (<see cref="GitWorktreeManagerDiffBudget.MaxCharacters"/>) rather than
+/// a failure — a large, real diff degrades by truncation, not by failure, matching every other
+/// context-assembly budget in this codebase (ADR 0012).
+/// </summary>
+public sealed record GitDiffResult(
+    bool Succeeded, string? Diff, bool Truncated, string DiagnosticCode, string? Detail = null)
+{
+    public static GitDiffResult Ok(string diff, bool truncated) => new(true, diff, truncated, DiagnosticCodes.None);
+
+    public static GitDiffResult Fail(string diagnosticCode, string? detail = null) =>
+        new(false, null, false, diagnosticCode, Detail: Truncate(detail));
+
+    private static string? Truncate(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? null
+            : text.Length <= 500 ? text.Trim() : string.Concat(text.AsSpan(0, 500), "…");
+}
+
+/// <summary>The single, MVP-fixed bound <see cref="IWorktreeManager.DiffAsync"/> truncates a raw
+/// `git diff` to before it ever reaches a prompt — an unverified guess (matching
+/// <c>IntakeExecutionHostedService.DefaultTokenBudget</c>'s own precedent for a frozen fallback
+/// with no configuration source), sized to leave real room for a review prompt's other sections
+/// (the handoff, rules, knowledge) under the same context-manifest token budget they already
+/// share.</summary>
+public static class GitWorktreeManagerDiffBudget
+{
+    public const int MaxCharacters = 50_000;
+}
+
+/// <summary>
 /// Low-level, real-Git worktree operations. Every method targets a linked worktree by its absolute
 /// path; <c>projectRoot</c> is the main repository every worktree links back to. No method leaves
 /// the main repository itself checked out to a different branch or dirty — all mutation happens
@@ -173,6 +205,17 @@ public interface IWorktreeManager
     /// </summary>
     Task<GitOperationResult> CommitAllAsync(
         string projectRoot, string path, string message, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// The read-only counterpart to <see cref="CommitAllAsync"/>: `git diff` between two already-
+    /// resolved commits (never a ref, matching every other commit-shaped argument this interface
+    /// takes), never the working tree at <paramref name="path"/> itself — reading history, not the
+    /// checkout's own state. <paramref name="path"/> only needs to be a worktree of the same
+    /// repository; git's object store is shared, so the diff does not depend on what that worktree
+    /// happens to have checked out.
+    /// </summary>
+    Task<GitDiffResult> DiffAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken);
 
     /// <summary>Discards every uncommitted change and untracked file in <paramref name="path"/>,
     /// then resets it to <paramref name="commit"/> — the dirty-recovery primitive: never continues

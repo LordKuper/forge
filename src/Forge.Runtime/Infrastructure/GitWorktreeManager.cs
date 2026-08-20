@@ -170,6 +170,27 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
     }
 
+    public async Task<GitDiffResult> DiffAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken)
+    {
+        if (!CommitPattern().IsMatch(fromCommit) || !CommitPattern().IsMatch(toCommit))
+        {
+            return GitDiffResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
+        ProcessResult result = await RunInWorktreeAsync(
+            path, ["diff", "--no-color", fromCommit, toCommit], cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            return GitDiffResult.Fail(DiagnosticCodes.WorktreeDiffFailed, result.StandardError);
+        }
+
+        string diff = result.StandardOutput;
+        bool truncated = diff.Length > GitWorktreeManagerDiffBudget.MaxCharacters;
+        return GitDiffResult.Ok(
+            truncated ? diff[..GitWorktreeManagerDiffBudget.MaxCharacters] : diff, truncated);
+    }
+
     public async Task<GitOperationResult> ResetHardAsync(
         string projectRoot,
         string path,

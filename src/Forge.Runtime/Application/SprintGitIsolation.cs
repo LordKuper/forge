@@ -148,6 +148,23 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         return worktrees.CommitAllAsync(projectRoot, attemptPath, message, cancellationToken);
     }
 
+    /// <summary>Reads the diff an attempt's own worktree can see between two already-resolved
+    /// commits — a thin path-resolution wrapper, the same shape as <see cref="CommitAttemptAsync"/>.
+    /// A review-role attempt is this method's first intended caller, reading what changed between a
+    /// sprint's frozen base and its current integration tip.</summary>
+    public Task<GitDiffResult> ReadDiffAsync(
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        AttemptId attemptId,
+        string fromCommit,
+        string toCommit,
+        CancellationToken cancellationToken)
+    {
+        string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
+        return worktrees.DiffAsync(projectRoot, attemptPath, fromCommit, toCommit, cancellationToken);
+    }
+
     /// <summary>
     /// Fast-forwards the sprint's integration branch to an attempt's branch tip, but only while the
     /// integration branch is still exactly at <paramref name="expectedIntegrationTip"/> — the base
