@@ -1,5 +1,7 @@
+using System.ComponentModel;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using Forge.Application;
 using Forge.Compiler;
 using Forge.Configuration;
@@ -7,6 +9,7 @@ using Forge.Domain;
 using Forge.Providers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using YamlDotNet.Core;
 
 namespace Forge.Host;
 
@@ -132,14 +135,29 @@ public sealed class PlanningExecutionHostedService(
             catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
                 or InvalidDataException or InvalidOperationException or FormatException
                 or ArgumentNullException or NullReferenceException or OverflowException
-                or KeyNotFoundException)
+                or KeyNotFoundException or ArgumentOutOfRangeException or YamlException
+                or JsonException or ConfigurationScopeException or Win32Exception)
             {
-                // Matches IntakeExecutionHostedService's own widened filter (ADR 0028, round 7
-                // review) — the same durable-state-corruption exception shapes reachable through
-                // SprintScheduler/FileSprintEventLog can surface through this service's identical
-                // call chain (AdvanceGraphAsync, LoadDefinitionAsync, StartAttemptAsync,
-                // CompleteAttemptAsync), and this service must not have to re-audit their internals
-                // separately to know that.
+                // The first four lines match IntakeExecutionHostedService's own widened filter
+                // (ADR 0028, round 7 review) — the same durable-state-corruption exception shapes
+                // reachable through SprintScheduler/FileSprintEventLog can surface through this
+                // service's identical call chain (AdvanceGraphAsync, LoadDefinitionAsync,
+                // StartAttemptAsync, CompleteAttemptAsync), and this service must not have to
+                // re-audit their internals separately to know that. Widened further for four
+                // failure surfaces intake never had: ArgumentOutOfRangeException from a corrupted
+                // (non-positive or absurdly large) ExecutionProfile deadline reaching
+                // AttemptSupervisor's own constructor guard; YamlException/JsonException/
+                // ConfigurationScopeException from ProjectIdentity.ReadProjectIdAsync reading a
+                // manifest.yaml damaged badly enough that YamlConfigurationStore.ReadAsync's own
+                // `.previous`-backup recovery cannot apply (matching the exact exception set
+                // YamlConfigurationStore.IsRecoverable already names); and Win32Exception from
+                // SprintGitIsolation's underlying `git.exe` process failing to start at all (a
+                // failure surface intake — which never touches git — never had). Every one of these
+                // leaves the node `running`, resumable by the same idempotent restart
+                // StartAttemptAsync already gives `intake`; a permanently corrupted profile or
+                // manifest logs a warning every tick rather than being rate-limited, matching this
+                // service's own "logged, not rate-limited" precedent for a permanently-rejected
+                // completion.
                 LogSprintFailed(logger, sprintId.Value, exception);
             }
         }
@@ -218,39 +236,45 @@ public sealed class PlanningExecutionHostedService(
             documents,
             tokenBudget);
 
-        (bool succeeded, List<string> outputs, List<NodeDiagnostic> diagnostics, string? summary) =
-            await RunPlanningAttemptAsync(
+        PlanningAttemptOutcome outcome = await RunPlanningAttemptAsync(
                 sprintId, attemptId, definition, profile, provider, documents, manifest, cancellationToken)
                 .ConfigureAwait(false);
-        if (!succeeded && diagnostics.Count == 0)
+        if (outcome.Disposition == PlanningAttemptDisposition.HostShuttingDown)
         {
-            // AttemptSupervisionResult.Reason == Cancelled: the caller's own token fired (Host
-            // shutting down), not a provider or infrastructure failure. RunPlanningAttemptAsync
-            // returns this exact empty-diagnostics failure shape only for that case, deliberately
-            // skipping both the worktree discard (the same token would make it throw) and
-            // CompleteAttemptAsync (the node stays `running`, resumed on the next tick after
-            // restart — the identical crash-resumability story IntakeExecutionHostedService already
-            // relies on for its own interrupted attempts).
+            // RunPlanningAttemptAsync deliberately skipped both the worktree discard (the same
+            // cancelled token would make it throw) and any scheduler completion call — the node
+            // stays `running`, resumed on the next tick after restart, the identical
+            // crash-resumability story IntakeExecutionHostedService already relies on for its own
+            // interrupted attempts.
             return;
         }
 
-        CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
-            options.ProjectRoot,
-            sprintId,
-            planning.Id,
-            attemptId,
-            succeeded,
-            manifest.ManifestDigest,
-            outputs,
-            diagnostics,
-            cancellationToken).ConfigureAwait(false);
+        // ADR 0006's durable rate-limit wait (ADR 0018): a RateLimited failure is a retryable
+        // condition the shared provider/model/surface routing key should back off from for
+        // DefaultRateLimitBackoff, not an ordinary failed attempt — DeferAttemptAsync abandons the
+        // attempt and records that routing block itself; it must not be raced by this service's own
+        // CompleteAttemptAsync call for the identical attempt.
+        CompleteAttemptResult completed = outcome.Disposition == PlanningAttemptDisposition.RateLimited
+            ? await scheduler.DeferAttemptAsync(
+                options.ProjectRoot, sprintId, planning.Id, attemptId, manifest.ManifestDigest, cancellationToken)
+                .ConfigureAwait(false)
+            : await scheduler.CompleteAttemptAsync(
+                options.ProjectRoot,
+                sprintId,
+                planning.Id,
+                attemptId,
+                outcome.Disposition == PlanningAttemptDisposition.Succeeded,
+                manifest.ManifestDigest,
+                outcome.Outputs,
+                outcome.Diagnostics,
+                cancellationToken).ConfigureAwait(false);
         if (!completed.Succeeded)
         {
             LogCompleteRejected(logger, sprintId.Value, completed.DiagnosticCode, null);
             return;
         }
 
-        if (succeeded && summary is not null)
+        if (outcome.Disposition == PlanningAttemptDisposition.Succeeded && outcome.Summary is not null)
         {
             string? nextNodeId = definition.Graph
                 .FirstOrDefault(candidate => candidate.Role == NodeRole.Implementation)?.Id;
@@ -259,7 +283,7 @@ public sealed class PlanningExecutionHostedService(
                 sprintId,
                 planning.Id,
                 definition.BaseCommit,
-                summary,
+                outcome.Summary,
                 decisions: [],
                 openRisks: [],
                 nextNodeIds: nextNodeId is null ? null : [nextNodeId],
@@ -272,16 +296,54 @@ public sealed class PlanningExecutionHostedService(
         }
     }
 
-    private async Task<(bool Succeeded, List<string> Outputs, List<NodeDiagnostic> Diagnostics, string? Summary)>
-        RunPlanningAttemptAsync(
-            SprintId sprintId,
-            AttemptId attemptId,
-            SprintDefinition definition,
-            ExecutionProfile profile,
-            ILlmProvider provider,
-            ForgeDocumentSet documents,
-            ContextManifest manifest,
-            CancellationToken cancellationToken)
+    /// <summary>What the caller must do with the started attempt — an explicit discriminator rather
+    /// than inferring "the Host is shutting down" from an otherwise-ambiguous combination of other
+    /// fields, which would be fragile to extend the next time a node executor (implementation,
+    /// review) copies this shape.</summary>
+    private enum PlanningAttemptDisposition
+    {
+        Succeeded,
+        Failed,
+
+        /// <summary>ADR 0006/0018's durable rate-limit wait: the caller must complete the attempt
+        /// through <see cref="SprintScheduler.DeferAttemptAsync"/>, not the ordinary
+        /// <see cref="SprintScheduler.CompleteAttemptAsync"/> path.</summary>
+        RateLimited,
+
+        /// <summary><see cref="AttemptTerminationReason.Cancelled"/>: the Host is shutting down, not
+        /// a provider or infrastructure failure. The caller must complete the attempt neither way —
+        /// see <see cref="RunPlanningAttemptAsync"/>'s own remarks.</summary>
+        HostShuttingDown,
+    }
+
+    private readonly record struct PlanningAttemptOutcome(
+        PlanningAttemptDisposition Disposition,
+        List<string> Outputs,
+        List<NodeDiagnostic> Diagnostics,
+        string? Summary)
+    {
+        public static readonly PlanningAttemptOutcome Cancelled =
+            new(PlanningAttemptDisposition.HostShuttingDown, [], [], null);
+
+        public static PlanningAttemptOutcome Failed(NodeDiagnostic diagnostic) =>
+            new(PlanningAttemptDisposition.Failed, [], [diagnostic], null);
+
+        public static PlanningAttemptOutcome RateLimitedFailure(NodeDiagnostic diagnostic) =>
+            new(PlanningAttemptDisposition.RateLimited, [], [diagnostic], null);
+
+        public static PlanningAttemptOutcome Success(string digest, string summary) =>
+            new(PlanningAttemptDisposition.Succeeded, [digest], [], summary);
+    }
+
+    private async Task<PlanningAttemptOutcome> RunPlanningAttemptAsync(
+        SprintId sprintId,
+        AttemptId attemptId,
+        SprintDefinition definition,
+        ExecutionProfile profile,
+        ILlmProvider provider,
+        ForgeDocumentSet documents,
+        ContextManifest manifest,
+        CancellationToken cancellationToken)
     {
         Guid projectId = await ProjectIdentity
             .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
@@ -292,7 +354,7 @@ public sealed class PlanningExecutionHostedService(
         if (!integration.Succeeded)
         {
             LogWorktreeUnavailable(logger, sprintId.Value, null);
-            return (false, [], [WorktreeDiagnostic(integration)], null);
+            return PlanningAttemptOutcome.Failed(Diagnostic("git", integration.DiagnosticCode, integration.Detail));
         }
 
         GitOperationResult attemptWorktree = await gitIsolation.CreateAttemptWorktreeAsync(
@@ -300,7 +362,8 @@ public sealed class PlanningExecutionHostedService(
         if (!attemptWorktree.Succeeded)
         {
             LogWorktreeUnavailable(logger, sprintId.Value, null);
-            return (false, [], [WorktreeDiagnostic(attemptWorktree)], null);
+            return PlanningAttemptOutcome.Failed(
+                Diagnostic("git", attemptWorktree.DiagnosticCode, attemptWorktree.Detail));
         }
 
         string worktreePath = WorktreeLayout.AttemptPath(environmentPaths, projectId, sprintId, attemptId);
@@ -336,7 +399,7 @@ public sealed class PlanningExecutionHostedService(
             // Deliberately skips the worktree discard below: the same cancellationToken that just
             // cancelled the provider run would also cancel a `git worktree remove` call made with
             // it. The worktree is left for a future reconciliation pass; see the class remarks.
-            return (false, [], [], null);
+            return PlanningAttemptOutcome.Cancelled;
         }
 
         bool discarded = await gitIsolation
@@ -347,55 +410,42 @@ public sealed class PlanningExecutionHostedService(
             LogWorktreeDiscardFailed(logger, sprintId.Value, null);
         }
 
-        if (supervised.Reason == AttemptTerminationReason.IdleTimeout)
+        string? terminationCode = supervised.Reason switch
         {
-            return (false, [], [new(
-                ProviderDiagnosticCodes.IdleTimeout, "provider", $"diagnostic.{ProviderDiagnosticCodes.IdleTimeout}",
-                new Dictionary<string, string?>(StringComparer.Ordinal))], null);
-        }
-
-        if (supervised.Reason == AttemptTerminationReason.SessionTimeout)
+            AttemptTerminationReason.IdleTimeout => ProviderDiagnosticCodes.IdleTimeout,
+            AttemptTerminationReason.SessionTimeout => ProviderDiagnosticCodes.SessionTimeout,
+            _ => null,
+        };
+        if (terminationCode is not null)
         {
-            return (false, [], [new(
-                ProviderDiagnosticCodes.SessionTimeout, "provider",
-                $"diagnostic.{ProviderDiagnosticCodes.SessionTimeout}",
-                new Dictionary<string, string?>(StringComparer.Ordinal))], null);
+            return PlanningAttemptOutcome.Failed(Diagnostic("provider", terminationCode));
         }
 
         ProviderRunResult? result = supervised.Value;
         if (result is null || !result.Succeeded)
         {
-            string code = MapFailure(result?.Failure ?? ProviderFailureKind.Unknown);
-            Dictionary<string, string?> arguments = new(StringComparer.Ordinal);
-            if (!string.IsNullOrWhiteSpace(result?.Detail))
-            {
-                arguments["detail"] = result.Detail;
-            }
-
-            return (false, [], [new(code, "provider", $"diagnostic.{code}", arguments)], null);
+            ProviderFailureKind failure = result?.Failure ?? ProviderFailureKind.Unknown;
+            NodeDiagnostic diagnostic = Diagnostic("provider", MapFailure(failure), result?.Detail);
+            return failure == ProviderFailureKind.RateLimited
+                ? PlanningAttemptOutcome.RateLimitedFailure(diagnostic)
+                : PlanningAttemptOutcome.Failed(diagnostic);
         }
 
         string? summary = result.TerminalResult?.Summary;
-        if (string.IsNullOrWhiteSpace(summary))
-        {
-            return (false, [], [new(
-                ProviderDiagnosticCodes.EmptyTerminalSummary, "provider",
-                $"diagnostic.{ProviderDiagnosticCodes.EmptyTerminalSummary}",
-                new Dictionary<string, string?>(StringComparer.Ordinal))], null);
-        }
-
-        return (true, [Digest(summary)], [], summary);
+        return string.IsNullOrWhiteSpace(summary)
+            ? PlanningAttemptOutcome.Failed(Diagnostic("provider", ProviderDiagnosticCodes.EmptyTerminalSummary))
+            : PlanningAttemptOutcome.Success(Digest(summary), summary);
     }
 
-    private static NodeDiagnostic WorktreeDiagnostic(GitOperationResult result)
+    private static NodeDiagnostic Diagnostic(string category, string code, string? detail = null)
     {
         Dictionary<string, string?> arguments = new(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(result.Detail))
+        if (!string.IsNullOrWhiteSpace(detail))
         {
-            arguments["detail"] = result.Detail;
+            arguments["detail"] = detail;
         }
 
-        return new(result.DiagnosticCode, "git", $"diagnostic.{result.DiagnosticCode}", arguments);
+        return new(code, category, $"diagnostic.{code}", arguments);
     }
 
     private static string MapFailure(ProviderFailureKind failure) => failure switch

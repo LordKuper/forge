@@ -142,6 +142,88 @@ best-effort write from here), the same "leaked resource left for a future
 pass" shape a failed worktree discard already accepts, rather than a
 second durable-write mechanism invented for this one caller.
 
+## Round 1 review
+
+Independent review found four issues, all fixed:
+
+1. **A `RateLimited` provider failure was completed as an ordinary failed
+   attempt instead of going through `SprintScheduler.DeferAttemptAsync`.**
+   ADR 0018's own dedicated rate-limit path abandons the attempt *and*
+   records a routing block (`DefaultRateLimitBackoff`, one minute) so the
+   same provider/model/surface key becomes unroutable for that window;
+   this executor never called it, so a rate-limited planning provider
+   would busy-loop retrying against the same still-rate-limited provider
+   every 15-second tick instead of backing off, burning the bounded
+   auto-retry budget far faster than intended. Fixed: `RunPlanningAttemptAsync`
+   now returns a `PlanningAttemptDisposition.RateLimited` outcome
+   specifically for `ProviderFailureKind.RateLimited`, and
+   `ExecutePlanningAsync` routes that disposition through
+   `DeferAttemptAsync` instead of `CompleteAttemptAsync`. Regression-tested
+   with `ARateLimitedProviderFailureDefersRoutingInsteadOfBeingTreatedAsAnOrdinaryFailure`,
+   which asserts a `RouteDecision` with `Outcome: Deferred` is actually
+   recorded for the attempt.
+2. **The per-sprint catch filter, copied verbatim from
+   `IntakeExecutionHostedService`, was not widened for the new failure
+   surfaces this executor alone reaches.** Three concrete gaps, each
+   reachable *after* `StartAttemptAsync` has already moved the node to
+   `running` (so an uncaught exception here does not strand the node —
+   the same crash-resumability story `intake` already relies on — but
+   does fault the whole `BackgroundService` and stop every other sprint's
+   planning until the Host restarts, which `intake`'s own filter exists
+   specifically to prevent): (a) `AttemptSupervisor`'s constructor throws
+   `ArgumentOutOfRangeException` for a non-positive or absurdly large
+   `ExecutionProfile.SessionDeadlineSeconds`/`IdleDeadlineSeconds` — a
+   plain `int` deserialized off a durable event-log DTO, schema-validated
+   only on write, matching the exact class of gap ADR 0028 named for
+   `context.token_budget`; (b) `ProjectIdentity.ReadProjectIdAsync` (this
+   executor's first call, before any git/provider work) can throw
+   `YamlException`/`JsonException`/`ConfigurationScopeException` reading a
+   `manifest.yaml` damaged badly enough that `YamlConfigurationStore
+   .ReadAsync`'s own `.previous`-backup recovery does not apply — `intake`
+   never reads the project manifest at all, so its filter never needed
+   these; (c) `SprintGitIsolation`'s underlying `git.exe` process failing
+   to start at all throws an unguarded `Win32Exception`
+   (`GitWorktreeManager`'s own code comment already documents this exact
+   hazard for a different case) — a failure surface `intake`, which never
+   touches git, never had. Fixed by widening the filter to include all
+   four; each is a corrupted/missing external resource case where logging
+   and retrying next tick (indefinitely, for a permanently corrupted
+   profile — "logged, not rate-limited," matching this codebase's existing
+   precedent for a permanently-rejected completion) is the correct
+   response, not a crash.
+3. **Four duplicated `NodeDiagnostic`-building blocks** (the
+   `IdleTimeout`/`SessionTimeout` termination-reason returns, the ordinary
+   provider-failure return, and `EmptyTerminalSummary`) each independently
+   built a `Dictionary<string, string?>` and applied the same
+   "if detail is non-blank, set `arguments[\"detail\"]`" guard. Consolidated
+   into one private `Diagnostic(category, code, detail)` helper (also
+   replacing the pre-existing separate `WorktreeDiagnostic` helper), and
+   the `IdleTimeout`/`SessionTimeout` pair collapsed into one `switch`
+   expression.
+4. **The `AttemptTerminationReason.Cancelled` (Host-shutdown) case was an
+   implicit sentinel** — signaled only by returning empty diagnostics with
+   `Succeeded: false`, detected by the caller as
+   `!succeeded && diagnostics.Count == 0`. Fragile to extend (the very
+   next fix in this same round added a second boolean, `RateLimited`,
+   which would have collided with that inference) and easy to silently
+   break in a future edit or the next node executor that copies this
+   shape. Replaced the two booleans with an explicit
+   `PlanningAttemptDisposition` enum (`Succeeded`/`Failed`/`RateLimited`/
+   `HostShuttingDown`) `RunPlanningAttemptAsync` returns and
+   `ExecutePlanningAsync` switches on directly — correct by construction
+   rather than by convention.
+
+Two further review findings were considered and explicitly not fixed in
+this slice, named rather than silently dropped: `TokenBudgetResolver`'s
+extracted doc comment initially dropped the "must never return a
+non-positive value" rationale the original `IntakeExecutionHostedService`
+comment stated explicitly — restored, since it is genuinely load-bearing
+for every future caller's own catch-filter design, not merely historical
+context. `SprintGitIsolation.ReconcileAsync` remains zero-caller (leaked
+worktrees from a failed discard, or from the `HostShuttingDown` path
+above, are not self-healed) — unchanged from ADR 0028, which already named
+this as accepted debt; this slice does not regress it.
+
 ## Consequences
 
 - New `src/Forge.Host.Runtime/PlanningExecutionHostedService.cs` and

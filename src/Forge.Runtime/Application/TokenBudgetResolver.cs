@@ -12,6 +12,14 @@ namespace Forge.Application;
 /// <c>IntakeExecutionHostedService.ResolveTokenBudgetAsync</c> (ADR 0028/0029) once a second node
 /// executor (planning, Stage 11) needed the identical read — behavior-preserving, not a design
 /// change.
+///
+/// The positive-integer guarantee is load-bearing, not incidental:
+/// <c>ContextManifestCompiler.Compile</c>'s own <see cref="ArgumentOutOfRangeException"/> for a
+/// non-positive budget is deliberately kept outside every caller's per-sprint catch filter (each
+/// node executor's own filter is tuned for durable-state-corruption shapes, not a caller-owned
+/// argument-validation failure), so this method must never hand back a non-positive value — the
+/// project-manifest schema already enforces one on write, but this method does not own that
+/// validation and must not assume it always ran.
 /// </summary>
 public static class TokenBudgetResolver
 {

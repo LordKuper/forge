@@ -179,6 +179,57 @@ public sealed class PlanningExecutionHostedServiceTests
         Assert.Equal(3, worktrees.RemovedPaths.Count);
     }
 
+    // ADR 0006/0018's durable rate-limit wait: a RateLimited failure must route through
+    // SprintScheduler.DeferAttemptAsync (recording a routing block for the provider/model key), not
+    // the ordinary CompleteAttemptAsync(succeeded: false, ...) path every other failure uses.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ARateLimitedProviderFailureDefersRoutingInsteadOfBeingTreatedAsAnOrdinaryFailure()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, _, _, _) => Task.FromResult(
+                ProviderRunResult.Failed(ProviderFailureKind.RateLimited, "slow down")));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForPlanningAsync(environment, orchestrator, scheduler, store, cancellationToken);
+
+        PlanningExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        RouteDecision deferred;
+        try
+        {
+            // Deliberately waits for the deferred routing decision itself, not the node result:
+            // DeferAttemptAsync (SprintScheduler.cs) calls CompleteAttemptAsync first and only then
+            // records the deferral, so a poll that stops at the node result alone can race a real,
+            // if narrow, window with no deferral recorded yet -- the same class of race
+            // WaitForHandoffAsync already exists to avoid for the success path's handoff. Also
+            // deliberately not terminal failure: once the deferral lands, every later
+            // StartAttemptAsync call this same tick loop makes is refused at the routing check
+            // itself (RouteOutcome.Deferred, DefaultRateLimitBackoff = 1 minute) before a second
+            // attempt is ever created, so a second NodeResult would not appear within any
+            // reasonable test timeout.
+            deferred = await WaitForDeferredRouteDecisionAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(await PlanningResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Failed, result.State);
+        NodeDiagnostic diagnostic = Assert.Single(result.Diagnostics);
+        Assert.Equal(ProviderDiagnosticCodes.RateLimited, diagnostic.Code);
+        Assert.Equal(result.AttemptId, deferred.AttemptId);
+        Assert.NotNull(deferred.ResumeNotBefore);
+    }
+
     // The provider reporting a schema-valid success with no usable text (ADR 0016: neither vendor
     // guarantees non-empty terminal-result text) must never produce a Handoff with an empty summary
     // -- handoff.schema.json requires minLength: 1 -- so this is a recorded failure, distinct from
@@ -373,6 +424,27 @@ public sealed class PlanningExecutionHostedServiceTests
         Assert.Fail(
             $"The planning node of sprint {sprintId.Value:D} never reached terminal failure " +
             $"(last observed state={observed?.State}, attemptCount={observed?.AttemptCount}).");
+    }
+
+    private static async Task<RouteDecision> WaitForDeferredRouteDecisionAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < PollTimeout)
+        {
+            IReadOnlyList<RouteDecision> decisions =
+                await store.GetRouteDecisionsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+            RouteDecision? deferred = decisions.FirstOrDefault(decision => decision.Outcome == RouteOutcome.Deferred);
+            if (deferred is not null)
+            {
+                return deferred;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+
+        Assert.Fail($"Sprint {sprintId.Value:D} never recorded a deferred routing decision.");
+        return null!;
     }
 
     private static async Task WaitForHandoffAsync(
