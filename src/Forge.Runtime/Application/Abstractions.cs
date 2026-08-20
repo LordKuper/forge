@@ -287,7 +287,22 @@ public interface IWorktreeManager
     /// <summary>Best-effort branch deletion; a missing branch is not an error. Returns
     /// <see langword="false"/> if `git` refused to delete a branch that still exists.</summary>
     Task<bool> DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken);
+
+    /// <summary>Every worktree `git` currently has registered for <paramref name="projectRoot"/> —
+    /// the enumeration counterpart to <see cref="ExistsAsync"/>'s single-path check, for `forge
+    /// doctor --bundle` (ADR 0005/0038). <see cref="WorktreeRegistration.Exists"/> applies the same
+    /// distinction <see cref="ExistsAsync"/>'s own doc comment names: `git` keeps a registration
+    /// around after its directory is deleted out from under it until the next prune, so a caller
+    /// diagnosing orphaned state needs both facts, not just the registration. `git worktree list`
+    /// always includes the primary worktree (<paramref name="projectRoot"/> itself) first — this
+    /// returns that entry too, unfiltered, matching git's own reality exactly rather than guessing
+    /// at which entries a caller considers "Forge's own."</summary>
+    Task<IReadOnlyList<WorktreeRegistration>> ListAsync(string projectRoot, CancellationToken cancellationToken);
 }
+
+/// <summary><paramref name="Path"/> is one worktree `git` has registered for a repository;
+/// <paramref name="Exists"/> is whether that path is still a real, present directory.</summary>
+public sealed record WorktreeRegistration(string Path, bool Exists);
 
 public sealed record AppendOutcome(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode, bool Replayed = false)
 {

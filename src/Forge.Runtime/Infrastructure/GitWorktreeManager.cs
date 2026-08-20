@@ -355,6 +355,29 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return list.ExitCode == 0 && list.StandardOutput.Trim().Length == 0;
     }
 
+    public async Task<IReadOnlyList<WorktreeRegistration>> ListAsync(
+        string projectRoot, CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunAsync(
+            projectRoot, ["worktree", "list", "--porcelain"], cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            return [];
+        }
+
+        List<WorktreeRegistration> registrations = [];
+        foreach (string line in result.StandardOutput.Split('\n'))
+        {
+            if (line.StartsWith("worktree ", StringComparison.Ordinal))
+            {
+                string path = line["worktree ".Length..].Trim();
+                registrations.Add(new(path, Directory.Exists(path)));
+            }
+        }
+
+        return registrations;
+    }
+
     private Task<ProcessResult> RunAsync(
         string workingDirectory,
         IReadOnlyList<string> arguments,
