@@ -39,10 +39,44 @@ public sealed class DoctorBundleCliTests
         Assert.True(result.IsValid, output.ToString());
         Assert.True(document.RootElement.GetProperty("project").GetProperty("initialized").GetBoolean());
         Assert.Equal(1, document.RootElement.GetProperty("project").GetProperty("sprint_count").GetInt32());
-        // The exact evidence ADR 0005 excludes must never appear even accidentally -- a stronger
-        // proof than "the schema validated," since additionalProperties:false only catches an
-        // unexpected top-level shape, not a free-text value smuggled into an allowed string field.
-        Assert.DoesNotContain("PROMPT_SECRET_MARKER", output.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>Round 1 review of PR #79: the original version of this test asserted a marker never
+    /// appeared without ever planting that marker anywhere the collector could reach, so it passed
+    /// vacuously and proved nothing about the "a collection failure omits that section rather than
+    /// leaking anything about it" design. A corrupt sprint definition containing sensitive-looking
+    /// text is the concrete leak vector this proves closed: `CollectEventLogIntegrityAsync` catches
+    /// `InvalidDataException` by type only and reports a fixed
+    /// <see cref="DiagnosticCodes.WorkflowLogCorrupted"/> code, never the exception's own message
+    /// (which -- via `FileSprintEventLog`'s own wrapping -- would otherwise carry this file's raw
+    /// content back out).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DoctorBundleNeverLeaksTheContentOfACorruptSprintFile()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("a", NodeKind.Work, [])]),
+            cancellationToken)).SprintId!;
+        const string marker = "PROMPT_SECRET_MARKER sk-live-not-a-real-key";
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        await File.WriteAllTextAsync(definitionPath, marker, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(environment, output, ["doctor", "--bundle"]);
+
+        Assert.Equal(0, exitCode);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.False(document.RootElement.GetProperty("event_log_integrity").GetProperty("valid").GetBoolean());
+        Assert.Equal(
+            DiagnosticCodes.WorkflowLogCorrupted,
+            document.RootElement.GetProperty("event_log_integrity").GetProperty("diagnostic_code").GetString());
+        Assert.DoesNotContain(marker, output.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("sk-live", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
