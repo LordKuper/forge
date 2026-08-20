@@ -177,6 +177,51 @@ public sealed class FinalizeSprintTests
         Assert.Single(repository.MergeCalls);
     }
 
+    // A crash or dropped call between CompleteAttemptAsync (marks the node Succeeded) and
+    // CompleteSprintAsync (the only path that ever appends ready_to_finalize -> completed) would
+    // otherwise leave the sprint wedged forever: the node is durably Succeeded, but nothing ever
+    // drives the sprint the rest of the way. Simulated here by performing exactly the first half of
+    // CompleteFinalizationAsync's two writes directly through SprintScheduler, then resuming through
+    // the public FinalizeSprintAsync entry point the way a retried CLI call would.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncResumedAfterANodeCompletedWithoutSprintCompletionFinishesTheSprint()
+    {
+        FakeRepository repository = new(defaultBranch: "main");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        SprintWorkflowState before = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "finalization", before.Nodes["finalization"].Version, cancellationToken);
+        Assert.True(started.Succeeded, started.DiagnosticCode);
+        string digest = $"sha256:{new string('a', 64)}";
+        CompleteAttemptResult completedAttempt = await scheduler.CompleteAttemptAsync(
+            environment.ProjectRoot, sprintId, "finalization", started.AttemptId!, true, digest,
+            outputs: [digest], diagnostics: [], cancellationToken);
+        Assert.True(completedAttempt.Succeeded, completedAttempt.DiagnosticCode);
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Succeeded, wedged.Nodes["finalization"].State);
+        Assert.Equal(SprintState.ReadyToFinalize, wedged.Sprint.State);
+
+        FinalizeSprintResult resumed = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.True(resumed.Succeeded, resumed.DiagnosticCode);
+        Assert.Equal(SprintState.Completed, resumed.Sprint!.State);
+        Assert.Empty(repository.MergeCalls);
+        SprintWorkflowState after = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Completed, after.Sprint.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task CreateSprintAsyncFreezesTheProjectsCurrentBranchAsDefaultBranch()
