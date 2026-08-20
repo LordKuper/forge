@@ -514,6 +514,80 @@ public sealed class GitIsolationTests
         Assert.True(Directory.Exists(runningPath));
     }
 
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ReadDiffReturnsTheRealGitDiffBetweenTheAttemptsBaseAndItsCurrentTip()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        (SprintId sprintId, Guid projectId, string baseCommit) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "new-feature.txt"), "hello", cancellationToken);
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Implement the feature", cancellationToken);
+        AssertSucceeded(committed);
+
+        GitDiffResult diff = await isolation.ReadDiffAsync(
+            repository.Root, projectId, sprintId, attemptId, baseCommit, committed.Commit!, cancellationToken);
+
+        Assert.True(diff.Succeeded, $"ReadDiffAsync failed: {diff.DiagnosticCode} ({diff.Detail})");
+        Assert.False(diff.Truncated);
+        Assert.Contains("new-feature.txt", diff.Diff, StringComparison.Ordinal);
+        Assert.Contains("+hello", diff.Diff, StringComparison.Ordinal);
+    }
+
+    // Regression test for a real bug an independent PR #74 review found: the first cut of this
+    // truncation sliced at a raw UTF-16 offset with no surrogate-pair check, unlike this codebase's
+    // own established safe-truncation pattern (ImplementationExecutionHostedService's commit-subject
+    // Truncate, ADR 0032's own review finding). A diff whose content is entirely astral characters
+    // (surrogate pairs) guarantees the 50,000-character cut lands inside one, regardless of the
+    // header's own exact length -- so this reproduces the split deterministically rather than by luck.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ReadDiffTruncatesWithoutSplittingASurrogatePair()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        (SprintId sprintId, Guid projectId, string baseCommit) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        // U+1F600 ("😀") is a surrogate pair in UTF-16; 40,000 repeats is 80,000 code units, so the
+        // 50,000-character truncation boundary is guaranteed to fall inside this run no matter how
+        // long the diff's own header text turns out to be.
+        string hugeContent = string.Concat(Enumerable.Repeat("\U0001F600", 40_000));
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "big.txt"), hugeContent, cancellationToken);
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Add a huge file", cancellationToken);
+        AssertSucceeded(committed);
+
+        GitDiffResult diff = await isolation.ReadDiffAsync(
+            repository.Root, projectId, sprintId, attemptId, baseCommit, committed.Commit!, cancellationToken);
+
+        Assert.True(diff.Succeeded, $"ReadDiffAsync failed: {diff.DiagnosticCode} ({diff.Detail})");
+        Assert.True(diff.Truncated);
+        Assert.True(diff.Diff!.Length is 49_999 or 50_000);
+        Assert.False(char.IsHighSurrogate(diff.Diff[^1]));
+    }
+
     /// <summary>A `git` failure's own `stderr` (<see cref="GitOperationResult.Detail"/>) is what
     /// actually diagnoses a CI-only failure that cannot be reproduced locally; every success
     /// assertion in this file goes through this helper instead of a bare `Assert.True` so that text

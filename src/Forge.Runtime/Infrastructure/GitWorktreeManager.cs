@@ -170,6 +170,42 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return GitOperationResult.Ok(await GetHeadAsync(projectRoot, path, cancellationToken).ConfigureAwait(false));
     }
 
+    public async Task<GitDiffResult> DiffAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken)
+    {
+        if (!CommitPattern().IsMatch(fromCommit) || !CommitPattern().IsMatch(toCommit))
+        {
+            return GitDiffResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
+        ProcessResult result = await RunInWorktreeAsync(
+            path, ["diff", "--no-color", fromCommit, toCommit], cancellationToken).ConfigureAwait(false);
+        if (result.ExitCode != 0)
+        {
+            return GitDiffResult.Fail(DiagnosticCodes.WorktreeDiffFailed, result.StandardError);
+        }
+
+        string diff = result.StandardOutput;
+        bool truncated = diff.Length > GitWorktreeManagerDiffBudget.MaxCharacters;
+        return GitDiffResult.Ok(truncated ? TruncateSafely(diff, GitWorktreeManagerDiffBudget.MaxCharacters) : diff, truncated);
+    }
+
+    /// <summary>Never splits a UTF-16 surrogate pair at the truncation boundary: cutting a string at
+    /// a fixed code-unit count with a bare slice can land between a high and low surrogate, producing
+    /// a malformed string with an unpaired high surrogate at its end -- the same bound and safety rule
+    /// <see cref="Forge.Providers.ProviderExecution"/>'s own safe-truncation helper already
+    /// applies.</summary>
+    private static string TruncateSafely(string text, int maxLength)
+    {
+        int length = maxLength;
+        if (length > 0 && char.IsHighSurrogate(text[length - 1]))
+        {
+            length--;
+        }
+
+        return text[..length];
+    }
+
     public async Task<GitOperationResult> ResetHardAsync(
         string projectRoot,
         string path,

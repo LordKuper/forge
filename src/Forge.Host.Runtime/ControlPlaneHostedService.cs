@@ -42,6 +42,7 @@ public sealed class ControlPlaneHostedService(
     IntakeExecutionHostedService intakeExecution,
     PlanningExecutionHostedService planningExecution,
     ImplementationExecutionHostedService implementationExecution,
+    ReviewExecutionHostedService reviewExecution,
     IHostApplicationLifetime lifetime,
     ILogger<ControlPlaneHostedService> logger) : BackgroundService
 {
@@ -137,6 +138,7 @@ public sealed class ControlPlaneHostedService(
         await intakeExecution.StartAsync(stoppingToken).ConfigureAwait(false);
         await planningExecution.StartAsync(stoppingToken).ConfigureAwait(false);
         await implementationExecution.StartAsync(stoppingToken).ConfigureAwait(false);
+        await reviewExecution.StartAsync(stoppingToken).ConfigureAwait(false);
 
         string pipeName = InstanceIdentity.ComputePipeName(options.InstanceId, projectId);
         NamedPipeControlTransport transport = new();
@@ -181,6 +183,7 @@ public sealed class ControlPlaneHostedService(
         await intakeExecution.StopAsync(cancellationToken).ConfigureAwait(false);
         await planningExecution.StopAsync(cancellationToken).ConfigureAwait(false);
         await implementationExecution.StopAsync(cancellationToken).ConfigureAwait(false);
+        await reviewExecution.StopAsync(cancellationToken).ConfigureAwait(false);
         if (listener is not null)
         {
             await listener.DisposeAsync().ConfigureAwait(false);

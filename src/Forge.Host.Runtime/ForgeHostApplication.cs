@@ -79,6 +79,11 @@ public static class ForgeHostApplication
                 // files) — a Host that lost the lease race must never drive it either.
                 services.AddSingleton(new ImplementationExecutionOptions(projectRoot));
                 services.AddSingleton<ImplementationExecutionHostedService>();
+                // Same reasoning again: this is the fourth service that executes a node (Stage 11's
+                // review executor, the first to call SprintScheduler.RecordReviewIterationAsync) —
+                // a Host that lost the lease race must never drive it either.
+                services.AddSingleton(new ReviewExecutionOptions(projectRoot));
+                services.AddSingleton<ReviewExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

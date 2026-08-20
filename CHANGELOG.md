@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.54.0
+
+### Added
+
+- A running sprint's fourth node (`review`) now actually executes: once
+  `test_work` finishes, Forge runs the sprint's frozen review provider
+  against the diff between the sprint's base and its current integration
+  tip, asking it to approve the change or request changes. An approval, or
+  the change getting the same review verdict twice in a row, completes the
+  review node and (on repeated rejection) blocks the sprint for human
+  attention. An ordinary "changes requested" verdict keeps the review node
+  open and runs another round on the next tick, rather than counting
+  against the sprint's normal per-node retry limit. A provider failure, an
+  idle/session timeout, or an unreadable verdict is recorded as a failure
+  and automatically retried, matching every other node's retry policy.
+
 ## v0.53.0
 
 ### Added

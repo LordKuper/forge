@@ -107,6 +107,13 @@ public static class ProviderDiagnosticCodes
     /// <see cref="MissingTerminalResult"/>, which means no terminal event was ever emitted at
     /// all.</summary>
     public const string EmptyTerminalSummary = "provider_empty_terminal_summary";
+
+    /// <summary>The review node executor's own outcome: the provider reported a schema-valid
+    /// success with real terminal text, but that text's own last non-blank line was neither of the
+    /// two verdict markers the review prompt requires (`APPROVED`/`CHANGES_REQUESTED`) — the
+    /// provider did not follow the required output contract. Distinct from
+    /// <see cref="EmptyTerminalSummary"/>, which means there was no usable text at all.</summary>
+    public const string ReviewVerdictUnparseable = "provider_review_verdict_unparseable";
 }
 
 /// <summary>
