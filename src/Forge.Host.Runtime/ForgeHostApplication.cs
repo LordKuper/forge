@@ -74,6 +74,11 @@ public static class ForgeHostApplication
                 // lease race must never drive it either.
                 services.AddSingleton(new PlanningExecutionOptions(projectRoot));
                 services.AddSingleton<PlanningExecutionHostedService>();
+                // Same reasoning again: this is the third service that executes a node (Stage 11's
+                // implementation executor, the first whose provider run is meant to edit and commit
+                // files) — a Host that lost the lease race must never drive it either.
+                services.AddSingleton(new ImplementationExecutionOptions(projectRoot));
+                services.AddSingleton<ImplementationExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

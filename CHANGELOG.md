@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.53.0
+
+### Added
+
+- A running sprint's third node (`implementation`) now actually executes:
+  once `planning` finishes, Forge runs the sprint's frozen provider inside
+  an isolated worktree with the plan and the project's admitted rules and
+  knowledge, this time inviting file edits. If the provider actually
+  changes anything, Forge commits it (authored as Forge itself) and
+  integrates it into the sprint. A provider that reports success but
+  changes nothing is recorded as a failure, since a role whose job is
+  producing an edit that produces none has not done its job. A provider
+  failure, an idle/session timeout, or an isolation failure is recorded
+  and automatically retried up to twice, matching every other node's
+  retry policy.
+
 ## v0.52.0
 
 ### Added

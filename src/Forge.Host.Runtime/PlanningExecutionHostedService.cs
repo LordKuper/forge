@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Forge.Application;
@@ -354,7 +353,8 @@ public sealed class PlanningExecutionHostedService(
         if (!integration.Succeeded)
         {
             LogWorktreeUnavailable(logger, sprintId.Value, null);
-            return PlanningAttemptOutcome.Failed(Diagnostic("git", integration.DiagnosticCode, integration.Detail));
+            return PlanningAttemptOutcome.Failed(
+                NodeExecutionDiagnostics.Diagnostic("git", integration.DiagnosticCode, integration.Detail));
         }
 
         GitOperationResult attemptWorktree = await gitIsolation.CreateAttemptWorktreeAsync(
@@ -363,7 +363,7 @@ public sealed class PlanningExecutionHostedService(
         {
             LogWorktreeUnavailable(logger, sprintId.Value, null);
             return PlanningAttemptOutcome.Failed(
-                Diagnostic("git", attemptWorktree.DiagnosticCode, attemptWorktree.Detail));
+                NodeExecutionDiagnostics.Diagnostic("git", attemptWorktree.DiagnosticCode, attemptWorktree.Detail));
         }
 
         string worktreePath = WorktreeLayout.AttemptPath(environmentPaths, projectId, sprintId, attemptId);
@@ -418,14 +418,15 @@ public sealed class PlanningExecutionHostedService(
         };
         if (terminationCode is not null)
         {
-            return PlanningAttemptOutcome.Failed(Diagnostic("provider", terminationCode));
+            return PlanningAttemptOutcome.Failed(NodeExecutionDiagnostics.Diagnostic("provider", terminationCode));
         }
 
         ProviderRunResult? result = supervised.Value;
         if (result is null || !result.Succeeded)
         {
             ProviderFailureKind failure = result?.Failure ?? ProviderFailureKind.Unknown;
-            NodeDiagnostic diagnostic = Diagnostic("provider", MapFailure(failure), result?.Detail);
+            NodeDiagnostic diagnostic = NodeExecutionDiagnostics.Diagnostic(
+                "provider", NodeExecutionDiagnostics.MapProviderFailure(failure), result?.Detail);
             return failure == ProviderFailureKind.RateLimited
                 ? PlanningAttemptOutcome.RateLimitedFailure(diagnostic)
                 : PlanningAttemptOutcome.Failed(diagnostic);
@@ -433,34 +434,10 @@ public sealed class PlanningExecutionHostedService(
 
         string? summary = result.TerminalResult?.Summary;
         return string.IsNullOrWhiteSpace(summary)
-            ? PlanningAttemptOutcome.Failed(Diagnostic("provider", ProviderDiagnosticCodes.EmptyTerminalSummary))
-            : PlanningAttemptOutcome.Success(Digest(summary), summary);
+            ? PlanningAttemptOutcome.Failed(
+                NodeExecutionDiagnostics.Diagnostic("provider", ProviderDiagnosticCodes.EmptyTerminalSummary))
+            : PlanningAttemptOutcome.Success(NodeExecutionDiagnostics.Digest(summary), summary);
     }
-
-    private static NodeDiagnostic Diagnostic(string category, string code, string? detail = null)
-    {
-        Dictionary<string, string?> arguments = new(StringComparer.Ordinal);
-        if (!string.IsNullOrWhiteSpace(detail))
-        {
-            arguments["detail"] = detail;
-        }
-
-        return new(code, category, $"diagnostic.{code}", arguments);
-    }
-
-    private static string MapFailure(ProviderFailureKind failure) => failure switch
-    {
-        ProviderFailureKind.NotReady => ProviderDiagnosticCodes.RunNotReady,
-        ProviderFailureKind.Authentication => ProviderDiagnosticCodes.AuthenticationRequired,
-        ProviderFailureKind.QuotaExceeded => ProviderDiagnosticCodes.QuotaExceeded,
-        ProviderFailureKind.RateLimited => ProviderDiagnosticCodes.RateLimited,
-        ProviderFailureKind.Policy => ProviderDiagnosticCodes.RunPolicyViolation,
-        ProviderFailureKind.Transient => ProviderDiagnosticCodes.RunTransientFailure,
-        ProviderFailureKind.MalformedOutput => ProviderDiagnosticCodes.RunMalformedOutput,
-        ProviderFailureKind.MissingTerminalResult => ProviderDiagnosticCodes.MissingTerminalResult,
-        ProviderFailureKind.DuplicateTerminalResult => ProviderDiagnosticCodes.DuplicateTerminalResult,
-        _ => ProviderDiagnosticCodes.RunUnknownFailure,
-    };
 
     /// <summary>A deliberately plain instruction prompt, not a templating system: concatenates
     /// every admitted rule/knowledge document's already-parsed <see cref="ForgeDocument.Body"/> (no
@@ -508,7 +485,4 @@ public sealed class PlanningExecutionHostedService(
             builder.Append("### ").Append(item.RelativePath).Append('\n').Append(body).Append('\n');
         }
     }
-
-    private static string Digest(string content) =>
-        $"sha256:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(content)))}";
 }

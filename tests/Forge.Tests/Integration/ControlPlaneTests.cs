@@ -860,6 +860,8 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
                 services.AddSingleton<IntakeExecutionHostedService>();
                 services.AddSingleton(new PlanningExecutionOptions(options.ProjectRoot));
                 services.AddSingleton<PlanningExecutionHostedService>();
+                services.AddSingleton(new ImplementationExecutionOptions(options.ProjectRoot));
+                services.AddSingleton<ImplementationExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();
