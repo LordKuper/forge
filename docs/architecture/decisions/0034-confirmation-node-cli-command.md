@@ -58,14 +58,19 @@ budget to bound an indefinite retry loop against. `ConfirmNodeAsync` is
 deliberately single-shot: an already-terminal node (`succeeded`/`failed`)
 returns the most recently recorded artifact instead of re-acting, so a
 stateless CLI retry after its own response was lost resolves cleanly
-without re-running anything. A crash between `RecordConfirmationAsync` and
-`CompleteAttemptAsync` — the one gap this does not close — leaves the node
-`running`; a retry resumes the same attempt and records one harmless
-duplicate artifact with the same outcome (eligibility only ever reads the
-*latest* one). Named as an accepted, narrow limitation rather than solved:
-the retry window is two already-durable local appends, and no
-caller-visible outcome depends on which of the two near-identical
-artifacts is "latest."
+without re-running anything.
+
+Both non-terminal states this method can observe — the node still
+`running` from a crash between `RecordConfirmationAsync` and
+`CompleteAttemptAsync`, and the terminal short-circuit above — look up
+whatever artifact already exists for the node before doing anything else.
+A resumed call whose requested `outcome` matches that artifact skips
+re-recording (no duplicate is ever minted) and proceeds straight to
+`CompleteAttemptAsync`; a resumed call presenting a *different* outcome is
+refused with `DiagnosticCodes.NodeTransitionInvalid` instead of silently
+reinterpreting the already-durable verdict — the same decision-flip
+protection `ResolveHumanGateAsync`'s own review history (ADR 0019)
+established for gate decisions, required here for the identical reason.
 
 ### `forge confirm confirmed|not-confirmed`, not `forge sprint confirm`
 
@@ -117,6 +122,51 @@ now, but it is not added to `CapabilityIds.Implemented`, so
 matching Desktop view. Desktop parity is named as deferred future work,
 not silently assumed done.
 
+## Round 1 review
+
+Independent review found real issues, all fixed:
+
+1. **`ConfirmNodeAsync`'s `running` (resuming) branch had no decision-flip
+   protection**, unlike `ResolveHumanGateAsync`, which ADR 0019's own
+   review history already fixed for this exact bug class. A resumed call
+   presenting a *different* outcome than an already-recorded artifact
+   would have skipped every check and appended a second, contradicting
+   artifact — silently letting a `NotConfirmed` verdict that already
+   blocked the sprint be reopened by a later, differently-argued call
+   against the same still-`running` node. Fixed by looking up the latest
+   recorded artifact before branching on node state at all (not only in
+   the terminal branch) and refusing a mismatched outcome with
+   `DiagnosticCodes.NodeTransitionInvalid` in both the terminal and the
+   `running` cases. This also naturally replaced the "accepted, narrow
+   limitation" duplicate-artifact note the design section above used to
+   carry: a resumed call whose outcome matches the existing artifact now
+   skips `RecordConfirmationAsync` entirely instead of minting a second
+   one.
+2. **The terminal short-circuit didn't check the caller's outcome at
+   all** — a stateless replay presenting a different outcome than what
+   already landed would have silently returned the *wrong* artifact as a
+   reported success. Same fix as above closes this too.
+3. **The new `confirmation_evidence_kind_invalid` diagnostic was missing
+   from `docs/contracts/v1/README.md`'s diagnostics table**, breaking the
+   precedent ADR 0019 itself set for its own new usage codes. Fixed —
+   added alongside the also-new `confirmation_text_required` (see next
+   finding).
+4. **`--definition-of-done`/`--evidence` accepted an empty or
+   whitespace-only value**: `Required = true` only checks presence, not
+   content, so the node's attempt was started (`StartAttemptAsync`, moving
+   it to `running`) before `confirmation-result.schema.json`'s own
+   `minLength: 1` eventually rejected the value inside
+   `RecordConfirmationAsync` — a real, if recoverable, "stuck" attempt.
+   Fixed with a CLI-side check (new `DiagnosticCodes.ConfirmationTextRequired`)
+   before the mutation call runs at all.
+5. **Test gap**: the resumability tests only replayed with the *same*
+   outcome after the node was already terminal — the `running`
+   (crash-before-`CompleteAttemptAsync`) branch, where finding #1 lived,
+   was never exercised. Fixed with dedicated tests for both the
+   `running`-with-no-artifact-yet and `running`-with-a-matching-artifact
+   resume paths, and for the decision-flip refusal in both the `running`
+   and terminal branches.
+
 ## Consequences
 
 - New `SprintScheduler.ConfirmNodeAsync`/`.ConfirmNodeKey`; first caller of
@@ -127,8 +177,11 @@ not silently assumed done.
   `ConfirmationEvidenceEntry`; new `ControlPlaneHostedService` dispatch
   handler.
 - New `forge confirm confirmed|not-confirmed` CLI command; new
-  `DiagnosticCodes.ConfirmationEvidenceKindInvalid` (mapped to
-  `ExitCodes.Usage`) for an unrecognized `--evidence-kind`.
+  `DiagnosticCodes.ConfirmationEvidenceKindInvalid` (an unrecognized
+  `--evidence-kind`) and `.ConfirmationTextRequired` (an empty/whitespace-
+  only `--definition-of-done`/`--evidence`), both mapped to
+  `ExitCodes.Usage` and documented in `docs/contracts/v1/README.md`'s
+  diagnostics table.
 - New `workflow.confirm` entry in `capabilities.json`, documented but not
   yet `Implemented` (no Desktop control).
 - English/Russian RESX localization for the new command's description and

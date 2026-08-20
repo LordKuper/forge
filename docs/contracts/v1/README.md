@@ -39,6 +39,8 @@ gate on workstations and CI.
 | 2 | usage | `supersession_instruction_too_long` | Supersession instruction exceeds the maximum bounded length |
 | 2 | usage | `supersession_instruction_unreadable` | Supersession instruction source could not be read at all |
 | 2 | usage | `supersession_instruction_required` | Supersession instruction was empty or whitespace-only |
+| 2 | usage | `confirmation_evidence_kind_invalid` | `forge confirm`'s `--evidence-kind` was not `inspection`/`execution`/`existing-check` |
+| 2 | usage | `confirmation_text_required` | `forge confirm`'s `--definition-of-done`/`--evidence` was empty or whitespace-only |
 | 3 | configuration | `configuration_scope_violation` | Key belongs to another scope |
 | 4 | project | `project_not_initialized` | Confirmed root lacks valid `.forge/` |
 | 5 | platform | `platform_not_supported` | No registered platform strategy |

@@ -1672,17 +1672,26 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeNotFound);
         }
 
+        IReadOnlyList<ConfirmationArtifact> recordedForSprint = await store
+            .GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        ConfirmationArtifact? latestForNode = recordedForSprint
+            .Where(candidate => candidate.NodeId.Value == nodeId)
+            .OrderByDescending(candidate => candidate.RecordedAt)
+            .FirstOrDefault();
+
         if (node.State is NodeState.Succeeded or NodeState.Failed)
         {
-            IReadOnlyList<ConfirmationArtifact> recordedAlready = await store
-                .GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-            ConfirmationArtifact? latest = recordedAlready
-                .Where(candidate => candidate.NodeId.Value == nodeId)
-                .OrderByDescending(candidate => candidate.RecordedAt)
-                .FirstOrDefault();
-            return latest is null
-                ? new(false, null, DiagnosticCodes.WorkflowEventConflict)
-                : new(true, latest, DiagnosticCodes.None);
+            if (latestForNode is null)
+            {
+                return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            // A resumed call presenting a *different* outcome than what is already durable must
+            // never silently reinterpret the earlier verdict -- the same decision-flip protection
+            // ResolveHumanGateAsync's own review history (ADR 0019) established for gate decisions.
+            return latestForNode.Outcome == outcome
+                ? new(true, latestForNode, DiagnosticCodes.None)
+                : new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
         }
 
         bool resuming = node.State == NodeState.Running;
@@ -1698,6 +1707,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 return new(false, null, DiagnosticCodes.NodeTransitionInvalid);
             }
         }
+        else if (latestForNode is not null && latestForNode.Outcome != outcome)
+        {
+            // A crash landing after RecordConfirmationAsync durably lands below but before
+            // CompleteAttemptAsync leaves the node `running` with an artifact already on record --
+            // the same decision-flip protection as the terminal branch above, checked here too since
+            // this attempt has not reached a terminal node state yet.
+            return new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
+        }
 
         StartAttemptResult started = await StartAttemptAsync(
             projectRoot, sprintId, nodeId, node.Version, cancellationToken).ConfigureAwait(false);
@@ -1706,9 +1723,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, started.DiagnosticCode);
         }
 
-        RecordConfirmationResult recorded = await RecordConfirmationAsync(
-            projectRoot, sprintId, nodeId, outcome, definitionOfDone, evidence, cancellationToken)
-            .ConfigureAwait(false);
+        // Skips re-recording once a matching artifact already exists (the resumed, same-outcome
+        // case just validated above) rather than minting a harmless-but-avoidable duplicate --
+        // there is nothing left to durably record that isn't already durable.
+        RecordConfirmationResult recorded = latestForNode is not null
+            ? new(true, latestForNode, DiagnosticCodes.None)
+            : await RecordConfirmationAsync(
+                projectRoot, sprintId, nodeId, outcome, definitionOfDone, evidence, cancellationToken)
+                .ConfigureAwait(false);
         if (!recorded.Succeeded)
         {
             return recorded;

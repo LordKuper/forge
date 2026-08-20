@@ -205,6 +205,39 @@ public sealed class ConfirmationCliTests
         Assert.Equal(NodeState.Ready, state.Nodes["confirm"].State);
     }
 
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ConfirmCommandRejectsAWhitespaceOnlyDefinitionOfDoneBeforeStartingTheAttempt()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ConfirmGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog), output, environment.Application, diagnostics, isInteractive: () => true);
+
+        int exitCode = await root
+            .Parse([
+                "confirm", "confirmed", "--sprint", sprintId.Value.ToString(), "--node", "confirm",
+                "--definition-of-done", "   ", "--evidence-kind", "execution", "--evidence", "Ran it.",
+                "--yes", "--project-root", environment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(ExitCodes.Usage, exitCode);
+        Assert.Contains(DiagnosticCodes.ConfirmationTextRequired, diagnostics.ToString(), StringComparison.Ordinal);
+        // The node must never have been started at all -- not just left recoverable.
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, state.Nodes["confirm"].State);
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

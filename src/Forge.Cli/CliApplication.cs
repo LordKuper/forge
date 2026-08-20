@@ -699,12 +699,22 @@ public static class CliApplication
                 return Report(diagnostics, DiagnosticCodes.ConfirmationEvidenceKindInvalid);
             }
 
+            string definitionOfDoneValue = parseResult.GetValue(definitionOfDone) ?? string.Empty;
+            string evidenceValue = parseResult.GetValue(evidence) ?? string.Empty;
+            // Checked here, before StartAttemptAsync ever runs (inside ConfirmNodeAsync below) --
+            // `confirmation-result.schema.json`'s own `minLength: 1` would eventually reject an
+            // empty value too, but only after the node was already durably moved to `running`.
+            if (string.IsNullOrWhiteSpace(definitionOfDoneValue) || string.IsNullOrWhiteSpace(evidenceValue))
+            {
+                return Report(diagnostics, DiagnosticCodes.ConfirmationTextRequired);
+            }
+
             string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.ConfirmationNodeId;
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
             RecordConfirmationResult result = await mutations
                 .ConfirmNodeAsync(
-                    root, sprintId, nodeId, outcome, parseResult.GetValue(definitionOfDone) ?? string.Empty,
-                    [new ConfirmationEvidence(kind, parseResult.GetValue(evidence) ?? string.Empty)],
+                    root, sprintId, nodeId, outcome, definitionOfDoneValue,
+                    [new ConfirmationEvidence(kind, evidenceValue)],
                     parseResult.GetValue(confirm), cancellationToken)
                 .ConfigureAwait(false);
             if (result.Succeeded)
