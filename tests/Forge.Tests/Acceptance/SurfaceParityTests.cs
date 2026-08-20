@@ -202,6 +202,25 @@ public sealed class SurfaceParityTests
             entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
     }
 
+    /// <summary>Round 2 review of PR #78: the regex above only ever matches `&lt;Entry&gt;` elements,
+    /// so it cannot catch a `Picker` losing its screen-reader description -- the exact gap that let
+    /// `ConfirmEvidenceKindPicker` ship with none at all until round 1 review caught it. No MAUI
+    /// control can be instantiated headlessly (see the reasoning above), so this pins the fix
+    /// directly in the code-behind text the same way the other static checks on this page do,
+    /// scoped to the one `Picker` this PR actually adds rather than widening to every existing
+    /// `Picker` on the page (`ConfigurationScopePicker` predates this PR and is unrelated to
+    /// it).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ConfirmEvidenceKindPickerCarriesAScreenReaderName()
+    {
+        string codeBehind = File.ReadAllText(Path.Combine(
+            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
+
+        Assert.Contains(
+            "SemanticProperties.SetDescription(ConfirmEvidenceKindPicker, ", codeBehind, StringComparison.Ordinal);
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public void GateConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
