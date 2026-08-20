@@ -45,11 +45,19 @@ public sealed class DoctorBundleCliTests
     /// appeared without ever planting that marker anywhere the collector could reach, so it passed
     /// vacuously and proved nothing about the "a collection failure omits that section rather than
     /// leaking anything about it" design. A corrupt sprint definition containing sensitive-looking
-    /// text is the concrete leak vector this proves closed: `CollectEventLogIntegrityAsync` catches
-    /// `InvalidDataException` by type only and reports a fixed
-    /// <see cref="DiagnosticCodes.WorkflowLogCorrupted"/> code, never the exception's own message
-    /// (which -- via `FileSprintEventLog`'s own wrapping -- would otherwise carry this file's raw
-    /// content back out).</summary>
+    /// text is the concrete leak vector this now exercises. Round 2 review, verified by a live
+    /// mutation experiment (temporarily forwarding the caught exception's own `Message` into
+    /// <c>DiagnosticCode</c>): the load-bearing proof is the fixed
+    /// <see cref="DiagnosticCodes.WorkflowLogCorrupted"/> constant assertion below -- that is what
+    /// actually fails if `CollectEventLogIntegrityAsync` ever starts deriving the code from exception
+    /// content instead of catching by type alone. The two marker-absence assertions are additional
+    /// defense-in-depth, not currently reachable through this exact fixture: `System.Text.Json`'s own
+    /// parse-failure messages for malformed input describe the *shape* of the error (an invalid
+    /// start-of-value, a line/byte position) rather than echoing the offending text back, so today's
+    /// `JsonException`/`InvalidDataException` messages never contain this file's actual content
+    /// regardless of what this collector does with them. Kept anyway: a future change to either the
+    /// JSON runtime's own message format or to how corruption is wrapped could start echoing content,
+    /// and these assertions would then be the ones to catch it.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task DoctorBundleNeverLeaksTheContentOfACorruptSprintFile()
@@ -72,6 +80,8 @@ public sealed class DoctorBundleCliTests
         Assert.Equal(0, exitCode);
         using JsonDocument document = JsonDocument.Parse(output.ToString());
         Assert.False(document.RootElement.GetProperty("event_log_integrity").GetProperty("valid").GetBoolean());
+        // The load-bearing assertion (see summary above): this is a fixed constant, never derived
+        // from the exception the corrupt file actually produced.
         Assert.Equal(
             DiagnosticCodes.WorkflowLogCorrupted,
             document.RootElement.GetProperty("event_log_integrity").GetProperty("diagnostic_code").GetString());
