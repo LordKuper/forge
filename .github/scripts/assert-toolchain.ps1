@@ -8,7 +8,7 @@ $actual = @{
     ".NET SDK" = ((& dotnet --version)).Trim()
 }
 $expected = @{
-    ".NET SDK" = "10.0.302"
+    ".NET SDK" = "10.0.303"
 }
 $minimumPowerShellVersion = [version]"7.6.3"
 $actualPowerShellVersion = $PSVersionTable.PSVersion
