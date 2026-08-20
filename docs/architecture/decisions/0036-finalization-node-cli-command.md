@@ -165,7 +165,21 @@ path naturally. Only after the retry budget is exhausted does the node
 stay `failed`, identical to how any other Work node behaves once stuck —
 `forge attempt supersede` remains the existing, general re-arm mechanism
 for that case, not something this item needed to build a parallel path
-for.
+for. A terminal `failed` node reports `Node` alone (`Sprint: null`),
+matching `FinalizeSprintResult`'s own doc comment — the sprint has not
+moved in that case, so there is nothing to report.
+
+The node and the sprint settle in two separate durable writes
+(`CompleteAttemptAsync`, then `CompleteSprintAsync`); a crash or dropped
+call between them can leave the node durably `Succeeded` while the sprint
+is still durably `ReadyToFinalize`, with nothing else in this codebase ever
+driving that last transition. The terminal-node short-circuit accounts for
+this: when the node is `Succeeded` but `state.Sprint.State` is not yet
+`Completed`, a resumed call re-drives the idempotent `CompleteSprintAsync`
+instead of reporting a false success for a permanently wedged sprint.
+Found and fixed during this item's own review loop; regression-tested by
+reproducing the wedge directly through `SprintScheduler` (the node's own
+completion write without the sprint's).
 
 ### Not yet in `CapabilityIds.Implemented`
 

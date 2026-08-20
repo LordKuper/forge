@@ -785,7 +785,8 @@ public sealed class ForgeApplication(
                 return new(resumed.Succeeded, node, resumed.Sprint, resumed.DiagnosticCode);
             }
 
-            return new(node.State == NodeState.Succeeded, node, state.Sprint, DiagnosticCodes.None);
+            bool succeeded = node.State == NodeState.Succeeded;
+            return new(succeeded, node, succeeded ? state.Sprint : null, DiagnosticCodes.None);
         }
 
         SprintDefinition? definition =

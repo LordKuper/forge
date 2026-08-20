@@ -92,6 +92,47 @@ public sealed class FinalizeSprintTests
         Assert.Equal(2, repository.MergeCalls.Count);
     }
 
+    // A permanently-failed node (retry budget exhausted) reports Node alone, matching
+    // FinalizeSprintResult's own doc comment ("a failed merge... reports Node alone") -- the sprint
+    // never moved in this case, so nothing about it should be reported back.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncReportsOnlyTheNodeOnceRetriesAreExhausted()
+    {
+        FakeRepository repository = new(defaultBranch: "main")
+        {
+            MergeResult = GitOperationResult.Fail(DiagnosticCodes.RepositoryDirty),
+        };
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        FinalizeSprintResult result = new(false, null, null, DiagnosticCodes.None);
+        for (int attempt = 0; attempt < SprintScheduler.MaxAutomaticRetries + 1; attempt++)
+        {
+            result = await environment.Application.FinalizeSprintAsync(
+                environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+        }
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.RepositoryDirty, result.DiagnosticCode);
+        Assert.Equal(NodeState.Failed, result.Node!.State);
+        Assert.Null(result.Sprint);
+
+        FinalizeSprintResult replay = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.False(replay.Succeeded);
+        Assert.Equal(NodeState.Failed, replay.Node!.State);
+        Assert.Null(replay.Sprint);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task FinalizeSprintAsyncRequiresConfirmation()
