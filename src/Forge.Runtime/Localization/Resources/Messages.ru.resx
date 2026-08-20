@@ -99,14 +99,14 @@
   <data name="ConfirmFailed" xml:space="preserve"><value>Не удалось записать подтверждение.</value></data>
   <data name="ConfirmNodeIdLabel" xml:space="preserve"><value>Идентификатор узла подтверждения (пусто: confirmation):</value></data>
   <data name="ConfirmDefinitionOfDoneLabel" xml:space="preserve"><value>Определение готовности:</value></data>
-  <data name="ConfirmEvidenceKindLabel" xml:space="preserve"><value>Тип подтверждения:</value></data>
-  <data name="ConfirmEvidenceLabel" xml:space="preserve"><value>Подтверждение:</value></data>
+  <data name="ConfirmEvidenceKindLabel" xml:space="preserve"><value>Тип доказательства:</value></data>
+  <data name="ConfirmEvidenceLabel" xml:space="preserve"><value>Доказательство:</value></data>
   <data name="ConfirmConfirmedAction" xml:space="preserve"><value>Подтверждено</value></data>
   <data name="ConfirmNotConfirmedAction" xml:space="preserve"><value>Не подтверждено</value></data>
   <data name="ConfirmConfirmationRequired" xml:space="preserve"><value>Подтвердите решение перед его применением.</value></data>
   <data name="ConfirmSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы подтвердить его узел.</value></data>
   <data name="ConfirmDefinitionOfDoneRequired" xml:space="preserve"><value>Укажите, что было проверено на соответствие определению готовности.</value></data>
-  <data name="ConfirmEvidenceRequired" xml:space="preserve"><value>Укажите подтверждение решения.</value></data>
+  <data name="ConfirmEvidenceRequired" xml:space="preserve"><value>Укажите доказательство для решения.</value></data>
   <data name="TestWorkFailed" xml:space="preserve"><value>Не удалось записать решение о тестах.</value></data>
   <data name="TestWorkNodeIdLabel" xml:space="preserve"><value>Идентификатор узла тестирования (пусто: test_work):</value></data>
   <data name="TestWorkJustificationLabel" xml:space="preserve"><value>Обоснование:</value></data>
