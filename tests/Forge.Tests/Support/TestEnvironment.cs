@@ -401,10 +401,16 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
 
     public string DiffFailureCode { get; set; } = DiagnosticCodes.WorktreeDiffFailed;
 
+    /// <summary>A test overrides this to exercise the review executor's own handling of a
+    /// budget-truncated diff (appending the "(truncated)" marker to its prompt) without needing a
+    /// real diff 50,000 characters long -- the real truncation arithmetic itself belongs to
+    /// <c>GitIsolationTests</c>, against real `git.exe`.</summary>
+    public bool DiffTruncated { get; set; }
+
     public Task<GitDiffResult> DiffAsync(
         string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken) =>
         Task.FromResult(
-            FailNextDiff ? GitDiffResult.Fail(DiffFailureCode) : GitDiffResult.Ok(Diff, truncated: false));
+            FailNextDiff ? GitDiffResult.Fail(DiffFailureCode) : GitDiffResult.Ok(Diff, DiffTruncated));
 
     public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
         heads.TryGetValue(path, out string? head)

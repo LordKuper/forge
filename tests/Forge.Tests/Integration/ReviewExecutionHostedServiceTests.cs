@@ -31,13 +31,20 @@ public sealed class ReviewExecutionHostedServiceTests
     public async Task AnApprovedVerdictSucceedsOnTheFirstIteration()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
-        FakeWorktreeManager worktrees = new() { Diff = "diff --git a/x.txt b/x.txt\n+hello" };
+        FakeWorktreeManager worktrees = new()
+        {
+            Diff = "diff --git a/x.txt b/x.txt\n+hello",
+            DiffTruncated = true,
+        };
         FakeRunnableLlmProvider provider = new(
             new ProviderId("fake"),
             (prompt, _, _, _) =>
             {
-                // The diff must actually reach the prompt for a review to mean anything.
+                // The diff must actually reach the prompt for a review to mean anything, and a
+                // budget-truncated diff must say so rather than silently passing partial content off
+                // as the whole change.
                 Assert.Contains("diff --git a/x.txt b/x.txt", prompt, StringComparison.Ordinal);
+                Assert.Contains("(truncated)", prompt, StringComparison.Ordinal);
                 return Task.FromResult(ProviderRunResult.Success(
                     [], new ProviderTerminalResult("Looks correct.\nAPPROVED")));
             });

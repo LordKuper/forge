@@ -187,8 +187,23 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
 
         string diff = result.StandardOutput;
         bool truncated = diff.Length > GitWorktreeManagerDiffBudget.MaxCharacters;
-        return GitDiffResult.Ok(
-            truncated ? diff[..GitWorktreeManagerDiffBudget.MaxCharacters] : diff, truncated);
+        return GitDiffResult.Ok(truncated ? TruncateSafely(diff, GitWorktreeManagerDiffBudget.MaxCharacters) : diff, truncated);
+    }
+
+    /// <summary>Never splits a UTF-16 surrogate pair at the truncation boundary: cutting a string at
+    /// a fixed code-unit count with a bare slice can land between a high and low surrogate, producing
+    /// a malformed string with an unpaired high surrogate at its end -- the same bound and safety rule
+    /// <see cref="Forge.Providers.ProviderExecution"/>'s own safe-truncation helper already
+    /// applies.</summary>
+    private static string TruncateSafely(string text, int maxLength)
+    {
+        int length = maxLength;
+        if (length > 0 && char.IsHighSurrogate(text[length - 1]))
+        {
+            length--;
+        }
+
+        return text[..length];
     }
 
     public async Task<GitOperationResult> ResetHardAsync(
