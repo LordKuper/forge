@@ -858,6 +858,8 @@ internal sealed class ControlPlaneHost : IAsyncDisposable
                 services.AddSingleton<NotificationDeliveryHostedService>();
                 services.AddSingleton(new IntakeExecutionOptions(options.ProjectRoot));
                 services.AddSingleton<IntakeExecutionHostedService>();
+                services.AddSingleton(new PlanningExecutionOptions(options.ProjectRoot));
+                services.AddSingleton<PlanningExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();

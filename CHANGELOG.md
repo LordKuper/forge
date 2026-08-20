@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.51.0
+
+### Added
+
+- A running sprint's second node (`planning`) now actually executes: once
+  `intake` finishes, Forge runs the sprint's frozen provider inside an
+  isolated, throwaway worktree with a prompt built from the project's
+  admitted rules and knowledge, asking it to research and reason about
+  the change without editing any file. Its response is recorded as a
+  structured handoff for the (not-yet-built) `implementation` node to
+  read. A provider failure, an empty response, an idle/session timeout,
+  or an isolation failure is recorded and automatically retried up to
+  twice before the node is marked failed, matching every other node's
+  retry policy.
+
 ## v0.50.1
 
 ### Fixed

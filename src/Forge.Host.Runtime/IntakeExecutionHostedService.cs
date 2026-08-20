@@ -1,4 +1,3 @@
-using System.Text.Json;
 using Forge.Application;
 using Forge.Compiler;
 using Forge.Domain;
@@ -57,16 +56,11 @@ public sealed class IntakeExecutionHostedService(
     ForgeApplication application,
     ILogger<IntakeExecutionHostedService> logger) : BackgroundService
 {
-    /// <summary>The fallback used when `context.token_budget` (ADR 0029) is unset, or when the
-    /// project configuration cannot be read at all (see <see cref="ResolveTokenBudgetAsync"/>) —
-    /// never a silent substitute for a value the project actually set. Eight times
-    /// <c>ForgeDocumentCompiler</c>'s own 4,000-token per-document default cap, so a project with a
-    /// handful of ordinary rules and ADRs fits without truncation. An unverified MVP guess, not a
-    /// measured value (ADR 0028); over-budget items degrade by truncation, never by failure, so
-    /// guessing low costs admitted context rather than correctness.</summary>
-    public const int DefaultTokenBudget = 32_000;
-
-    private const string TokenBudgetKey = "context.token_budget";
+    /// <summary>Re-exported for this service's own existing tests/callers; the real value now lives
+    /// on <see cref="TokenBudgetResolver.DefaultTokenBudget"/>, shared with every other node
+    /// executor that resolves `context.token_budget` (ADR 0029) — see there for the fallback's own
+    /// justification.</summary>
+    public const int DefaultTokenBudget = TokenBudgetResolver.DefaultTokenBudget;
 
     /// <summary><see cref="NodeDiagnostic.Category"/> for a `.forge/` parse failure recorded against
     /// a succeeded intake node — the free-form lowercase convention
@@ -258,7 +252,8 @@ public sealed class IntakeExecutionHostedService(
         ForgeDocumentSet documents = await new ForgeDocumentCompiler()
             .ParseAsync(options.ProjectRoot, cancellationToken)
             .ConfigureAwait(false);
-        int tokenBudget = await ResolveTokenBudgetAsync(cancellationToken).ConfigureAwait(false);
+        int tokenBudget = await TokenBudgetResolver
+            .ResolveAsync(application, options.ProjectRoot, cancellationToken).ConfigureAwait(false);
         ContextManifest manifest = ContextManifestCompiler.Compile(
             sprintId.Value,
             definition.BaseCommit,
@@ -300,37 +295,6 @@ public sealed class IntakeExecutionHostedService(
             // service must never leave a `running` node behind by throwing here.
             LogCompleteRejected(logger, sprintId.Value, completed.DiagnosticCode, null);
         }
-    }
-
-    /// <summary>Reads `context.token_budget` (ADR 0029) fresh every attempt rather than once per
-    /// tick or caching it at startup, matching this service's own no-per-sprint-memory discipline —
-    /// a project's configuration can change between ticks, and the added cost is one config read per
-    /// attempt, not per tick. Falls back to <see cref="DefaultTokenBudget"/> whenever the value
-    /// cannot be trusted: the project configuration is unreadable, the key is absent (an
-    /// unconfigured project, the common case), or the resolved value is not a positive integer.
-    /// <see cref="ContextManifestCompiler.Compile"/>'s own <see cref="ArgumentOutOfRangeException"/>
-    /// for a non-positive budget is deliberately outside this service's per-sprint catch filter
-    /// (round 7 review of PR #68 widened that filter to every exception the eleven
-    /// Persisted*-DTO-corruption instances actually produced, not to every exception a
-    /// differently-shaped future bug could ever produce), so a bad value must never reach
-    /// `Compile` in the first place — the schema already enforces a positive value on write, but
-    /// this service does not own that validation and must not assume it always ran.</summary>
-    private async Task<int> ResolveTokenBudgetAsync(CancellationToken cancellationToken)
-    {
-        ConfigurationView project = await application
-            .GetProjectConfigurationAsync(options.ProjectRoot, cancellationToken)
-            .ConfigureAwait(false);
-        if (project.DiagnosticCode != DiagnosticCodes.None)
-        {
-            return DefaultTokenBudget;
-        }
-
-        JsonElement value = project.Values
-            .FirstOrDefault(item => item.Key == TokenBudgetKey)?.Value ?? default;
-        return value.ValueKind == JsonValueKind.Number &&
-            value.TryGetInt32(out int budget) && budget >= 1
-                ? budget
-                : DefaultTokenBudget;
     }
 
     /// <summary>A malformed `.forge/` document degrades intake's admitted context; it never fails

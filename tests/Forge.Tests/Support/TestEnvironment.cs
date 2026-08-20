@@ -18,7 +18,8 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         IRepository? repository = null,
         IEnumerable<ILlmProvider>? llmProviders = null,
         IProviderEnablementSource? providerEnablement = null,
-        IEnumerable<IProviderIntegrationGenerator>? generators = null)
+        IEnumerable<IProviderIntegrationGenerator>? generators = null,
+        IWorktreeManager? worktrees = null)
     {
         IPlatformPreflight preflight = platform ?? new SupportedPlatformPreflight();
         Root = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
@@ -71,6 +72,15 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         foreach (IProviderIntegrationGenerator generator in generators ?? [])
         {
             services.AddSingleton(generator);
+        }
+
+        // AddForgeCore's default is the real GitWorktreeManager (real `git.exe`, exercised against
+        // an actual repository by GitIsolationTests); overridden only when a caller explicitly
+        // wants SprintGitIsolation's own orchestration decoupled from a real subprocess -- the same
+        // `repository` override pattern above, for the same reason.
+        if (worktrees is not null)
+        {
+            services.AddSingleton(worktrees);
         }
 
         provider = services.BuildServiceProvider();
@@ -264,6 +274,122 @@ internal sealed class FakeLlmProvider(
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null) =>
         throw new NotSupportedException("This fake only exercises discovery/install orchestration.");
+}
+
+/// <summary>Unlike <see cref="FakeLlmProvider"/> (which deliberately throws from
+/// <see cref="RunAsync"/> — it exists only to exercise discovery/install orchestration), this fake
+/// actually runs a caller-supplied delegate, for tests of a node executor that calls
+/// <see cref="ILlmProvider.RunAsync"/> for real (Stage 11's planning executor). Records every
+/// invocation's prompt and working directory so a test can assert on them without the delegate
+/// itself needing to.</summary>
+internal sealed class FakeRunnableLlmProvider(
+    ProviderId id,
+    Func<string, string, CancellationToken, Func<AttemptActivityKind, CancellationToken, Task>?, Task<ProviderRunResult>> run)
+    : ILlmProvider
+{
+    public List<(string Prompt, string WorkingDirectory)> Calls { get; } = [];
+
+    public ProviderId Id => id;
+
+    public string DefaultModel => $"{id.Value}-fake-model";
+
+    public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
+        Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
+
+    public Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
+        Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
+
+    public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(null);
+
+    public Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(ProviderAuthenticationStatus.Ready);
+
+    public Task<ProviderRunResult> RunAsync(
+        string prompt,
+        string workingDirectory,
+        CancellationToken cancellationToken,
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
+    {
+        Calls.Add((prompt, workingDirectory));
+        return run(prompt, workingDirectory, cancellationToken, onActivity);
+    }
+}
+
+/// <summary>An in-memory stand-in for real `git.exe` worktree operations (`GitIsolationTests`
+/// already exercises the real thing) — for a test that needs to prove a caller's own orchestration
+/// (which methods it calls, in what order, how it reacts to a failure) rather than git's actual
+/// behavior. A worktree "exists" once <see cref="CreateAsync"/> succeeds for its path and stops
+/// existing once <see cref="RemoveAsync"/> is called, matching the real manager's own contract
+/// closely enough for that purpose.</summary>
+internal sealed class FakeWorktreeManager : IWorktreeManager
+{
+    private readonly HashSet<string> paths = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> heads = new(StringComparer.Ordinal);
+
+    public List<string> CreatedPaths { get; } = [];
+
+    public List<string> RemovedPaths { get; } = [];
+
+    /// <summary>Persistent, not a one-shot latch: a caller that retries after a failure (e.g. an
+    /// executor's bounded automatic retry) must keep observing the same failure until a test
+    /// explicitly clears this, matching a genuinely broken environment (e.g. disk full) rather
+    /// than a transient one.</summary>
+    public bool FailNextCreate { get; set; }
+
+    public string CreateFailureCode { get; set; } = DiagnosticCodes.WorktreeUnavailable;
+
+    public Task<bool> ExistsAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
+        Task.FromResult(paths.Contains(path));
+
+    public Task<GitOperationResult> CreateAsync(
+        string projectRoot, string path, string branch, string commit, CancellationToken cancellationToken)
+    {
+        if (FailNextCreate)
+        {
+            return Task.FromResult(GitOperationResult.Fail(CreateFailureCode));
+        }
+
+        paths.Add(path);
+        heads[path] = commit;
+        CreatedPaths.Add(path);
+        return Task.FromResult(GitOperationResult.Ok(commit));
+    }
+
+    public Task<bool> IsDirtyAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
+        Task.FromResult(false);
+
+    public Task<GitOperationResult> ResetHardAsync(
+        string projectRoot, string path, string commit, CancellationToken cancellationToken) =>
+        Task.FromResult(GitOperationResult.Ok(commit));
+
+    public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
+        heads.TryGetValue(path, out string? head)
+            ? Task.FromResult(head)
+            : throw new InvalidOperationException($"No fake worktree is registered at '{path}'.");
+
+    public Task<GitOperationResult> IntegrateFastForwardAsync(
+        string projectRoot, string path, string sourceBranch, CancellationToken cancellationToken) =>
+        Task.FromResult(GitOperationResult.Ok(heads.GetValueOrDefault(path)));
+
+    public Task<GitOperationResult> RebaseOntoAsync(
+        string projectRoot, string path, string upstream, string ontoCommit, CancellationToken cancellationToken) =>
+        Task.FromResult(GitOperationResult.Ok(ontoCommit));
+
+    public Task<bool> RemoveAsync(string projectRoot, string path, CancellationToken cancellationToken)
+    {
+        bool removed = paths.Remove(path);
+        heads.Remove(path);
+        if (removed)
+        {
+            RemovedPaths.Add(path);
+        }
+
+        return Task.FromResult(true);
+    }
+
+    public Task<bool> DeleteBranchAsync(string projectRoot, string branch, CancellationToken cancellationToken) =>
+        Task.FromResult(true);
 }
 
 /// <summary>A fixed, ordered `providers.enabled` selection — bypasses the real configuration

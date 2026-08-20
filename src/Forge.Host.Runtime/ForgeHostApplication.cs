@@ -69,6 +69,11 @@ public static class ForgeHostApplication
                 // against durable state another Host owns.
                 services.AddSingleton(new IntakeExecutionOptions(projectRoot));
                 services.AddSingleton<IntakeExecutionHostedService>();
+                // Same reasoning again: this is the second service that executes a node (Stage 11's
+                // planning executor, the first to invoke a real ILlmProvider) — a Host that lost the
+                // lease race must never drive it either.
+                services.AddSingleton(new PlanningExecutionOptions(projectRoot));
+                services.AddSingleton<PlanningExecutionHostedService>();
                 services.AddHostedService<ControlPlaneHostedService>();
             })
             .Build();
