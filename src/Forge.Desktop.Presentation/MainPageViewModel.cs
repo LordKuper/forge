@@ -109,9 +109,12 @@ public sealed class MainPageViewModel(
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(
                     text.Resolve(MessageKeys.SuggestedActionsTitle),
+                    // Two-space indent, matching `forge status`'s own `WriteActions` row formatting
+                    // exactly -- same bug class as the startup-checks/provider sections above (round
+                    // 2 review of PR #80).
                     snapshot.SuggestedActions.Select(action => string.Create(
                         CultureInfo.InvariantCulture,
-                        $"{action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"))),
+                        $"  {action.Rank}. {action.ActionId} - {text.Resolve(action.RationaleKey)}"))),
             // Same shared projection `forge tree` renders (ADR 0005: both surfaces read one snapshot).
             Render(
                 null,
@@ -123,13 +126,18 @@ public sealed class MainPageViewModel(
             snapshot.Details is { } sprintDetails
                 ? Render(null, SurfaceFormatting.SprintDetailLines(text, sprintDetails))
                 : string.Empty,
+            // Title deliberately excluded here (`null`, unlike every other Render(...) call above) --
+            // `ConfigurationTitleLabel` in MainPage.xaml.cs's constructor already renders
+            // MessageKeys.ConfigurationTitle as its own static label, not part of this scrollable
+            // section. Rows still need the same two-space indent `forge config show`'s own
+            // `WriteValues` uses (round 2 review of PR #80).
             Render(
                 null,
                 user.Values
                     .Concat(project.Values)
                     .Select(value => string.Create(
                         CultureInfo.InvariantCulture,
-                        $"{value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"))),
+                        $"  {value.Key} = {value.Value.GetRawText()} ({SurfaceFormatting.Machine(value.Provenance)})"))),
             Render(
                 text.Resolve(MessageKeys.DiagnosticsTitle),
                 new[]

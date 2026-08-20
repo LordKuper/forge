@@ -663,6 +663,79 @@ public sealed class SurfaceParityTests
     }
 
     /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
+    /// for the suggested-actions section (`SuggestedActionsTitle`). Round 2 review of PR #80 found
+    /// this section had the identical, previously-unfixed indent divergence from `forge status`'s
+    /// own `WriteActions` (`CliApplication.cs`) as the startup-checks/provider sections already
+    /// fixed. `WriteActions` is the last thing `forge status` writes, so the section is everything
+    /// from its own title to the end of output -- the same "read to end" shape the sibling parity
+    /// tests already use, unlike the startup-checks test's own bounded slice.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameSuggestedActionsForOneSnapshot()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        // An uninitialized project always suggests `initialize_project` -- a real, non-empty
+        // fixture without needing any sprint/provider setup.
+        await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["status", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+        MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
+            .RefreshAsync(environment.ProjectRoot, null, cancellationToken);
+
+        string title = text.Resolve(MessageKeys.SuggestedActionsTitle);
+        string full = cliOutput.ToString();
+        int start = full.IndexOf(title, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"'{title}' was not found in CLI output: {full}");
+        string cliSection = full[start..].TrimEnd();
+
+        Assert.Equal(cliSection, desktop.SuggestedActionsText);
+        Assert.Contains("initialize_project", desktop.SuggestedActionsText, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
+    /// for the configuration-values section. Round 2 review of PR #80 found the same indent
+    /// divergence from `forge config show`'s own `WriteValues` (`CliApplication.cs`). Unlike every
+    /// other section here, Desktop's own `Render(null, ...)` call deliberately excludes the title --
+    /// `ConfigurationTitleLabel` in `MainPage.xaml.cs`'s constructor already renders
+    /// `MessageKeys.ConfigurationTitle` as its own static label, not part of this scrollable text --
+    /// so the CLI comparison text is sliced to start right after its own title line instead of
+    /// including it.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameConfigurationValuesForOneSnapshot()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["config", "show", "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+        MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
+            .RefreshAsync(environment.ProjectRoot, null, cancellationToken);
+
+        string title = text.Resolve(MessageKeys.ConfigurationTitle);
+        string full = cliOutput.ToString();
+        int titleIndex = full.IndexOf(title, StringComparison.Ordinal);
+        Assert.True(titleIndex >= 0, $"'{title}' was not found in CLI output: {full}");
+        string cliSection = full[(titleIndex + title.Length)..].TrimStart('\r', '\n').TrimEnd();
+
+        Assert.Equal(cliSection, desktop.ConfigurationText);
+        // The comparison above is only as strong as its fixture -- pin that real content is
+        // actually compared, not two empty sections that would trivially agree either way.
+        Assert.NotEmpty(desktop.ConfigurationText);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
     /// for `SurfaceFormatting.IntegrationInspectionLines` (ADR 0026).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
