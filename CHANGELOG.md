@@ -6,9 +6,9 @@ User-facing Forge changes are listed by release, newest first.
 
 ### Fixed
 
-- The Desktop app's provider toolchain list now indents each provider row
-  the same way `forge models` does, matching the CLI's own formatting
-  instead of rendering flush-left.
+- The Desktop app's provider toolchain list and startup checks list now
+  indent each row the same way `forge models`/`forge doctor --startup` do,
+  matching the CLI's own formatting instead of rendering flush-left.
 
 ## v0.59.0
 

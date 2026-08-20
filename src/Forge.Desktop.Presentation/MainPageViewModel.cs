@@ -90,9 +90,13 @@ public sealed class MainPageViewModel(
                 : MessageKeys.ProjectNotInitialized),
             Render(
                 text.Resolve(MessageKeys.StartupChecksTitle),
+                // Two-space indent, matching `forge doctor --startup`'s own row formatting exactly
+                // (`CliApplication.CreateDoctorCommand`) -- same bug class and fix as the provider
+                // section just below (round 1 review of PR #80 found this section had the identical,
+                // previously-unfixed divergence).
                 startup.Checks.Select(check => string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
+                    $"  {SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
             Render(
                 text.Resolve(MessageKeys.ProviderToolchainTitle),
                 // Two-space indent, matching `forge models`'s own row formatting exactly (`CliApplication
