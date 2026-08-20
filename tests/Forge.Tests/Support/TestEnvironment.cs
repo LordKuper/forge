@@ -168,13 +168,35 @@ internal sealed class SupportedPlatformPreflight : IPlatformPreflight
         new("windows", "x64", true, DiagnosticCodes.None);
 }
 
-/// <summary>Returns a fixed commit without running `git`.</summary>
-internal sealed class FakeRepository(string? head = null) : IRepository
+/// <summary>Returns a fixed commit and branch without running `git`. <see cref="MergeResult"/>
+/// controls what <see cref="MergeSprintIntoDefaultBranchAsync"/> reports (defaults to success), and
+/// every call is recorded in <see cref="MergeCalls"/> so a test can assert what branch names a
+/// finalize call actually presented.</summary>
+internal sealed class FakeRepository(string? head = null, string? defaultBranch = "main") : IRepository
 {
     private readonly string head = head ?? new string('a', 40);
 
+    // Not `defaultBranch ?? "main"`: a caller passing `defaultBranch: null` explicitly (simulating a
+    // detached HEAD) must actually get null, not have it silently coalesced back to "main" -- only
+    // an *omitted* argument should default, which the parameter's own default value already handles.
+    public string? DefaultBranch { get; set; } = defaultBranch;
+
+    public GitOperationResult MergeResult { get; set; } = GitOperationResult.Ok(new string('b', 40));
+
+    public List<(string DefaultBranch, string SourceBranch)> MergeCalls { get; } = [];
+
     public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(head);
+
+    public Task<string?> GetCurrentBranchAsync(string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(DefaultBranch);
+
+    public Task<GitOperationResult> MergeSprintIntoDefaultBranchAsync(
+        string projectRoot, string defaultBranch, string sourceBranch, CancellationToken cancellationToken)
+    {
+        MergeCalls.Add((defaultBranch, sourceBranch));
+        return Task.FromResult(MergeResult);
+    }
 }
 
 /// <summary>Like <see cref="FakeRepository"/>, but `Head` can change between calls — for tests that
@@ -184,14 +206,30 @@ internal sealed class MutableRepository : IRepository
 {
     public string Head { get; set; } = new string('a', 40);
 
+    public string? CurrentBranch { get; set; } = "main";
+
     public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(Head);
+
+    public Task<string?> GetCurrentBranchAsync(string projectRoot, CancellationToken cancellationToken) =>
+        Task.FromResult(CurrentBranch);
+
+    public Task<GitOperationResult> MergeSprintIntoDefaultBranchAsync(
+        string projectRoot, string defaultBranch, string sourceBranch, CancellationToken cancellationToken) =>
+        Task.FromResult(GitOperationResult.Ok(new string('b', 40)));
 }
 
 /// <summary>Always fails, matching a project root that is not (or not yet) a Git repository.</summary>
 internal sealed class UnavailableRepository : IRepository
 {
     public Task<string> GetHeadAsync(string projectRoot, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("No repository is available in this test.");
+
+    public Task<string?> GetCurrentBranchAsync(string projectRoot, CancellationToken cancellationToken) =>
+        throw new InvalidOperationException("No repository is available in this test.");
+
+    public Task<GitOperationResult> MergeSprintIntoDefaultBranchAsync(
+        string projectRoot, string defaultBranch, string sourceBranch, CancellationToken cancellationToken) =>
         throw new InvalidOperationException("No repository is available in this test.");
 }
 
@@ -614,6 +652,28 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new RecordTestWorkResult(true, null, DiagnosticCodes.None));
     }
 
+    public int FinalizeSprintCalls { get; private set; }
+
+    public bool? LastFinalizeConfirmed { get; private set; }
+
+    public string? LastFinalizeNodeId { get; private set; }
+
+    public Guid? LastFinalizeSprintId { get; private set; }
+
+    public Task<FinalizeSprintResult> FinalizeSprintAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        FinalizeSprintCalls++;
+        LastFinalizeConfirmed = confirmed;
+        LastFinalizeNodeId = nodeId;
+        LastFinalizeSprintId = sprintId;
+        return Task.FromResult(new FinalizeSprintResult(true, null, null, DiagnosticCodes.None));
+    }
+
     public int CreateSprintCalls { get; private set; }
 
     public int RunSprintCalls { get; private set; }
@@ -724,6 +784,14 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new RecordTestWorkResult(true, null, DiagnosticCodes.None));
+
+    public Task<FinalizeSprintResult> FinalizeSprintAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new FinalizeSprintResult(true, null, null, DiagnosticCodes.None));
 
     public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken) =>
         Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));

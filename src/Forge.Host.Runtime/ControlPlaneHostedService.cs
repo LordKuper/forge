@@ -318,6 +318,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchConfirmNodeAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RecordTestWorkKind =>
                     await DispatchRecordTestWorkAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.FinalizeSprintKind =>
+                    await DispatchFinalizeSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.CreateSprintKind =>
                     await DispatchCreateSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RunSprintKind =>
@@ -625,6 +627,25 @@ public sealed class ControlPlaneHostedService(
                 payload.Justification,
                 payload.Confirmed,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchFinalizeSprintAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        FinalizeSprintRequest? payload = request.Payload is { } value
+            ? value.Deserialize<FinalizeSprintRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.NodeId is null)
+        {
+            throw new InvalidDataException("The finalize_sprint payload is required.");
+        }
+
+        FinalizeSprintResult result = await application
+            .FinalizeSprintAsync(options.ProjectRoot, payload.SprintId, payload.NodeId, payload.Confirmed, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

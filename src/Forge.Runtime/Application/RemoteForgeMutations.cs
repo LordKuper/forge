@@ -158,6 +158,24 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "Unknown confirmation evidence kind."),
     };
 
+    public async Task<FinalizeSprintResult> FinalizeSprintAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new FinalizeSprintRequest(sprintId, nodeId, confirmed), ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.FinalizeSprintKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<FinalizeSprintResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, null, DiagnosticCodes.HostUnavailable);
+    }
+
     public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
         string? projectRoot,
         Guid sprintId,

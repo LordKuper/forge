@@ -1299,6 +1299,44 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
     }
 
+    /// <summary>
+    /// Finalization's own completion step (ADR 0036): the sprint's last legal transition,
+    /// `ready_to_finalize` → `completed`, walked only once finalization's own attempt has durably
+    /// merged the sprint's real changes into the project's default branch.
+    /// <see cref="EvaluateCompletionAsync"/> deliberately never walks this far on its own — nothing
+    /// else in this codebase appends it. Idempotent: a sprint already `completed` reports success
+    /// without re-appending anything, so a resumed finalize call after a crash between the merge
+    /// and this step lands cleanly.
+    /// </summary>
+    public async Task<SprintTransitionResult> CompleteSprintAsync(
+        string projectRoot, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (state.Sprint.State == SprintState.Completed)
+        {
+            return new(true, state.Sprint, DiagnosticCodes.None);
+        }
+
+        if (state.Sprint.State != SprintState.ReadyToFinalize)
+        {
+            return new(false, state.Sprint, DiagnosticCodes.SprintTransitionInvalid);
+        }
+
+        AppendOutcome outcome = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_completed", WorkflowStateNames.ToSnakeCase(SprintState.Completed),
+            state.Sprint.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+        if (!outcome.Succeeded)
+        {
+            return new(false, state.Sprint, outcome.DiagnosticCode);
+        }
+
+        SprintWorkflowState updated = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, updated.Sprint, DiagnosticCodes.None);
+    }
+
     /// <summary>A durable <see cref="WorkflowEvent.BlockedReasonArgument"/> tag for each of the
     /// five sites that can append a sprint's `blocked` transition — a stuck/failed node
     /// (<see cref="EvaluateCompletionAsync"/>), a late-arriving open finding

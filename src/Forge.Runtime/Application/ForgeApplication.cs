@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Forge.Configuration;
 using Forge.Domain;
@@ -18,6 +20,13 @@ public sealed record ConfigurationWriteResult(bool Succeeded, string DiagnosticC
 {
     public static ConfigurationWriteResult Success { get; } = new(true, DiagnosticCodes.None);
 }
+
+/// <summary><see cref="Sprint"/> is populated only once <see cref="Succeeded"/> reflects the
+/// sprint actually reaching `completed` — a failed merge or an already-in-flight attempt reports
+/// <see cref="Node"/> alone (mirroring every other node-settling mutation's own result shape), since
+/// the sprint itself has not moved in either of those cases.</summary>
+public sealed record FinalizeSprintResult(
+    bool Succeeded, NodeSnapshot? Node, SprintSnapshot? Sprint, string DiagnosticCode);
 
 public sealed record ConfigurationView(
     IReadOnlyList<EffectiveConfigurationValue> Values,
@@ -113,6 +122,21 @@ public interface IForgeMutations
         bool confirmed,
         CancellationToken cancellationToken);
 
+    /// <summary>The human-only `workflow.finalize` capability (ADR 0036): merges a sprint's
+    /// isolated integration branch into the project's own default branch (the branch checked out
+    /// when the sprint was created, frozen as <see cref="SprintDefinition.DefaultBranch"/>) and, on
+    /// success, completes the sprint. Fast-forward-only and fails closed on any divergence, a dirty
+    /// working directory, or the wrong branch checked out — this never runs `git checkout` itself,
+    /// so the project's own working directory never changes which branch it is on because Forge
+    /// ran. <paramref name="confirmed"/> must be <see langword="true"/> — the same no-config-bypass
+    /// rule as <see cref="ResolveGateAsync"/>.</summary>
+    Task<FinalizeSprintResult> FinalizeSprintAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability: cancels a non-terminal
     /// attempt and creates a linked replacement. <paramref name="confirmed"/> must be
     /// <see langword="true"/> — the same no-config-bypass rule as <see cref="ResolveGateAsync"/>.</summary>
@@ -168,7 +192,8 @@ public sealed class ForgeApplication(
     IntegrationInstallationService integrationInstallation,
     ISprintStore sprintStore,
     SprintScheduler scheduler,
-    SprintOrchestrator orchestrator) : IForgeMutations
+    SprintOrchestrator orchestrator,
+    IRepository repository) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -699,6 +724,127 @@ public sealed class ForgeApplication(
             .RecordTestWorkAsync(status.Root, id, nodeId, outcome, justification, node.Version, key, cancellationToken)
             .ConfigureAwait(false);
     }
+
+    /// <summary>ADR 0036's human-only `workflow.finalize` capability. Unlike every other node-
+    /// settling mutation, this one's real action (a git merge into the project's own working
+    /// directory) is genuine external I/O — deliberately orchestrated here rather than folded into
+    /// one <see cref="SprintScheduler"/> call the way <see cref="ConfirmNodeAsync"/>/
+    /// <see cref="RecordTestWorkAsync"/> are, since <see cref="SprintScheduler"/> itself stays a
+    /// pure state machine with no I/O beyond durable event-log state. This mirrors how every
+    /// model-bearing node's own executor is structured (real work happens between
+    /// <see cref="SprintScheduler.StartAttemptAsync"/> and <see cref="SprintScheduler.CompleteAttemptAsync"/>,
+    /// orchestrated outside <see cref="SprintScheduler"/>), just synchronous and CLI-triggered
+    /// instead of a background poll loop.</summary>
+    public async Task<FinalizeSprintResult> FinalizeSprintAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string nodeId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(nodeId);
+        if (!confirmed)
+        {
+            return new(false, null, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, null, status.DiagnosticCode);
+        }
+
+        SprintId id = new(sprintId);
+        SprintWorkflowState? state =
+            await sprintStore.LoadAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        // An already-terminal node is never re-acted on: a resumed call after the sprint already
+        // completed reports that success back rather than attempting a second, redundant merge (a
+        // fast-forward-only merge of an already-merged branch is harmless, but there is nothing left
+        // to do, and re-running StartAttemptAsync against a Succeeded node would only be rejected).
+        if (node.State is NodeState.Succeeded or NodeState.Failed)
+        {
+            return new(node.State == NodeState.Succeeded, node, state.Sprint, DiagnosticCodes.None);
+        }
+
+        SprintDefinition? definition =
+            await sprintStore.LoadDefinitionAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+        if (definition is null)
+        {
+            return new(false, null, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null || definedNode.Role != NodeRole.Finalization || definedNode.Kind != NodeKind.Work)
+        {
+            return new(false, null, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        if (definition.DefaultBranch is null)
+        {
+            return new(false, null, null, DiagnosticCodes.SprintDefaultBranchUnavailable);
+        }
+
+        return await CompleteFinalizationAsync(
+            status.Root, id, nodeId, node, definition.DefaultBranch, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<FinalizeSprintResult> CompleteFinalizationAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        NodeSnapshot node,
+        string defaultBranch,
+        CancellationToken cancellationToken)
+    {
+        StartAttemptResult started = await scheduler
+            .StartAttemptAsync(projectRoot, sprintId, nodeId, node.Version, cancellationToken)
+            .ConfigureAwait(false);
+        if (!started.Succeeded || started.AttemptId is not { } attemptId)
+        {
+            return new(false, null, null, started.DiagnosticCode);
+        }
+
+        GitOperationResult merged = await repository
+            .MergeSprintIntoDefaultBranchAsync(
+                projectRoot, defaultBranch, WorktreeLayout.IntegrationBranch(sprintId), cancellationToken)
+            .ConfigureAwait(false);
+        if (!merged.Succeeded)
+        {
+            NodeDiagnostic diagnostic = new(
+                merged.DiagnosticCode, "git", merged.DiagnosticCode, new Dictionary<string, string?>(StringComparer.Ordinal));
+            CompleteAttemptResult failed = await scheduler.CompleteAttemptAsync(
+                projectRoot, sprintId, nodeId, attemptId, false, Digest(merged.DiagnosticCode),
+                outputs: [], diagnostics: [diagnostic], cancellationToken).ConfigureAwait(false);
+            return new(false, failed.Node, null, merged.DiagnosticCode);
+        }
+
+        CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
+            projectRoot, sprintId, nodeId, attemptId, true, Digest(merged.Commit ?? string.Empty),
+            outputs: [Digest(merged.Commit ?? string.Empty)], diagnostics: [], cancellationToken)
+            .ConfigureAwait(false);
+        if (!completed.Succeeded)
+        {
+            return new(false, completed.Node, null, completed.DiagnosticCode);
+        }
+
+        SprintTransitionResult sprintCompleted =
+            await scheduler.CompleteSprintAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return new(sprintCompleted.Succeeded, completed.Node, sprintCompleted.Sprint, sprintCompleted.DiagnosticCode);
+    }
+
+    private static string Digest(string text) =>
+        $"sha256:{Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(text)))}";
 
     /// <summary>ADR 0005/0018's human-only `attempt.supersede` capability. Same server-side
     /// version/idempotency-key derivation as <see cref="ResolveGateAsync"/>.</summary>

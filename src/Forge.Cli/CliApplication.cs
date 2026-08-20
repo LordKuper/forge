@@ -70,6 +70,8 @@ public static class CliApplication
             CreateConfirmCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         root.Subcommands.Add(
             CreateTestWorkCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
+        root.Subcommands.Add(
+            CreateFinalizeCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         if (install is not null)
         {
             root.Subcommands.Add(CreateInstallCommand(text, output, install));
@@ -821,6 +823,60 @@ public static class CliApplication
             if (result.Succeeded)
             {
                 output.WriteLine(text.Resolve(MessageKeys.TestWorkRecorded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>The human-only `workflow.finalize` capability (ADR 0036). Unlike
+    /// <see cref="CreateConfirmCommand"/>/<see cref="CreateTestWorkCommand"/>, there is no outcome
+    /// choice to make — finalization only ever attempts the same merge — so this is a single command
+    /// rather than a noun with two verb subcommands. Same ADR 0023 interactive-session check and
+    /// mandatory, never-bypassed `--yes` every other human-only command shares.</summary>
+    private static Command CreateFinalizeCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<string> node = new("--node")
+        {
+            Description = "Finalization node id. Defaults to the canonical finalization node.",
+        };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the merge." };
+        Command command = new("finalize", text.Resolve(MessageKeys.FinalizeDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(node);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            // ADR 0023: same earliest-reachable, unconditional refusal every human-only command
+            // shares -- before this action's own sprint-id validation.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            string nodeId = parseResult.GetValue(node) ?? ImplementationCriticalGraphBuilder.FinalizationNodeId;
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            FinalizeSprintResult result = await mutations
+                .FinalizeSprintAsync(root, sprintId, nodeId, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.SprintFinalized));
             }
 
             return Report(diagnostics, result.DiagnosticCode);

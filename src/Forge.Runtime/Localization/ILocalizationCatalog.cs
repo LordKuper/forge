@@ -134,6 +134,8 @@ public static class MessageKeys
     public const string TestWorkAddedDescription = "TestWorkAddedDescription";
     public const string TestWorkNoNewTestsDescription = "TestWorkNoNewTestsDescription";
     public const string TestWorkRecorded = "TestWorkRecorded";
+    public const string FinalizeDescription = "FinalizeDescription";
+    public const string SprintFinalized = "SprintFinalized";
     public const string AttemptDescription = "AttemptDescription";
     public const string AttemptSupersedeDescription = "AttemptSupersedeDescription";
     public const string AttemptSuperseded = "AttemptSuperseded";

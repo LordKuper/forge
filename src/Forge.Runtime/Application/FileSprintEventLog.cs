@@ -92,6 +92,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         PersistedDefinition persisted = new()
         {
             BaseCommit = definition.BaseCommit,
+            DefaultBranch = definition.DefaultBranch,
             Workflow = definition.Workflow,
             WorkflowVersion = definition.WorkflowVersion,
             ConfigurationSnapshot = new(definition.ConfigurationSnapshot, StringComparer.Ordinal),
@@ -168,6 +169,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             return new(
                 id,
                 persisted.BaseCommit,
+                persisted.DefaultBranch,
                 persisted.Workflow,
                 persisted.WorkflowVersion,
                 persisted.ConfigurationSnapshot,
@@ -1817,6 +1819,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     private sealed class PersistedDefinition
     {
         public string BaseCommit { get; set; } = string.Empty;
+
+        // Absent (null) for a sprint frozen before this field existed, or one frozen with a
+        // detached HEAD (sprint creation itself now refuses that -- see
+        // DiagnosticCodes.RepositoryDetachedHead -- but an old, already-durable sprint from before
+        // that guard existed could still have one).
+        public string? DefaultBranch { get; set; }
 
         public string Workflow { get; set; } = string.Empty;
 

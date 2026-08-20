@@ -108,6 +108,11 @@ public sealed record RecordTestWorkRequest(
     string Justification,
     bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.FinalizeSprintKind"/>'s request payload (the human-only
+/// `workflow.finalize` capability). No expected node version travels on the wire — same reason as
+/// <see cref="ResolveGateRequest"/>.</summary>
+public sealed record FinalizeSprintRequest(Guid SprintId, string NodeId, bool Confirmed);
+
 /// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. Empty: the Host
 /// always creates from its own project's canonical graph, and mints its own idempotency key, so
 /// nothing travels on the wire — see <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>.</summary>
@@ -185,6 +190,12 @@ public static class ControlProtocol
     /// this role either). Request payload: a <see cref="RecordTestWorkRequest"/>. Response payload:
     /// a `RecordTestWorkResult` instance (<c>{"succeeded": bool, "test_work"?: {...}, "diagnostic_code": string}</c>).</summary>
     public const string RecordTestWorkKind = "record_test_work";
+
+    /// <summary>The human-only `workflow.finalize` capability — merges a sprint's isolated
+    /// integration branch into the project's own default branch and, on success, completes the
+    /// sprint. Request payload: a <see cref="FinalizeSprintRequest"/>. Response payload: a
+    /// `FinalizeSprintResult` instance (<c>{"succeeded": bool, "node"?: {...}, "sprint"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string FinalizeSprintKind = "finalize_sprint";
 
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph (ADR
     /// 0001). Request payload: a <see cref="CreateSprintRequest"/>. Response payload: a

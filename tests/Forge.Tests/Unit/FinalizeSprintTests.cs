@@ -1,0 +1,237 @@
+using Forge.Application;
+using Forge.Domain;
+using Forge.Tests.Support;
+
+namespace Forge.UnitTests;
+
+/// <summary>
+/// Stage 11, ADR 0036: the human-only `workflow.finalize` capability
+/// (<see cref="ForgeApplication.FinalizeSprintAsync"/>), and the
+/// <see cref="SprintDefinition.DefaultBranch"/> freezing it depends on
+/// (<see cref="SprintOrchestrator.CreateSprintAsync"/>). Unlike `confirm`/`test-work`, the real
+/// action here is genuine git I/O (<see cref="IRepository.MergeSprintIntoDefaultBranchAsync"/>), so
+/// these tests drive it through a <see cref="FakeRepository"/> rather than asserting purely on
+/// <see cref="SprintScheduler"/> state.
+/// </summary>
+public sealed class FinalizeSprintTests
+{
+    private static readonly IReadOnlyList<NodeDefinition> FinalizationGraph =
+        [new("finalization", NodeKind.Work, [], NodeRole.Finalization)];
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncMergesAndCompletesTheSprintOnSuccess()
+    {
+        FakeRepository repository = new(defaultBranch: "main");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        FinalizeSprintResult result = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.True(result.Succeeded, result.DiagnosticCode);
+        Assert.Equal(NodeState.Succeeded, result.Node!.State);
+        Assert.Equal(SprintState.Completed, result.Sprint!.State);
+        (string DefaultBranch, string SourceBranch) call = Assert.Single(repository.MergeCalls);
+        Assert.Equal("main", call.DefaultBranch);
+        Assert.Equal(WorktreeLayout.IntegrationBranch(sprintId), call.SourceBranch);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Completed, state.Sprint.State);
+        Assert.Equal(NodeState.Succeeded, state.Nodes["finalization"].State);
+    }
+
+    // A failed merge (dirty tree, wrong branch, diverged) goes through the same generic
+    // per-node retry budget every other Work node already has: CompleteAttemptAsync's own
+    // "workflow.node_retrying" step resets the node back to `ready` (not stuck `failed`) as long as
+    // fewer than MaxAutomaticRetries + 1 attempts have landed, so a human who fixes the underlying
+    // issue can just run `forge finalize` again.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncAllowsACleanRetryAfterAFailedMerge()
+    {
+        FakeRepository repository = new(defaultBranch: "main")
+        {
+            MergeResult = GitOperationResult.Fail(DiagnosticCodes.RepositoryDirty),
+        };
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        FinalizeSprintResult failed = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.False(failed.Succeeded);
+        Assert.Equal(DiagnosticCodes.RepositoryDirty, failed.DiagnosticCode);
+        SprintWorkflowState afterFailure =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        // Automatically reset to `ready`, not stuck at `failed` -- the first of MaxAutomaticRetries.
+        Assert.Equal(NodeState.Ready, afterFailure.Nodes["finalization"].State);
+        Assert.Equal(SprintState.Running, afterFailure.Sprint.State);
+
+        repository.MergeResult = GitOperationResult.Ok(new string('c', 40));
+        FinalizeSprintResult retried = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.True(retried.Succeeded, retried.DiagnosticCode);
+        Assert.Equal(SprintState.Completed, retried.Sprint!.State);
+        Assert.Equal(2, repository.MergeCalls.Count);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncRequiresConfirmation()
+    {
+        FakeRepository repository = new(defaultBranch: "main");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+
+        FinalizeSprintResult result = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", false, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfirmationRequired, result.DiagnosticCode);
+        Assert.Empty(repository.MergeCalls);
+    }
+
+    // A sprint frozen before DefaultBranch existed (or with a detached HEAD, back when that was
+    // still possible) has nothing to merge into -- checked before the finalization attempt even
+    // starts, rather than starting one that could never succeed.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncFailsClosedWhenDefaultBranchIsUnavailable()
+    {
+        FakeRepository repository = new(defaultBranch: "main");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        // Simulates a sprint frozen before this field existed -- written directly through the store,
+        // bypassing CreateSprintAsync's own (now-mandatory) DefaultBranch freeze.
+        SprintDefinition original =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        await store.SaveDefinitionAsync(environment.ProjectRoot, original with { DefaultBranch = null }, cancellationToken);
+
+        FinalizeSprintResult result = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintDefaultBranchUnavailable, result.DiagnosticCode);
+        Assert.Empty(repository.MergeCalls);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, state.Nodes["finalization"].State);
+    }
+
+    // A stateless caller (the CLI) retrying after its own response was lost must resolve to what
+    // already happened rather than attempting a second, redundant merge.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task FinalizeSprintAsyncResumedAfterAlreadySucceededDoesNotReMerge()
+    {
+        FakeRepository repository = new(defaultBranch: "main");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: FinalizationGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        FinalizeSprintResult first = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+        Assert.True(first.Succeeded, first.DiagnosticCode);
+
+        FinalizeSprintResult replay = await environment.Application.FinalizeSprintAsync(
+            environment.ProjectRoot, sprintId.Value, "finalization", true, cancellationToken);
+
+        Assert.True(replay.Succeeded, replay.DiagnosticCode);
+        Assert.Equal(SprintState.Completed, replay.Sprint!.State);
+        Assert.Single(repository.MergeCalls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreateSprintAsyncFreezesTheProjectsCurrentBranchAsDefaultBranch()
+    {
+        FakeRepository repository = new(defaultBranch: "feature/whatever");
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken)).SprintId!;
+
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal("feature/whatever", definition.DefaultBranch);
+    }
+
+    // A detached HEAD has no branch name to freeze -- finalization would otherwise have nothing to
+    // merge into, no matter how far the sprint gets. Refusing once, at creation, is simpler than
+    // letting every sprint carry a null DefaultBranch finalization has to fail closed on later.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreateSprintAsyncRefusesADetachedHead()
+    {
+        FakeRepository repository = new(defaultBranch: null);
+        using TestEnvironment environment = new(repository: repository);
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.RepositoryDetachedHead, result.DiagnosticCode);
+    }
+
+    private static async Task RunToRunningAsync(
+        SprintOrchestrator orchestrator,
+        string root,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(root, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(root, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(root, sprintId, toReady.Sprint!.Version, SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+    }
+}
