@@ -410,8 +410,11 @@ public sealed class ReviewExecutionHostedService(
         RecordReviewIterationResult recorded = await scheduler.RecordReviewIterationAsync(
             options.ProjectRoot, sprintId, nodeId, ReviewDimension.Implementation, ReviewerKind.External, outcome,
             findings: [], coverage: null, cancellationToken).ConfigureAwait(false);
-        if (!recorded.Succeeded && recorded.DiagnosticCode
-                is not (DiagnosticCodes.ReviewIterationLimit or DiagnosticCodes.ReviewRepeatedFindings))
+        // `RecordReviewIterationAsync` never pairs `Succeeded: false` with `ReviewIterationLimit`/
+        // `ReviewRepeatedFindings` -- both diagnostic codes are only ever returned alongside
+        // `Succeeded: true` (a convergence-gate trip is a designed stopping point, not a failure) --
+        // so this is a plain success check, not a narrower one.
+        if (!recorded.Succeeded)
         {
             return ReviewAttemptOutcome.Failed(NodeExecutionDiagnostics.Diagnostic("review", recorded.DiagnosticCode));
         }

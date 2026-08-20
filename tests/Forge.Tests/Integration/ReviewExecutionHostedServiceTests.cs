@@ -207,6 +207,43 @@ public sealed class ReviewExecutionHostedServiceTests
 
     [Fact]
     [Trait("Category", "Integration")]
+    public async Task ADiffReadFailureIsRecordedAsAFailureWithoutRunningTheProvider()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new() { FailNextDiff = true };
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, _, _, _) => throw new InvalidOperationException(
+                "The provider must not run when the diff itself could not be read."));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForReviewAsync(environment, orchestrator, scheduler, store, cancellationToken);
+
+        ReviewExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForTerminalFailureAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Empty(provider.Calls);
+        IReadOnlyList<NodeResult> results = await ReviewResultsAsync(store, environment, sprintId, cancellationToken);
+        Assert.NotEmpty(results);
+        Assert.All(results, result => Assert.Equal(NodeOutcome.Failed, result.State));
+        Assert.Equal(worktrees.DiffFailureCode, Assert.Single(results[0].Diagnostics).Code);
+        Assert.Empty(await scheduler.GetReviewIterationsAsync(environment.ProjectRoot, sprintId, cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Integration")]
     public async Task ARateLimitedProviderFailureDefersRoutingInsteadOfBeingTreatedAsAnOrdinaryFailure()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
