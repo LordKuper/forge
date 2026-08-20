@@ -86,6 +86,10 @@
   <data name="GateRejectDescription" xml:space="preserve"><value>Отклонить контрольную точку, ожидающую решения человека.</value></data>
   <data name="GateResolved" xml:space="preserve"><value>Контрольная точка обработана.</value></data>
   <data name="GateResolutionFailed" xml:space="preserve"><value>Не удалось обработать контрольную точку.</value></data>
+  <data name="ConfirmDescription" xml:space="preserve"><value>Команды подтверждения соответствия критериям готовности (только для человека).</value></data>
+  <data name="ConfirmConfirmedDescription" xml:space="preserve"><value>Зафиксировать, что реализация соответствует критериям готовности.</value></data>
+  <data name="ConfirmNotConfirmedDescription" xml:space="preserve"><value>Зафиксировать, что реализация не соответствует критериям готовности.</value></data>
+  <data name="ConfirmRecorded" xml:space="preserve"><value>Подтверждение зафиксировано.</value></data>
   <data name="GateNodeIdLabel" xml:space="preserve"><value>Идентификатор узла контрольной точки (пусто: human_approval):</value></data>
   <data name="GateApproveAction" xml:space="preserve"><value>Одобрить</value></data>
   <data name="GateRejectAction" xml:space="preserve"><value>Отклонить</value></data>

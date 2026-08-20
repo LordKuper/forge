@@ -131,6 +131,18 @@ public static class DiagnosticCodes
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";
 
+    /// <summary>`forge confirm`'s <c>--evidence-kind</c> was not one of <c>inspection</c>/
+    /// <c>execution</c>/<c>existing-check</c> (matching `confirmation-result.schema.json`'s own
+    /// vocabulary).</summary>
+    public const string ConfirmationEvidenceKindInvalid = "confirmation_evidence_kind_invalid";
+
+    /// <summary>`forge confirm`'s <c>--definition-of-done</c>/<c>--evidence</c> was empty or
+    /// whitespace-only. Checked before <see cref="SprintScheduler.ConfirmNodeAsync"/>
+    /// starts the node's attempt, not only by `confirmation-result.schema.json`'s own `minLength: 1`
+    /// afterward -- the schema check alone would still leave the attempt started (and thus the node
+    /// `running`) before rejecting the record.</summary>
+    public const string ConfirmationTextRequired = "confirmation_text_required";
+
     /// <summary>ADR 0011: the project's resolved `artifacts.language.agent_facing` is not in
     /// <c>ILocalizationCatalog.SupportedCultures</c>; integration generation/install/remove refuses
     /// rather than silently falling back to English.</summary>

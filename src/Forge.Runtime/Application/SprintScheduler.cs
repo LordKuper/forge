@@ -1612,6 +1612,145 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         return new(true, confirmation, DiagnosticCodes.None);
     }
 
+    /// <summary>
+    /// The one call a human-driven confirmation command needs: unlike <see cref="RecordConfirmationAsync"/>
+    /// itself (deliberately state-independent — see its own remarks), a `confirmation` node has no
+    /// executor to drive its own attempt lifecycle (<see cref="ExecutionProfilePolicy.PhaseFor"/>
+    /// returns <see langword="null"/> for <see cref="NodeRole.Confirmation"/> — "not a model phase"),
+    /// so nothing else ever settles it to a terminal state. This composes the ordinary Work-node
+    /// lifecycle (<see cref="StartAttemptAsync"/>/<see cref="CompleteAttemptAsync"/>) with
+    /// <see cref="RecordConfirmationAsync"/>: <paramref name="nodeId"/> must be `ready` or `running`
+    /// (matching every other <see cref="StartAttemptAsync"/> caller) and moves to `succeeded`
+    /// regardless of <paramref name="outcome"/> — rendering an honest judgment is this node's whole
+    /// job, whether the judgment is <see cref="ConfirmationOutcome.Confirmed"/> or
+    /// <see cref="ConfirmationOutcome.NotConfirmed"/>; a `NotConfirmed` verdict still blocks the
+    /// sprint (via <see cref="RecordConfirmationAsync"/>'s own side effect), which is this design's
+    /// stopping point for a human, not a reason to fail the node's own attempt.
+    /// </summary>
+    /// <remarks>
+    /// Same server-side version/idempotency-key derivation as <see cref="ResolveHumanGateAsync"/>: a
+    /// caller only presents the node's *current* version and a key derived from it
+    /// (<see cref="ConfirmNodeKey"/>), checked only for a fresh (`ready`) call — a resumed call
+    /// (`running`, meaning <see cref="StartAttemptAsync"/> already landed before a crash) is not
+    /// re-checked against a version that has legitimately moved past whatever it observed, mirroring
+    /// every other resumable mutation in this class. An already-terminal node (`succeeded`/`failed`)
+    /// returns the most recently recorded artifact instead of re-acting, so a stateless caller
+    /// retrying after its own response was lost still gets back what actually happened rather than a
+    /// spurious conflict.
+    ///
+    /// Known, accepted limitation: a crash landing between <see cref="RecordConfirmationAsync"/> and
+    /// <see cref="CompleteAttemptAsync"/> below leaves the node `running`; a retry resumes the same
+    /// attempt and calls <see cref="RecordConfirmationAsync"/> a second time, recording a harmless
+    /// duplicate artifact with the same outcome (eligibility only ever reads the *latest* one — see
+    /// <see cref="IsTestWorkEligibleAsync"/> — so this never changes what the sprint observes). Not
+    /// de-duplicated further: the retry window is narrow (two already-durable local appends), and a
+    /// caller-visible outcome never depends on which of the two near-identical artifacts is "latest."
+    /// </remarks>
+    public async Task<RecordConfirmationResult> ConfirmNodeAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        ConfirmationOutcome outcome,
+        string definitionOfDone,
+        IReadOnlyList<ConfirmationEvidence> evidence,
+        long expectedNodeVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        NodeDefinition? definedNode = definition.Graph.FirstOrDefault(item => item.Id == nodeId);
+        if (definedNode is null || definedNode.Role != NodeRole.Confirmation || definedNode.Kind != NodeKind.Work)
+        {
+            return new(false, null, DiagnosticCodes.NodeKindMismatch);
+        }
+
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
+        {
+            return new(false, null, DiagnosticCodes.NodeNotFound);
+        }
+
+        IReadOnlyList<ConfirmationArtifact> recordedForSprint = await store
+            .GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        ConfirmationArtifact? latestForNode = recordedForSprint
+            .Where(candidate => candidate.NodeId.Value == nodeId)
+            .OrderByDescending(candidate => candidate.RecordedAt)
+            .FirstOrDefault();
+
+        if (node.State is NodeState.Succeeded or NodeState.Failed)
+        {
+            if (latestForNode is null)
+            {
+                return new(false, null, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            // A resumed call presenting a *different* outcome than what is already durable must
+            // never silently reinterpret the earlier verdict -- the same decision-flip protection
+            // ResolveHumanGateAsync's own review history (ADR 0019) established for gate decisions.
+            return latestForNode.Outcome == outcome
+                ? new(true, latestForNode, DiagnosticCodes.None)
+                : new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
+        }
+
+        bool resuming = node.State == NodeState.Running;
+        if (!resuming)
+        {
+            if (node.Version != expectedNodeVersion || idempotencyKey != ConfirmNodeKey(sprintId, node))
+            {
+                return new(false, null, DiagnosticCodes.SuggestionStale);
+            }
+
+            if (node.State != NodeState.Ready)
+            {
+                return new(false, null, DiagnosticCodes.NodeTransitionInvalid);
+            }
+        }
+        else if (latestForNode is not null && latestForNode.Outcome != outcome)
+        {
+            // A crash landing after RecordConfirmationAsync durably lands below but before
+            // CompleteAttemptAsync leaves the node `running` with an artifact already on record --
+            // the same decision-flip protection as the terminal branch above, checked here too since
+            // this attempt has not reached a terminal node state yet.
+            return new(false, latestForNode, DiagnosticCodes.NodeTransitionInvalid);
+        }
+
+        StartAttemptResult started = await StartAttemptAsync(
+            projectRoot, sprintId, nodeId, node.Version, cancellationToken).ConfigureAwait(false);
+        if (!started.Succeeded || started.AttemptId is not { } attemptId)
+        {
+            return new(false, null, started.DiagnosticCode);
+        }
+
+        // Skips re-recording only on the just-validated resumed, same-outcome case above -- a
+        // *fresh* attempt (this branch's `!resuming` path, including one starting right after a
+        // supersession re-armed the node back to `ready`) always records anew regardless of any
+        // stale artifact left over from an earlier, unrelated attempt on this same node id: reusing
+        // it here without the outcome-match check the resuming branch already performed would let a
+        // stale, unrelated verdict silently win over what this fresh call actually requested.
+        RecordConfirmationResult recorded = resuming && latestForNode is not null
+            ? new(true, latestForNode, DiagnosticCodes.None)
+            : await RecordConfirmationAsync(
+                projectRoot, sprintId, nodeId, outcome, definitionOfDone, evidence, cancellationToken)
+                .ConfigureAwait(false);
+        if (!recorded.Succeeded)
+        {
+            return recorded;
+        }
+
+        CompleteAttemptResult completed = await CompleteAttemptAsync(
+            projectRoot, sprintId, nodeId, attemptId, true,
+            Fingerprint(sprintId, nodeId, [outcome.ToString(), definitionOfDone]), outputs: [], diagnostics: [],
+            cancellationToken).ConfigureAwait(false);
+        return completed.Succeeded
+            ? new(true, recorded.Confirmation, DiagnosticCodes.None)
+            : new(false, recorded.Confirmation, completed.DiagnosticCode);
+    }
+
+    public static Guid ConfirmNodeKey(SprintId sprintId, NodeSnapshot node) =>
+        NodeActionKey("confirm_node", sprintId, node);
+
     public Task<IReadOnlyList<ConfirmationArtifact>> GetConfirmationsAsync(
         string projectRoot,
         SprintId sprintId,

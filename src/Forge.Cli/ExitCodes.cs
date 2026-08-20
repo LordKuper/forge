@@ -26,7 +26,8 @@ public static class ExitCodes
         DiagnosticCodes.ConfigurationKeyUnknown or DiagnosticCodes.ProjectRootNotAbsolute or
             DiagnosticCodes.SprintNotFound or DiagnosticCodes.SupersessionInstructionTooLong or
             DiagnosticCodes.SupersessionInstructionUnreadable or
-            DiagnosticCodes.SupersessionInstructionRequired => Usage,
+            DiagnosticCodes.SupersessionInstructionRequired or
+            DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
