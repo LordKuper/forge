@@ -772,8 +772,19 @@ public sealed class ForgeApplication(
         // completed reports that success back rather than attempting a second, redundant merge (a
         // fast-forward-only merge of an already-merged branch is harmless, but there is nothing left
         // to do, and re-running StartAttemptAsync against a Succeeded node would only be rejected).
+        // The node and the sprint settle in two separate durable writes (CompleteAttemptAsync then
+        // CompleteSprintAsync); a crash or dropped call between them can leave the node Succeeded
+        // while the sprint is still ReadyToFinalize. CompleteSprintAsync is idempotent, so a resumed
+        // call closes that gap here instead of reporting a false success for a wedged sprint.
         if (node.State is NodeState.Succeeded or NodeState.Failed)
         {
+            if (node.State == NodeState.Succeeded && state.Sprint.State != SprintState.Completed)
+            {
+                SprintTransitionResult resumed = await scheduler
+                    .CompleteSprintAsync(status.Root, id, cancellationToken).ConfigureAwait(false);
+                return new(resumed.Succeeded, node, resumed.Sprint, resumed.DiagnosticCode);
+            }
+
             return new(node.State == NodeState.Succeeded, node, state.Sprint, DiagnosticCodes.None);
         }
 

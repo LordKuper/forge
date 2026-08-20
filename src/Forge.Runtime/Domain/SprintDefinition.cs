@@ -50,7 +50,7 @@ public sealed record SprintDependency(SprintDependencyKind Kind, string Referenc
 /// frozen with a detached `HEAD` (creation itself refuses that case) or one frozen before this
 /// field existed;
 /// either way, finalization has nothing to merge into and fails closed. The diagnostic code is
-/// `repository_detached_head` (`Forge.Application.DiagnosticCodes.RepositoryDetachedHead`).
+/// `sprint_default_branch_unavailable` (`Forge.Application.DiagnosticCodes.SprintDefaultBranchUnavailable`).
 /// </summary>
 public sealed record SprintDefinition(
     SprintId Id,
