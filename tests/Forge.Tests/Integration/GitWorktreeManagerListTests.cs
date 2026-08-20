@@ -22,7 +22,8 @@ public sealed class GitWorktreeManagerListTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
         string commit = await repository.HeadAsync(cancellationToken);
-        string worktreePath = Path.Combine(Path.GetDirectoryName(repository.Root)!, $"{Path.GetFileName(repository.Root)}-wt");
+        string worktreePath = Path.Combine(
+            Path.GetDirectoryName(repository.Root)!, $"{Path.GetFileName(repository.Root)}-wt");
         GitWorktreeManager worktrees = new(new ProcessRunner());
         GitOperationResult created = await worktrees.CreateAsync(
             repository.Root, worktreePath, "forge/list-test", commit, cancellationToken);
@@ -30,26 +31,28 @@ public sealed class GitWorktreeManagerListTests
 
         IReadOnlyList<WorktreeRegistration> beforeDeletion =
             await worktrees.ListAsync(repository.Root, cancellationToken);
-        WorktreeRegistration registration = Assert.Single(
-            beforeDeletion, entry => SamePath(entry.Path, worktreePath));
-        Assert.True(registration.Exists);
-        // git worktree list always includes the primary worktree first -- the count must reflect
-        // that reality, not silently drop it.
-        Assert.Contains(beforeDeletion, entry => SamePath(entry.Path, repository.Root));
+        // `git worktree list --porcelain` always reports the primary worktree first, then linked
+        // ones in creation order -- matched by position rather than comparing `Path` against a
+        // string this test built itself: a CI runner whose temp directory resolves through a
+        // symlink (macOS's `/tmp` -> `/private/tmp`) has `git` canonicalize the registered path in
+        // its own output, which a plain `Path.GetFullPath` comparison against this test's own,
+        // uncanonicalized `worktreePath`/`repository.Root` strings does not account for -- confirmed
+        // failing exactly this way in CI. Letting `ListAsync`'s own output be the source of truth
+        // for "which entry is the new one" avoids needing to reproduce git's own path resolution.
+        Assert.Equal(2, beforeDeletion.Count);
+        Assert.True(beforeDeletion[0].Exists, "the primary worktree must report as existing.");
+        Assert.True(beforeDeletion[1].Exists, "the newly created worktree must report as existing.");
 
         // Simulates external deletion (not a Forge-driven RemoveAsync) -- git still believes the
-        // worktree is registered until the next prune.
+        // worktree is registered until the next prune. Deleted through this test's own path
+        // (equivalent to the registered one regardless of symlink resolution -- filesystem
+        // operations follow symlinks transparently; only the *comparison* above needed avoiding).
         Directory.Delete(worktreePath, true);
 
         IReadOnlyList<WorktreeRegistration> afterDeletion =
             await worktrees.ListAsync(repository.Root, cancellationToken);
-        WorktreeRegistration orphaned = Assert.Single(afterDeletion, entry => SamePath(entry.Path, worktreePath));
-        Assert.False(orphaned.Exists);
+        Assert.Equal(2, afterDeletion.Count);
+        Assert.True(afterDeletion[0].Exists, "the primary worktree must still report as existing.");
+        Assert.False(afterDeletion[1].Exists, "the externally deleted worktree must report as orphaned.");
     }
-
-    private static bool SamePath(string a, string b) =>
-        string.Equals(
-            Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar),
-            Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar),
-            StringComparison.OrdinalIgnoreCase);
 }
