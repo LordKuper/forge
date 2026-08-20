@@ -82,6 +82,14 @@ public static class DiagnosticCodes
     public const string WorktreeCommitInvalid = "worktree_commit_invalid";
     public const string WorktreeCommitFailed = "worktree_commit_failed";
     public const string WorktreeUnavailable = "worktree_unavailable";
+
+    /// <summary>The implementation node executor's own outcome: the provider run succeeded (a
+    /// schema-valid terminal result, no timeout, no failure) but left the attempt worktree exactly
+    /// as clean as it started — nothing to commit for a role whose whole job is producing an edit.
+    /// Distinct from every <c>ProviderDiagnosticCodes</c> value because the provider itself never
+    /// reported failing.</summary>
+    public const string ImplementationNoChanges = "implementation_no_changes";
+
     public const string ControlCursorStale = "control_cursor_stale";
 
     /// <summary>ADR 0006's durable rate-limit wait (Stage 11, P11.48-P11.55):
