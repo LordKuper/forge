@@ -95,7 +95,12 @@ public sealed class MainPageViewModel(
                     $"{SurfaceFormatting.Machine(check.Id)} {SurfaceFormatting.Machine(check.State)} {check.DiagnosticCode}"))),
             Render(
                 text.Resolve(MessageKeys.ProviderToolchainTitle),
-                snapshot.Providers.Select(SurfaceFormatting.ProviderRow)),
+                // Two-space indent, matching `forge models`'s own row formatting exactly (`CliApplication
+                // .CreateModelsCommand`) -- SurfaceParityTests.DesktopAndCliRenderTheSameProvidersForOneSnapshot
+                // pins the two surfaces to literal equality the same way the tree/events/integration
+                // sections already are.
+                snapshot.Providers.Select(entry => string.Create(
+                    CultureInfo.InvariantCulture, $"  {SurfaceFormatting.ProviderRow(entry)}"))),
             snapshot.SuggestedActions.Count == 0
                 ? text.Resolve(MessageKeys.NoSuggestedActions)
                 : Render(

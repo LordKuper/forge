@@ -580,6 +580,48 @@ public sealed class SurfaceParityTests
     }
 
     /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
+    /// for the provider-health section (`ProviderToolchainTitle`). Stage 12's P12.16-P12.32 audit
+    /// (this codebase's own security/robustness test sweep) found this section had never been
+    /// pinned to literal equality the way the tree/events/integration sections already were --
+    /// exposing a real, if cosmetic, divergence: `forge models` (`CliApplication.CreateModelsCommand`)
+    /// indents each provider row two spaces under its title; `MainPageViewModel.RefreshAsync`'s own
+    /// rendering did not. Fixed alongside this test, not discovered by it after the fact -- matching
+    /// AGENTS.md's "confirm through inspection... before authoring new tests" ordering.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameProvidersForOneSnapshot()
+    {
+        // A default TestEnvironment's toolchain manager reports codex/claude_code as Missing
+        // (FakeProviderToolchainManager.NotReady), which is real, illustrative-but-unhealthy default
+        // behavior (matching StartupCliTests's own "providers blocked provider_preflight_pending"
+        // fixture) but not what this test needs to prove -- an explicit Ready fixture keeps the
+        // comparison about rendering, not about an incidentally-nonzero exit code neither surface's
+        // own rendering path is responsible for.
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        // `forge models` has no `--project-root` -- provider toolchain health is a per-user concept
+        // (which CLIs are installed), not a per-project one.
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, environment.Application, diagnostics)
+            .Parse(["models"])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+        MainPageSnapshot desktop = await new MainPageViewModel(text, environment.Application)
+            .RefreshAsync(environment.ProjectRoot, null, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop.ProvidersText);
+        Assert.Empty(diagnostics.ToString());
+        // The comparison above is only as strong as its fixture -- pin that the compared text
+        // really carries a real provider row, not an empty section both sides would trivially agree
+        // on regardless of whether rendering actually matches.
+        Assert.Contains("codex", desktop.ProvidersText, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same no-drift proof as <see cref="DesktopAndCliRenderTheSameEventsForOneSnapshot"/>,
     /// for `SurfaceFormatting.IntegrationInspectionLines` (ADR 0026).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]

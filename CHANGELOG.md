@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.1
+
+### Fixed
+
+- The Desktop app's provider toolchain list now indents each provider row
+  the same way `forge models` does, matching the CLI's own formatting
+  instead of rendering flush-left.
+
 ## v0.59.0
 
 ### Added
