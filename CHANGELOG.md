@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.62.0
+
+### Added
+
+- Added a one-command Windows bootstrap script that selects the x64 or Arm64
+  stable release, verifies its published size and SHA-256 checksum, and runs
+  the existing per-user Forge installer.
+
 ## v0.61.1
 
 ### Changed
