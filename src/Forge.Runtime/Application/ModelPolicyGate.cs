@@ -43,10 +43,13 @@ public static class ModelPolicyGate
     /// id, so a policy meant to restrict a misspelled name enforces no restriction anywhere, with
     /// no signal it was ever ignored. `forge eval`'s <see cref="EvaluationArea.ModelPolicy"/> area
     /// calls this to report each configured entry's provider id that does not match any of
-    /// <paramref name="enabledProviderIds"/> as a distinct failed check -- <see cref="IsAllowed"/>
-    /// and the <c>SprintOrchestrator.CreateSprintAsync</c> gate stay unchanged (an unmatched entry
-    /// still enforces nothing there, by design: a project may list models for a provider it has
-    /// not enabled yet), so this is a diagnostic-only addition, not a behavior change to the gate
+    /// <paramref name="enabledProviderIds"/> as a distinct <c>Blocked</c> check (round 2 review of
+    /// PR #87: not <c>Failed</c> -- an unmatched entry is legitimate, not an error, matching the
+    /// next sentence exactly, and <c>Failed</c> would both move `forge eval`'s exit code and
+    /// contradict this doc comment's own claim) -- <see cref="IsAllowed"/> and the
+    /// <c>SprintOrchestrator.CreateSprintAsync</c> gate stay unchanged (an unmatched entry still
+    /// enforces nothing there, by design: a project may list models for a provider it has not
+    /// enabled yet), so this is a diagnostic-only addition, not a behavior change to the gate
     /// itself.</summary>
     public static IReadOnlyList<string> UnmatchedProviderIds(
         IReadOnlyList<string> allowedModels, IReadOnlyList<string> enabledProviderIds)

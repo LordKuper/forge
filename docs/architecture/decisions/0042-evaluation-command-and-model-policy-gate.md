@@ -134,7 +134,7 @@ read command.
   `DiagnosticBundleCreated` is equally unwired, and this follows that exact
   precedent rather than being the first read to invent one).
 
-**Round 1 review of PR #87 found and fixed six issues**, none of them
+**Round 1 review of PR #87 found and fixed seven issues**, none of them
 functional defects in the gate itself (which review confirmed correct: the
 `IsAllowed` prefix check includes the separator, so `codex` cannot cross-match
 `codex-2`; the gate's placement in `CreateSprintAsync` is after the
@@ -169,6 +169,38 @@ implemented; corrected to the real `[--project-root <path>]` shape, and
 fixed to the real `forge config project <key> <value>` form (no `set` verb
 exists) — a pre-existing identical error elsewhere in that file, from an
 already-published release, was left alone rather than rewritten.
+
+**Round 2 review found and fixed five issues, all in round 1's own fixes or
+this ADR's own bookkeeping — no functional defect in the gate, `IsAllowed`,
+`UnmatchedProviderIds`' parsing, or the CLI's exit-code selection.** Most
+substantively: round 1's own `UnmatchedProviderIds` fix reported an unmatched
+policy entry as `Failed`, contradicting its own doc comment's claim that
+"a project may list models for a provider it has not enabled yet" is
+legitimate, not an error — `Failed` both moved `forge eval`'s exit code and
+directly contradicted that sentence. Fixed to `EvaluationState.Blocked`
+(reported, not a failure), matching the doc comment's own stated intent; the
+`ModelPolicyProviderUnknown` diagnostic code and `RunEvaluationAsyncReportsAMisspelledPolicyProviderIdAsItsOwnFailedCheck`
+test (renamed to its `...BlockedCheck` counterpart) were updated to match.
+`ExitCodes.For`'s two new arms (`ModelPolicyViolation`/
+`ModelPolicyProviderUnknown`) had no direct test — the acceptance test only
+exercised the first through a live CLI round trip, and the second was never
+exercised via `Report()` at all once it became `Blocked` — fixed with a new
+`ExitCodesTests.cs` asserting both mappings directly against the pure
+function, closing the gap regardless of whether either code is currently
+CLI-reachable. This ADR's own round 1 addendum said "six issues" above a
+list of seven — corrected. Also fixed: this plan item's own closing note in
+`docs/plans/implementation-plan.md` (P12.9–P12.15) had not been updated
+since round 1 landed, under-claiming `ModelPolicyProviderUnknown`,
+`ExitCodes.Workflow`, and `UnmatchedProviderIds`; and `CHANGELOG.md`'s new
+entry did not mention the round-1-added unmatched-provider-id diagnostic.
+Round 2 also independently re-verified round 1's fixes directly rather than
+trusting their own claims: `IsAllowed` and `UnmatchedProviderIds` agree on
+every entry shape `project-manifest.schema.json`'s own
+`^[^:]+:[^:]+$` pattern admits (malformed shapes are already rejected at
+write time by `ConfigurationSchemaCodec.ToProject`'s schema validation, so
+`UnmatchedProviderIds`' own `separatorIndex <= 0` guard is defense in depth,
+not a live divergence), and `HashSet` iteration order feeds only
+order-independent assertions, confirming no ordering hazard.
 
 ## References
 

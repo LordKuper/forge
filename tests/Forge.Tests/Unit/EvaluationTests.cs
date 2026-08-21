@@ -110,9 +110,12 @@ public sealed class EvaluationTests
     // Round 1 review of PR #87: a policy entry naming a provider id that matches no enabled
     // provider used to enforce nothing and report nothing -- IsAllowed only ever sees the enabled
     // provider's own id, so a typo silently disabled the whole restriction with no visible signal.
+    // Round 2 review: Blocked, not Failed -- an unmatched entry is legitimate (a project may list
+    // models for a provider it has not enabled yet), so it must not move the exit code the way a
+    // real ModelPolicyViolation does; see RunEvaluationAsyncReportsAModelPolicyViolationWithoutFailingOtherAreas.
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task RunEvaluationAsyncReportsAMisspelledPolicyProviderIdAsItsOwnFailedCheck()
+    public async Task RunEvaluationAsyncReportsAMisspelledPolicyProviderIdAsItsOwnBlockedCheck()
     {
         using TestEnvironment environment = new(
             llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")],
@@ -129,14 +132,14 @@ public sealed class EvaluationTests
         EvaluationReport report = await environment.Application
             .RunEvaluationAsync(environment.ProjectRoot, cancellationToken);
 
-        Assert.Equal(EvaluationState.Failed, report.State);
+        Assert.Equal(EvaluationState.Blocked, report.State);
         // The real "codex" provider is still unrestricted (no entry names it) and passes.
         EvaluationCheck codex = Assert.Single(
             report.Checks, check => check.Area == EvaluationArea.ModelPolicy && check.Name == "codex");
         Assert.Equal(EvaluationState.Passed, codex.State);
         EvaluationCheck unmatched = Assert.Single(
             report.Checks, check => check.Area == EvaluationArea.ModelPolicy && check.Name == "condex");
-        Assert.Equal(EvaluationState.Failed, unmatched.State);
+        Assert.Equal(EvaluationState.Blocked, unmatched.State);
         Assert.Equal(DiagnosticCodes.ModelPolicyProviderUnknown, unmatched.DiagnosticCode);
         AssertSchemaValid(report);
     }

@@ -472,11 +472,14 @@ public sealed class ForgeApplication(
                     DiagnosticCodes.ModelPolicyViolation))];
         // Round 1 review of PR #87: a configured entry naming a provider id no enabled provider
         // matches (a typo, a stale/renamed entry) otherwise enforces nothing and reports nothing —
-        // surfaced here as its own failed check rather than silently passing.
+        // surfaced here as its own check rather than silently passing. Round 2 review: Blocked, not
+        // Failed -- ModelPolicyGate.UnmatchedProviderIds' own doc comment calls this legitimate ("a
+        // project may list models for a provider it has not enabled yet"), and Failed would both
+        // move `forge eval`'s exit code and contradict that doc comment's own claim.
         checks.AddRange(ModelPolicyGate
             .UnmatchedProviderIds(allowedModels, [.. enabledProviders.Select(provider => provider.Id.Value)])
             .Select(providerId => new EvaluationCheck(
-                EvaluationArea.ModelPolicy, providerId, EvaluationState.Failed, DiagnosticCodes.ModelPolicyProviderUnknown)));
+                EvaluationArea.ModelPolicy, providerId, EvaluationState.Blocked, DiagnosticCodes.ModelPolicyProviderUnknown)));
         return checks;
     }
 
