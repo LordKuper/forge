@@ -123,7 +123,7 @@ read command.
 - New `DiagnosticCodes.ModelPolicyViolation`, applied in
   `SprintOrchestrator.CreateSprintAsync` and documented in
   `docs/contracts/v1/README.md`.
-- New `forge eval [--area <name>]` CLI command.
+- New `forge eval [--project-root <path>]` CLI command.
 - Explicitly **not** in this slice, named rather than silently absorbed:
   Desktop parity (`Quality/RunEvaluation`, `CapabilityIds.Implemented`); full
   per-phase model selection/override (ADR 0006's larger "project model
@@ -133,6 +133,42 @@ read command.
   persists a control event today either — `forge doctor --bundle`'s own
   `DiagnosticBundleCreated` is equally unwired, and this follows that exact
   precedent rather than being the first read to invent one).
+
+**Round 1 review of PR #87 found and fixed six issues**, none of them
+functional defects in the gate itself (which review confirmed correct: the
+`IsAllowed` prefix check includes the separator, so `codex` cannot cross-match
+`codex-2`; the gate's placement in `CreateSprintAsync` is after the
+already-created idempotent return and before any event write; 1.0.0/1.1.0
+manifests still round-trip). A misspelled or stale `models.allowed_models`
+provider id (a typo, a renamed or now-disabled provider) matched no enabled
+provider anywhere, so it silently enforced nothing and reported nothing —
+fixed with new `ModelPolicyGate.UnmatchedProviderIds` and
+`DiagnosticCodes.ModelPolicyProviderUnknown`, surfaced only by `forge eval`'s
+`ModelPolicy` area as its own failed check per unmatched id; the gate itself
+is deliberately unchanged (a policy entry for a provider not yet enabled is
+not an error). `DiagnosticCodes.ModelPolicyViolation` was documented in
+`docs/contracts/v1/README.md` under exit 11 but `ExitCodes.For` had no arm
+for it (silently falling to 13 `internal`) — fixed with a new
+`ExitCodes.Workflow = 11` constant and a real mapping (also mapping the new
+`ModelPolicyProviderUnknown` to exit 3 `configuration`, matching its own
+category). Both prior `EvaluateCliTests` cases only ever asserted exit 0, so
+mutating the CLI's `Failed → Report(...)` branch to always return
+`ExitCodes.Ok` would have survived the whole suite — fixed with a new test
+using a real model-policy violation. `ForgeApplication`'s `StartupCheckId` →
+`EvaluationArea` lookup was an unguarded dictionary indexer (an opaque
+`KeyNotFoundException` on a future unmapped id) — replaced with the same
+named-exception switch-expression pattern already used one line below for
+`StartupCheckState`. `EvaluationTests`'s own uninitialized-project case had a
+comment claiming the `ModelPolicy` area "does not depend on project
+initialization," which is wrong — an uninitialized root short-circuits to one
+`Blocked` `configuration` check before any provider is ever resolved; the
+comment and assertion were both corrected. Finally, this ADR's own
+Consequences section still named a `--area` option that was never
+implemented; corrected to the real `[--project-root <path>]` shape, and
+`CHANGELOG.md`'s new entry's `forge config project set ...` example was
+fixed to the real `forge config project <key> <value>` form (no `set` verb
+exists) — a pre-existing identical error elsewhere in that file, from an
+already-published release, was left alone rather than rewritten.
 
 ## References
 

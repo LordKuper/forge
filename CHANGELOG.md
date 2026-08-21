@@ -8,7 +8,7 @@ User-facing Forge changes are listed by release, newest first.
 
 - Added `forge eval`, a pass/fail evaluation of the updater, provider,
   bootstrap, and workflow subsystems, printed as JSON.
-- Added an optional project model policy: `forge config project set
+- Added an optional project model policy: `forge config project
   models.allowed_models '["<provider>:<model>", ...]'` restricts which
   model a provider may use. Creating a sprint now refuses up front if a
   provider's model is not on the configured list; an unlisted provider

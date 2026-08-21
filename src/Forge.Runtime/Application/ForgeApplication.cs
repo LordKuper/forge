@@ -413,21 +413,25 @@ public sealed class ForgeApplication(
         return new(EvaluationReport.ContractVersion, clock.UtcNow, state, checks);
     }
 
-    private static readonly Dictionary<StartupCheckId, EvaluationArea> StartupCheckAreas =
-        new()
-        {
-            [StartupCheckId.UserConfiguration] = EvaluationArea.Bootstrap,
-            [StartupCheckId.Language] = EvaluationArea.Bootstrap,
-            [StartupCheckId.Platform] = EvaluationArea.Bootstrap,
-            [StartupCheckId.ProjectRoot] = EvaluationArea.Bootstrap,
-            [StartupCheckId.ProjectConfiguration] = EvaluationArea.Bootstrap,
-            [StartupCheckId.UpdateStrategy] = EvaluationArea.Updater,
-            [StartupCheckId.Release] = EvaluationArea.Updater,
-            [StartupCheckId.Providers] = EvaluationArea.Provider,
-        };
+    /// <summary>Round 1 review of PR #87: an unmapped <see cref="StartupCheckId"/> now throws a
+    /// named <see cref="ArgumentOutOfRangeException"/> (matching the identical pattern already used
+    /// for <see cref="StartupCheckState"/> just below) instead of an opaque
+    /// <see cref="KeyNotFoundException"/> from a dictionary indexer. Every existing
+    /// <c>EvaluationTests</c> case calls <see cref="RunEvaluationAsync"/> against the full,
+    /// unfiltered check list <see cref="StartupPipeline.RunAsync"/> always returns, so a future
+    /// <see cref="StartupCheckId"/> added without a corresponding arm here already fails the very
+    /// next test run, not silently in production.</summary>
+    private static EvaluationArea AreaFor(StartupCheckId id) => id switch
+    {
+        StartupCheckId.UserConfiguration or StartupCheckId.Language or StartupCheckId.Platform or
+            StartupCheckId.ProjectRoot or StartupCheckId.ProjectConfiguration => EvaluationArea.Bootstrap,
+        StartupCheckId.UpdateStrategy or StartupCheckId.Release => EvaluationArea.Updater,
+        StartupCheckId.Providers => EvaluationArea.Provider,
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, "Unmapped startup check id."),
+    };
 
     private static EvaluationCheck FromStartupCheck(StartupCheck check) => new(
-        StartupCheckAreas[check.Id],
+        AreaFor(check.Id),
         JsonNamingPolicy.SnakeCaseLower.ConvertName(check.Id.ToString()),
         check.State switch
         {
@@ -457,7 +461,8 @@ public sealed class ForgeApplication(
         IReadOnlyList<string> allowedModels = ModelPolicyGate.ParseAllowedModels(project.Values);
         IReadOnlyList<string>? enabledProviderIds = await providerEnablement
             .GetEnabledIdsAsync(cancellationToken).ConfigureAwait(false);
-        return [.. providerCatalog.ResolveEnabled(enabledProviderIds).Select(provider =>
+        IReadOnlyList<ILlmProvider> enabledProviders = providerCatalog.ResolveEnabled(enabledProviderIds);
+        List<EvaluationCheck> checks = [.. enabledProviders.Select(provider =>
             ModelPolicyGate.IsAllowed(provider.Id.Value, provider.DefaultModel, allowedModels)
                 ? EvaluationCheck.Passed(EvaluationArea.ModelPolicy, provider.Id.Value)
                 : new EvaluationCheck(
@@ -465,6 +470,14 @@ public sealed class ForgeApplication(
                     provider.Id.Value,
                     EvaluationState.Failed,
                     DiagnosticCodes.ModelPolicyViolation))];
+        // Round 1 review of PR #87: a configured entry naming a provider id no enabled provider
+        // matches (a typo, a stale/renamed entry) otherwise enforces nothing and reports nothing —
+        // surfaced here as its own failed check rather than silently passing.
+        checks.AddRange(ModelPolicyGate
+            .UnmatchedProviderIds(allowedModels, [.. enabledProviders.Select(provider => provider.Id.Value)])
+            .Select(providerId => new EvaluationCheck(
+                EvaluationArea.ModelPolicy, providerId, EvaluationState.Failed, DiagnosticCodes.ModelPolicyProviderUnknown)));
+        return checks;
     }
 
     /// <summary>The minimal proactive integrity check this codebase has today: every persisted

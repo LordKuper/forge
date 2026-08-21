@@ -37,6 +37,42 @@ public static class ModelPolicyGate
             .Select(item => item.GetString()!)];
     }
 
+    /// <summary>Round 1 review of PR #87: a configured entry naming a provider id that matches no
+    /// enabled provider (a typo, a renamed provider, a stale entry for a now-disabled provider)
+    /// silently does nothing -- <see cref="IsAllowed"/> only ever sees the enabled provider's own
+    /// id, so a policy meant to restrict a misspelled name enforces no restriction anywhere, with
+    /// no signal it was ever ignored. `forge eval`'s <see cref="EvaluationArea.ModelPolicy"/> area
+    /// calls this to report each configured entry's provider id that does not match any of
+    /// <paramref name="enabledProviderIds"/> as a distinct failed check -- <see cref="IsAllowed"/>
+    /// and the <c>SprintOrchestrator.CreateSprintAsync</c> gate stay unchanged (an unmatched entry
+    /// still enforces nothing there, by design: a project may list models for a provider it has
+    /// not enabled yet), so this is a diagnostic-only addition, not a behavior change to the gate
+    /// itself.</summary>
+    public static IReadOnlyList<string> UnmatchedProviderIds(
+        IReadOnlyList<string> allowedModels, IReadOnlyList<string> enabledProviderIds)
+    {
+        ArgumentNullException.ThrowIfNull(allowedModels);
+        ArgumentNullException.ThrowIfNull(enabledProviderIds);
+        HashSet<string> enabled = new(enabledProviderIds, StringComparer.Ordinal);
+        HashSet<string> unmatched = new(StringComparer.Ordinal);
+        foreach (string entry in allowedModels)
+        {
+            int separatorIndex = entry.IndexOf(Separator);
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            string providerId = entry[..separatorIndex];
+            if (!enabled.Contains(providerId))
+            {
+                unmatched.Add(providerId);
+            }
+        }
+
+        return [.. unmatched];
+    }
+
     public static bool IsAllowed(string providerId, string modelId, IReadOnlyList<string> allowedModels)
     {
         ArgumentNullException.ThrowIfNull(providerId);

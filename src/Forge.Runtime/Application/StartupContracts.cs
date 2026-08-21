@@ -198,6 +198,14 @@ public static class DiagnosticCodes
     /// <see cref="SprintProviderCandidatesEmpty"/> already uses for the adjacent "no routable
     /// provider" case.</summary>
     public const string ModelPolicyViolation = "model_policy_violation";
+
+    /// <summary>ADR 0042 (round 1 review of PR #87): a `models.allowed_models` entry names a
+    /// provider id that matches none of the project's enabled providers -- a likely typo or a
+    /// stale entry for a provider that was since renamed or disabled. Reported only by `forge
+    /// eval`'s <see cref="EvaluationArea.ModelPolicy"/> area; <see cref="ModelPolicyGate.IsAllowed"/>
+    /// and the <c>SprintOrchestrator.CreateSprintAsync</c> gate are unaffected -- an unmatched entry
+    /// still enforces no restriction there, by design.</summary>
+    public const string ModelPolicyProviderUnknown = "model_policy_provider_unknown";
 }
 
 public enum StartupState

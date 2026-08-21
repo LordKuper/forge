@@ -43,6 +43,7 @@ gate on workstations and CI.
 | 2 | usage | `confirmation_text_required` | `forge confirm`'s `--definition-of-done`/`--evidence` was empty or whitespace-only |
 | 2 | usage | `test_work_justification_required` | `forge test-work`'s `--justification` was empty or whitespace-only |
 | 3 | configuration | `configuration_scope_violation` | Key belongs to another scope |
+| 3 | configuration | `model_policy_provider_unknown` | `models.allowed_models` names a provider id no enabled provider matches (`forge eval` only) |
 | 4 | project | `project_not_initialized` | Confirmed root lacks valid `.forge/` |
 | 5 | platform | `platform_not_supported` | No registered platform strategy |
 | 6 | update | `self_update_failed` | Forge update/verification/handshake failed |

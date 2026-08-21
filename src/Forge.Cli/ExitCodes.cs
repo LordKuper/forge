@@ -18,6 +18,7 @@ public static class ExitCodes
     public const int Authorization = 8;
     public const int Confirmation = 9;
     public const int Concurrency = 10;
+    public const int Workflow = 11;
     public const int Internal = 13;
 
     public static int For(string diagnosticCode) => diagnosticCode switch
@@ -29,8 +30,8 @@ public static class ExitCodes
             DiagnosticCodes.SupersessionInstructionRequired or
             DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired or
             DiagnosticCodes.TestWorkJustificationRequired => Usage,
-        DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
-            Configuration,
+        DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid or
+            DiagnosticCodes.ModelPolicyProviderUnknown => Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
             DiagnosticCodes.ProjectRootMissing => Project,
         DiagnosticCodes.PlatformNotSupported => Platform,
@@ -41,6 +42,7 @@ public static class ExitCodes
         DiagnosticCodes.PermissionDenied => Authorization,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
+        DiagnosticCodes.ModelPolicyViolation => Workflow,
         _ => Internal,
     };
 }

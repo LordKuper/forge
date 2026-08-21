@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Cli;
+using Forge.Configuration;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Tests.Support;
@@ -53,6 +54,39 @@ public sealed class EvaluateCliTests
         Assert.Equal(0, exitCode);
         using JsonDocument document = JsonDocument.Parse(output.ToString());
         Assert.Equal("blocked", document.RootElement.GetProperty("state").GetString());
+    }
+
+    // Round 1 review of PR #87: both prior tests only ever asserted exit 0, so mutating the
+    // Failed -> Report(...) branch to always `return ExitCodes.Ok;` would have survived the whole
+    // suite despite the CreateEvaluateCommand doc comment's own promise. A real Failed check (a
+    // model-policy violation) is the only way to prove the non-zero path actually fires.
+    private static readonly string[] ViolatingModelPolicy = ["codex:some-other-model"];
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task EvalExitsNonZeroWithTheViolationDiagnosticWhenAModelPolicyCheckFails()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        Assert.True((await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        Assert.True((await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(ViolatingModelPolicy),
+            cancellationToken)).Succeeded);
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter error = new(CultureInfo.InvariantCulture);
+
+        int exitCode = await InvokeAsync(environment, output, ["eval"], error);
+
+        Assert.Equal(ExitCodes.Workflow, exitCode);
+        using JsonDocument document = JsonDocument.Parse(output.ToString());
+        Assert.Equal("failed", document.RootElement.GetProperty("state").GetString());
+        Assert.Contains(DiagnosticCodes.ModelPolicyViolation, error.ToString());
     }
 
     private static Task<int> InvokeAsync(
