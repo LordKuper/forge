@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.61.0
+
+### Added
+
+- Added `forge eval`, a pass/fail evaluation of the updater, provider,
+  bootstrap, and workflow subsystems, printed as JSON.
+- Added an optional project model policy: `forge config project
+  models.allowed_models '["<provider>:<model>", ...]'` restricts which
+  model a provider may use. Creating a sprint now refuses up front if a
+  provider's model is not on the configured list; an unlisted provider
+  stays unrestricted. Reported by `forge eval` too, with no sprint needed.
+  A policy entry naming a provider that isn't enabled (a typo, or a
+  provider not yet turned on) is flagged by `forge eval` rather than
+  silently doing nothing.
+
 ## v0.60.0
 
 ### Added

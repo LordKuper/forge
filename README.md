@@ -22,7 +22,8 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 
 | Command | Purpose |
 |---|---|
-| `forge doctor [--startup] [--recover --yes]` | Show the startup summary, the ordered checks with `--startup`, or quarantine unreadable configuration with `--recover`. |
+| `forge doctor [--startup] [--recover --yes] [--bundle]` | Show the startup summary, the ordered checks with `--startup`, quarantine unreadable configuration with `--recover`, or emit a redacted diagnostic bundle with `--bundle`. |
+| `forge eval [--project-root <path>]` | Evaluate the updater, provider, bootstrap, and workflow subsystems plus the project model-policy gate; JSON, non-zero exit on a failed check. |
 | `forge init --project-root <absolute-path> [--yes]` | Display the absolute root and initialize `.forge/` after confirmation. |
 | `forge status [--detail summary\|full] [--sprint <id>] [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
 | `forge tree [--sprint <id>] [--json]` | Show the sprint hierarchy, nesting each attempt under its owning node. |

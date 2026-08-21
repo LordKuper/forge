@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host.Client;
@@ -382,6 +383,104 @@ public sealed class ForgeApplication(
             retryBudget,
             writableProbes,
             omissions);
+    }
+
+    /// <summary>ADR 0042's `forge eval`: a pass/fail report over the updater, provider, bootstrap,
+    /// and workflow subsystems plus the project model-policy gate. Every check reuses an existing
+    /// command's own logic rather than a second probing path -- <see cref="StartupPipeline.RunAsync"/>
+    /// (already `forge doctor --startup`'s own backing) covers the first three areas directly;
+    /// <see cref="Forge.Domain.SprintGraphValidator"/> against the canonical
+    /// <see cref="ImplementationCriticalGraphBuilder"/> graph covers workflow structural validity with
+    /// no sprint created; <see cref="ModelPolicyGate"/> covers the allowlist gate against the same
+    /// frozen-candidate derivation <c>SprintOrchestrator.CreateSprintAsync</c> uses.</summary>
+    public async Task<EvaluationReport> RunEvaluationAsync(
+        string? projectRoot, CancellationToken cancellationToken)
+    {
+        (StartupStatus startup, _) = await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        List<EvaluationCheck> checks = [.. startup.Checks.Select(FromStartupCheck)];
+
+        checks.Add(SprintGraphValidator.IsValid(ImplementationCriticalGraphBuilder.Build())
+            ? EvaluationCheck.Passed(EvaluationArea.Workflow, "graph")
+            : new(EvaluationArea.Workflow, "graph", EvaluationState.Failed, DiagnosticCodes.SprintGraphInvalid));
+
+        checks.AddRange(await EvaluateModelPolicyAsync(projectRoot, cancellationToken).ConfigureAwait(false));
+
+        EvaluationState state = checks.Any(check => check.State == EvaluationState.Failed)
+            ? EvaluationState.Failed
+            : checks.Any(check => check.State == EvaluationState.Blocked)
+                ? EvaluationState.Blocked
+                : EvaluationState.Passed;
+        return new(EvaluationReport.ContractVersion, clock.UtcNow, state, checks);
+    }
+
+    /// <summary>Round 1 review of PR #87: an unmapped <see cref="StartupCheckId"/> now throws a
+    /// named <see cref="ArgumentOutOfRangeException"/> (matching the identical pattern already used
+    /// for <see cref="StartupCheckState"/> just below) instead of an opaque
+    /// <see cref="KeyNotFoundException"/> from a dictionary indexer. Every existing
+    /// <c>EvaluationTests</c> case calls <see cref="RunEvaluationAsync"/> against the full,
+    /// unfiltered check list <see cref="StartupPipeline.RunAsync"/> always returns, so a future
+    /// <see cref="StartupCheckId"/> added without a corresponding arm here already fails the very
+    /// next test run, not silently in production.</summary>
+    private static EvaluationArea AreaFor(StartupCheckId id) => id switch
+    {
+        StartupCheckId.UserConfiguration or StartupCheckId.Language or StartupCheckId.Platform or
+            StartupCheckId.ProjectRoot or StartupCheckId.ProjectConfiguration => EvaluationArea.Bootstrap,
+        StartupCheckId.UpdateStrategy or StartupCheckId.Release => EvaluationArea.Updater,
+        StartupCheckId.Providers => EvaluationArea.Provider,
+        _ => throw new ArgumentOutOfRangeException(nameof(id), id, "Unmapped startup check id."),
+    };
+
+    private static EvaluationCheck FromStartupCheck(StartupCheck check) => new(
+        AreaFor(check.Id),
+        JsonNamingPolicy.SnakeCaseLower.ConvertName(check.Id.ToString()),
+        check.State switch
+        {
+            StartupCheckState.Passed => EvaluationState.Passed,
+            StartupCheckState.Skipped => EvaluationState.Skipped,
+            StartupCheckState.Blocked => EvaluationState.Blocked,
+            StartupCheckState.Failed => EvaluationState.Failed,
+            _ => throw new ArgumentOutOfRangeException(nameof(check), check.State, "Unknown startup check state."),
+        },
+        check.DiagnosticCode);
+
+    /// <summary>One check per frozen-candidate provider (the same
+    /// <c>ProviderCatalog.ResolveEnabled</c> derivation <c>SprintOrchestrator.CreateSprintAsync</c>
+    /// freezes) against the project's own configured <c>models.allowed_models</c> policy -- a
+    /// dry-run report requiring no sprint. An unreadable project configuration reports the whole
+    /// area <see cref="EvaluationState.Blocked"/> rather than guessing at an empty policy.</summary>
+    private async Task<IReadOnlyList<EvaluationCheck>> EvaluateModelPolicyAsync(
+        string? projectRoot, CancellationToken cancellationToken)
+    {
+        ConfigurationView project = await GetProjectConfigurationAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (project.DiagnosticCode != DiagnosticCodes.None)
+        {
+            return [new(EvaluationArea.ModelPolicy, "configuration", EvaluationState.Blocked, project.DiagnosticCode)];
+        }
+
+        IReadOnlyList<string> allowedModels = ModelPolicyGate.ParseAllowedModels(project.Values);
+        IReadOnlyList<string>? enabledProviderIds = await providerEnablement
+            .GetEnabledIdsAsync(cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<ILlmProvider> enabledProviders = providerCatalog.ResolveEnabled(enabledProviderIds);
+        List<EvaluationCheck> checks = [.. enabledProviders.Select(provider =>
+            ModelPolicyGate.IsAllowed(provider.Id.Value, provider.DefaultModel, allowedModels)
+                ? EvaluationCheck.Passed(EvaluationArea.ModelPolicy, provider.Id.Value)
+                : new EvaluationCheck(
+                    EvaluationArea.ModelPolicy,
+                    provider.Id.Value,
+                    EvaluationState.Failed,
+                    DiagnosticCodes.ModelPolicyViolation))];
+        // Round 1 review of PR #87: a configured entry naming a provider id no enabled provider
+        // matches (a typo, a stale/renamed entry) otherwise enforces nothing and reports nothing —
+        // surfaced here as its own check rather than silently passing. Round 2 review: Blocked, not
+        // Failed -- ModelPolicyGate.UnmatchedProviderIds' own doc comment calls this legitimate ("a
+        // project may list models for a provider it has not enabled yet"), and Failed would both
+        // move `forge eval`'s exit code and contradict that doc comment's own claim.
+        checks.AddRange(ModelPolicyGate
+            .UnmatchedProviderIds(allowedModels, [.. enabledProviders.Select(provider => provider.Id.Value)])
+            .Select(providerId => new EvaluationCheck(
+                EvaluationArea.ModelPolicy, providerId, EvaluationState.Blocked, DiagnosticCodes.ModelPolicyProviderUnknown)));
+        return checks;
     }
 
     /// <summary>The minimal proactive integrity check this codebase has today: every persisted

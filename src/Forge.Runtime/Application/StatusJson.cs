@@ -25,6 +25,9 @@ public static class StatusJson
     public static string Serialize(DiagnosticBundle bundle) =>
         JsonSerializer.Serialize(bundle, Options);
 
+    public static string Serialize(EvaluationReport report) =>
+        JsonSerializer.Serialize(report, Options);
+
     public static string Serialize(ExecutionProfile profile) =>
         JsonSerializer.Serialize(profile, Options);
 

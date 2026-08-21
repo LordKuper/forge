@@ -60,6 +60,30 @@
       }
     },
     {
+      "name": "project manifest accepts an explicit model policy",
+      "schema": "project-manifest",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.2.0",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "workflow": "implementation-critical",
+        "artifacts": {"language": {"user_facing": "en", "agent_facing": "en"}},
+        "models": {"allowed_models": ["codex:gpt-5", "claude_code:sonnet"]}
+      }
+    },
+    {
+      "name": "project manifest rejects a model policy entry with no provider separator",
+      "schema": "project-manifest",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.2.0",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "workflow": "implementation-critical",
+        "artifacts": {"language": {"user_facing": "en", "agent_facing": "en"}},
+        "models": {"allowed_models": ["gpt-5"]}
+      }
+    },
+    {
       "name": "project manifest rejects another workflow",
       "schema": "project-manifest",
       "valid": false,
@@ -1001,6 +1025,45 @@
         "writable_probes": [],
         "omissions": [],
         "raw_command_line": "codex exec --json"
+      }
+    },
+    {
+      "name": "evaluation report accepts a blocked state naming every area",
+      "schema": "evaluation-result",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "generated_at": "2026-08-21T00:00:00Z",
+        "state": "blocked",
+        "checks": [
+          {"area": "updater", "name": "update_strategy", "state": "passed", "diagnostic_code": "none"},
+          {"area": "provider", "name": "providers", "state": "passed", "diagnostic_code": "none"},
+          {"area": "bootstrap", "name": "project_root", "state": "blocked", "diagnostic_code": "project_not_initialized"},
+          {"area": "workflow", "name": "graph", "state": "passed", "diagnostic_code": "none"},
+          {"area": "model_policy", "name": "codex", "state": "passed", "diagnostic_code": "none"}
+        ]
+      }
+    },
+    {
+      "name": "evaluation report rejects an unknown area",
+      "schema": "evaluation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.0.0",
+        "generated_at": "2026-08-21T00:00:00Z",
+        "state": "passed",
+        "checks": [{"area": "network", "name": "ping", "state": "passed", "diagnostic_code": "none"}]
+      }
+    },
+    {
+      "name": "evaluation report rejects an unknown major schema version",
+      "schema": "evaluation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "generated_at": "2026-08-21T00:00:00Z",
+        "state": "passed",
+        "checks": []
       }
     },
     {

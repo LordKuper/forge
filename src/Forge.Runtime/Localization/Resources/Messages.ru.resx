@@ -15,6 +15,7 @@
   <data name="UpdateCompleted" xml:space="preserve"><value>Обновление Forge завершено.</value></data>
   <data name="UpdateFailed" xml:space="preserve"><value>Не удалось обновить Forge.</value></data>
   <data name="DoctorDescription" xml:space="preserve"><value>Показать упорядоченные проверки запуска.</value></data>
+  <data name="EvalDescription" xml:space="preserve"><value>Оценить подсистемы обновления, провайдеров, запуска и рабочего процесса, а также политику моделей.</value></data>
   <data name="InitDescription" xml:space="preserve"><value>Инициализировать проект Forge в явно указанном каталоге.</value></data>
   <data name="NextDescription" xml:space="preserve"><value>Показать рекомендуемые следующие действия.</value></data>
   <data name="ModelsDescription" xml:space="preserve"><value>Обнаружить, установить и обновить провайдеров Codex и Claude Code.</value></data>

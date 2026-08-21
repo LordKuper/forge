@@ -90,6 +90,16 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             "32000",
             null,
             false);
+        // ADR 0042: project-scoped, like context.token_budget above -- which models are acceptable
+        // is a property of the project's own policy, not a per-machine preference. Empty means "no
+        // per-project model policy configured," the behavior every sprint had before this key
+        // existed (ModelPolicyGate.IsAllowed treats an unlisted provider as unrestricted).
+        yield return Create(
+            "models.allowed_models",
+            ConfigurationScope.Project,
+            "[]",
+            null,
+            false);
     }
 
     private static ConfigurationKey Create(

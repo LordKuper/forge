@@ -18,6 +18,7 @@ public static class ExitCodes
     public const int Authorization = 8;
     public const int Confirmation = 9;
     public const int Concurrency = 10;
+    public const int Workflow = 11;
     public const int Internal = 13;
 
     public static int For(string diagnosticCode) => diagnosticCode switch
@@ -41,6 +42,7 @@ public static class ExitCodes
         DiagnosticCodes.PermissionDenied => Authorization,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
+        DiagnosticCodes.ModelPolicyViolation => Workflow,
         _ => Internal,
     };
 }

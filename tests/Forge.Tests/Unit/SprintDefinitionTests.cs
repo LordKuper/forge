@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Configuration;
@@ -9,6 +10,10 @@ namespace Forge.UnitTests;
 
 public sealed class SprintDefinitionTests
 {
+    private static readonly string[] ViolatingModelPolicy = ["codex:some-other-model"];
+    private static readonly string[] SatisfyingModelPolicy = ["codex:codex-fake-model"];
+
+
     // ADR 0008: "Routing candidates are the ordered intersection of the frozen project profile and
     // the user-enabled set... The resolved candidate list is frozen into the sprint profile." No
     // project constraint is configurable yet, so this proves the user-enabled resolution alone --
@@ -140,6 +145,68 @@ public sealed class SprintDefinitionTests
             await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
 
         Assert.Equal(["codex"], definition!.FrozenProviders);
+    }
+
+    // ADR 0042: models.allowed_models restricts codex to a model FakeLlmProvider never resolves
+    // ("codex-fake-model" is its own fixed DefaultModel) -- creation must refuse before any event
+    // is written, the same shape CreationWithNoEnabledProvidersFailsWithoutRegisteringASprint proves
+    // for the adjacent empty-candidates case.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationRefusesAProviderWhoseDefaultModelViolatesTheConfiguredPolicy()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(ViolatingModelPolicy),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ModelPolicyViolation, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // The same policy, but listing codex's actual resolved model -- creation must succeed, proving
+    // the gate does not refuse every configured policy, only a genuine mismatch.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationSucceedsWhenTheFrozenModelIsListedInTheConfiguredPolicy()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(SatisfyingModelPolicy),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
     }
 
     // A definition.json written before FrozenProviders existed has no such key at all -- proves

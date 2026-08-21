@@ -53,6 +53,7 @@ public static class CliApplication
 
         RootCommand root = new(text.Resolve(MessageKeys.AppDescription));
         root.Subcommands.Add(CreateDoctorCommand(text, output, diagnostics, application, effectiveResolver));
+        root.Subcommands.Add(CreateEvaluateCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateInitCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateStatusCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
@@ -153,6 +154,33 @@ public static class CliApplication
             return status.FirstFailure is { } failure
                 ? Report(diagnostics, failure.DiagnosticCode)
                 : ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    /// <summary>ADR 0042's `forge eval`: pass/fail evaluation of the updater, provider, bootstrap,
+    /// and workflow subsystems plus the project model-policy gate, printed as JSON like
+    /// `forge doctor --bundle`. Only a `Failed` check moves the exit code off <see cref="ExitCodes.Ok"/>
+    /// -- a `Blocked` check (e.g. an uninitialized project) is reported but not itself a failure,
+    /// matching <c>StartupStatus.FirstFailure</c>'s own Failed-only convention.</summary>
+    private static Command CreateEvaluateCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Command command = new("eval", text.Resolve(MessageKeys.EvalDescription));
+        command.Options.Add(projectRoot);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            EvaluationReport report = await application
+                .RunEvaluationAsync(parseResult.GetValue(projectRoot), cancellationToken)
+                .ConfigureAwait(false);
+            output.WriteLine(StatusJson.Serialize(report));
+            EvaluationCheck? failure = report.Checks
+                .FirstOrDefault(check => check.State == EvaluationState.Failed);
+            return failure is not null ? Report(diagnostics, failure.DiagnosticCode) : ExitCodes.Ok;
         });
         return command;
     }
