@@ -8,6 +8,8 @@ namespace Forge.InstallerTests;
 
 public sealed class WindowsUpdateStrategyTests
 {
+    private const string AffectedCommandShim = "& {\r\n    $ErrorActionPreference = 'Stop'\r\n    $root = Split-Path -Parent $PSScriptRoot\r\n    $version = (Get-Content -Raw (Join-Path $root 'current.json') | ConvertFrom-Json).Version\r\n    $hostPath = Join-Path $root ('versions\\' + $version + '\\forge.exe')\r\n    if (-not (Test-Path -LiteralPath $hostPath -PathType Leaf)) { throw 'The active Forge host is missing.' }\r\n    & $hostPath @args\r\n    exit $LASTEXITCODE\r\n}\r\n";
+
     [Fact]
     [Trait("Category", "Installer")]
     public async Task HostSelfTestStopsAfterItsDeadline()
@@ -51,6 +53,70 @@ public sealed class WindowsUpdateStrategyTests
         Assert.Equal(Path.Combine(first.VersionDirectory!, "Forge.Desktop.exe"), shortcut.ExecutablePath);
         Assert.True(second.Succeeded);
         Assert.Equal(1, downloader.DownloadCount);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task CommandShimForwardsArguments()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        WindowsInstallationResult installed = await strategy.InstallAsync(
+            Release(archive),
+            new UpdateTarget("windows", "x64", "portable_bundle"),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(installed.Succeeded);
+        File.Copy(
+            Path.Combine(Environment.SystemDirectory, "where.exe"),
+            Path.Combine(installed.VersionDirectory!, "forge.exe"),
+            overwrite: true);
+        using Process process = Process.Start(new ProcessStartInfo("powershell.exe")
+        {
+            ArgumentList =
+            {
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                Path.Combine(temporary.Path, "current", "forge.ps1"),
+                "cmd.exe"
+            },
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        })!;
+
+        string output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.EndsWith("cmd.exe", output.Trim(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
+    public async Task MigratesAffectedCommandShim()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        WindowsUpdateStrategy strategy = new(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester());
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        WindowsInstallationResult first = await strategy.InstallAsync(
+            Release(archive),
+            target,
+            TestContext.Current.CancellationToken);
+        Assert.True(first.Succeeded);
+        string script = Path.Combine(temporary.Path, "current", "forge.ps1");
+        await File.WriteAllTextAsync(script, AffectedCommandShim, TestContext.Current.CancellationToken);
+
+        WindowsInstallationResult second = await strategy.InstallAsync(
+            Release(archive),
+            target,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(second.Succeeded);
+        Assert.NotEqual(AffectedCommandShim, await File.ReadAllTextAsync(script, TestContext.Current.CancellationToken));
     }
 
     [Fact]

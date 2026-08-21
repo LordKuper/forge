@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.62.2
+
+### Fixed
+
+- Fixed the Windows command shim discarding all CLI arguments, including
+  `--version`, `--help`, and subcommands.
+- Added automatic migration of the affected `0.62.0` and `0.62.1` command
+  shim during installation or update.
+
 ## v0.62.1
 
 ### Fixed
