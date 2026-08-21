@@ -158,11 +158,13 @@ try {
 
     Test-Case "Bootstrap entry point reaches release resolution in PowerShell 7" {
         . $installer
+        function global:Assert-ForgeWindowsSupport {}
         function global:Invoke-RestMethod { throw 'release resolution reached' }
         try {
             Assert-Throws { Install-Forge | Out-Null } "release resolution reached"
         } finally {
             Remove-Item Function:\Invoke-RestMethod -Force
+            Remove-Item Function:\Assert-ForgeWindowsSupport -Force
         }
     }
 
