@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://forge.dev/schemas/v1/evaluation-result.schema.json",
+  "title": "EvaluationReport v1",
+  "description": "forge eval (ADR 0042): pass/fail evaluation of the updater, provider, bootstrap, and workflow subsystems plus the project model-policy gate, each reusing an existing command's own checks.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "state", "checks"],
+  "properties": {
+    "schema_version": {"const": "1.0.0"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "state": {"enum": ["passed", "blocked", "failed"]},
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["area", "name", "state", "diagnostic_code"],
+        "properties": {
+          "area": {"enum": ["updater", "provider", "bootstrap", "workflow", "model_policy"]},
+          "name": {"type": "string", "minLength": 1},
+          "state": {"enum": ["passed", "skipped", "blocked", "failed"]},
+          "diagnostic_code": {"type": "string", "minLength": 1}
+        }
+      }
+    }
+  }
+}

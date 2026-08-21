@@ -49,6 +49,7 @@ public static class MessageKeys
     public const string UpdateCompleted = "UpdateCompleted";
     public const string UpdateFailed = "UpdateFailed";
     public const string DoctorDescription = "DoctorDescription";
+    public const string EvalDescription = "EvalDescription";
     public const string InitDescription = "InitDescription";
     public const string NextDescription = "NextDescription";
     public const string ModelsDescription = "ModelsDescription";

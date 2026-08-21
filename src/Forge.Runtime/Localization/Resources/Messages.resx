@@ -15,6 +15,7 @@
   <data name="UpdateCompleted" xml:space="preserve"><value>Forge update completed.</value></data>
   <data name="UpdateFailed" xml:space="preserve"><value>Forge update failed.</value></data>
   <data name="DoctorDescription" xml:space="preserve"><value>Show the ordered startup checks.</value></data>
+  <data name="EvalDescription" xml:space="preserve"><value>Evaluate the updater, provider, bootstrap, and workflow subsystems plus the model-policy gate.</value></data>
   <data name="InitDescription" xml:space="preserve"><value>Initialize a Forge project in an explicit directory.</value></data>
   <data name="NextDescription" xml:space="preserve"><value>Show the recommended next actions.</value></data>
   <data name="ModelsDescription" xml:space="preserve"><value>Discover, install, and update the Codex and Claude Code provider CLIs.</value></data>

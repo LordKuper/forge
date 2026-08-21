@@ -12,8 +12,10 @@ namespace Forge.Application;
 public static class ExecutionProfilePolicy
 {
     // ponytail: every phase shares one fixed MVP policy (sandbox/permission/allowlist), and effort
-    // only distinguishes review from the other two — no per-project model policy configuration
-    // exists yet (ADR 0006 describes one; nothing built it). Revisit once it does.
+    // only distinguishes review from the other two. ADR 0042 added the allowlist half of ADR 0006's
+    // "project model policy" (SprintOrchestrator.CreateSprintAsync refuses creation via
+    // ModelPolicyGate before this class ever runs) but not per-phase model *selection* -- every
+    // phase still resolves the same fixed ILlmProvider.DefaultModel. Revisit once that exists.
     private const string SandboxPolicy = "workspace-write";
     private const string PermissionPolicy = "never";
     private static readonly IReadOnlyList<string> CapabilityAllowlist =

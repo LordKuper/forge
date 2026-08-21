@@ -190,6 +190,14 @@ public static class DiagnosticCodes
     /// Reserved since Stage 0 (`docs/contracts/v1/README.md`'s `permission_denied`/exit 8) and
     /// unimplemented until this ADR.</summary>
     public const string PermissionDenied = "permission_denied";
+
+    /// <summary>ADR 0042: a frozen provider's <c>ILlmProvider.DefaultModel</c> is not listed in the
+    /// project's configured <c>models.allowed_models</c> policy for that provider. Checked in
+    /// <see cref="SprintOrchestrator.CreateSprintAsync"/> immediately after <c>frozenProviders</c> is
+    /// resolved, before any event is appended -- the same fail-closed placement
+    /// <see cref="SprintProviderCandidatesEmpty"/> already uses for the adjacent "no routable
+    /// provider" case.</summary>
+    public const string ModelPolicyViolation = "model_policy_violation";
 }
 
 public enum StartupState

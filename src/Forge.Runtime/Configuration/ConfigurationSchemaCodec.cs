@@ -10,10 +10,10 @@ internal static class ConfigurationSchemaCodec
     /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
     /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
     private const string UserContractVersion = "1.2.0";
-    /// <summary>Bumped for ADR 0029's optional, nullable `context.token_budget` -- an older
-    /// document (missing `context`) still validates under `project-manifest.schema.json`'s
-    /// tolerant `schema_version` enum, matching `UserContractVersion`'s own precedent.</summary>
-    private const string ProjectContractVersion = "1.1.0";
+    /// <summary>Bumped for ADR 0042's optional, nullable `models.allowed_models` -- an older
+    /// document (missing `models`) still validates under `project-manifest.schema.json`'s tolerant
+    /// `schema_version` enum, matching ADR 0029's own `context.token_budget` precedent.</summary>
+    private const string ProjectContractVersion = "1.2.0";
     private const string WorkflowName = "implementation-critical";
     private static readonly JsonSchema UserSchema = LoadSchema("user-config");
     private static readonly JsonSchema ProjectSchema = LoadSchema("project-manifest");
@@ -101,6 +101,14 @@ internal static class ConfigurationSchemaCodec
             Context = GetOptionalInt32(document, "context.token_budget") is { } tokenBudget
                 ? new() { TokenBudget = tokenBudget }
                 : null,
+            // Optional and nullable, like Context above -- ADR 0042 added this key after
+            // schema_version 1.1.0 shipped, so a manifest written before this key existed must
+            // still validate on read with it entirely absent. A present-but-empty list is the same
+            // "no restriction" default as an absent key (ModelPolicyGate.IsAllowed), so no
+            // omitted-vs-empty distinction needs preserving the way Providers.Enabled needs one.
+            Models = GetOptionalStringArray(document, "models.allowed_models") is { } allowedModels
+                ? new() { AllowedModels = allowedModels }
+                : null,
         };
         Validate(
             JsonSerializer.SerializeToElement(persisted, JsonOptions),
@@ -121,6 +129,7 @@ internal static class ConfigurationSchemaCodec
                 JsonSerializer.SerializeToElement(persisted.Artifacts.Language.AgentFacing),
         };
         Add(values, "context.token_budget", persisted.Context?.TokenBudget);
+        Add(values, "models.allowed_models", persisted.Models?.AllowedModels);
         return new(
             1,
             values,
@@ -317,6 +326,8 @@ internal static class ConfigurationSchemaCodec
         public ProjectArtifacts Artifacts { get; set; } = new();
 
         public ProjectContext? Context { get; set; }
+
+        public ProjectModels? Models { get; set; }
     }
 
     internal sealed class ProjectArtifacts
@@ -334,5 +345,10 @@ internal static class ConfigurationSchemaCodec
     internal sealed class ProjectContext
     {
         public int? TokenBudget { get; set; }
+    }
+
+    internal sealed class ProjectModels
+    {
+        public List<string>? AllowedModels { get; set; }
     }
 }

@@ -151,6 +151,18 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.SprintProviderCandidatesEmpty);
         }
 
+        // ADR 0042: the allowlist half of ADR 0006's "project model policy" -- refused before any
+        // event is written, the same fail-closed placement as the empty-candidates check above.
+        IReadOnlyList<string> allowedModels = ModelPolicyGate.ParseAllowedModels(
+            await configuration.GetProjectAsync(status.Root, cancellationToken).ConfigureAwait(false));
+        bool policyViolated = frozenProviders.Any(providerId =>
+            providerCatalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider) &&
+            !ModelPolicyGate.IsAllowed(providerId, provider.DefaultModel, allowedModels));
+        if (policyViolated)
+        {
+            return new(false, null, DiagnosticCodes.ModelPolicyViolation);
+        }
+
         string baseCommit;
         try
         {

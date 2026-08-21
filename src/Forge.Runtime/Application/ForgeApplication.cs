@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host.Client;
@@ -382,6 +383,88 @@ public sealed class ForgeApplication(
             retryBudget,
             writableProbes,
             omissions);
+    }
+
+    /// <summary>ADR 0042's `forge eval`: a pass/fail report over the updater, provider, bootstrap,
+    /// and workflow subsystems plus the project model-policy gate. Every check reuses an existing
+    /// command's own logic rather than a second probing path -- <see cref="StartupPipeline.RunAsync"/>
+    /// (already `forge doctor --startup`'s own backing) covers the first three areas directly;
+    /// <see cref="Forge.Domain.SprintGraphValidator"/> against the canonical
+    /// <see cref="ImplementationCriticalGraphBuilder"/> graph covers workflow structural validity with
+    /// no sprint created; <see cref="ModelPolicyGate"/> covers the allowlist gate against the same
+    /// frozen-candidate derivation <c>SprintOrchestrator.CreateSprintAsync</c> uses.</summary>
+    public async Task<EvaluationReport> RunEvaluationAsync(
+        string? projectRoot, CancellationToken cancellationToken)
+    {
+        (StartupStatus startup, _) = await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        List<EvaluationCheck> checks = [.. startup.Checks.Select(FromStartupCheck)];
+
+        checks.Add(SprintGraphValidator.IsValid(ImplementationCriticalGraphBuilder.Build())
+            ? EvaluationCheck.Passed(EvaluationArea.Workflow, "graph")
+            : new(EvaluationArea.Workflow, "graph", EvaluationState.Failed, DiagnosticCodes.SprintGraphInvalid));
+
+        checks.AddRange(await EvaluateModelPolicyAsync(projectRoot, cancellationToken).ConfigureAwait(false));
+
+        EvaluationState state = checks.Any(check => check.State == EvaluationState.Failed)
+            ? EvaluationState.Failed
+            : checks.Any(check => check.State == EvaluationState.Blocked)
+                ? EvaluationState.Blocked
+                : EvaluationState.Passed;
+        return new(EvaluationReport.ContractVersion, clock.UtcNow, state, checks);
+    }
+
+    private static readonly Dictionary<StartupCheckId, EvaluationArea> StartupCheckAreas =
+        new()
+        {
+            [StartupCheckId.UserConfiguration] = EvaluationArea.Bootstrap,
+            [StartupCheckId.Language] = EvaluationArea.Bootstrap,
+            [StartupCheckId.Platform] = EvaluationArea.Bootstrap,
+            [StartupCheckId.ProjectRoot] = EvaluationArea.Bootstrap,
+            [StartupCheckId.ProjectConfiguration] = EvaluationArea.Bootstrap,
+            [StartupCheckId.UpdateStrategy] = EvaluationArea.Updater,
+            [StartupCheckId.Release] = EvaluationArea.Updater,
+            [StartupCheckId.Providers] = EvaluationArea.Provider,
+        };
+
+    private static EvaluationCheck FromStartupCheck(StartupCheck check) => new(
+        StartupCheckAreas[check.Id],
+        JsonNamingPolicy.SnakeCaseLower.ConvertName(check.Id.ToString()),
+        check.State switch
+        {
+            StartupCheckState.Passed => EvaluationState.Passed,
+            StartupCheckState.Skipped => EvaluationState.Skipped,
+            StartupCheckState.Blocked => EvaluationState.Blocked,
+            StartupCheckState.Failed => EvaluationState.Failed,
+            _ => throw new ArgumentOutOfRangeException(nameof(check), check.State, "Unknown startup check state."),
+        },
+        check.DiagnosticCode);
+
+    /// <summary>One check per frozen-candidate provider (the same
+    /// <c>ProviderCatalog.ResolveEnabled</c> derivation <c>SprintOrchestrator.CreateSprintAsync</c>
+    /// freezes) against the project's own configured <c>models.allowed_models</c> policy -- a
+    /// dry-run report requiring no sprint. An unreadable project configuration reports the whole
+    /// area <see cref="EvaluationState.Blocked"/> rather than guessing at an empty policy.</summary>
+    private async Task<IReadOnlyList<EvaluationCheck>> EvaluateModelPolicyAsync(
+        string? projectRoot, CancellationToken cancellationToken)
+    {
+        ConfigurationView project = await GetProjectConfigurationAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        if (project.DiagnosticCode != DiagnosticCodes.None)
+        {
+            return [new(EvaluationArea.ModelPolicy, "configuration", EvaluationState.Blocked, project.DiagnosticCode)];
+        }
+
+        IReadOnlyList<string> allowedModels = ModelPolicyGate.ParseAllowedModels(project.Values);
+        IReadOnlyList<string>? enabledProviderIds = await providerEnablement
+            .GetEnabledIdsAsync(cancellationToken).ConfigureAwait(false);
+        return [.. providerCatalog.ResolveEnabled(enabledProviderIds).Select(provider =>
+            ModelPolicyGate.IsAllowed(provider.Id.Value, provider.DefaultModel, allowedModels)
+                ? EvaluationCheck.Passed(EvaluationArea.ModelPolicy, provider.Id.Value)
+                : new EvaluationCheck(
+                    EvaluationArea.ModelPolicy,
+                    provider.Id.Value,
+                    EvaluationState.Failed,
+                    DiagnosticCodes.ModelPolicyViolation))];
     }
 
     /// <summary>The minimal proactive integrity check this codebase has today: every persisted

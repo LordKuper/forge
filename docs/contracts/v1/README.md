@@ -65,6 +65,7 @@ gate on workstations and CI.
 | 11 | workflow | `routing_deferred` | Node's provider/model key is still unroutable through a recorded resume time |
 | 11 | workflow | `routing_budget_exhausted` | Sprint's shared routing retry budget is exhausted |
 | 11 | workflow | `routing_circuit_open` | Node's provider/model key circuit breaker is currently open |
+| 11 | workflow | `model_policy_violation` | A frozen provider's default model is not listed in the project's configured model policy |
 | 12 | dependency | `dependency_unavailable` | Required immutable input is unavailable |
 | 13 | internal | `internal_error` | Sanitized unexpected failure |
 | 14 | compatibility | `host_protocol_incompatible` | Client and Host protocol majors cannot communicate |
