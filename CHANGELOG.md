@@ -8,8 +8,8 @@ User-facing Forge changes are listed by release, newest first.
 
 - Fixed the Windows command shim discarding all CLI arguments, including
   `--version`, `--help`, and subcommands.
-- Added automatic migration of the affected `0.62.0` and `0.62.1` command
-  shim during installation or update.
+- Rerunning the bootstrap installer now upgrades an existing installation and
+  automatically migrates the affected `0.62.0` and `0.62.1` command shim.
 
 ## v0.62.1
 

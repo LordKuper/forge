@@ -285,6 +285,41 @@ public sealed class WindowsUpdateStrategyTests
 
     [Fact]
     [Trait("Category", "Installer")]
+    public async Task BootstrapInstallerUpgradesAffectedInstallation()
+    {
+        using TemporaryDirectory temporary = new();
+        byte[] archive = CreateBundle(temporary.Path);
+        VerifiedRelease release = Release(archive);
+        UpdateTarget target = new("windows", "x64", "portable_bundle");
+        string previous = Path.Combine(temporary.Path, "versions", "1.0.0");
+        Directory.CreateDirectory(previous);
+        Directory.CreateDirectory(Path.Combine(temporary.Path, "current"));
+        File.WriteAllText(Path.Combine(temporary.Path, "current.json"), "{\"Version\":\"1.0.0\"}");
+        string script = Path.Combine(temporary.Path, "current", "forge.ps1");
+        File.WriteAllText(script, AffectedCommandShim);
+        WindowsInstaller installer = new(
+            new FixedTargetDetector(target),
+            new PassingUpdateLock(),
+            new StaticReleaseClient(new(
+                release.Version,
+                release.ReleaseUri,
+                false,
+                false,
+                DateTimeOffset.UtcNow,
+                [])),
+            new PassingVerifier(release),
+            new WindowsUpdateStrategy(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester()));
+
+        WindowsInstallationResult result = await installer.InstallLatestAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Contains("1.1.0", File.ReadAllText(Path.Combine(temporary.Path, "current.json")), StringComparison.Ordinal);
+        Assert.True(Directory.Exists(previous));
+        Assert.NotEqual(AffectedCommandShim, File.ReadAllText(script));
+    }
+
+    [Fact]
+    [Trait("Category", "Installer")]
     public async Task DoesNotLookupAReleaseWhenInstallationIsLocked()
     {
         using TemporaryDirectory temporary = new();

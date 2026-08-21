@@ -117,7 +117,7 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
                 return CompleteInstallation(destination);
             }
 
-            if (current is not null || Directory.Exists(destination))
+            if (current is null && Directory.Exists(destination))
             {
                 return WindowsInstallationResult.Failure(new(
                     UpdateDiagnosticCode.ActivationFailed,
@@ -128,6 +128,36 @@ public sealed class WindowsUpdateStrategy : IPlatformUpdateStrategy
             if (!staged.Succeeded)
             {
                 return WindowsInstallationResult.Failure(staged.Diagnostic);
+            }
+
+            if (current is not null)
+            {
+                ActivationResult activated = await ActivateAsync(
+                    staged.Staged!,
+                    new RestartContext(
+                        string.Empty,
+                        string.Empty,
+                        [],
+                        root,
+                        new(release.Version, target, UpdateSurface.Cli)),
+                    cancellationToken).ConfigureAwait(false);
+                if (activated.Succeeded)
+                {
+                    return new(true, destination, UpdateDiagnostic.None);
+                }
+
+                if (activated.Receipt is not null)
+                {
+                    RollbackResult rollback = await RollbackAsync(
+                        activated.Receipt,
+                        CancellationToken.None).ConfigureAwait(false);
+                    if (!rollback.Succeeded)
+                    {
+                        return WindowsInstallationResult.Failure(rollback.Diagnostic);
+                    }
+                }
+
+                return WindowsInstallationResult.Failure(activated.Diagnostic);
             }
 
             Directory.Move(staged.Staged!.Location, destination);
