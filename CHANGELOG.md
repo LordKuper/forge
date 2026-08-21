@@ -2,6 +2,15 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.4
+
+### Changed
+
+- Extended automated test coverage proving every internal versioned data
+  contract rejects an unsupported schema version, and added a check that
+  keeps that guarantee from silently lapsing as new contracts are added.
+  No functional change.
+
 ## v0.59.3
 
 ### Security

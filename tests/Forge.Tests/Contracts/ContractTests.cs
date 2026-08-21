@@ -62,6 +62,60 @@ public sealed class ContractTests
             contractKeyNames.OrderBy(name => name, StringComparer.Ordinal));
     }
 
+    /// <summary>Stage 12's migration/versioned-contract audit found every embedded contract
+    /// schema's own `schema_version` is a closed set (`const`/`enum`, never an open string), so
+    /// `Draft202012SchemasMatchCompatibilityFixtures` already fails closed on an out-of-range
+    /// version wherever a fixture case exercises one — but only `user-config` actually had such a
+    /// case; the other 21 schemas were unverified. This proves every current schema file has at
+    /// least one fixture case whose `schema_version` sits outside that schema's own allowed set,
+    /// and — since it walks the schema directory rather than a hardcoded name list — a schema
+    /// added later with no matching case fails this test instead of silently going unverified.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void EveryContractSchemaRejectsAnUnsupportedSchemaVersion()
+    {
+        string root = Forge.UnitTests.RepositoryRoot.Find();
+        string schemaRoot = Path.Combine(root, "docs", "contracts", "v1", "schemas");
+        string fixturePath = Path.Combine(root, "tests", "Forge.Tests", "Contracts", "fixtures", "contract-cases.json");
+        using JsonDocument fixtureDocument = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        JsonElement cases = fixtureDocument.RootElement.GetProperty("cases");
+
+        List<string> schemaNames = [.. Directory
+            .GetFiles(schemaRoot, "*.schema.json")
+            .Select(path => Path.GetFileName(path).Replace(".schema.json", string.Empty, StringComparison.Ordinal))
+            .OrderBy(name => name, StringComparer.Ordinal)];
+
+        List<string> schemasMissingAVersionRejectionCase = [];
+        foreach (string schemaName in schemaNames)
+        {
+            using JsonDocument schemaDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(schemaRoot, $"{schemaName}.schema.json")));
+            JsonElement versionProperty =
+                schemaDocument.RootElement.GetProperty("properties").GetProperty("schema_version");
+            HashSet<string> allowedVersions = versionProperty.TryGetProperty("const", out JsonElement constValue)
+                ? [constValue.GetString()!]
+                : versionProperty
+                    .GetProperty("enum")
+                    .EnumerateArray()
+                    .Select(value => value.GetString()!)
+                    .ToHashSet(StringComparer.Ordinal);
+
+            bool hasRejectionCase = cases.EnumerateArray().Any(testCase =>
+                testCase.GetProperty("schema").GetString() == schemaName &&
+                !testCase.GetProperty("valid").GetBoolean() &&
+                testCase.GetProperty("instance").TryGetProperty("schema_version", out JsonElement instanceVersion) &&
+                instanceVersion.ValueKind == JsonValueKind.String &&
+                !allowedVersions.Contains(instanceVersion.GetString()!));
+
+            if (!hasRejectionCase)
+            {
+                schemasMissingAVersionRejectionCase.Add(schemaName);
+            }
+        }
+
+        Assert.Empty(schemasMissingAVersionRejectionCase);
+    }
+
     [Fact]
     [Trait("Category", "Contracts")]
     public void Draft202012SchemasMatchCompatibilityFixtures()
