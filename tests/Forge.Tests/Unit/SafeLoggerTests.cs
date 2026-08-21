@@ -51,6 +51,29 @@ public sealed class SafeLoggerTests
         Assert.Contains("[REDACTED:credential]", content, StringComparison.Ordinal);
     }
 
+    /// <summary>Round 1 review of PR #86: an uncaught I/O failure here (disk full, permission
+    /// denied, the log directory blocked by a same-named file) would propagate out of
+    /// <c>InformationAsync</c> into whatever hosted service called it — and since nothing
+    /// configures <c>BackgroundServiceExceptionBehavior</c>, an uncaught hosted-service exception
+    /// crashes the whole Host process. Best-effort telemetry must never do that. Blocks the log
+    /// directory's own path with a plain file (a real, portable way to force
+    /// <see cref="Directory.CreateDirectory(string)"/> to throw <see cref="IOException"/> on every
+    /// OS this test runs on) and proves the call still completes normally.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InformationAsyncSwallowsAnIOExceptionInsteadOfThrowing()
+    {
+        using TestEnvironment environment = new();
+        string logsDirectory = Path.Combine(environment.LocalApplicationData, "Forge", environment.InstanceId, "logs");
+        Directory.CreateDirectory(Path.GetDirectoryName(logsDirectory)!);
+        await File.WriteAllTextAsync(
+            logsDirectory, "blocking the logs directory itself", TestContext.Current.CancellationToken);
+        using SafeLogger logger = new(environment);
+
+        await logger.InformationAsync(
+            "blocked_event", new Dictionary<string, object?>(), TestContext.Current.CancellationToken);
+    }
+
     private static string LogPath(TestEnvironment environment) =>
         Path.Combine(environment.LocalApplicationData, "Forge", environment.InstanceId, "logs", "forge.jsonl");
 }

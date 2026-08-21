@@ -59,12 +59,22 @@ deferral, ...) deserves persistence next.
 
 - `SafeLogger` is `IDisposable` (owns a `SemaphoreSlim` serializing writes); DI disposes it with
   the container, matching every other owned-resource singleton in this codebase.
-- Two new tests: `SafeLoggerTests` (unit-level, an isolated `TestEnvironment` — proves one JSON
-  line per call, and that a planted secret-shaped property name is redacted, not written raw) and
-  `ControlPlaneTests.StartingAndStoppingTheHostRecordsRedactedLifecycleEvents` (a real Host
-  round-trip — proves the wiring, not just the primitive). Both confirmed via a live mutation
-  check: removing `SecretRedactor.RedactProperties` and removing the `host_started` call each
-  reproduce the exact regression the corresponding test now catches.
+- Three new tests: `SafeLoggerTests` (unit-level, an isolated `TestEnvironment` — proves one JSON
+  line per call, that a planted secret-shaped property name is redacted rather than written raw,
+  and — added after round 1 review found the gap — that an I/O failure writing the log itself
+  never propagates) and `ControlPlaneTests.StartingAndStoppingTheHostRecordsRedactedLifecycleEvents`
+  (a real Host round-trip — proves the wiring, not just the primitive). All confirmed via a live
+  mutation check: removing `SecretRedactor.RedactProperties`, removing the `host_started` call,
+  and removing the I/O `catch` each reproduce the exact regression the corresponding test now
+  catches.
+- **Round 1 review found a real defect**: `InformationAsync` had no guard around
+  `Directory.CreateDirectory`/`File.AppendAllTextAsync`, so a disk-full, permission-denied, or
+  directory-blocked-by-a-file failure propagated out of the hosted service that called it — and
+  since nothing configures `BackgroundServiceExceptionBehavior`, an uncaught hosted-service
+  exception crashes the whole Host process, contradicting this ADR's own "best-effort operational
+  telemetry, not durable state" framing. Fixed at the source (`SafeLogger` itself, not each call
+  site): `IOException`/`UnauthorizedAccessException` are caught and swallowed, verified with a
+  real blocked-directory reproduction, not just reasoning about it.
 - Explicitly deferred, named rather than silently dropped: OpenTelemetry traces/metrics (needs its
   own exporter/dependency decision, out of scope for this slice); every other candidate structured
   event (per-node attempt lifecycle, provider failures, routing deferrals, notification delivery);

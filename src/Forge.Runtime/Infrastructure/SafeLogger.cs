@@ -46,6 +46,14 @@ public sealed class SafeLogger(IEnvironmentPaths paths) : ISafeLogger, IDisposab
                 Path.Combine(directory, FileName), line + Environment.NewLine, cancellationToken)
                 .ConfigureAwait(false);
         }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            // Best-effort operational telemetry, not durable state (round 1 review of PR #86):
+            // a disk-full/permission-denied/AV-locked write here must never propagate into the
+            // caller's own hosted-service loop, since nothing configures
+            // BackgroundServiceExceptionBehavior and an uncaught exception there crashes the
+            // whole Host process — turning a missed log line into a missed sprint.
+        }
         finally
         {
             gate.Release();
