@@ -15,6 +15,20 @@ engine are not yet.
 - [AI-assisted software delivery research](docs/architecture/ai-agentic-software-development-workflow.md)
 - [Implementation plan](docs/plans/implementation-plan.md)
 
+## Install
+
+On Windows x64 or Arm64, run this from PowerShell 5.1 or later:
+
+```powershell
+irm https://raw.githubusercontent.com/LordKuper/forge/main/install.ps1 | iex
+```
+
+The script requires no administrator privileges. It downloads the latest stable
+release from GitHub, verifies the bundle against the release's published size
+and SHA-256 checksum, then runs Forge's existing per-user installer. The script
+and release are not code-signed; HTTPS and the GitHub repository are the trust
+boundary for this initial distribution method.
+
 ## Commands
 
 Every command runs the same ordered startup sequence. Unresolved checks keep

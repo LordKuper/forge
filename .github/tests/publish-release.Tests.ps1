@@ -6,6 +6,7 @@ $ErrorActionPreference = "Stop"
 
 $publisher = (Resolve-Path "$PSScriptRoot/../scripts/publish-release.ps1").Path
 $bundlePublisher = (Resolve-Path "$PSScriptRoot/../../build/Publish-WindowsBundle.ps1").Path
+$installer = (Resolve-Path "$PSScriptRoot/../../install.ps1").Path
 $testRoot = Join-Path ([IO.Path]::GetTempPath()) "forge-release-tests-$PID"
 $passed = 0
 
@@ -132,6 +133,36 @@ function Test-Case([string]$Name, [scriptblock]$Action) {
 
 New-Item -ItemType Directory -Path $testRoot | Out-Null
 try {
+    Test-Case "Bootstrap installer has valid PowerShell syntax" {
+        $tokens = $null
+        $parseErrors = $null
+        [Management.Automation.Language.Parser]::ParseFile(
+            $installer,
+            [ref]$tokens,
+            [ref]$parseErrors) | Out-Null
+        if ($parseErrors.Count -ne 0) {
+            throw "install.ps1 has parse errors: $($parseErrors -join '; ')"
+        }
+    }
+
+    Test-Case "Bootstrap installer verifies the matching release bundle before delegating" {
+        $content = Get-Content -LiteralPath $installer -Raw
+        $requiredFragments = @(
+            "'X64' { 'x64' }",
+            "'Arm64' { 'arm64' }",
+            '$bundleName = "forge-windows-$architecture-portable_bundle.zip"',
+            "`$Matches.name -eq `$bundleName",
+            "`$downloadedBundle.Length -ne `$matchingChecksums[0].Size",
+            'Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256',
+            '& $forgePath install'
+        )
+        foreach ($fragment in $requiredFragments) {
+            if (-not $content.Contains($fragment, [StringComparison]::Ordinal)) {
+                throw "install.ps1 is missing the required release-install fragment: $fragment"
+            }
+        }
+    }
+
     Test-Case "Windows bundle disables unavailable ReadyToRun" {
         $publishLines = @(Get-Content $bundlePublisher | Where-Object { $_ -match '^\s*dotnet publish ' })
         if ($publishLines.Count -ne 3) {
