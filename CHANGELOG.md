@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.5
+
+### Changed
+
+- Confirmed and documented that release bundles are already reproducible,
+  version-matched, checksummed, and SBOM-covered, closing out an internal
+  planning item. No functional change.
+
 ## v0.59.4
 
 ### Changed
