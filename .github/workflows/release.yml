@@ -8,9 +8,11 @@ on:
   # merge landed on `main`, no CI/Release Validation/Release Forge run of any kind was ever created
   # for that commit, and no incident explained it). AGENTS.md allows manual publication only to
   # retry a workflow that failed to do its job for a commit that already passed review; this is that
-  # retry path, restricted to `main` itself by the job-level `if:` below so a manual dispatch can
-  # never target an unreviewed branch the way the `push` trigger's own `branches:` filter already
-  # prevents.
+  # retry path. The job-level `if:` below stops the JOB from running against a non-`main` ref, but
+  # `workflow_dispatch` executes the workflow file from the dispatcher-selected ref, not `main`'s own
+  # copy — a write-access actor could still dispatch a modified copy of this file from another
+  # branch with that guard weakened. Repo has a single maintainer, so this residual risk is accepted
+  # rather than closed.
   workflow_dispatch: {}
 
 permissions:
