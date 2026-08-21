@@ -1567,7 +1567,9 @@
         "startup": "ready",
         "sprints": [],
         "attention": [],
-        "suggested_actions": []
+        "suggested_actions": [],
+        "startup_checks": [],
+        "providers": []
       }
     },
     {
@@ -1612,7 +1614,7 @@
       "instance": {
         "schema_version": "2.0.0",
         "state": "ready",
-        "checks": [{"id": "network", "state": "passed", "diagnostic_code": "none"}],
+        "checks": [{"id": "providers", "state": "passed", "diagnostic_code": "none"}],
         "language": {"ui": "en", "interaction": "en", "llm": "en"},
         "project": {
           "root": "C:/src/forge",
