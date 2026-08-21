@@ -472,9 +472,14 @@ public interface ISprintStore
 
 public interface IArtifactStore;
 
+/// <summary>A redacted, persisted operational log distinct from any console/`ILogger` output — see
+/// <see cref="Infrastructure.SafeLogger"/> for the destination and redaction guarantee.</summary>
 public interface ISafeLogger
 {
-    void Information(string eventName, IReadOnlyDictionary<string, object?> properties);
+    ValueTask InformationAsync(
+        string eventName,
+        IReadOnlyDictionary<string, object?> properties,
+        CancellationToken cancellationToken);
 }
 
 public sealed class SystemClock : IClock

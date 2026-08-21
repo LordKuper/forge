@@ -80,6 +80,66 @@ public sealed class ControlPlaneTests
         Assert.Equal(CapabilityIds.Implemented, response.Capabilities);
     }
 
+    /// <summary>Stage 12's P12.1-P12.8 structured-logging slice: proves the Host's own lifecycle
+    /// is the first real <see cref="ISafeLogger"/> caller, persisted to a redacted file distinct
+    /// from console-only `ILogger` output, and that a project id (not itself sensitive, but
+    /// present as a real value in the property bag) survives redaction unredacted while still
+    /// going through the same <see cref="SecretRedactor"/> path every property does.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task StartingAndStoppingTheHostRecordsRedactedLifecycleEvents()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+        ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot, instanceId, cancellationToken);
+        IEnvironmentPaths paths = host.Services.GetRequiredService<IEnvironmentPaths>();
+        string logPath = Path.Combine(paths.LocalApplicationData, "Forge", paths.InstanceId, "logs", "forge.jsonl");
+
+        string? startedLine = await PollForLineAsync(logPath, "host_started", cancellationToken);
+        Assert.NotNull(startedLine);
+        Assert.Contains(projectId.ToString(), startedLine, StringComparison.Ordinal);
+
+        await host.DisposeAsync();
+
+        string? stoppedLine = await PollForLineAsync(logPath, "host_stopped", cancellationToken);
+        Assert.NotNull(stoppedLine);
+        Assert.Contains(instanceId, stoppedLine, StringComparison.Ordinal);
+    }
+
+    private static async Task<string?> PollForLineAsync(
+        string path, string eventName, CancellationToken cancellationToken)
+    {
+        using CancellationTokenSource deadline = new(TimeSpan.FromSeconds(5));
+        using CancellationTokenSource linked =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
+        while (true)
+        {
+            if (File.Exists(path))
+            {
+                string? match = (await File.ReadAllLinesAsync(path, cancellationToken))
+                    .FirstOrDefault(line => line.Contains($"\"{eventName}\"", StringComparison.Ordinal));
+                if (match is not null)
+                {
+                    return match;
+                }
+            }
+
+            try
+            {
+                await Task.Delay(20, linked.Token).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (deadline.IsCancellationRequested)
+            {
+                return null;
+            }
+        }
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task IncompatibleProtocolVersionIsRejectedBeforeAnyProjectAccess()

@@ -45,6 +45,7 @@ public sealed class ControlPlaneHostedService(
     ImplementationExecutionHostedService implementationExecution,
     ReviewExecutionHostedService reviewExecution,
     IHostApplicationLifetime lifetime,
+    ISafeLogger safeLogger,
     ILogger<ControlPlaneHostedService> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception> LogNotInitialized = LoggerMessage.Define(
@@ -145,6 +146,18 @@ public sealed class ControlPlaneHostedService(
         NamedPipeControlTransport transport = new();
         listener = transport.CreateListener(pipeName);
         LogListening(logger, projectId, options.InstanceId, null);
+        // A persisted, redacted counterpart to the console-only log above: LogListening is gone
+        // once the terminal that started this headless Host closes, but this record survives for
+        // later inspection (Stage 12's P12.1-P12.8 structured-logging slice).
+        await safeLogger.InformationAsync(
+            "host_started",
+            new Dictionary<string, object?>
+            {
+                ["project_id"] = projectId,
+                ["instance_id"] = options.InstanceId,
+                ["lease_recovered"] = lease.WasAbandoned,
+            },
+            stoppingToken).ConfigureAwait(false);
 
         try
         {
@@ -188,6 +201,17 @@ public sealed class ControlPlaneHostedService(
         if (listener is not null)
         {
             await listener.DisposeAsync().ConfigureAwait(false);
+        }
+
+        if (lease is not null)
+        {
+            // CancellationToken.None: this Host actually started and should record that it
+            // stopped regardless of how far shutdown's own token has already progressed, matching
+            // Task.WhenAll(...).WaitAsync(..., CancellationToken.None) below for the same reason.
+            await safeLogger.InformationAsync(
+                "host_stopped",
+                new Dictionary<string, object?> { ["instance_id"] = options.InstanceId },
+                CancellationToken.None).ConfigureAwait(false);
         }
 
         try

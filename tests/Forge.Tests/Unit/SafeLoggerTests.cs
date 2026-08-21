@@ -1,0 +1,56 @@
+using System.Text.Json;
+using Forge.Infrastructure;
+using Forge.Tests.Support;
+
+namespace Forge.UnitTests;
+
+public sealed class SafeLoggerTests
+{
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InformationAsyncAppendsOneJsonLinePerCallToANewlyCreatedLogDirectory()
+    {
+        using TestEnvironment environment = new();
+        using SafeLogger logger = new(environment);
+        string logPath = LogPath(environment);
+        Assert.False(File.Exists(logPath));
+
+        await logger.InformationAsync(
+            "first_event",
+            new Dictionary<string, object?> { ["count"] = 1 },
+            TestContext.Current.CancellationToken);
+        await logger.InformationAsync(
+            "second_event",
+            new Dictionary<string, object?> { ["count"] = 2 },
+            TestContext.Current.CancellationToken);
+
+        string[] lines = await File.ReadAllLinesAsync(logPath, TestContext.Current.CancellationToken);
+        Assert.Equal(2, lines.Length);
+        using JsonDocument first = JsonDocument.Parse(lines[0]);
+        Assert.Equal("first_event", first.RootElement.GetProperty("event_name").GetString());
+        Assert.Equal(1, first.RootElement.GetProperty("properties").GetProperty("count").GetInt32());
+        Assert.True(first.RootElement.TryGetProperty("timestamp", out _));
+        using JsonDocument second = JsonDocument.Parse(lines[1]);
+        Assert.Equal("second_event", second.RootElement.GetProperty("event_name").GetString());
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task InformationAsyncRedactsASensitivePropertyNameInsteadOfWritingItRaw()
+    {
+        using TestEnvironment environment = new();
+        using SafeLogger logger = new(environment);
+
+        await logger.InformationAsync(
+            "provider_authenticated",
+            new Dictionary<string, object?> { ["password"] = "hunter2-the-real-secret-value" },
+            TestContext.Current.CancellationToken);
+
+        string content = await File.ReadAllTextAsync(LogPath(environment), TestContext.Current.CancellationToken);
+        Assert.DoesNotContain("hunter2-the-real-secret-value", content, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:credential]", content, StringComparison.Ordinal);
+    }
+
+    private static string LogPath(TestEnvironment environment) =>
+        Path.Combine(environment.LocalApplicationData, "Forge", environment.InstanceId, "logs", "forge.jsonl");
+}
