@@ -2,7 +2,7 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.59.2
+## v0.59.3
 
 ### Security
 
@@ -11,6 +11,12 @@ User-facing Forge changes are listed by release, newest first.
   resolve outside its sprint's own directory even if a future change ever
   bypassed the existing node-id validation that already prevents this in
   practice.
+
+### Changed
+
+- The automated release publication step now has a manual retry path for
+  the rare case where it does not start on its own after a change lands,
+  so a release is never stuck unpublished with no way to recover it.
 
 ## v0.59.1
 

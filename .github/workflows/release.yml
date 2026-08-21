@@ -3,6 +3,17 @@ name: Release Forge
 on:
   push:
     branches: [main]
+  # Retry path for a push whose Release Forge run never started at all (a dropped GitHub Actions
+  # trigger delivery, not a job failure `gh run rerun` could retry — observed in practice: a squash
+  # merge landed on `main`, no CI/Release Validation/Release Forge run of any kind was ever created
+  # for that commit, and no incident explained it). AGENTS.md allows manual publication only to
+  # retry a workflow that failed to do its job for a commit that already passed review; this is that
+  # retry path. The job-level `if:` below stops the JOB from running against a non-`main` ref, but
+  # `workflow_dispatch` executes the workflow file from the dispatcher-selected ref, not `main`'s own
+  # copy — a write-access actor could still dispatch a modified copy of this file from another
+  # branch with that guard weakened. Repo has a single maintainer, so this residual risk is accepted
+  # rather than closed.
+  workflow_dispatch: {}
 
 permissions:
   contents: read
@@ -17,6 +28,11 @@ jobs:
   # gets a fresh dependency check even though the build/test/format gate itself is not repeated.
   release:
     name: Publish release
+    # Only ever runs for `main` itself, whether triggered by the push (already scoped to
+    # `branches: [main]`, so this is a no-op there) or by a manual `workflow_dispatch` (which can
+    # otherwise target any branch/tag) -- a manual retry must never publish from a ref that skipped
+    # required status checks.
+    if: github.ref == 'refs/heads/main'
     permissions:
       contents: write
     runs-on: windows-2025
