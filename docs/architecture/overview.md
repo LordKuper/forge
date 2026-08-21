@@ -455,9 +455,12 @@ state, writable probes, and safe error metadata. It excludes source/diff content
 prompts, provider output, raw commands, secrets, unredacted personal paths, and
 any payload whose safe parsing or redaction cannot be proven.
 
-OpenTelemetry traces cover startup, updates, providers, routing, attempts,
-deadlines, deferrals, workflow transitions, notifications, and reviews. Metrics
-and diagnostics use stable codes and never contain localized user content or secrets.
+OpenTelemetry traces/metrics are deferred past the MVP (`docs/plans/implementation-plan.md`'s
+`## Deferred` list): every standard exporter either phones home over the network
+or needs a local collector process this project doesn't have. `forge doctor
+--bundle` and the redacted structured-log file (above) cover the MVP's
+diagnosability need instead. Diagnostics use stable codes and never contain
+localized user content or secrets.
 
 ## Release acceptance
 

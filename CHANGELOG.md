@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.61.1
+
+### Changed
+
+- Confirmed and documented that OpenTelemetry tracing/metrics are
+  deliberately out of scope for the MVP (every standard exporter either
+  phones home over the network or needs a local collector this project
+  doesn't have), closing out an internal planning item. `forge doctor
+  --bundle` and the redacted structured-log file already cover the
+  diagnosability need. No functional change.
+
 ## v0.61.0
 
 ### Added
