@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.6
+
+### Added
+
+- Added a test proving the Windows updater's host self-check actually
+  kills and fails a hung self-test process instead of only being trusted
+  to, closing out the last untested step of the update pipeline.
+
 ## v0.59.5
 
 ### Changed
