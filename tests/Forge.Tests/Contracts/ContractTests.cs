@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Forge.Configuration;
 using Forge.Tests.Support;
 using Json.Schema;
@@ -60,6 +61,86 @@ public sealed class ContractTests
         Assert.Equal(
             registryKeys.Keys.OrderBy(name => name, StringComparer.Ordinal),
             contractKeyNames.OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    /// <summary>Stage 12's migration/versioned-contract audit found every embedded contract
+    /// schema's own `schema_version` is a closed set (`const`/`enum`, never an open string), so
+    /// `Draft202012SchemasMatchCompatibilityFixtures` already fails closed on an out-of-range
+    /// version wherever a fixture case exercises one — but only `user-config` actually had such a
+    /// case; the other 21 schemas were unverified. This proves every current schema file has at
+    /// least one fixture case whose `schema_version` sits outside that schema's own allowed set
+    /// AND whose every other field is otherwise schema-valid — round 1 review of the PR that added
+    /// this test found two of the first-drafted cases (`project-snapshot`, `startup-check`) were
+    /// invalid for an unrelated reason too (a missing required field; an out-of-enum check id), so
+    /// checking only "this case is invalid" could not actually prove the version check is what
+    /// rejected it. Proven by re-validating a copy of the same instance with only `schema_version`
+    /// corrected to an allowed value and requiring THAT to pass. Since this walks the schema
+    /// directory rather than a hardcoded name list, a schema added later with no matching case
+    /// fails this test instead of silently going unverified.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void EveryContractSchemaRejectsAnUnsupportedSchemaVersion()
+    {
+        string root = Forge.UnitTests.RepositoryRoot.Find();
+        string schemaRoot = Path.Combine(root, "docs", "contracts", "v1", "schemas");
+        string fixturePath = Path.Combine(root, "tests", "Forge.Tests", "Contracts", "fixtures", "contract-cases.json");
+        using JsonDocument fixtureDocument = JsonDocument.Parse(File.ReadAllText(fixturePath));
+        JsonElement cases = fixtureDocument.RootElement.GetProperty("cases");
+        IReadOnlyDictionary<string, JsonSchema> schemas = ContractSchemas.LoadAll();
+        var options = new EvaluationOptions
+        {
+            OutputFormat = OutputFormat.List,
+            RequireFormatValidation = true,
+            AddAnnotationForUnknownKeywords = true
+        };
+
+        List<string> schemaNames = [.. Directory
+            .GetFiles(schemaRoot, "*.schema.json")
+            .Select(path => Path.GetFileName(path).Replace(".schema.json", string.Empty, StringComparison.Ordinal))
+            .OrderBy(name => name, StringComparer.Ordinal)];
+
+        List<string> schemasMissingAVersionRejectionCase = [];
+        foreach (string schemaName in schemaNames)
+        {
+            using JsonDocument schemaDocument = JsonDocument.Parse(
+                File.ReadAllText(Path.Combine(schemaRoot, $"{schemaName}.schema.json")));
+            JsonElement versionProperty =
+                schemaDocument.RootElement.GetProperty("properties").GetProperty("schema_version");
+            List<string> allowedVersions = versionProperty.TryGetProperty("const", out JsonElement constValue)
+                ? [constValue.GetString()!]
+                : [.. versionProperty.GetProperty("enum").EnumerateArray().Select(value => value.GetString()!)];
+            HashSet<string> allowedVersionSet = allowedVersions.ToHashSet(StringComparer.Ordinal);
+
+            bool provesVersionIsTheSoleCause = false;
+            foreach (JsonElement testCase in cases.EnumerateArray())
+            {
+                if (testCase.GetProperty("schema").GetString() != schemaName ||
+                    testCase.GetProperty("valid").GetBoolean() ||
+                    !testCase.GetProperty("instance").TryGetProperty("schema_version", out JsonElement instanceVersion) ||
+                    instanceVersion.ValueKind != JsonValueKind.String ||
+                    allowedVersionSet.Contains(instanceVersion.GetString()!))
+                {
+                    continue;
+                }
+
+                JsonNode correctedInstance = JsonNode.Parse(testCase.GetProperty("instance").GetRawText())!;
+                correctedInstance["schema_version"] = allowedVersions[0];
+                EvaluationResults correctedResult = schemas[schemaName].Evaluate(
+                    JsonSerializer.SerializeToElement(correctedInstance), options);
+                if (correctedResult.IsValid)
+                {
+                    provesVersionIsTheSoleCause = true;
+                    break;
+                }
+            }
+
+            if (!provesVersionIsTheSoleCause)
+            {
+                schemasMissingAVersionRejectionCase.Add(schemaName);
+            }
+        }
+
+        Assert.Empty(schemasMissingAVersionRejectionCase);
     }
 
     [Fact]

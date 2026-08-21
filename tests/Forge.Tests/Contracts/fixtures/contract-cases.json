@@ -1250,6 +1250,401 @@
         ],
         "recorded_at": "2026-08-17T00:00:00Z"
       }
+    },
+    {
+      "name": "context manifest accepts an admitted rule with no truncation",
+      "schema": "context-manifest",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "workflow": "implementation-critical",
+        "workflow_version": "1.0.0",
+        "token_budget": 32000,
+        "allocated_tokens": 1200,
+        "layers": {
+          "rules": [{"relative_path": ".forge/rules/testing.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "estimated_tokens": 400, "rationale": "rule"}],
+          "sprint_specifications": [],
+          "knowledge": [],
+          "handoffs": [],
+          "query_results": []
+        },
+        "truncated": [],
+        "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "context manifest rejects an unknown major schema version",
+      "schema": "context-manifest",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "workflow": "implementation-critical",
+        "workflow_version": "1.0.0",
+        "token_budget": 32000,
+        "allocated_tokens": 1200,
+        "layers": {
+          "rules": [{"relative_path": ".forge/rules/testing.md", "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "estimated_tokens": 400, "rationale": "rule"}],
+          "sprint_specifications": [],
+          "knowledge": [],
+          "handoffs": [],
+          "query_results": []
+        },
+        "truncated": [],
+        "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      }
+    },
+    {
+      "name": "context query plan accepts one git_show and one git_grep operation",
+      "schema": "context-query-plan",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "operations": [
+          {"operation_id": "read-file", "kind": "git_show", "path": "src/a.cs"},
+          {"operation_id": "search-todo", "kind": "git_grep", "pattern": "TODO"}
+        ]
+      }
+    },
+    {
+      "name": "context query plan rejects an unknown major schema version",
+      "schema": "context-query-plan",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "operations": [
+          {"operation_id": "read-file", "kind": "git_show", "path": "src/a.cs"}
+        ]
+      }
+    },
+    {
+      "name": "context result bundle accepts a found and a not-found operation result",
+      "schema": "context-result-bundle",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "results": [
+          {"operation_id": "read-file", "diagnostic": "none", "content_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "byte_count": 128, "truncated": false},
+          {"operation_id": "search-todo", "diagnostic": "not_found", "content_digest": null, "byte_count": 0, "truncated": false}
+        ]
+      }
+    },
+    {
+      "name": "context result bundle rejects an unknown major schema version",
+      "schema": "context-result-bundle",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "plan_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "source_commit": "0123456789abcdef0123456789abcdef01234567",
+        "results": []
+      }
+    },
+    {
+      "name": "test work result accepts a tests-added outcome",
+      "schema": "test-work-result",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "test_work_id": "77777777-7777-4777-8777-777777777777",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "test_work",
+        "outcome": "tests_added",
+        "justification": "Added a regression test for the fixed defect.",
+        "recorded_at": "2026-08-21T00:00:00Z"
+      }
+    },
+    {
+      "name": "test work result rejects an unknown major schema version",
+      "schema": "test-work-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "test_work_id": "77777777-7777-4777-8777-777777777777",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "test_work",
+        "outcome": "tests_added",
+        "justification": "Added a regression test for the fixed defect.",
+        "recorded_at": "2026-08-21T00:00:00Z"
+      }
+    },
+    {
+      "name": "confirmation result rejects an unknown major schema version",
+      "schema": "confirmation-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "confirmation_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "confirmation",
+        "outcome": "confirmed",
+        "definition_of_done": "Feature X matches its agreed definition of done.",
+        "evidence": [{"kind": "execution", "description": "Ran the full test suite locally; all green."}],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "control event page rejects an unknown major schema version",
+      "schema": "control-event-page",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "events": [],
+        "cursor": "eyJ2ZXJzaW9uIjoiMS4wLjAifQ==",
+        "diagnostic_code": "none"
+      }
+    },
+    {
+      "name": "diagnostic bundle rejects an unknown major schema version",
+      "schema": "diagnostic-bundle",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "generated_at": "2026-08-14T00:00:00Z",
+        "forge_version": "0.16.0",
+        "protocol_version": "1.0.0",
+        "providers": [],
+        "startup_checks": [],
+        "project": {"initialized": true, "sprint_count": 0},
+        "event_log_integrity": {"valid": true, "diagnostic_code": "none"},
+        "worktree_registrations": {"count": 0, "orphaned_count": 0},
+        "circuit_breakers": [],
+        "retry_budget": {"total": 10, "remaining": 10},
+        "writable_probes": [],
+        "omissions": []
+      }
+    },
+    {
+      "name": "event rejects an unknown major schema version",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 1,
+        "occurred_at": "2026-07-27T12:00:00Z",
+        "type": "SprintChanged",
+        "aggregate": {"kind": "sprint", "id": "sprint-1", "version": 1},
+        "message_key": "sprint.changed",
+        "arguments": {"state": "ready"}
+      }
+    },
+    {
+      "name": "execution profile rejects an unknown major schema version",
+      "schema": "execution-profile",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "phase": "planning",
+        "provider": "claude_code",
+        "model": "sonnet",
+        "effort": "medium",
+        "sandbox_policy": "workspace-write",
+        "permission_policy": "never",
+        "capability_allowlist": [],
+        "session_deadline_seconds": 1800,
+        "idle_deadline_seconds": 180
+      }
+    },
+    {
+      "name": "finding rejects an unknown major schema version",
+      "schema": "finding",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "finding_id": "55555555-5555-4555-8555-555555555555",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "fingerprint": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "severity": "high",
+        "status": "open",
+        "message_key": "review.finding",
+        "arguments": {},
+        "evidence": ["tests failed"]
+      }
+    },
+    {
+      "name": "forge document rejects an unknown major schema version",
+      "schema": "forge-document",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "id": "testing-invariant",
+        "title": "Implementation-first testing invariant",
+        "scope": "project",
+        "references": ["knowledge/adr-0006.md"],
+        "context_limit_tokens": 1200
+      }
+    },
+    {
+      "name": "generated artifact rejects an unknown major schema version",
+      "schema": "generated-artifact",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "provider_id": "codex",
+        "relative_path": "AGENTS.md",
+        "media_type": "text/markdown",
+        "audience": "agent_facing",
+        "language": "en",
+        "source_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "policy_snapshot_hash": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "generator_version": "0.30.0"
+      }
+    },
+    {
+      "name": "handoff rejects an unknown major schema version",
+      "schema": "handoff",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "handoff_id": "33333333-3333-4333-8333-333333333333",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "analysis",
+        "base_sha": "0123456789abcdef0123456789abcdef01234567",
+        "summary": "Analysis completed.",
+        "decisions": [],
+        "artifacts": [],
+        "open_risks": []
+      }
+    },
+    {
+      "name": "language pack rejects an unknown major schema version",
+      "schema": "language-pack",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "culture": "ru",
+        "fallback": "en",
+        "catalog_version": "1.0.0",
+        "capabilities": ["ui", "interaction"],
+        "messages": {"sprint.count": {"template": "{count}", "placeholders": {"count": "integer"}, "plural_selectors": ["count"]}}
+      }
+    },
+    {
+      "name": "node result rejects an unknown major schema version",
+      "schema": "node-result",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "tests",
+        "attempt_id": "66666666-6666-4666-8666-666666666666",
+        "state": "succeeded",
+        "started_at": "2026-07-27T12:00:00Z",
+        "completed_at": "2026-07-27T12:01:00Z",
+        "input_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+        "outputs": [],
+        "diagnostics": []
+      }
+    },
+    {
+      "name": "project manifest rejects an unknown major schema version",
+      "schema": "project-manifest",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "project_id": "11111111-1111-4111-8111-111111111111",
+        "workflow": "implementation-critical",
+        "artifacts": {"language": {"user_facing": "ru", "agent_facing": "en"}}
+      }
+    },
+    {
+      "name": "project snapshot rejects an unknown major schema version",
+      "schema": "project-snapshot",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "state_version": 3,
+        "generated_at": "2026-07-27T12:00:00Z",
+        "project": {"root": "C:/src/forge", "initialized": true},
+        "startup": "ready",
+        "sprints": [],
+        "attention": [],
+        "suggested_actions": [],
+        "startup_checks": [],
+        "providers": []
+      }
+    },
+    {
+      "name": "provider health rejects an unknown major schema version",
+      "schema": "provider-health",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "providers": [{
+          "id": "codex",
+          "registered": true,
+          "enabled": true,
+          "state": "ready",
+          "version": "0.146.0",
+          "update_available": false,
+          "authentication": "ready",
+          "diagnostic_code": "none"
+        }]
+      }
+    },
+    {
+      "name": "review iteration rejects an unknown major schema version",
+      "schema": "review-iteration",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "review_iteration_id": "66666666-6666-4666-8666-666666666666",
+        "sprint_id": "44444444-4444-4444-8444-444444444444",
+        "node_id": "review",
+        "dimension": "implementation",
+        "reviewer_kind": "internal",
+        "iteration": 1,
+        "outcome": "approved",
+        "external_findings": [],
+        "recorded_at": "2026-08-17T00:00:00Z"
+      }
+    },
+    {
+      "name": "startup check rejects an unknown major schema version",
+      "schema": "startup-check",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "state": "ready",
+        "checks": [{"id": "providers", "state": "passed", "diagnostic_code": "none"}],
+        "language": {"ui": "en", "interaction": "en", "llm": "en"},
+        "project": {
+          "root": "C:/src/forge",
+          "exists": true,
+          "initialized": true,
+          "unknown": false,
+          "diagnostic_code": "none"
+        },
+        "allows_sprint_work": true,
+        "allows_project_mutation": true,
+        "first_failure": null
+      }
+    },
+    {
+      "name": "suggested action rejects an unknown major schema version",
+      "schema": "suggested-action",
+      "valid": false,
+      "instance": {
+        "schema_version": "2.0.0",
+        "action_id": "resume_sprint",
+        "rank": 1,
+        "rationale_key": "next.resume",
+        "rationale_arguments": {},
+        "preconditions": ["sprint.ready"],
+        "safety_class": "confirm_mutation",
+        "target": {"kind": "sprint", "id": "sprint-1"},
+        "command": {"name": "ResumeSprint", "arguments": {}, "idempotency_key": "77777777-7777-4777-8777-777777777777"},
+        "expected_state_version": 3,
+        "stale_behavior": "reject_without_side_effect"
+      }
     }
   ]
 }
