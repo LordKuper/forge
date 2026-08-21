@@ -63,20 +63,29 @@ it):
   `-` and containing shell metacharacters is matched as literal text, not
   misread as a `git grep` option or given shell meaning.
 
-### `ReviewFloorPinPath` gains an independent path-containment check
+### `ReviewFloorPinPath` re-checks the node id's own alphabet, not just the resulting path
 
-Resolves the constructed path with `Path.GetFullPath` and verifies it
-still starts with the intended review-iterations directory, throwing
-`InvalidDataException` (matching this file's own "corrupt state fails
-loud" convention) if not — the same fail-closed shape
-`SprintGraphValidator`'s upstream gate already uses, applied a second time
-at the one point that would actually be reachable if that upstream gate
-were ever bypassed by a future change.
+Round 2 review found the first version of this fix — a lexical
+`Path.GetFullPath` containment check against the resulting path — has a
+real gap: `Path.GetFullPath` never resolves symlinks or junctions, so if
+the review-iterations directory itself were ever a symlink, a string-prefix
+check against its own *unresolved* path could read as "contained" while
+the real write landed wherever the symlink pointed. The actual defense is
+narrower and simpler: `SprintGraphValidator.IsValidNodeId` (newly exposed
+alongside the existing `IsValid`) is checked first, before any path is
+even constructed — no character in that alphabet (`^[a-z0-9][a-z0-9_-]*$`)
+can ever encode a path separator or `..`, so there is no traversal payload
+left for a symlinked directory to redirect. The lexical containment check
+is kept as a second, independent layer, but the alphabet re-check is now
+the actual guarantee, matching `InvalidDataException`'s existing
+fail-closed convention in this file either way.
 
 ## Consequences
 
-- `ReviewFloorPinPath` (private, `FileSprintEventLog.cs`) now fails closed
-  independently of the graph-freeze alphabet gate.
+- `SprintGraphValidator.IsValidNodeId` is now public, reused directly by
+  `ReviewFloorPinPath` (private, `FileSprintEventLog.cs`), which fails
+  closed on the node id's own alphabet before constructing any path, with
+  the lexical containment check retained as a second layer.
 - Four new tests, each confirmed via a live mutation check to actually
   detect the specific regression it guards against, not merely to pass.
 - No behavior change for any legitimate node id, grep pattern, or process
@@ -88,9 +97,13 @@ were ever bypassed by a future change.
   is already exercised incidentally by many existing tests — git branch
   names with special characters, the real-child-process environment
   isolation test — so a dedicated test would add limited marginal proof
-  for its cost) and a full "hostile project" end-to-end scenario spanning
-  the whole attempt lifecycle (the four targeted tests above already prove
-  the actual mechanisms directly, at far lower cost and fragility risk).
+  for its cost); a full "hostile project" end-to-end scenario spanning the
+  whole attempt lifecycle (the four targeted tests above already prove the
+  actual mechanisms directly, at far lower cost and fragility risk); and
+  project-wide symlink/junction safety for every directory Forge itself
+  creates (`.forge/`, worktrees, sprint directories) — a materially
+  broader architectural question than one file's node-id handling, flagged
+  separately rather than folded into this PR's narrower scope.
 
 ## References
 

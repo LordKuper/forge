@@ -623,10 +623,22 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
     /// method only from an already-frozen graph, whose own node ids <see cref="SprintGraphValidator"/>
     /// already constrains to a safe alphabet before freezing — but this is the one place in this
     /// file that interpolates a node id directly into a filename rather than deriving it from a
-    /// GUID, so a path-traversal payload (`../`, an absolute path) is checked here too, failing
-    /// closed rather than trusting that upstream gate to be the only one that ever runs.</summary>
+    /// GUID, so it is re-checked here too, failing closed rather than trusting that upstream gate to
+    /// be the only one that ever runs. The alphabet re-check is the actual defense against a
+    /// path-traversal payload (`../`, an absolute path): no character in
+    /// <see cref="SprintGraphValidator.IsValidNodeId"/>'s pattern can ever navigate outside the
+    /// intended directory, which a purely lexical containment check on the *resulting path* cannot
+    /// fully guarantee on its own — <see cref="Path.GetFullPath(string)"/> never resolves symlinks,
+    /// so if the review-iterations directory itself were ever a symlink, a string-prefix check
+    /// against its own unresolved path could still read as "contained" while the real write landed
+    /// elsewhere. The containment check is kept anyway as a second, independent layer.</summary>
     private static string ReviewFloorPinPath(string projectRoot, SprintId sprintId, string nodeId, ReviewDimension dimension)
     {
+        if (!SprintGraphValidator.IsValidNodeId(nodeId))
+        {
+            throw new InvalidDataException($"Node id '{nodeId}' is not a valid review-floor-pin target.");
+        }
+
         string directory = ReviewIterationsDirectory(SprintDirectory(projectRoot, sprintId));
         string path = Path.Combine(
             directory, $"{nodeId}.{WorkflowStateNames.ToSnakeCase(dimension)}.floor-pinned.marker");
