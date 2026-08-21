@@ -29,6 +29,7 @@ release from GitHub, verifies the bundle against the release's published size
 and SHA-256 checksum, then runs Forge's existing per-user installer. The script
 and release are not code-signed; HTTPS and the GitHub repository are the trust
 boundary for this initial distribution method.
+Rerun the same command to update or repair an existing per-user installation.
 
 ## Commands
 
