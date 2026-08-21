@@ -30,8 +30,8 @@ public static class ExitCodes
             DiagnosticCodes.SupersessionInstructionRequired or
             DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired or
             DiagnosticCodes.TestWorkJustificationRequired => Usage,
-        DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid or
-            DiagnosticCodes.ModelPolicyProviderUnknown => Configuration,
+        DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
+            Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
             DiagnosticCodes.ProjectRootMissing => Project,
         DiagnosticCodes.PlatformNotSupported => Platform,

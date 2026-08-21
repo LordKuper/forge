@@ -202,6 +202,29 @@ write time by `ConfigurationSchemaCodec.ToProject`'s schema validation, so
 not a live divergence), and `HashSet` iteration order feeds only
 order-independent assertions, confirming no ordering hazard.
 
+**A third (final full-scope) review round found one further issue and
+confirmed everything else correct by direct reproduction, not just
+diff-reading:** the round-1-added `ModelPolicyProviderUnknown => Configuration`
+`ExitCodes.For` arm and its `docs/contracts/v1/README.md` row were never
+revisited after round 2 changed the underlying check from `Failed` to
+`Blocked` — `forge eval`'s `CreateEvaluateCommand` only ever calls `Report`
+for a `Failed` check, so that code can now never reach `ExitCodes.For` in
+production; the mirror image of round 1's own finding on the adjacent
+`ModelPolicyViolation` row. Removed the dead arm and README row; a new
+`ExitCodesTests` case pins the honest current behavior (falls back to
+`Internal`) instead. The round independently re-verified, by direct
+reproduction rather than re-reading the ADR's own claims: the `Blocked`
+aggregation and exit-0 behavior for an unmatched-provider-only report;
+that `IsAllowed` and `UnmatchedProviderIds` provably extract the identical
+provider id from any entry the schema pattern admits (exactly one colon
+forces both extractions to agree; `project:id:extra` is rejected by schema
+validation before either function ever sees it); that the gate's placement
+in `CreateSprintAsync` has no idempotency hazard across a resumed call
+(re-evaluates current configuration exactly like the adjacent
+`frozenProviders`/graph/`HEAD` checks already do); and a clean
+`dotnet build -c Release`, full `dotnet test` pass, and `dotnet format
+--verify-no-changes`.
+
 ## References
 
 - ADR 0006 (supervised execution and review convergence — "the project model
