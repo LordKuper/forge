@@ -17,7 +17,8 @@ engine are not yet.
 
 ## Install
 
-On Windows x64 or Arm64, run this from PowerShell 5.1 or later:
+On Windows 10 version 2004 (build 19041) or later, using an x64 or Arm64
+machine and PowerShell 5.1 or later, run:
 
 ```powershell
 irm https://raw.githubusercontent.com/LordKuper/forge/main/install.ps1 | iex

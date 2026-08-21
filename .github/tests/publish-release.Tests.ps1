@@ -145,21 +145,108 @@ try {
         }
     }
 
-    Test-Case "Bootstrap installer verifies the matching release bundle before delegating" {
-        $content = Get-Content -LiteralPath $installer -Raw
-        $requiredFragments = @(
-            "'X64' { 'x64' }",
-            "'Arm64' { 'arm64' }",
-            '$bundleName = "forge-windows-$architecture-portable_bundle.zip"',
-            "`$Matches.name -eq `$bundleName",
-            "`$downloadedBundle.Length -ne `$matchingChecksums[0].Size",
-            'Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256',
-            '& $forgePath install'
-        )
-        foreach ($fragment in $requiredFragments) {
-            if (-not $content.Contains($fragment, [StringComparison]::Ordinal)) {
-                throw "install.ps1 is missing the required release-install fragment: $fragment"
+    Test-Case "Bootstrap installer enforces the supported Windows baseline" {
+        . $installer
+        Assert-ForgeWindowsSupport $true ([Version]'10.0.19041')
+        Assert-Throws {
+            Assert-ForgeWindowsSupport $true ([Version]'10.0.18363')
+        } "requires Windows 10 version 2004"
+        Assert-Throws {
+            Assert-ForgeWindowsSupport $false ([Version]'10.0.19041')
+        } "supported only on Windows"
+    }
+
+    Test-Case "Bootstrap installer executes only a verified matching bundle" {
+        . $installer
+        $fixtureRoot = Join-Path $testRoot 'bootstrap-fixtures'
+        $bundleSource = Join-Path $fixtureRoot 'bundle'
+        New-Item -ItemType Directory -Path $bundleSource -Force | Out-Null
+        Set-Content -LiteralPath (Join-Path $bundleSource 'forge.exe') -Value 'fixture executable'
+        $bundlePath = Join-Path $fixtureRoot 'forge-windows-x64-portable_bundle.zip'
+        Compress-Archive -Path (Join-Path $bundleSource '*') -DestinationPath $bundlePath
+        $bundleFile = Get-Item -LiteralPath $bundlePath
+        $bundleHash = (Get-FileHash -LiteralPath $bundlePath -Algorithm SHA256).Hash
+        $checksumsPath = Join-Path $fixtureRoot 'checksums.txt'
+        $validChecksum = "$bundleHash  $($bundleFile.Length)  $($bundleFile.Name)"
+        Set-Content -LiteralPath $checksumsPath -Value $validChecksum
+
+        $checksumAsset = [pscustomobject]@{
+            name = 'checksums.txt'
+            browser_download_url = $checksumsPath
+        }
+        $x64Asset = [pscustomobject]@{
+            name = 'forge-windows-x64-portable_bundle.zip'
+            browser_download_url = $bundlePath
+        }
+        $arm64Asset = [pscustomobject]@{
+            name = 'forge-windows-arm64-portable_bundle.zip'
+            browser_download_url = $bundlePath
+        }
+        $validAssets = @($checksumAsset, $arm64Asset, $x64Asset)
+        $validRelease = [pscustomobject]@{
+            tag_name = 'v0.62.0'
+            draft = $false
+            prerelease = $false
+            assets = $validAssets
+        }
+
+        $script:bootstrapDownloads = @()
+        $script:bootstrapLaunches = 0
+        $downloadFile = {
+            param($Uri, $Destination)
+            $script:bootstrapDownloads += Split-Path $Destination -Leaf
+            Copy-Item -LiteralPath $Uri -Destination $Destination
+        }
+        $runInstaller = {
+            param($ForgePath)
+            if (-not (Test-Path -LiteralPath $ForgePath -PathType Leaf)) {
+                throw 'The stub installer path does not exist.'
             }
+            $script:bootstrapLaunches++
+        }
+
+        Invoke-ForgeBootstrap 'x64' $validRelease $downloadFile $runInstaller | Out-Null
+        if ($script:bootstrapLaunches -ne 1) {
+            throw "Expected one verified installer launch, found $script:bootstrapLaunches."
+        }
+        if ($script:bootstrapDownloads -notcontains $x64Asset.name -or
+            $script:bootstrapDownloads -contains $arm64Asset.name) {
+            throw "The bootstrap did not select only the matching x64 bundle: $script:bootstrapDownloads"
+        }
+
+        $script:bootstrapLaunches = 0
+        $missingRelease = [pscustomobject]@{
+            tag_name = 'v0.62.0'; draft = $false; prerelease = $false
+            assets = @($checksumAsset, $arm64Asset)
+        }
+        Assert-Throws {
+            Invoke-ForgeBootstrap 'x64' $missingRelease $downloadFile $runInstaller | Out-Null
+        } "does not contain the expected Windows bundle"
+
+        $duplicateRelease = [pscustomobject]@{
+            tag_name = 'v0.62.0'; draft = $false; prerelease = $false
+            assets = @($validAssets + $x64Asset)
+        }
+        Assert-Throws {
+            Invoke-ForgeBootstrap 'x64' $duplicateRelease $downloadFile $runInstaller | Out-Null
+        } "does not contain the expected Windows bundle"
+
+        Set-Content -LiteralPath $checksumsPath -Value @($validChecksum, $validChecksum)
+        Assert-Throws {
+            Invoke-ForgeBootstrap 'x64' $validRelease $downloadFile $runInstaller | Out-Null
+        } "does not contain exactly one entry"
+
+        Set-Content -LiteralPath $checksumsPath -Value "$bundleHash  $($bundleFile.Length + 1)  $($bundleFile.Name)"
+        Assert-Throws {
+            Invoke-ForgeBootstrap 'x64' $validRelease $downloadFile $runInstaller | Out-Null
+        } "size does not match"
+
+        Set-Content -LiteralPath $checksumsPath -Value "$('0' * 64)  $($bundleFile.Length)  $($bundleFile.Name)"
+        Assert-Throws {
+            Invoke-ForgeBootstrap 'x64' $validRelease $downloadFile $runInstaller | Out-Null
+        } "SHA-256 does not match"
+        if ($script:bootstrapLaunches -ne 0) {
+            throw 'An invalid fixture reached the stub installer.'
         }
     }
 
