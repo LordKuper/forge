@@ -22,12 +22,22 @@ public sealed class PublishProfileTests
         }
     }
 
-    [Fact]
+    /// <summary>Covers every project <c>Publish-WindowsBundle.ps1</c> actually passes
+    /// <c>--runtime win-x64</c>/<c>--runtime win-arm64</c> to (not the two projects
+    /// <see cref="BothHostsDefineWindowsPublishProfile"/> happens to check, which are unrelated
+    /// `.pubxml` files the script never reads) — a missing RID here breaks `dotnet publish
+    /// --self-contained true` for that host outright. Round 1 review of PR #84 found the prior
+    /// version of this test only checked <c>Forge.Cli.Windows</c>, leaving
+    /// <c>Forge.Host.Windows</c> and <c>Forge.Desktop</c> unverified despite the plan item's own
+    /// closure note claiming "already fully covered by the tests above".</summary>
+    [Theory]
+    [InlineData("Forge.Cli.Windows")]
+    [InlineData("Forge.Host.Windows")]
+    [InlineData("Forge.Desktop")]
     [Trait("Category", "Installer")]
-    public void CliDeclaresBothWindowsRuntimeIdentifiers()
+    public void EveryPublishedHostDeclaresBothWindowsRuntimeIdentifiers(string host)
     {
-        string project = File.ReadAllText(
-            Path.Combine(FindRoot(), "src", "Forge.Cli.Windows", "Forge.Cli.Windows.csproj"));
+        string project = File.ReadAllText(Path.Combine(FindRoot(), "src", host, $"{host}.csproj"));
 
         Assert.Contains("<RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>", project, StringComparison.Ordinal);
     }
