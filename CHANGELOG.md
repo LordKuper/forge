@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.62.1
+
+### Fixed
+
+- Fixed the PowerShell 7 bootstrap entry point failing because its local
+  platform variable collided case-insensitively with the read-only
+  `$IsWindows` automatic variable.
+
 ## v0.62.0
 
 ### Added

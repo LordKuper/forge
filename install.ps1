@@ -103,9 +103,9 @@ function Install-Forge {
     $ErrorActionPreference = 'Stop'
     $ProgressPreference = 'SilentlyContinue'
 
-    $isWindows = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    $platformIsWindows = [Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
         [Runtime.InteropServices.OSPlatform]::Windows)
-    Assert-ForgeWindowsSupport $isWindows ([Environment]::OSVersion.Version)
+    Assert-ForgeWindowsSupport $platformIsWindows ([Environment]::OSVersion.Version)
 
     if ($PSVersionTable.PSVersion.Major -lt 6) {
         [Net.ServicePointManager]::SecurityProtocol =

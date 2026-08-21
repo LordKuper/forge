@@ -156,6 +156,16 @@ try {
         } "supported only on Windows"
     }
 
+    Test-Case "Bootstrap entry point reaches release resolution in PowerShell 7" {
+        . $installer
+        function global:Invoke-RestMethod { throw 'release resolution reached' }
+        try {
+            Assert-Throws { Install-Forge | Out-Null } "release resolution reached"
+        } finally {
+            Remove-Item Function:\Invoke-RestMethod -Force
+        }
+    }
+
     Test-Case "Bootstrap installer executes only a verified matching bundle" {
         . $installer
         $fixtureRoot = Join-Path $testRoot 'bootstrap-fixtures'
