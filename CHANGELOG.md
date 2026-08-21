@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.59.2
+
+### Security
+
+- Added an independent defense-in-depth check for the internal file path a
+  test-work review-floor decision is recorded under, so it can never
+  resolve outside its sprint's own directory even if a future change ever
+  bypassed the existing node-id validation that already prevents this in
+  practice.
+
 ## v0.59.1
 
 ### Fixed

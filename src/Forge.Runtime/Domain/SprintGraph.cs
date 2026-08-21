@@ -60,10 +60,18 @@ public static class SprintGraphValidator
     // schema itself only requires non-empty (node-result.schema.json: minLength 1).
     private static readonly Regex NodeIdPattern = new("^[a-z0-9][a-z0-9_-]*$", RegexOptions.Compiled);
 
+    /// <summary>The same alphabet gate <see cref="IsValid"/> applies to every node in a graph,
+    /// exposed standalone for a caller (<c>FileSprintEventLog.ReviewFloorPinPath</c>) that
+    /// interpolates one already-frozen node id into a filename and needs to re-check it directly —
+    /// the character set itself is what rules out a path-traversal payload (no `/`, `\`, or `..` can
+    /// ever match), which a purely lexical containment check on the resulting path cannot fully
+    /// guarantee on its own if the containing directory were ever a symlink.</summary>
+    public static bool IsValidNodeId(string id) => NodeIdPattern.IsMatch(id);
+
     public static bool IsValid(IReadOnlyList<NodeDefinition> graph)
     {
         ArgumentNullException.ThrowIfNull(graph);
-        if (graph.Any(node => !NodeIdPattern.IsMatch(node.Id)))
+        if (graph.Any(node => !IsValidNodeId(node.Id)))
         {
             return false;
         }

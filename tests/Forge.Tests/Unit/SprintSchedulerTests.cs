@@ -64,6 +64,43 @@ public sealed class SprintSchedulerTests
         Assert.Equal(DiagnosticCodes.SprintGraphInvalid, result.DiagnosticCode);
     }
 
+    /// <summary>Stage 12's injection-safety sweep: node ids become filenames (results, handoffs,
+    /// review-floor pins) and event-log aggregate ids, so `SprintGraphValidator`'s own alphabet gate
+    /// (`^[a-z0-9][a-z0-9_-]*$`) is the primary defense against a path-traversal or shell-metacharacter
+    /// payload ever reaching a file path or process argument by way of a freely-chosen node id. This
+    /// is the one place that gate is actually exercised end to end -- through
+    /// `SprintOrchestrator.CreateSprintAsync`, not the validator's own internals directly -- since a
+    /// frozen graph is the only way a node id ever becomes reachable elsewhere in this
+    /// codebase.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("../../../etc/passwd")]
+    [InlineData("..\\..\\windows\\system32")]
+    [InlineData("/etc/passwd")]
+    [InlineData("C:\\Windows\\System32")]
+    [InlineData("a; rm -rf /")]
+    [InlineData("a`id`")]
+    [InlineData("a$(id)")]
+    [InlineData("a b")]
+    [InlineData("A")]
+    [InlineData("")]
+    [InlineData("-a")]
+    public async Task AGraphWithAPathTraversalOrShellMetacharacterNodeIdIsRejected(string nodeId)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new(nodeId, NodeKind.Work, [])]),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintGraphInvalid, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task StartingAnAttemptRequiresARunningSprint()
