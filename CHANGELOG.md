@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.60.0
+
+### Added
+
+- The Host process now writes a redacted, persistent structured log
+  (`host_started`/`host_stopped` lifecycle events so far) to a local
+  per-instance file, so an operator can inspect what happened after the
+  console that started a headless Host has already closed. Never sent
+  anywhere off the machine.
+
 ## v0.59.6
 
 ### Added
