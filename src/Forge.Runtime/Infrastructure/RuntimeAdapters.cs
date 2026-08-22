@@ -29,14 +29,13 @@ public sealed class ProcessRunner : IProcessRunner
     /// for the read-side half of that same guarantee).</summary>
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
 
-    public async Task<ProcessResult> RunAsync(
-        ProcessRequest request,
-        IProcessOutputSink? outputSink,
-        CancellationToken cancellationToken)
+    /// <summary>Split out from <see cref="RunAsync"/> purely so a unit test can assert its
+    /// properties (e.g. <see cref="ProcessStartInfo.CreateNoWindow"/>) without spawning a real
+    /// child process -- launching a child from a console-hosted test runner cannot itself
+    /// distinguish a hidden console from an inherited one, since the child would just reuse the
+    /// test host's own console either way.</summary>
+    internal static ProcessStartInfo CreateStartInfo(ProcessRequest request)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        cancellationToken.ThrowIfCancellationRequested();
-
         ProcessStartInfo startInfo = new()
         {
             FileName = request.FileName,
@@ -53,7 +52,29 @@ public sealed class ProcessRunner : IProcessRunner
             StandardErrorEncoding = Utf8WithoutBom,
             StandardInputEncoding = request.StandardInput is not null ? Utf8WithoutBom : null,
             UseShellExecute = false,
+            // Ignored on non-Windows; on Windows it stops each redirected child (git, provider
+            // `--version`/auth checks, ...) from flashing its own console window while Forge Host
+            // itself stays hidden.
+            CreateNoWindow = true,
         };
+
+        foreach (string argument in request.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        return startInfo;
+    }
+
+    public async Task<ProcessResult> RunAsync(
+        ProcessRequest request,
+        IProcessOutputSink? outputSink,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        ProcessStartInfo startInfo = CreateStartInfo(request);
 
         if (request.ReplaceEnvironment)
         {
@@ -71,11 +92,6 @@ public sealed class ProcessRunner : IProcessRunner
             {
                 startInfo.EnvironmentVariables[key] = value;
             }
-        }
-
-        foreach (string argument in request.Arguments)
-        {
-            startInfo.ArgumentList.Add(argument);
         }
 
         using Process process = new() { StartInfo = startInfo };
