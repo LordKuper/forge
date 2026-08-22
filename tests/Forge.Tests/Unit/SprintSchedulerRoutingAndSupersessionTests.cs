@@ -268,6 +268,39 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         Assert.Equal(DiagnosticCodes.AttemptTerminal, result.DiagnosticCode);
     }
 
+    /// <summary>Regression: `state-machines.json` 1.2.0 added `validating -&gt; cancelled` so the
+    /// Slice 2 stop coordinator (ADR 0044) can cancel an attempt that is validating its own outcome.
+    /// `SupersedeAttemptAsync` only ever gated on `WorkflowStateMachines.IsTerminal(AttemptState)`,
+    /// which a `validating` attempt never was — so widening the state machine alone silently handed
+    /// this human-operator command a capability ADR 0044's own Consequences section says must stay
+    /// unreachable through any existing command this slice ("both are unreachable through any
+    /// existing command... nothing in production code produces them yet"). Before the dedicated
+    /// `AttemptState.Validating` gate this proves, a `validating` attempt's supersede call fell
+    /// through to <c>store.AppendTransitionAsync</c> and, once the state machine permitted the edge,
+    /// simply succeeded instead of failing closed with <c>workflow_transition_invalid</c> the way it
+    /// did before this PR's state-machine change.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedeAttemptAsyncRejectsAValidatingAttempt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintScheduler scheduler, ISprintStore store, SprintId sprintId, AttemptSnapshot attempt) =
+            await StartImplementationAttemptAsync(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        AttemptSnapshot validating =
+            await DriveAttemptToValidatingAsync(store, environment.ProjectRoot, sprintId, attempt, cancellationToken);
+
+        CompleteAttemptResult result = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, validating.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, validating), confirmed: true,
+            "Try a different approach.", cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowTransitionInvalid, result.DiagnosticCode);
+        SprintWorkflowState finalState = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Validating, finalState.Attempts[attempt.Id.Value.ToString("D")].State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SupersedeAttemptAsyncCancelsTheOldAttemptAndCreatesALinkedReplacement()
@@ -666,6 +699,33 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         AttemptSnapshot attempt = state.Attempts[started.AttemptId!.Value.ToString("D")];
         return (scheduler, store, sprintId, attempt);
+    }
+
+    /// <summary>Walks a freshly `created` attempt forward to `validating` using the same raw
+    /// `store.AppendTransitionAsync` calls <c>SprintScheduler</c>'s own internal `WalkAttemptAsync`
+    /// makes -- there is no public scheduler verb that stops there, since `CompleteAttemptAsync`
+    /// walks straight through to a terminal state in one call.</summary>
+    private static async Task<AttemptSnapshot> DriveAttemptToValidatingAsync(
+        ISprintStore store,
+        string projectRoot,
+        SprintId sprintId,
+        AttemptSnapshot attempt,
+        CancellationToken cancellationToken)
+    {
+        string attemptKey = attempt.Id.Value.ToString("D");
+        long version = attempt.Version;
+        foreach (AttemptState toState in
+                 (AttemptState[])[AttemptState.Preparing, AttemptState.Running, AttemptState.Validating])
+        {
+            AppendOutcome outcome = await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+                "workflow.attempt_transitioned", WorkflowStateNames.ToSnakeCase(toState), version, Guid.NewGuid(),
+                cancellationToken);
+            Assert.True(outcome.Succeeded, $"diag={outcome.DiagnosticCode}");
+            version = outcome.State!.Attempts[attemptKey].Version;
+        }
+
+        return (await store.LoadAsync(projectRoot, sprintId, cancellationToken))!.Attempts[attemptKey];
     }
 
     private static async Task RunToRunningAsync(

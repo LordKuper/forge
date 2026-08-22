@@ -1,6 +1,8 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Forge.Application;
 using Forge.Configuration;
+using Forge.Domain;
 using Forge.Tests.Support;
 using Json.Schema;
 
@@ -8,6 +10,47 @@ namespace Forge.Tests.Contracts;
 
 public sealed class ContractTests
 {
+    /// <summary>Round 1 review of PR #94 found `project-snapshot.schema.json`'s `$defs.sprint.state`
+    /// stayed a closed enum without `paused` even after `state-machines.json` 1.2.0 added
+    /// `running -&gt; paused` and <see cref="SprintState"/> gained <see cref="SprintState.Paused"/> —
+    /// so the very first paused sprint a real snapshot ever reports would serialize to a document
+    /// that fails its own published schema. Proven with the actual serializer
+    /// (<see cref="StatusJson.Serialize(ProjectSnapshot)"/>), not a hand-built JSON string, so a
+    /// future rename of the enum member or a converter change is caught here too.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void ASnapshotWithAPausedSprintSatisfiesTheProjectSnapshotContract()
+    {
+        ProjectSnapshot snapshot = new(
+            SchemaVersion: "1.2.0",
+            StateVersion: 5,
+            GeneratedAt: DateTimeOffset.Parse("2026-08-23T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Project: new ProjectDescriptor("C:/src/forge", true),
+            Startup: StartupState.Ready,
+            ActiveSprintId: Guid.Parse("44444444-4444-4444-8444-444444444444"),
+            Sprints:
+            [
+                new SprintStatus(
+                    Guid.Parse("44444444-4444-4444-8444-444444444444"),
+                    1,
+                    SprintState.Paused,
+                    "implementation-critical",
+                    "0123456789abcdef0123456789abcdef01234567")
+            ],
+            Attention: [],
+            SuggestedActions: [],
+            StartupChecks: [],
+            Providers: []);
+
+        string json = StatusJson.Serialize(snapshot);
+        using JsonDocument instance = JsonDocument.Parse(json);
+
+        EvaluationResults result = ContractSchemas.Load("project-snapshot").Evaluate(
+            instance.RootElement,
+            new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
+        Assert.True(result.IsValid, json);
+    }
+
     /// <summary>Round 1 review of PR #64 found `docs/contracts/v1/configuration.json`'s own `keys`
     /// list can drift from `ConfigurationRegistry.CreateDefaultKeys()` (it had, for the new
     /// `notifications.enabled` key) with nothing catching it. Proves both directions: every

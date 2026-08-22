@@ -731,6 +731,19 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             {
                 return new(false, null, DiagnosticCodes.AttemptTerminal);
             }
+
+            // ADR 0044: `Validating -> Cancelled` was added to the versioned attempt state machine
+            // only so the Slice 2 stop coordinator can cancel an attempt that is validating its own
+            // outcome without waiting for it to settle first ("both are unreachable through any
+            // existing command" per that ADR's Consequences — deliberately, since no coordinator
+            // exists yet to own that cancellation safely). `IsTerminal` alone no longer blocks this
+            // path now that the edge is legal, so this human-operator command must reject a
+            // `validating` attempt itself rather than silently gain a new capability the ADR did not
+            // sanction for it.
+            if (attempt.State == AttemptState.Validating)
+            {
+                return new(false, null, DiagnosticCodes.WorkflowTransitionInvalid);
+            }
         }
 
         string? nodeId = attempt.NodeId;

@@ -154,4 +154,5 @@
   <data name="SprintCancelAction" xml:space="preserve"><value>Отменить спринт</value></data>
   <data name="SprintManageFailed" xml:space="preserve"><value>Действие со спринтом не выполнено.</value></data>
   <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы выполнить действие.</value></data>
+  <data name="SprintStatePaused" xml:space="preserve"><value>Приостановлено</value></data>
 </root>

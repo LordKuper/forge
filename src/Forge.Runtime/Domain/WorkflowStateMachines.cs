@@ -22,12 +22,14 @@ public static class WorkflowStateMachines
             [SprintState.Ready] = [SprintState.Running, SprintState.Cancelled],
             [SprintState.Running] =
             [
+                SprintState.Paused,
                 SprintState.AwaitingHuman,
                 SprintState.Blocked,
                 SprintState.Failed,
                 SprintState.ReadyToFinalize,
                 SprintState.Cancelled,
             ],
+            [SprintState.Paused] = [SprintState.Ready, SprintState.Cancelled],
             [SprintState.AwaitingHuman] =
                 [SprintState.Running, SprintState.Blocked, SprintState.Cancelled],
             [SprintState.Blocked] = [SprintState.Ready, SprintState.Cancelled],
@@ -65,7 +67,8 @@ public static class WorkflowStateMachines
                 [AttemptState.Running, AttemptState.Failed, AttemptState.Cancelled],
             [AttemptState.Running] =
                 [AttemptState.Validating, AttemptState.Failed, AttemptState.Cancelled],
-            [AttemptState.Validating] = [AttemptState.Succeeded, AttemptState.Failed],
+            [AttemptState.Validating] =
+                [AttemptState.Succeeded, AttemptState.Failed, AttemptState.Cancelled],
             [AttemptState.Succeeded] = [],
             [AttemptState.Failed] = [],
             [AttemptState.Cancelled] = [],

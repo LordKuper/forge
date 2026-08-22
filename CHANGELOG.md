@@ -2,6 +2,26 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.63.0
+
+### Added
+
+- Added a `paused` sprint state to the workflow contracts, reached only by
+  cancelling a sprint's active operation without ending the sprint — the
+  foundation for an upcoming Stop action that lets you interrupt a running
+  step and safely resume it later, independent of cancelling the sprint.
+- Added an append-only stage revision concept to the workflow domain model,
+  enabling a future safe way to reopen a completed stage without losing or
+  rewriting its prior history.
+- Reserved seven new capability ids (workspace summary, sprint timeline,
+  available actions, stop current operation, stage-transition assessment,
+  move-sprint-to-stage, and provider quota status) in the versioned
+  capability contract. None is implemented yet, so today's Host and Desktop
+  behave exactly as before; the reservation lets a future release add each
+  capability without an older Host or Desktop silently attempting an
+  operation it does not support.
+- Added English and Russian localization for the paused sprint state label.
+
 ## v0.62.3
 
 ### Fixed

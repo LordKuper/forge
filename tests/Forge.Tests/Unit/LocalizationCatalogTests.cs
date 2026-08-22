@@ -16,6 +16,16 @@ public sealed class LocalizationCatalogTests
     }
 
     [Fact]
+    [Trait("Category", "Unit")]
+    public void CatalogResolvesThePausedSprintStateLabelInEnglishAndRussian()
+    {
+        ResourceLocalizationCatalog catalog = new();
+
+        Assert.Equal("Paused", catalog.Resolve(MessageKeys.SprintStatePaused, new("en-US")));
+        Assert.Equal("Приостановлено", catalog.Resolve(MessageKeys.SprintStatePaused, new("ru-RU")));
+    }
+
+    [Fact]
     [Trait("Category", "Architecture")]
     public void BuiltInCatalogsHaveIdenticalKeys()
     {

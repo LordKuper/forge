@@ -18,6 +18,7 @@ public sealed class WorkflowContractTests
                 "draft",
                 "ready",
                 "running",
+                "paused",
                 "awaiting_human",
                 "blocked",
                 "failed",
@@ -74,6 +75,11 @@ public sealed class WorkflowContractTests
     [InlineData(SprintState.Blocked, SprintState.Running, false)]
     [InlineData(SprintState.Completed, SprintState.Draft, false)]
     [InlineData(SprintState.Cancelled, SprintState.Ready, false)]
+    [InlineData(SprintState.Running, SprintState.Paused, true)]
+    [InlineData(SprintState.Paused, SprintState.Ready, true)]
+    [InlineData(SprintState.Paused, SprintState.Cancelled, true)]
+    [InlineData(SprintState.Paused, SprintState.Running, false)]
+    [InlineData(SprintState.Ready, SprintState.Paused, false)]
     public void SprintTransitionsMatchFrozenV1Contract(SprintState from, SprintState to, bool expected) =>
         Assert.Equal(expected, WorkflowStateMachines.CanTransition(from, to));
 
@@ -91,6 +97,8 @@ public sealed class WorkflowContractTests
     [InlineData(AttemptState.Created, AttemptState.Preparing, true)]
     [InlineData(AttemptState.Validating, AttemptState.Succeeded, true)]
     [InlineData(AttemptState.Succeeded, AttemptState.Failed, false)]
+    [InlineData(AttemptState.Validating, AttemptState.Cancelled, true)]
+    [InlineData(AttemptState.Succeeded, AttemptState.Cancelled, false)]
     public void AttemptTransitionsMatchFrozenV1Contract(AttemptState from, AttemptState to, bool expected) =>
         Assert.Equal(expected, WorkflowStateMachines.CanTransition(from, to));
 

@@ -188,4 +188,11 @@ public static class MessageKeys
     public const string SprintCancelAction = "SprintCancelAction";
     public const string SprintManageFailed = "SprintManageFailed";
     public const string SprintManageSprintAmbiguous = "SprintManageSprintAmbiguous";
+
+    /// <summary>The workspace redesign's sprint-status label for <see
+    /// cref="Forge.Domain.SprintState.Paused"/> (plan section 4.1: "Every status has text and an
+    /// accessible icon"). Not yet rendered anywhere -- no surface displays sprint state through a
+    /// per-state label today (CLI/Desktop render the raw snake_case value); this key exists so the
+    /// later slice that adds one has an already-reviewed, parity-checked label to reuse.</summary>
+    public const string SprintStatePaused = "SprintStatePaused";
 }
