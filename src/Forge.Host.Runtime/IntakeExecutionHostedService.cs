@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Compiler;
+using Forge.Configuration;
 using Forge.Domain;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,8 @@ public sealed class IntakeExecutionHostedService(
     ISprintStore store,
     SprintScheduler scheduler,
     ForgeApplication application,
+    IConfigurationRegistry registry,
+    StopOperationCoordinator stopCoordinator,
     ILogger<IntakeExecutionHostedService> logger) : BackgroundService
 {
     /// <summary>Re-exported for this service's own existing tests/callers; the real value now lives
@@ -187,14 +190,6 @@ public sealed class IntakeExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            // A draft sprint's dependency-free intake node is already `ready` (AdvanceGraphAsync
-            // promotes regardless of sprint state), but StartAttemptAsync would refuse it with
-            // `sprint_not_running`. Skipping quietly here keeps that ordinary, expected state from
-            // logging a rejection every interval for the life of the sprint.
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -212,6 +207,33 @@ public sealed class IntakeExecutionHostedService(
             node => node.Role == NodeRole.Intake && node.Kind == NodeKind.Work);
         if (intake is null || !state.Nodes.TryGetValue(intake.Id, out NodeSnapshot? node))
         {
+            return;
+        }
+
+        // Plan section 7.3 / ADR 0047 addendum: check the durable stop intent from the node's own
+        // CurrentAttemptId and the attempt's durable state, never from node.State == Running (see
+        // ImplementationExecutionHostedService's own identical check for the full reasoning). Intake
+        // never registers with ActiveOperationRegistry (it invokes no provider/process), but a stop
+        // request could in principle still land against it mid-tick; without this check its stop
+        // intent would be recorded but never converged, wedging the sprint at `running` forever.
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, intake.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
+        {
+            // A draft sprint's dependency-free intake node is already `ready` (AdvanceGraphAsync
+            // promotes regardless of sprint state), but StartAttemptAsync would refuse it with
+            // `sprint_not_running`. Skipping quietly here keeps that ordinary, expected state from
+            // logging a rejection every interval for the life of the sprint.
             return;
         }
 

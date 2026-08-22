@@ -196,6 +196,23 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, null, DiagnosticCodes.HostUnavailable);
     }
 
+    public async Task<StopOperationResult> StopCurrentOperationAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new StopCurrentOperationRequest(sprintId, attemptId, confirmed), ControlProtocol.JsonOptions);
+        ControlResponse response = await SendAsync(ControlProtocol.StopCurrentOperationKind, payload, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<StopOperationResult>(ControlProtocol.JsonOptions) ??
+                new(false, DiagnosticCodes.HostUnavailable)
+            : new(false, DiagnosticCodes.HostUnavailable);
+    }
+
     public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
     {
         JsonElement payload = JsonSerializer.SerializeToElement(new CreateSprintRequest(), ControlProtocol.JsonOptions);

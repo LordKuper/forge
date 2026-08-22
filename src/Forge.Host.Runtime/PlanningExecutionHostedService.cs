@@ -53,6 +53,8 @@ public sealed class PlanningExecutionHostedService(
     IConfigurationRegistry registry,
     IEnvironmentPaths environmentPaths,
     ForgeApplication application,
+    ActiveOperationRegistry activeOperations,
+    StopOperationCoordinator stopCoordinator,
     ILogger<PlanningExecutionHostedService> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
@@ -167,10 +169,6 @@ public sealed class PlanningExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -183,6 +181,26 @@ public sealed class PlanningExecutionHostedService(
         NodeDefinition? planning = definition.Graph.FirstOrDefault(
             node => node.Role == NodeRole.Planning && node.Kind == NodeKind.Work);
         if (planning is null || !state.Nodes.TryGetValue(planning.Id, out NodeSnapshot? node))
+        {
+            return;
+        }
+
+        // Plan section 7.3 / ADR 0047 addendum: check the durable stop intent from the node's own
+        // CurrentAttemptId and the attempt's durable state, never from node.State == Running (see
+        // ImplementationExecutionHostedService's own identical check for the full reasoning).
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, planning.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
         {
             return;
         }
@@ -370,11 +388,14 @@ public sealed class PlanningExecutionHostedService(
 
         string prompt = BuildPrompt(manifest, documents);
         AttemptSupervisionResult<ProviderRunResult> supervised;
-        using (AttemptSupervisor supervisor = new(
-            TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
-            TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
-            cancellationToken))
+        // Plan section 7.3: registered before provider/process execution, unregistered in `finally`.
+        CancellationTokenSource operation = activeOperations.Register(attemptId, cancellationToken);
+        try
         {
+            using AttemptSupervisor supervisor = new(
+                TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
+                TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
+                operation.Token);
             supervised = await supervisor.SuperviseAsync(async (token, onActivity) =>
             {
                 try
@@ -392,6 +413,10 @@ public sealed class PlanningExecutionHostedService(
                     return ProviderRunResult.Failed(ProviderFailureKind.Unknown, exception.Message);
                 }
             }).ConfigureAwait(false);
+        }
+        finally
+        {
+            activeOperations.Unregister(attemptId);
         }
 
         if (supervised.Reason == AttemptTerminationReason.Cancelled)

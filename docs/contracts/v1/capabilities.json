@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.6.0",
+  "contract_version": "1.7.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -221,11 +221,11 @@
       "kind": "command",
       "contract": "StopCurrentOperation",
       "events": ["AttemptChanged", "SprintChanged"],
-      "cli": "forge attempt stop <attempt-id> [--sprint <id>] [--yes]",
+      "cli": "forge attempt stop <attempt-id> --sprint <id> [--yes]",
       "desktop": "SprintWorkspace/StopOperation",
       "permission": "human_stop_operation_confirm",
       "acceptance": "stop-operation-parity",
-      "note": "Reserved, not implemented on either surface (plan section 7, Slice 2). Not yet in `CapabilityIds.Implemented` -- an older Host/Desktop that has not shipped the stop coordinator must never be silently invited to attempt it (plan section 9.2)."
+      "note": "Implemented on Host and CLI (plan section 7, Slice 2); Desktop parity is deferred to Slice 6, matching ADR 0037's CLI-first precedent for workflow.confirm/workflow.test_work/workflow.finalize. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule), so an older Desktop is never silently invited into a control it has no UI for."
     },
     {
       "id": "workflow.assess_stage_transition",

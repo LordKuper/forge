@@ -771,6 +771,114 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task<AppendOutcome> AppendAttemptStopRequestedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        long expectedAttemptVersion,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // Recorded at most once per attempt, mirroring AppendAttemptSupersededAsync -- a second
+            // call is always a replay of the coordinator's own idempotent stop request, not a
+            // distinct intent.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptStopRequestedType && item.Aggregate.Id == attemptKey))
+            {
+                SprintWorkflowState? replayed = await LoadCoreAsync(
+                    projectRoot, sprintId, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+                return new(true, replayed, DiagnosticCodes.None, true);
+            }
+
+            // Round-trip review finding (PR #95): the caller (StopOperationCoordinator.RequestStopAsync)
+            // validates the attempt is the sprint's exact current, live operation and then calls this
+            // without holding any lock across that read and this append -- a concurrent compound
+            // operation (SprintScheduler.CompleteAttemptAsync/SupersedeAttemptAsync) that moves the
+            // attempt off being current in that window bumps its version, exactly like an ordinary
+            // AppendTransitionAsync conflict, so it is caught here, inside this store's own per-sprint
+            // critical section, instead of letting the intent silently attach to a now-stale attempt.
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            if (attemptVersion != expectedAttemptVersion)
+            {
+                return AppendOutcome.Conflict;
+            }
+
+            WorkflowEvent stopRequested = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptStopRequestedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_stop_requested",
+                new Dictionary<string, string?>(StringComparer.Ordinal));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(stopRequested), cancellationToken)
+                .ConfigureAwait(false);
+
+            SprintWorkflowState? updated = await LoadCoreAsync(
+                projectRoot, sprintId, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendAttemptStopConvergedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // Recorded at most once per attempt, mirroring AppendAttemptStopRequestedAsync -- a
+            // second call is always a replay of FinishStopAsync's own last, unconditional step.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptStopConvergedType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent converged = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptStopConvergedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_stop_converged",
+                new Dictionary<string, string?>(StringComparer.Ordinal));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(converged), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
         string projectRoot,
         SprintId sprintId,

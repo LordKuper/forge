@@ -139,6 +139,8 @@
   <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(идентификатор попытки не указан)</value></data>
   <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы заменить его попытку.</value></data>
   <data name="AttemptInstructionRequired" xml:space="preserve"><value>Введите инструкцию для замены.</value></data>
+  <data name="AttemptStopDescription" xml:space="preserve"><value>Остановить активную операцию спринта, не отменяя сам спринт.</value></data>
+  <data name="AttemptStopped" xml:space="preserve"><value>Остановка запрошена.</value></data>
   <data name="NotificationAwaitingHumanTitle" xml:space="preserve"><value>Forge: ожидает вашего решения</value></data>
   <data name="NotificationBlockedTitle" xml:space="preserve"><value>Forge: спринт заблокирован</value></data>
   <data name="NotificationFailedTitle" xml:space="preserve"><value>Forge: спринт завершился с ошибкой</value></data>

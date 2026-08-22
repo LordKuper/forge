@@ -58,6 +58,8 @@ public sealed class ImplementationExecutionHostedService(
     IConfigurationRegistry registry,
     IEnvironmentPaths environmentPaths,
     ForgeApplication application,
+    ActiveOperationRegistry activeOperations,
+    StopOperationCoordinator stopCoordinator,
     ILogger<ImplementationExecutionHostedService> logger) : BackgroundService
 {
     private const string FallbackSummary = "Implemented the requested change; the provider returned no summary.";
@@ -169,10 +171,6 @@ public sealed class ImplementationExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -185,6 +183,31 @@ public sealed class ImplementationExecutionHostedService(
         NodeDefinition? implementation = definition.Graph.FirstOrDefault(
             candidate => candidate.Role == NodeRole.Implementation && candidate.Kind == NodeKind.Work);
         if (implementation is null || !state.Nodes.TryGetValue(implementation.Id, out NodeSnapshot? node))
+        {
+            return;
+        }
+
+        // Plan section 7.3 / ADR 0047 addendum (round 1/2 review of PR #95): checked from the node's
+        // own CurrentAttemptId and the attempt's durable state, never from node.State == Running --
+        // that id is set once by the node's own `running` transition and never cleared by any of
+        // FinishStopAsync's later steps, so it still resolves to the stopping attempt even after a
+        // Host crash has left the node `Failed` (mid-rearm) or already `Ready` (rearmed, sprint not
+        // yet paused) -- states a Running-only gate can never see again, since nothing else revisits
+        // a node once it leaves `Running` on its own. StopConvergedAt is what stops this from firing
+        // again once the saga genuinely finished, even after a later, unrelated resume.
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, implementation.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
         {
             return;
         }
@@ -365,11 +388,15 @@ public sealed class ImplementationExecutionHostedService(
 
         string prompt = BuildPrompt(manifest, documents, handoff);
         AttemptSupervisionResult<ProviderRunResult> supervised;
-        using (AttemptSupervisor supervisor = new(
-            TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
-            TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
-            cancellationToken))
+        // Plan section 7.3: registered before provider/process execution, unregistered in `finally`
+        // -- the exact attempt a stop request's ActiveOperationRegistry.TryCancel can reach.
+        CancellationTokenSource operation = activeOperations.Register(attemptId, cancellationToken);
+        try
         {
+            using AttemptSupervisor supervisor = new(
+                TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
+                TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
+                operation.Token);
             supervised = await supervisor.SuperviseAsync(async (token, onActivity) =>
             {
                 try
@@ -382,6 +409,10 @@ public sealed class ImplementationExecutionHostedService(
                     return ProviderRunResult.Failed(ProviderFailureKind.Unknown, exception.Message);
                 }
             }).ConfigureAwait(false);
+        }
+        finally
+        {
+            activeOperations.Unregister(attemptId);
         }
 
         if (supervised.Reason == AttemptTerminationReason.Cancelled)

@@ -291,6 +291,15 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, AttemptId attemptId, string instruction,
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<AppendOutcome> AppendAttemptStopRequestedAsync(
+            string projectRoot, SprintId sprintId, AttemptId attemptId, long expectedAttemptVersion,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task AppendAttemptStopConvergedAsync(
+            string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private static WorkflowEvent FakeEvent(Guid sprintId, long sequence, DateTimeOffset occurredAt) =>
