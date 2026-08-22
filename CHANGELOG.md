@@ -6,8 +6,8 @@ User-facing Forge changes are listed by release, newest first.
 
 ### Fixed
 
-- Fixed console windows briefly flashing on Windows during startup for each
-  provider version and authorization check.
+- Fixed console windows briefly flashing on Windows for every `git` command
+  and provider version/authorization check Forge runs, including at startup.
 
 ## v0.62.2
 

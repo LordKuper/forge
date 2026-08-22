@@ -3,6 +3,11 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Lets Forge.Tests unit-test ProcessRunner.CreateStartInfo's Win32 process-launch flags
+         (e.g. CreateNoWindow) without spawning a real child process. -->
+    <InternalsVisibleTo Include="Forge.Tests" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="JsonSchema.Net" />
     <PackageReference Include="Microsoft.Extensions.Hosting" />
     <PackageReference Include="YamlDotNet" />
