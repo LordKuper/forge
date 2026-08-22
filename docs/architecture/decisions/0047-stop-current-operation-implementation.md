@@ -150,8 +150,97 @@ Slice-1-reserved ids (`workspace.summary`, etc.) has one until it graduates.
   `IConfigurationRegistry` for Intake, which never registers a live operation); every direct test
   construction site was updated alongside the production DI registration in `ForgeHost.AddForgeCore`.
 
+## Addendum: independent review findings (PR #95, round 1)
+
+An independent review agent found four genuine saga-correctness defects in the design above before
+merge. Fixing them changed the design in ways worth recording here rather than only in the commit
+history.
+
+### Findings 1 and 2 shared one root cause: the convergence check was gated on `node.State == Running`
+
+The original per-executor check ("a `Running` node whose current attempt already carries a stop
+intent") could only ever see the node *before* `FinishStopAsync`'s node-stopped/node-rearmed steps
+ran. Once a Host crash landed after either step, the node was `Failed` or already `Ready` on
+restart — a state the check no longer matched — and nothing else in this codebase ever revisits a
+node once it leaves `Running` on its own:
+
+- **Finding 1**: a crash between the node-stopped append (`Running` -> `Failed`) and the
+  node-rearmed append (`Failed` -> `Ready`) left the node durably `Failed` with the sprint still
+  `Running`. `EvaluateCompletionAsync`'s own "stuck" check does not fire either (it only treats a
+  `Failed` node as stuck once `AttemptCount` exhausts `MaxAutomaticRetries`, which the stop path
+  deliberately never advances) — the sprint wedged permanently.
+- **Finding 2**: a crash between the node-rearmed append and the sprint-paused append left the node
+  `Ready` with the sprint still `Running`. The next tick's stop-check no longer matched (node not
+  `Running`), so execution fell through to the ordinary `StartAttemptAsync` path, minting a **new**
+  attempt and silently spending the automatic-retry budget the stop was meant to preserve.
+
+**Fix**: the check no longer reads `node.State` at all. It reads `node.CurrentAttemptId` (set once
+by the node's own `running` transition and never cleared by any later transition in this codebase,
+including every step `FinishStopAsync` itself appends — verified against `WorkflowFold.Apply`) and
+then the *attempt's* own durable state: `StopRequestedAt is not null && StopConvergedAt is null`.
+This resolves correctly regardless of whether the node is `Running`, `Failed`, or already `Ready`,
+closing both crash windows with one generalized rule instead of two special cases. Each of
+`IntakeExecutionHostedService`/`PlanningExecutionHostedService`/`ImplementationExecutionHostedService`/
+`ReviewExecutionHostedService` now runs this check immediately after resolving its own node (before
+either the `sprint.State != Running` or the `node.State is not (Ready or Running)` gate — both now
+sit *after* it, since a node with an unconverged stop can legitimately be in any state those gates
+would otherwise skip).
+
+`AttemptSnapshot.StopConvergedAt` is a new folded projection (`WorkflowEvent.AttemptStopConvergedType`,
+message key `workflow.attempt_stop_converged`), appended by `FinishStopAsync` as its own last,
+unconditional step, after the sprint-pause step whether or not that step actually fired. Without it,
+the generalized check above would re-fire forever once the saga finished, including after an
+unrelated later `resume_sprint` put the sprint back in `Running` — re-pausing it spuriously. This one
+marker is what lets the check be keyed purely off "has this exact attempt's stop finished," fully
+independent of every other field's own, unrelated later history.
+
+`FinishStopAsync`'s own internal steps needed no reordering and no new gating: each already re-reads
+current durable state before acting (attempt non-terminal, then `node.State == Running`, then
+`node.State == Failed`, then `sprint.State == Running`), so it was already safe to call redundantly
+from any of its own intermediate states, including a `Ready` node. The defect was entirely that
+nothing durable-state-independent ever called it again after the two crash windows above.
+
+### Finding 3: `RequestStopAsync` validated a snapshot without a lock, then appended without re-checking it
+
+`RequestStopAsync` read and validated the target attempt (sprint `Running`, attempt non-terminal,
+`node.CurrentAttemptId` matches) and only afterward called
+`ISprintStore.AppendAttemptStopRequestedAsync` — with no lock held across the two calls. A concurrent
+`SprintScheduler.CompleteAttemptAsync`/`SupersedeAttemptAsync` landing in that window could move the
+attempt off being the node's current, live operation; the stop intent would still attach to the now-
+stale attempt, nothing would ever converge it, and the caller would still see success.
+
+**Fix**: `AppendAttemptStopRequestedAsync` now takes `expectedAttemptVersion` and re-validates it
+against the attempt's *current* version inside its own per-sprint critical section (the same
+optimistic-concurrency discipline `AppendTransitionAsync` already applies, and the same one
+`SupersedeAttemptAsync` already relies on for its own compound operation) — reusing the store's
+existing per-sprint lock rather than introducing a new locking primitive, per the review's own
+suggestion. A version mismatch returns `AppendOutcome.Conflict`; `RequestStopAsync` reports
+`DiagnosticCodes.ActiveOperationChanged` and does not call `ActiveOperationRegistry.TryCancel` — a
+clean rejection, never a silently-stuck stop intent reported as success.
+
+### Finding 4: `capabilities.json` documented `[--sprint <id>]` as optional; the CLI defines it `Required = true`
+
+Fixed the documented string to `--sprint <id>` (no brackets), matching the real, already-shipped
+`CreateAttemptStopCommand`. Making `--sprint` genuinely optional (resolving the sprint from the
+attempt id alone) was considered and rejected: attempt ids are not indexed across sprints anywhere in
+`ISprintStore` today, so resolving one would mean scanning every sprint's full event journal on every
+stop request — a real complication for no clear benefit, when the caller already knows which sprint
+it is targeting in every existing surface.
+
+This drift was invisible to `SurfaceParityTests.CliExposesEveryDocumentedCapabilityCommand` for two
+independent reasons: that test only walks `CapabilityIds.Implemented`, and `workflow.stop_operation`
+is deliberately excluded from it (this ADR's own decision, above); and even for a capability it does
+walk, it only ever checked that a documented `--option` exists somewhere in the command tree, never
+whether its *documented bracket optionality* matches the option's real `Required` value. A new test,
+`SurfaceParityTests.StopOperationDocumentedCliOptionsMatchTheirActualRequiredness`, checks the second
+property for this one capability specifically (not generalized to every reserved capability): most of
+the others reserved alongside it have no CLI command at all yet, and a couple of long-implemented,
+unrelated commands elsewhere in this contract (`init --project-root`, `doctor --bundle`) have their
+own pre-existing, unrelated bracket/`Required` drift that is not this PR's concern to fix.
+
 ## References
 
 - Plan section 7 (stop current operation), section 12.4 (acceptance criteria)
 - ADR 0044 (state-machine/protocol shape this ADR implements)
 - ADR 0037 (CLI-first / Desktop-parity-later precedent this ADR follows for the capability id)
+- Independent review of PR #95, round 1 (four findings fixed by this addendum)
