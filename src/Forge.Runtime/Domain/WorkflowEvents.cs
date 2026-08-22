@@ -97,6 +97,17 @@ public sealed record WorkflowEvent(
     /// (ADR 0006: "from the superseded attempt's recorded base"). Absent otherwise: nothing else
     /// today records what commit an attempt's worktree would be created at.</summary>
     public const string BaseCommitArgument = "base_commit";
+
+    /// <summary>Plan section 7.3's durable stop intent: recorded once for the exact attempt a
+    /// `StopCurrentOperation` request targets, before the stop coordinator relies on the in-memory
+    /// <c>ActiveOperationRegistry</c> at all. Appended on the attempt's own aggregate, alongside
+    /// (never instead of) its ordinary `AttemptChanged` transition to `cancelled` once the stop
+    /// actually converges — this event itself is never a transition (no
+    /// <see cref="ToStateArgument"/>), matching <see cref="AttemptSupersededType"/>'s own shape.
+    /// Unlike that type, this one is folded into <see cref="AttemptSnapshot.StopRequestedAt"/>: an
+    /// executor or restart-recovery pass must be able to ask "does this running attempt already
+    /// carry a stop intent" directly, not merely read it back as audit trail.</summary>
+    public const string AttemptStopRequestedType = "AttemptStopRequested";
 }
 
 public sealed record SprintWorkflowState(
@@ -177,6 +188,21 @@ public static class WorkflowFold
                 continue;
             }
 
+            if (current.Type == WorkflowEvent.AttemptStopRequestedType)
+            {
+                // Validated like every other envelope, never a transition -- but unlike
+                // AttemptSuperseded, this one IS projected: StopRequestedAt must be directly
+                // queryable so an executor or restart-recovery pass can ask "does this attempt
+                // already carry a stop intent" without re-scanning the raw journal.
+                _ = IsTransitionRecord(current);
+                if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? stoppingAttempt))
+                {
+                    attempts[current.Aggregate.Id] = stoppingAttempt with { StopRequestedAt = current.OccurredAt };
+                }
+
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -253,7 +279,8 @@ public static class WorkflowFold
                         previousAttempt?.LastActivityAt,
                         previousAttempt?.LastActivityKind,
                         baseCommit,
-                        supersedesAttemptId);
+                        supersedesAttemptId,
+                        previousAttempt?.StopRequestedAt);
                     break;
                 default:
                     throw new InvalidDataException(
@@ -285,6 +312,13 @@ public static class WorkflowFold
                 WorkflowEvent.SupersessionInstructionArgument, out string? instruction) && instruction is not null;
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasInstruction
                 ? throw new InvalidDataException($"Supersession event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptStopRequestedType)
+        {
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt
+                ? throw new InvalidDataException($"Stop-request event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

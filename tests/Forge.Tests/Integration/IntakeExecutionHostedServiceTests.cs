@@ -218,7 +218,8 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, environment.Application, logger);
+            store, scheduler, environment.Application, environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -283,7 +284,8 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, environment.Application, logger);
+            store, scheduler, environment.Application, environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -335,7 +337,8 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, environment.Application, logger);
+            store, scheduler, environment.Application, environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -587,7 +590,8 @@ public sealed class IntakeExecutionHostedServiceTests
         RecordingLogger logger = new();
         IntakeExecutionHostedService service = new(
             new IntakeExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
-            store, scheduler, environment.Application, logger);
+            store, scheduler, environment.Application, environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -618,6 +622,8 @@ public sealed class IntakeExecutionHostedServiceTests
             store,
             scheduler,
             environment.Application,
+            environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(),
             NullLogger<IntakeExecutionHostedService>.Instance);
 
     private static async Task<SprintId> CreateRunningSprintAsync(

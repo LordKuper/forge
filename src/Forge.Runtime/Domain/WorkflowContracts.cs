@@ -115,7 +115,11 @@ public sealed record NodeSnapshot(
 /// human-initiated clean replacement — "linkage" back to the exact attempt and base it replaced.
 /// An ordinarily-started attempt (automatic retry or a fresh node) carries neither: nothing today
 /// records what git commit an attempt's worktree would be created at, matching every prior Stage
-/// 11 item's "no node executor exists yet" gap.</summary>
+/// 11 item's "no node executor exists yet" gap. <paramref name="StopRequestedAt"/> is set once a
+/// durable <see cref="WorkflowEvent.AttemptStopRequestedType"/> event lands for this attempt (plan
+/// section 7.3) -- the queryable half of <see cref="StopIntent"/> executors and restart recovery
+/// check before starting or resuming an attempt, so a Host crash between the request and the stop
+/// coordinator's own convergence steps can never resurrect it.</summary>
 public sealed record AttemptSnapshot(
     AttemptId Id,
     AttemptState State,
@@ -126,4 +130,5 @@ public sealed record AttemptSnapshot(
     DateTimeOffset? LastActivityAt = null,
     AttemptActivityKind? LastActivityKind = null,
     string? BaseCommit = null,
-    AttemptId? SupersedesAttemptId = null);
+    AttemptId? SupersedesAttemptId = null,
+    DateTimeOffset? StopRequestedAt = null);

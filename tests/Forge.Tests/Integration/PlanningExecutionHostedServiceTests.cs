@@ -327,6 +327,8 @@ public sealed class PlanningExecutionHostedServiceTests
             environment.Resolve<IConfigurationRegistry>(),
             environment,
             environment.Application,
+            environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(),
             NullLogger<PlanningExecutionHostedService>.Instance);
 
     private static async Task<SprintId> CreateSprintReadyForPlanningAsync(

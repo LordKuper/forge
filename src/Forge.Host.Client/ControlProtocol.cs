@@ -78,6 +78,12 @@ public sealed record ResolveGateRequest(Guid SprintId, string NodeId, bool Appro
 /// human-only `attempt.supersede`).</summary>
 public sealed record SupersedeAttemptRequest(Guid SprintId, Guid AttemptId, string Instruction, bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.StopCurrentOperationKind"/>'s request payload (ADR 0044:
+/// human-only `workflow.stop_operation`). No expected sprint/attempt version travels on the wire --
+/// the Host derives both from a fresh state read and rejects a stale one internally, the same
+/// reason <see cref="SupersedeAttemptRequest"/> carries no attempt version.</summary>
+public sealed record StopCurrentOperationRequest(Guid SprintId, Guid AttemptId, bool Confirmed);
+
 /// <summary>One <c>ConfirmNodeRequest.Evidence</c> entry. <see cref="Kind"/> is one of
 /// <c>"inspection"</c>/<c>"execution"</c>/<c>"existing_check"</c> (matching
 /// <c>confirmation-result.schema.json</c>'s own vocabulary) — a primitive string, not
@@ -176,6 +182,13 @@ public static class ControlProtocol
     /// <see cref="SupersedeAttemptRequest"/>. Response payload: a `CompleteAttemptResult` instance
     /// (same shape as <see cref="ResolveGateKind"/>'s response).</summary>
     public const string SupersedeAttemptKind = "supersede_attempt";
+
+    /// <summary>ADR 0044: the human-only `workflow.stop_operation` capability -- durably records a
+    /// stop intent for the sprint's exact active attempt and cancels it without settling the sprint
+    /// as failed or consuming automatic retry budget. Request payload: a
+    /// <see cref="StopCurrentOperationRequest"/>. Response payload: a `StopOperationResult` instance
+    /// (<c>{"succeeded": bool, "diagnostic_code": string}</c>).</summary>
+    public const string StopCurrentOperationKind = "stop_current_operation";
 
     /// <summary>The human-only `workflow.confirm` capability — records whether a sprint's
     /// `confirmation` node's implementation meets its definition of done, and settles that node's

@@ -455,6 +455,19 @@ public interface ISprintStore
         string instruction,
         CancellationToken cancellationToken);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for
+    /// <paramref name="attemptId"/> (plan section 7.3's durable stop intent) -- recorded once per
+    /// attempt, like <see cref="AppendAttemptSupersededAsync"/>: a second call for the same attempt
+    /// is always a replay, deduplicated by scanning the journal rather than by a caller-supplied
+    /// idempotency key. Not gated by <see cref="AppendTransitionAsync"/>'s optimistic concurrency --
+    /// the stop coordinator (<c>Forge.Application.StopOperationCoordinator</c>) already validated
+    /// the attempt is the sprint's exact active operation before calling this.</summary>
+    Task AppendAttemptStopRequestedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken);
+
     /// <summary>
     /// Every durable transition and routing record for one sprint, in append order, including the
     /// records <see cref="LoadAsync"/> folds away — the raw stream a read model needs to derive

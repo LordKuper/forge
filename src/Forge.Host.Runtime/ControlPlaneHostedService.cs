@@ -338,6 +338,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchResolveGateAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.SupersedeAttemptKind =>
                     await DispatchSupersedeAttemptAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.StopCurrentOperationKind =>
+                    await DispatchStopCurrentOperationAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.ConfirmNodeKind =>
                     await DispatchConfirmNodeAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.RecordTestWorkKind =>
@@ -588,6 +590,26 @@ public sealed class ControlPlaneHostedService(
             .SupersedeAttemptAsync(
                 options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Instruction, payload.Confirmed,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchStopCurrentOperationAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        StopCurrentOperationRequest? payload = request.Payload is { } value
+            ? value.Deserialize<StopCurrentOperationRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The stop_current_operation payload is required.");
+        }
+
+        StopOperationResult result = await application
+            .StopCurrentOperationAsync(
+                options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Confirmed, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

@@ -139,6 +139,8 @@
   <data name="AttemptIdMissingPlaceholder" xml:space="preserve"><value>(no attempt id entered)</value></data>
   <data name="AttemptSupersedeSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to supersede its attempt.</value></data>
   <data name="AttemptInstructionRequired" xml:space="preserve"><value>Enter a replacement instruction.</value></data>
+  <data name="AttemptStopDescription" xml:space="preserve"><value>Stop the sprint's active operation without cancelling the sprint.</value></data>
+  <data name="AttemptStopped" xml:space="preserve"><value>Stop requested.</value></data>
   <data name="NotificationAwaitingHumanTitle" xml:space="preserve"><value>Forge: awaiting your decision</value></data>
   <data name="NotificationBlockedTitle" xml:space="preserve"><value>Forge: sprint blocked</value></data>
   <data name="NotificationFailedTitle" xml:space="preserve"><value>Forge: sprint failed</value></data>

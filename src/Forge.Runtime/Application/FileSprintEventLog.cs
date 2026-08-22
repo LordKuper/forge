@@ -771,6 +771,51 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task AppendAttemptStopRequestedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // Recorded at most once per attempt, mirroring AppendAttemptSupersededAsync -- a second
+            // call is always a replay of the coordinator's own idempotent stop request, not a
+            // distinct intent.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptStopRequestedType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent stopRequested = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptStopRequestedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_stop_requested",
+                new Dictionary<string, string?>(StringComparer.Ordinal));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(stopRequested), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
         string projectRoot,
         SprintId sprintId,

@@ -287,7 +287,8 @@ public sealed class ImplementationExecutionHostedServiceTests
             new ImplementationExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
             store, scheduler, environment.Resolve<SprintGitIsolation>(), worktrees,
             environment.Resolve<ProviderCatalog>(), environment.Resolve<IConfigurationRegistry>(), environment,
-            environment.Application, logger);
+            environment.Application, environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -316,6 +317,8 @@ public sealed class ImplementationExecutionHostedServiceTests
             environment.Resolve<IConfigurationRegistry>(),
             environment,
             environment.Application,
+            environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(),
             NullLogger<ImplementationExecutionHostedService>.Instance);
 
     private static async Task<SprintId> CreateSprintReadyForImplementationAsync(
