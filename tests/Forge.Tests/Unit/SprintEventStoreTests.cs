@@ -457,6 +457,135 @@ public sealed class SprintEventStoreTests
 
         Assert.Null(state);
     }
+
+    /// <summary>Plan section 7.2: <c>running -> paused</c> is a new legal sprint transition, and
+    /// <c>FileSprintEventLog.IsLegalTransition</c> is the single store-level chokepoint that gates
+    /// every append -- there is no generic public setter that could assign <c>Paused</c> directly,
+    /// only this validated append path.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunningSprintCanBePausedAndPausedSprintCanResumeOrCancel()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        string sprintKey = sprintId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_running", "running", 2, Guid.NewGuid(), cancellationToken);
+
+        AppendOutcome paused = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_paused", "paused", 3, Guid.NewGuid(), cancellationToken);
+        Assert.True(paused.Succeeded, "Running -> Paused must be a valid sprint transition.");
+        Assert.Equal(SprintState.Paused, paused.State!.Sprint.State);
+
+        AppendOutcome resumed = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_ready", "ready", 4, Guid.NewGuid(), cancellationToken);
+        Assert.True(resumed.Succeeded, "Paused -> Ready must be a valid sprint transition.");
+        Assert.Equal(SprintState.Ready, resumed.State!.Sprint.State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PausedSprintCanBeCancelled()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        string sprintKey = sprintId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_advanced", "ready", 1, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_running", "running", 2, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_paused", "paused", 3, Guid.NewGuid(), cancellationToken);
+
+        AppendOutcome cancelled = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_cancelled", "cancelled", 4, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(cancelled.Succeeded, "Paused -> Cancelled must be a valid sprint transition.");
+        Assert.Equal(SprintState.Cancelled, cancelled.State!.Sprint.State);
+    }
+
+    /// <summary>A direct <c>draft -> paused</c> jump (skipping ready/running) is not in the frozen
+    /// transition table and must be rejected by the store's own gate without appending anything --
+    /// proof that <c>Paused</c> cannot be assigned outside the validated transitions this slice
+    /// adds.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADirectDraftToPausedTransitionIsRejectedWithoutAppending()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        string sprintKey = sprintId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+
+        AppendOutcome rejected = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintKey, "SprintChanged",
+            "workflow.sprint_paused", "paused", 1, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowTransitionInvalid, rejected.DiagnosticCode);
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(SprintState.Draft, state!.Sprint.State);
+    }
+
+    /// <summary>Plan section 7.2: <c>validating -> cancelled</c> must remain a valid attempt
+    /// transition so a stop request stays valid until the operation has actually settled.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ValidatingAttemptCanBeCancelled()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_preparing", "preparing", 1, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_running", "running", 2, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_validating", "validating", 3, Guid.NewGuid(), cancellationToken);
+
+        AppendOutcome cancelled = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_cancelled", "cancelled", 4, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(cancelled.Succeeded, "Validating -> Cancelled must be a valid attempt transition.");
+        Assert.Equal(AttemptState.Cancelled, cancelled.State!.Attempts[attemptKey].State);
+    }
 }
 
 internal sealed class FakeClock : IClock

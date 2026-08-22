@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.1.0",
+  "contract_version": "1.2.0",
   "machines": {
     "self_update": {
       "initial": "current",
@@ -35,7 +35,8 @@
       "transitions": {
         "draft": ["ready", "cancelled"],
         "ready": ["running", "cancelled"],
-        "running": ["awaiting_human", "blocked", "failed", "ready_to_finalize", "cancelled"],
+        "running": ["paused", "awaiting_human", "blocked", "failed", "ready_to_finalize", "cancelled"],
+        "paused": ["ready", "cancelled"],
         "awaiting_human": ["running", "blocked", "cancelled"],
         "blocked": ["ready", "cancelled"],
         "failed": ["ready", "cancelled"],
@@ -65,7 +66,7 @@
         "created": ["preparing", "cancelled"],
         "preparing": ["running", "failed", "cancelled"],
         "running": ["validating", "failed", "cancelled"],
-        "validating": ["succeeded", "failed"],
+        "validating": ["succeeded", "failed", "cancelled"],
         "succeeded": [],
         "failed": [],
         "cancelled": []

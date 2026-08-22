@@ -5,6 +5,14 @@ public enum SprintState
     Draft,
     Ready,
     Running,
+
+    /// <summary>Reached only from <see cref="Running"/> by the stop-current-operation coordinator
+    /// (plan section 7, implemented in a later slice) after it cancels the sprint's exact active
+    /// attempt without settling the sprint as failed or consuming automatic retry budget. No
+    /// generic public API produces this value: like every other transition, only an
+    /// <c>AppendTransitionAsync</c> call validated against <see cref="WorkflowStateMachines"/> can
+    /// durably record it (see that type's own remarks).</summary>
+    Paused,
     AwaitingHuman,
     Blocked,
     Failed,
@@ -18,12 +26,17 @@ public sealed record SprintId(Guid Value)
     public static SprintId New() => new(Guid.NewGuid());
 }
 
+/// <summary><paramref name="Revision"/> is the sprint's current stage revision (plan section
+/// 8.4). Starts at <see cref="StageRevision.Initial"/> and is incremented only by the rewind
+/// coordinator introduced in a later slice — nothing in this slice produces a value other than
+/// the default.</summary>
 public sealed record SprintSnapshot(
     SprintId Id,
     SprintState State,
     long Version,
     DateTimeOffset UpdatedAt,
-    string? BlockedReason = null);
+    string? BlockedReason = null,
+    StageRevision Revision = default);
 
 public enum NodeState
 {
@@ -82,14 +95,20 @@ public sealed record AttemptId(Guid Value)
 /// later transition) — the durable, unambiguous answer to "which attempt does this node's
 /// `running` state currently belong to", used instead of re-deriving it from
 /// <paramref name="AttemptCount"/> and a deterministic-id guess, which cannot tell apart a
-/// human-initiated replacement attempt (Stage 11, P11.48-P11.55) from an ordinary one.</summary>
+/// human-initiated replacement attempt (Stage 11, P11.48-P11.55) from an ordinary one.
+/// <paramref name="Revision"/> is the stage revision this node's execution state belongs to
+/// (plan section 8.4). Node identity stays stable across a rewind; only execution state gains a
+/// revision, so a query can select the latest non-superseded one. Nothing in this slice produces
+/// a value other than the default — the rewind coordinator that increments it lands in a later
+/// slice.</summary>
 public sealed record NodeSnapshot(
     NodeId Id,
     NodeState State,
     long Version,
     DateTimeOffset UpdatedAt,
     int AttemptCount = 0,
-    string? CurrentAttemptId = null);
+    string? CurrentAttemptId = null,
+    StageRevision Revision = default);
 
 /// <summary><paramref name="BaseCommit"/> and <paramref name="SupersedesAttemptId"/> are set only
 /// on an attempt `SprintScheduler.SupersedeAttemptAsync` (Stage 11, P11.48-P11.55) created as a

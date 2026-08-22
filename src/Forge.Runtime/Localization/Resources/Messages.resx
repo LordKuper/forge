@@ -154,4 +154,5 @@
   <data name="SprintCancelAction" xml:space="preserve"><value>Cancel sprint</value></data>
   <data name="SprintManageFailed" xml:space="preserve"><value>Sprint action failed.</value></data>
   <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Multiple sprints are in progress; enter a sprint id to act on it.</value></data>
+  <data name="SprintStatePaused" xml:space="preserve"><value>Paused</value></data>
 </root>

@@ -53,7 +53,7 @@ foreach ($name in $requiredSchemas) {
 Assert-True (($schemas.Values | ForEach-Object { $_.'$id' } | Sort-Object -Unique).Count -eq $requiredSchemas.Count) 'Schema IDs must be unique.'
 
 $stateRegistry = Read-JsonObject (Join-Path $contractRoot 'state-machines.json')
-Assert-True ($stateRegistry.contract_version -eq '1.1.0') 'State-machine contract version must be 1.1.0.'
+Assert-True ($stateRegistry.contract_version -eq '1.2.0') 'State-machine contract version must be 1.2.0.'
 foreach ($machineEntry in $stateRegistry.machines.PSObject.Properties) {
     $name = $machineEntry.Name
     $machine = $machineEntry.Value
