@@ -372,7 +372,13 @@ public sealed class SprintOrchestrator(
     private static SprintState ResumeTarget(SprintState current) =>
         current switch
         {
-            SprintState.Blocked or SprintState.Failed => SprintState.Ready,
+            // Paused (plan section 7.1: "Resuming a paused sprint transitions it through ready")
+            // joins Blocked/Failed rather than getting its own case: the same "resume only reaches
+            // ready, a separate run advances it to running" contract already governs every resumable
+            // sprint state here, and StartAttemptAsync always starts a genuinely fresh attempt for a
+            // Ready node regardless of which prior state it came from, satisfying "starts a fresh
+            // attempt from the current integration base" with no special-cased resume path.
+            SprintState.Blocked or SprintState.Failed or SprintState.Paused => SprintState.Ready,
             _ => current,
         };
 

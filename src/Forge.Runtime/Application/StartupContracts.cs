@@ -93,6 +93,16 @@ public static class DiagnosticCodes
     public const string ReviewRepeatedFindings = "review_repeated_findings";
     public const string AttemptOwnershipMismatch = "attempt_ownership_mismatch";
     public const string AttemptTerminal = "attempt_terminal";
+
+    /// <summary>Category 11 (plan section 7.3): `StopCurrentOperation` rejects a stop request when
+    /// the sprint has no active operation at all -- it is not <see cref="Forge.Domain.SprintState.Running"/>,
+    /// so no attempt can be the sprint's exact active operation.</summary>
+    public const string NoActiveOperation = "no_active_operation";
+
+    /// <summary>Category 11 (plan section 7.3): "the active attempt changed before validation" --
+    /// the requested attempt is no longer (or never was) the node's current, running attempt, so
+    /// stopping it would either do nothing or, worse, target the wrong operation.</summary>
+    public const string ActiveOperationChanged = "active_operation_changed";
     public const string FindingNotFound = "finding_not_found";
     public const string WorkflowRecordInvalid = "workflow_record_invalid";
     public const string WorkflowTransitionInvalid = "workflow_transition_invalid";

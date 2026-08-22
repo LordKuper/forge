@@ -58,6 +58,8 @@ public sealed class ImplementationExecutionHostedService(
     IConfigurationRegistry registry,
     IEnvironmentPaths environmentPaths,
     ForgeApplication application,
+    ActiveOperationRegistry activeOperations,
+    StopOperationCoordinator stopCoordinator,
     ILogger<ImplementationExecutionHostedService> logger) : BackgroundService
 {
     private const string FallbackSummary = "Implemented the requested change; the provider returned no summary.";
@@ -191,6 +193,24 @@ public sealed class ImplementationExecutionHostedService(
 
         if (node.State is not (NodeState.Ready or NodeState.Running))
         {
+            return;
+        }
+
+        // Plan section 7.3: an executor must check the durable stop intent before resuming an
+        // attempt. A Running node whose current attempt already carries one means either this same
+        // process's own registry cancellation already unblocked the provider run and this is the
+        // very next tick, or a Host crash landed after the intent was recorded but before the stop
+        // coordinator converged -- either way, finishing the stop (never restarting the provider) is
+        // the only safe response.
+        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, implementation.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -365,11 +385,15 @@ public sealed class ImplementationExecutionHostedService(
 
         string prompt = BuildPrompt(manifest, documents, handoff);
         AttemptSupervisionResult<ProviderRunResult> supervised;
-        using (AttemptSupervisor supervisor = new(
-            TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
-            TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
-            cancellationToken))
+        // Plan section 7.3: registered before provider/process execution, unregistered in `finally`
+        // -- the exact attempt a stop request's ActiveOperationRegistry.TryCancel can reach.
+        CancellationTokenSource operation = activeOperations.Register(attemptId, cancellationToken);
+        try
         {
+            using AttemptSupervisor supervisor = new(
+                TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
+                TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
+                operation.Token);
             supervised = await supervisor.SuperviseAsync(async (token, onActivity) =>
             {
                 try
@@ -382,6 +406,10 @@ public sealed class ImplementationExecutionHostedService(
                     return ProviderRunResult.Failed(ProviderFailureKind.Unknown, exception.Message);
                 }
             }).ConfigureAwait(false);
+        }
+        finally
+        {
+            activeOperations.Unregister(attemptId);
         }
 
         if (supervised.Reason == AttemptTerminationReason.Cancelled)

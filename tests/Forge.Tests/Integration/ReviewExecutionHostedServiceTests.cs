@@ -305,7 +305,8 @@ public sealed class ReviewExecutionHostedServiceTests
         ReviewExecutionHostedService service = new(
             new ReviewExecutionOptions(environment.ProjectRoot, TimeSpan.FromMilliseconds(50)),
             store, scheduler, environment.Resolve<SprintGitIsolation>(), environment.Resolve<ProviderCatalog>(),
-            environment.Resolve<IConfigurationRegistry>(), environment, environment.Application, logger);
+            environment.Resolve<IConfigurationRegistry>(), environment, environment.Application,
+            environment.Resolve<ActiveOperationRegistry>(), environment.Resolve<StopOperationCoordinator>(), logger);
         await service.StartAsync(cancellationToken);
         try
         {
@@ -333,6 +334,8 @@ public sealed class ReviewExecutionHostedServiceTests
             environment.Resolve<IConfigurationRegistry>(),
             environment,
             environment.Application,
+            environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<StopOperationCoordinator>(),
             NullLogger<ReviewExecutionHostedService>.Instance);
 
     private static async Task<SprintId> CreateSprintReadyForReviewAsync(

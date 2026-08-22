@@ -151,6 +151,21 @@ public interface IForgeMutations
         bool confirmed,
         CancellationToken cancellationToken);
 
+    /// <summary>ADR 0044/plan section 7's human-only `workflow.stop_operation` capability: durably
+    /// records a stop intent for the sprint's exact active attempt and cancels it without settling
+    /// the sprint as failed or consuming automatic retry budget. <paramref name="confirmed"/> must
+    /// be <see langword="true"/> -- the same no-config-bypass rule as
+    /// <see cref="SupersedeAttemptAsync"/>. Convergence (process-tree termination, worktree discard,
+    /// node re-arm, sprint pause) completes asynchronously as the owning executor observes the
+    /// cancellation; a successful result here means the intent is durable and cancellation was
+    /// requested, not that convergence has already finished.</summary>
+    Task<StopOperationResult> StopCurrentOperationAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        bool confirmed,
+        CancellationToken cancellationToken);
+
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph
     /// (ADR 0001). Not confirmable/destructive — each call is a stateless attempt to create one new
     /// sprint, so a caller that wants a crash-safe retry to resume rather than mint a second sprint
@@ -201,7 +216,9 @@ public sealed class ForgeApplication(
     IWorktreeManager worktrees,
     IEnvironmentPaths paths,
     IFileSystem fileSystem,
-    IClock clock) : IForgeMutations
+    IClock clock,
+    StopOperationCoordinator stopCoordinator,
+    ActiveOperationRegistry activeOperations) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -1235,6 +1252,34 @@ public sealed class ForgeApplication(
         return await scheduler
             .SupersedeAttemptAsync(
                 status.Root, id, attempt, attemptSnapshot.Version, key, confirmed, instruction, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>ADR 0044/plan section 7's human-only `workflow.stop_operation` capability. Same
+    /// no-config-bypass confirmation rule as <see cref="SupersedeAttemptAsync"/>; every other
+    /// rejection reason (no active operation, already-settled attempt, stale sprint, changed active
+    /// attempt) is <see cref="StopOperationCoordinator.RequestStopAsync"/>'s own responsibility.</summary>
+    public async Task<StopOperationResult> StopCurrentOperationAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        if (!confirmed)
+        {
+            return new(false, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, status.DiagnosticCode);
+        }
+
+        return await stopCoordinator
+            .RequestStopAsync(status.Root, new(sprintId), new(attemptId), activeOperations, cancellationToken)
             .ConfigureAwait(false);
     }
 

@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Compiler;
+using Forge.Configuration;
 using Forge.Domain;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -54,6 +55,8 @@ public sealed class IntakeExecutionHostedService(
     ISprintStore store,
     SprintScheduler scheduler,
     ForgeApplication application,
+    IConfigurationRegistry registry,
+    StopOperationCoordinator stopCoordinator,
     ILogger<IntakeExecutionHostedService> logger) : BackgroundService
 {
     /// <summary>Re-exported for this service's own existing tests/callers; the real value now lives
@@ -221,6 +224,22 @@ public sealed class IntakeExecutionHostedService(
         // it would strand the node forever, since no other verb moves a `running` node onward.
         if (node.State is not (NodeState.Ready or NodeState.Running))
         {
+            return;
+        }
+
+        // Plan section 7.3: check the durable stop intent before resuming an attempt. Intake never
+        // registers with ActiveOperationRegistry (it invokes no provider/process), but a stop
+        // request could in principle still land against it mid-tick; without this check its stop
+        // intent would be recorded but never converged, wedging the sprint at `running` forever.
+        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, intake.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
             return;
         }
 

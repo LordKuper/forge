@@ -605,6 +605,28 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
     }
 
+    public int StopCurrentOperationCalls { get; private set; }
+
+    public Guid? LastStopSprintId { get; private set; }
+
+    public Guid? LastStopAttemptId { get; private set; }
+
+    public bool? LastStopConfirmed { get; private set; }
+
+    public Task<StopOperationResult> StopCurrentOperationAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        bool confirmed,
+        CancellationToken cancellationToken)
+    {
+        StopCurrentOperationCalls++;
+        LastStopSprintId = sprintId;
+        LastStopAttemptId = attemptId;
+        LastStopConfirmed = confirmed;
+        return Task.FromResult(new StopOperationResult(true, DiagnosticCodes.None));
+    }
+
     public int ConfirmNodeCalls { get; private set; }
 
     public ConfirmationOutcome? LastConfirmOutcome { get; private set; }
@@ -774,6 +796,14 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
+
+    public Task<StopOperationResult> StopCurrentOperationAsync(
+        string? projectRoot,
+        Guid sprintId,
+        Guid attemptId,
+        bool confirmed,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new StopOperationResult(true, DiagnosticCodes.None));
 
     public Task<RecordConfirmationResult> ConfirmNodeAsync(
         string? projectRoot,

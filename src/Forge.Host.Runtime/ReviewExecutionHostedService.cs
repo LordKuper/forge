@@ -61,6 +61,8 @@ public sealed class ReviewExecutionHostedService(
     IConfigurationRegistry registry,
     IEnvironmentPaths environmentPaths,
     ForgeApplication application,
+    ActiveOperationRegistry activeOperations,
+    StopOperationCoordinator stopCoordinator,
     ILogger<ReviewExecutionHostedService> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
@@ -183,6 +185,23 @@ public sealed class ReviewExecutionHostedService(
 
         if (node.State is not (NodeState.Ready or NodeState.Running))
         {
+            return;
+        }
+
+        // Plan section 7.3: check the durable stop intent before resuming an attempt. Deliberately
+        // narrower than "any Running node" -- an ordinary unresolved ChangesRequested verdict also
+        // leaves the node Running for the next review iteration (see this class's own remarks), and
+        // must keep doing so; only a Running attempt that actually carries a stop intent short-
+        // circuits here instead of starting another iteration.
+        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+            state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
+            stoppingAttempt.StopRequestedAt is not null)
+        {
+            Guid stoppingProjectId = await ProjectIdentity
+                .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
+            await stopCoordinator.FinishStopAsync(
+                options.ProjectRoot, sprintId, stoppingProjectId, review.Id,
+                new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
             return;
         }
 
@@ -352,11 +371,14 @@ public sealed class ReviewExecutionHostedService(
         string worktreePath = WorktreeLayout.AttemptPath(environmentPaths, projectId, sprintId, attemptId);
         string prompt = BuildPrompt(manifest, documents, handoff, diff, diffResult.Truncated, profile.Lineage);
         AttemptSupervisionResult<ProviderRunResult> supervised;
-        using (AttemptSupervisor supervisor = new(
-            TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
-            TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
-            cancellationToken))
+        // Plan section 7.3: registered before provider/process execution, unregistered in `finally`.
+        CancellationTokenSource operation = activeOperations.Register(attemptId, cancellationToken);
+        try
         {
+            using AttemptSupervisor supervisor = new(
+                TimeSpan.FromSeconds(profile.SessionDeadlineSeconds),
+                TimeSpan.FromSeconds(profile.IdleDeadlineSeconds),
+                operation.Token);
             supervised = await supervisor.SuperviseAsync(async (token, onActivity) =>
             {
                 try
@@ -369,6 +391,10 @@ public sealed class ReviewExecutionHostedService(
                     return ProviderRunResult.Failed(ProviderFailureKind.Unknown, exception.Message);
                 }
             }).ConfigureAwait(false);
+        }
+        finally
+        {
+            activeOperations.Unregister(attemptId);
         }
 
         if (supervised.Reason == AttemptTerminationReason.Cancelled)

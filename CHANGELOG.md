@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.64.0
+
+### Added
+
+- Added a `forge attempt stop <attempt-id> --sprint <id> [--yes]` command that stops the sprint's
+  current active operation without cancelling the sprint. Stopping terminates the running
+  provider's entire process tree, discards its partial worktree so no unfinished change reaches
+  the integration branch, and leaves the sprint `paused` with the interrupted step ready to run
+  again — without spending any of its automatic retry attempts.
+- Resuming a `paused` sprint (`forge sprint resume`) now returns it to `ready`; running it again
+  starts a fresh attempt from the project's current integration point.
+- A Host crash at any point during a stop is safe: on restart, Forge finishes converging the stop
+  instead of resurrecting the interrupted attempt or leaking its process or worktree.
+
 ## v0.63.0
 
 ### Added

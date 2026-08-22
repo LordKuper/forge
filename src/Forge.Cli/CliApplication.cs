@@ -941,6 +941,8 @@ public static class CliApplication
         Command command = new("attempt", text.Resolve(MessageKeys.AttemptDescription));
         command.Subcommands.Add(
             CreateAttemptSupersedeCommand(text, output, diagnostics, resolveMutations, input, isInteractive));
+        command.Subcommands.Add(
+            CreateAttemptStopCommand(text, output, diagnostics, resolveMutations, isInteractive));
         return command;
     }
 
@@ -1004,6 +1006,58 @@ public static class CliApplication
             if (result.Succeeded)
             {
                 output.WriteLine(text.Resolve(MessageKeys.AttemptSuperseded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>ADR 0044's human-only `workflow.stop_operation` capability. Same interactive-session
+    /// technical control and mandatory, never-bypassed confirmation as <see cref="CreateAttemptSupersedeCommand"/>
+    /// -- stopping the exact active operation is as irreversible-in-effect as superseding it.</summary>
+    private static Command CreateAttemptStopCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> sprint = new("--sprint") { Description = "Sprint id.", Required = true };
+        Option<bool> confirm = new("--yes") { Description = "Confirm stopping the active operation." };
+        Argument<string> id = new("attempt-id") { Description = "Attempt id." };
+        Command command = new("stop", text.Resolve(MessageKeys.AttemptStopDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            // ADR 0023: same earliest-reachable, unconditional refusal as attempt supersede/gate.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
+            if (!Guid.TryParse(parseResult.GetValue(sprint), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid attemptId))
+            {
+                return Report(diagnostics, DiagnosticCodes.WorkflowEventConflict);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            StopOperationResult result = await mutations
+                .StopCurrentOperationAsync(root, sprintId, attemptId, parseResult.GetValue(confirm), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.AttemptStopped));
             }
 
             return Report(diagnostics, result.DiagnosticCode);

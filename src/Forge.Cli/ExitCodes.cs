@@ -42,7 +42,8 @@ public static class ExitCodes
         DiagnosticCodes.PermissionDenied => Authorization,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
-        DiagnosticCodes.ModelPolicyViolation => Workflow,
+        DiagnosticCodes.ModelPolicyViolation or DiagnosticCodes.NoActiveOperation or
+            DiagnosticCodes.ActiveOperationChanged => Workflow,
         _ => Internal,
     };
 }
