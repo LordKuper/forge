@@ -221,7 +221,7 @@
       "kind": "command",
       "contract": "StopCurrentOperation",
       "events": ["AttemptChanged", "SprintChanged"],
-      "cli": "forge attempt stop <attempt-id> [--sprint <id>] [--yes]",
+      "cli": "forge attempt stop <attempt-id> --sprint <id> [--yes]",
       "desktop": "SprintWorkspace/StopOperation",
       "permission": "human_stop_operation_confirm",
       "acceptance": "stop-operation-parity",

@@ -139,6 +139,91 @@ public sealed class SurfaceParityTests
             });
     }
 
+    /// <summary>
+    /// Round 4 review of PR #95 (finding 4): `workflow.stop_operation` documented `--sprint` as
+    /// optional (`[--sprint &lt;id&gt;]`) while `CreateAttemptStopCommand` defines it with
+    /// `Required = true` -- a drift <see cref="CliExposesEveryDocumentedCapabilityCommand"/> could
+    /// never catch, since that test only walks <see cref="CapabilityIds.Implemented"/> and
+    /// `workflow.stop_operation` is deliberately excluded from it (ADR 0047: reserved until Desktop
+    /// parity ships, `capabilities.json`'s own `public_requires_both_surfaces` rule) even though its
+    /// CLI half has shipped since ADR 0047. This test closes exactly that gap: it compares this one
+    /// capability's documented `cli` string's bracket-implied option requiredness against the actual
+    /// command tree, so a future edit that reintroduces the same drift (either direction -- widening
+    /// an option to optional in code without updating the doc, or vice versa) fails here instead of
+    /// silently shipping. Deliberately scoped to this one capability rather than every reserved
+    /// entry: most of the others (`workspace.summary`, `sprint.timeline`, ...) have no CLI command at
+    /// all yet, and a handful of already-implemented commands elsewhere in this contract have their
+    /// own pre-existing, unrelated documentation gaps around `--project-root`/`--bundle` that are not
+    /// this PR's concern to fix.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void StopOperationDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("workflow.stop_operation");
+        // tokens[0] is always the fixed "forge" executable name (see DocumentedCli's own Skip(1));
+        // tokens[1] is the top-level subcommand.
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command attempt = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command stop = Assert.Single(attempt.Subcommands, subcommand => subcommand.Name == "stop");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(stop, entry.Option);
+                Assert.True(actual is not null, $"'stop' does not expose documented option '{entry.Option}'.");
+                Assert.True(
+                    actual!.Required == entry.Required,
+                    $"'{entry.Option}' is documented as {(entry.Required ? "required" : "optional")} " +
+                        $"but the CLI defines it as {(actual.Required ? "required" : "optional")}.");
+            });
+    }
+
+    /// <summary>Every `--option` token a documented `cli` string mentions, paired with whether it is
+    /// wrapped in a `[...]` bracket group there -- scanned on the raw, unsplit string since a bracket
+    /// group can span multiple space-separated tokens (e.g. `[--sprint &lt;id&gt;]`), unlike
+    /// <see cref="DocumentedCli"/>'s own per-token bracket trim, which discards that distinction.</summary>
+    private static IEnumerable<(string Option, bool Required)> ParseDocumentedOptionRequiredness(string cli) =>
+        Regex.Matches(cli, "--[a-zA-Z][a-zA-Z-]*")
+            .Select(match => (match.Value, Required: !IsInsideBracketGroup(cli, match.Index)));
+
+    private static bool IsInsideBracketGroup(string text, int index)
+    {
+        int depth = 0;
+        for (int i = 0; i < index; i++)
+        {
+            if (text[i] == '[')
+            {
+                depth++;
+            }
+            else if (text[i] == ']')
+            {
+                depth--;
+            }
+        }
+
+        return depth > 0;
+    }
+
+    private static Option? FindOptionRecursively(Command command, string name) =>
+        command.Options.FirstOrDefault(item => item.Name == name) ??
+        command.Subcommands
+            .Select(subcommand => FindOptionRecursively(subcommand, name))
+            .FirstOrDefault(item => item is not null);
+
+    private static string ReadCli(string capabilityId)
+    {
+        using JsonDocument contract = ReadCapabilities();
+        return Index(contract)[capabilityId].GetProperty("cli").GetString()!;
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public void DesktopExposesEveryImplementedCapability()
