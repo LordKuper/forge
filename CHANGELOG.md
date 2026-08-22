@@ -2,6 +2,13 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.62.3
+
+### Fixed
+
+- Fixed console windows briefly flashing on Windows during startup for each
+  provider version and authorization check.
+
 ## v0.62.2
 
 ### Fixed

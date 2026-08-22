@@ -53,6 +53,10 @@ public sealed class ProcessRunner : IProcessRunner
             StandardErrorEncoding = Utf8WithoutBom,
             StandardInputEncoding = request.StandardInput is not null ? Utf8WithoutBom : null,
             UseShellExecute = false,
+            // Ignored on non-Windows; on Windows it stops each redirected child (git, provider
+            // `--version`/auth checks, ...) from flashing its own console window while Forge Host
+            // itself stays hidden.
+            CreateNoWindow = true,
         };
 
         if (request.ReplaceEnvironment)
