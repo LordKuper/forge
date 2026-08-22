@@ -171,10 +171,6 @@ public sealed class ImplementationExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -191,26 +187,33 @@ public sealed class ImplementationExecutionHostedService(
             return;
         }
 
-        if (node.State is not (NodeState.Ready or NodeState.Running))
-        {
-            return;
-        }
-
-        // Plan section 7.3: an executor must check the durable stop intent before resuming an
-        // attempt. A Running node whose current attempt already carries one means either this same
-        // process's own registry cancellation already unblocked the provider run and this is the
-        // very next tick, or a Host crash landed after the intent was recorded but before the stop
-        // coordinator converged -- either way, finishing the stop (never restarting the provider) is
-        // the only safe response.
-        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+        // Plan section 7.3 / ADR 0047 addendum (round 1/2 review of PR #95): checked from the node's
+        // own CurrentAttemptId and the attempt's durable state, never from node.State == Running --
+        // that id is set once by the node's own `running` transition and never cleared by any of
+        // FinishStopAsync's later steps, so it still resolves to the stopping attempt even after a
+        // Host crash has left the node `Failed` (mid-rearm) or already `Ready` (rearmed, sprint not
+        // yet paused) -- states a Running-only gate can never see again, since nothing else revisits
+        // a node once it leaves `Running` on its own. StopConvergedAt is what stops this from firing
+        // again once the saga genuinely finished, even after a later, unrelated resume.
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
             state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
-            stoppingAttempt.StopRequestedAt is not null)
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
         {
             Guid stoppingProjectId = await ProjectIdentity
                 .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
             await stopCoordinator.FinishStopAsync(
                 options.ProjectRoot, sprintId, stoppingProjectId, implementation.Id,
                 new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
+        {
+            return;
+        }
+
+        if (node.State is not (NodeState.Ready or NodeState.Running))
+        {
             return;
         }
 

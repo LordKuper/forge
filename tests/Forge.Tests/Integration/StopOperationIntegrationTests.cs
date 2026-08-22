@@ -120,8 +120,11 @@ public sealed class StopOperationIntegrationTests
             environment.ProjectRoot, sprintId, PlanningNodeId, state.Nodes[PlanningNodeId].Version,
             cancellationToken);
         Assert.True(started.Succeeded);
+        SprintWorkflowState afterStart =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         await store.AppendAttemptStopRequestedAsync(
-            environment.ProjectRoot, sprintId, started.AttemptId!, cancellationToken);
+            environment.ProjectRoot, sprintId, started.AttemptId!,
+            afterStart.Attempts[started.AttemptId!.Value.ToString("D")].Version, cancellationToken);
 
         // A brand-new service instance, matching every other executor's own restart-recovery test
         // shape (e.g. IntakeExecutionHostedServiceTests): nothing in this process ever registered
@@ -145,6 +148,183 @@ public sealed class StopOperationIntegrationTests
         {
             await restarted.StopAsync(cancellationToken);
         }
+    }
+
+    /// <summary>Round 1 review of PR #95 (finding 1): a Host crash between
+    /// <see cref="StopOperationCoordinator.FinishStopAsync"/>'s own node-stopped and node-rearmed
+    /// appends leaves the node durably `Failed` with the sprint still `Running`. Before the fix,
+    /// every executor's own stop-convergence check was gated on `node.State == Running`, so a
+    /// `Failed` node was never revisited by anything -- the sprint wedged permanently. The
+    /// generalized check (node's own <see cref="NodeSnapshot.CurrentAttemptId"/> plus the attempt's
+    /// durable <see cref="AttemptSnapshot.StopRequestedAt"/>/<see cref="AttemptSnapshot.StopConvergedAt"/>,
+    /// independent of the node's current state) must converge it on the very next tick instead.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ARestartedExecutorFinishesAStopWhoseNodeWasLeftFailedByAnEarlierCrash()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, _, _, _) => throw new InvalidOperationException(
+                "The provider must not run again once a stop intent is already durable."));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId =
+            await CreateSprintReadyForPlanningAsync(environment, orchestrator, scheduler, store, cancellationToken);
+
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, PlanningNodeId, state.Nodes[PlanningNodeId].Version,
+            cancellationToken);
+        Assert.True(started.Succeeded);
+
+        await DriveToNodeFailedAfterStopAsync(
+            store, environment.ProjectRoot, sprintId, PlanningNodeId, started.AttemptId!, cancellationToken);
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Failed, wedged.Nodes[PlanningNodeId].State);
+        Assert.Equal(SprintState.Running, wedged.Sprint.State);
+
+        PlanningExecutionHostedService restarted = NewService(environment, store, scheduler);
+        await restarted.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForSprintPausedAsync(store, environment, sprintId, cancellationToken);
+
+            SprintWorkflowState converged =
+                (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+            Assert.Equal(SprintState.Paused, converged.Sprint.State);
+            Assert.Equal(NodeState.Ready, converged.Nodes[PlanningNodeId].State);
+            Assert.Equal(
+                AttemptState.Cancelled, converged.Attempts[started.AttemptId!.Value.ToString("D")].State);
+            // The re-arm never spent the automatic retry budget -- still exactly the one attempt
+            // that actually started.
+            Assert.Equal(1, converged.Nodes[PlanningNodeId].AttemptCount);
+            Assert.Empty(provider.Calls);
+        }
+        finally
+        {
+            await restarted.StopAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>Round 1 review of PR #95 (finding 2): a Host crash between
+    /// <see cref="StopOperationCoordinator.FinishStopAsync"/>'s own node-rearmed and sprint-paused
+    /// appends leaves the node durably `Ready` (its <see cref="NodeSnapshot.CurrentAttemptId"/> still
+    /// naming the stopped attempt -- the node's own `running`/rearm transitions never clear it) with
+    /// the sprint still `Running`. Before the fix, the executor's stop-check required
+    /// `node.State == Running`, so a `Ready` node fell straight through to `StartAttemptAsync`,
+    /// minting a brand-new attempt and silently spending automatic-retry budget the stop was meant
+    /// to preserve. The generalized check must recognize the still-unconverged stop from the
+    /// attempt's own durable state and finish it instead of starting fresh work.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ARestartedExecutorFinishesAStopWhoseNodeWasAlreadyRearmedWithoutStartingAFreshAttempt()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, _, _, _) => throw new InvalidOperationException(
+                "The provider must not run again once a stop intent is already durable -- a fresh " +
+                    "attempt here would prove the stale-Ready-node bug is back."));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId =
+            await CreateSprintReadyForPlanningAsync(environment, orchestrator, scheduler, store, cancellationToken);
+
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, PlanningNodeId, state.Nodes[PlanningNodeId].Version,
+            cancellationToken);
+        Assert.True(started.Succeeded);
+
+        await DriveToNodeReadyAfterStopAsync(
+            store, environment.ProjectRoot, sprintId, PlanningNodeId, started.AttemptId!, cancellationToken);
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, wedged.Nodes[PlanningNodeId].State);
+        Assert.Equal(SprintState.Running, wedged.Sprint.State);
+        Assert.Equal(1, wedged.Nodes[PlanningNodeId].AttemptCount);
+
+        PlanningExecutionHostedService restarted = NewService(environment, store, scheduler);
+        await restarted.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForSprintPausedAsync(store, environment, sprintId, cancellationToken);
+
+            SprintWorkflowState converged =
+                (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+            Assert.Equal(SprintState.Paused, converged.Sprint.State);
+            Assert.Equal(
+                AttemptState.Cancelled, converged.Attempts[started.AttemptId!.Value.ToString("D")].State);
+            // The critical assertion: no fresh attempt was ever minted. Before the fix, the node
+            // being `Ready` (not `Running`) made the executor's stop-check gate skip straight to
+            // StartAttemptAsync, bumping AttemptCount to 2 and invoking the provider a second time.
+            Assert.Equal(1, converged.Nodes[PlanningNodeId].AttemptCount);
+            Assert.Empty(provider.Calls);
+        }
+        finally
+        {
+            await restarted.StopAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>Manually replays exactly the first two of <see cref="StopOperationCoordinator.FinishStopAsync"/>'s
+    /// own durable steps (attempt -&gt; cancelled, node -&gt; failed) and stops there -- simulating a
+    /// Host crash between the node-stopped append and the node-rearmed append.</summary>
+    private static async Task DriveToNodeFailedAfterStopAsync(
+        ISprintStore store,
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = (await store.LoadAsync(projectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot attempt = state.Attempts[attemptId.Value.ToString("D")];
+        AppendOutcome stopRequested = await store.AppendAttemptStopRequestedAsync(
+            projectRoot, sprintId, attemptId, attempt.Version, cancellationToken);
+        Assert.True(stopRequested.Succeeded, $"diag={stopRequested.DiagnosticCode}");
+
+        AppendOutcome cancelled = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"), "AttemptChanged",
+            "workflow.attempt_stopped", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled), attempt.Version,
+            Guid.NewGuid(), cancellationToken);
+        Assert.True(cancelled.Succeeded, $"diag={cancelled.DiagnosticCode}");
+
+        NodeSnapshot node = cancelled.State!.Nodes[nodeId];
+        AppendOutcome failed = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", "workflow.node_stopped",
+            WorkflowStateNames.ToSnakeCase(NodeState.Failed), node.Version, Guid.NewGuid(), cancellationToken);
+        Assert.True(failed.Succeeded, $"diag={failed.DiagnosticCode}");
+    }
+
+    /// <summary>Extends <see cref="DriveToNodeFailedAfterStopAsync"/> one more step (node -&gt; ready)
+    /// and stops there -- simulating a Host crash between the node-rearmed append and the
+    /// sprint-paused append.</summary>
+    private static async Task DriveToNodeReadyAfterStopAsync(
+        ISprintStore store,
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        AttemptId attemptId,
+        CancellationToken cancellationToken)
+    {
+        await DriveToNodeFailedAfterStopAsync(store, projectRoot, sprintId, nodeId, attemptId, cancellationToken);
+        SprintWorkflowState state = (await store.LoadAsync(projectRoot, sprintId, cancellationToken))!;
+        NodeSnapshot node = state.Nodes[nodeId];
+        AppendOutcome ready = await store.AppendTransitionAsync(
+            projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", "workflow.node_rearmed",
+            WorkflowStateNames.ToSnakeCase(NodeState.Ready), node.Version, Guid.NewGuid(), cancellationToken);
+        Assert.True(ready.Succeeded, $"diag={ready.DiagnosticCode}");
     }
 
     private static PlanningExecutionHostedService NewService(

@@ -459,10 +459,32 @@ public interface ISprintStore
     /// <paramref name="attemptId"/> (plan section 7.3's durable stop intent) -- recorded once per
     /// attempt, like <see cref="AppendAttemptSupersededAsync"/>: a second call for the same attempt
     /// is always a replay, deduplicated by scanning the journal rather than by a caller-supplied
-    /// idempotency key. Not gated by <see cref="AppendTransitionAsync"/>'s optimistic concurrency --
-    /// the stop coordinator (<c>Forge.Application.StopOperationCoordinator</c>) already validated
-    /// the attempt is the sprint's exact active operation before calling this.</summary>
-    Task AppendAttemptStopRequestedAsync(
+    /// idempotency key, and returns a replayed <see cref="AppendOutcome"/> rather than appending
+    /// again. A fresh (non-replayed) append is still gated on <paramref name="expectedAttemptVersion"/>
+    /// matching the attempt's current version, exactly like <see cref="AppendTransitionAsync"/>'s own
+    /// optimistic concurrency: the stop coordinator
+    /// (<c>Forge.Application.StopOperationCoordinator.RequestStopAsync</c>) validates the attempt is
+    /// the sprint's exact active operation before calling this, but does not hold any lock across
+    /// that read and this call, so a concurrent compound operation
+    /// (<c>SprintScheduler.CompleteAttemptAsync</c>/<c>SupersedeAttemptAsync</c>) that moves the
+    /// attempt off being current in that window must be detected here, inside this store's own
+    /// per-sprint critical section, rather than let the intent silently attach to a now-stale
+    /// attempt. Returns <see cref="AppendOutcome.Conflict"/> on a version mismatch.</summary>
+    Task<AppendOutcome> AppendAttemptStopRequestedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        long expectedAttemptVersion,
+        CancellationToken cancellationToken);
+
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopConvergedType"/> event for
+    /// <paramref name="attemptId"/> -- <see cref="Forge.Application.StopOperationCoordinator.FinishStopAsync"/>'s
+    /// own last, unconditional step, marking the whole stop saga durably done. Recorded once per
+    /// attempt, deduplicated by scanning the journal like <see cref="AppendAttemptStopRequestedAsync"/>;
+    /// not gated by <see cref="AppendTransitionAsync"/>'s optimistic concurrency, since it is only
+    /// ever appended after <c>FinishStopAsync</c>'s own attempt-cancellation step already landed (or
+    /// was already a no-op because it had landed earlier).</summary>
+    Task AppendAttemptStopConvergedAsync(
         string projectRoot,
         SprintId sprintId,
         AttemptId attemptId,

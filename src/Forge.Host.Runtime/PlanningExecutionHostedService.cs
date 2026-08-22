@@ -169,10 +169,6 @@ public sealed class PlanningExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -189,22 +185,28 @@ public sealed class PlanningExecutionHostedService(
             return;
         }
 
-        if (node.State is not (NodeState.Ready or NodeState.Running))
-        {
-            return;
-        }
-
-        // Plan section 7.3: check the durable stop intent before resuming an attempt (see
+        // Plan section 7.3 / ADR 0047 addendum: check the durable stop intent from the node's own
+        // CurrentAttemptId and the attempt's durable state, never from node.State == Running (see
         // ImplementationExecutionHostedService's own identical check for the full reasoning).
-        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
             state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
-            stoppingAttempt.StopRequestedAt is not null)
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
         {
             Guid stoppingProjectId = await ProjectIdentity
                 .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
             await stopCoordinator.FinishStopAsync(
                 options.ProjectRoot, sprintId, stoppingProjectId, planning.Id,
                 new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
+        {
+            return;
+        }
+
+        if (node.State is not (NodeState.Ready or NodeState.Running))
+        {
             return;
         }
 

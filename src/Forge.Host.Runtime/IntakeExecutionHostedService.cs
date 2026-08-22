@@ -190,14 +190,6 @@ public sealed class IntakeExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            // A draft sprint's dependency-free intake node is already `ready` (AdvanceGraphAsync
-            // promotes regardless of sprint state), but StartAttemptAsync would refuse it with
-            // `sprint_not_running`. Skipping quietly here keeps that ordinary, expected state from
-            // logging a rejection every interval for the life of the sprint.
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -218,28 +210,39 @@ public sealed class IntakeExecutionHostedService(
             return;
         }
 
-        // `running` is not skipped as "someone else's work": nothing else in this codebase starts a
-        // Work node's attempt, so a `running` intake node can only be this service's own attempt
-        // interrupted before it completed. Resuming it is the entire crash-recovery path — skipping
-        // it would strand the node forever, since no other verb moves a `running` node onward.
-        if (node.State is not (NodeState.Ready or NodeState.Running))
-        {
-            return;
-        }
-
-        // Plan section 7.3: check the durable stop intent before resuming an attempt. Intake never
-        // registers with ActiveOperationRegistry (it invokes no provider/process), but a stop
+        // Plan section 7.3 / ADR 0047 addendum: check the durable stop intent from the node's own
+        // CurrentAttemptId and the attempt's durable state, never from node.State == Running (see
+        // ImplementationExecutionHostedService's own identical check for the full reasoning). Intake
+        // never registers with ActiveOperationRegistry (it invokes no provider/process), but a stop
         // request could in principle still land against it mid-tick; without this check its stop
         // intent would be recorded but never converged, wedging the sprint at `running` forever.
-        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
             state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
-            stoppingAttempt.StopRequestedAt is not null)
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
         {
             Guid stoppingProjectId = await ProjectIdentity
                 .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
             await stopCoordinator.FinishStopAsync(
                 options.ProjectRoot, sprintId, stoppingProjectId, intake.Id,
                 new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
+        {
+            // A draft sprint's dependency-free intake node is already `ready` (AdvanceGraphAsync
+            // promotes regardless of sprint state), but StartAttemptAsync would refuse it with
+            // `sprint_not_running`. Skipping quietly here keeps that ordinary, expected state from
+            // logging a rejection every interval for the life of the sprint.
+            return;
+        }
+
+        // `running` is not skipped as "someone else's work": nothing else in this codebase starts a
+        // Work node's attempt, so a `running` intake node can only be this service's own attempt
+        // interrupted before it completed. Resuming it is the entire crash-recovery path — skipping
+        // it would strand the node forever, since no other verb moves a `running` node onward.
+        if (node.State is not (NodeState.Ready or NodeState.Running))
+        {
             return;
         }
 

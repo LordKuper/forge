@@ -134,9 +134,30 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         CancellationToken cancellationToken) =>
         inner.AppendAttemptSupersededAsync(projectRoot, sprintId, attemptId, instruction, cancellationToken);
 
-    public Task AppendAttemptStopRequestedAsync(
+    /// <summary>Optional side effect run immediately before delegating an
+    /// <see cref="AppendAttemptStopRequestedAsync"/> call to the wrapped store -- lets a test inject
+    /// a concurrent mutation (e.g. a real <c>CompleteAttemptAsync</c>/<c>SupersedeAttemptAsync</c>
+    /// call) into the exact unlocked window
+    /// <see cref="Forge.Application.StopOperationCoordinator.RequestStopAsync"/> holds between its
+    /// own validation and this append, deterministically, without a real race.</summary>
+    public Func<CancellationToken, Task>? BeforeAppendAttemptStopRequested { get; set; }
+
+    public async Task<AppendOutcome> AppendAttemptStopRequestedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, long expectedAttemptVersion,
+        CancellationToken cancellationToken)
+    {
+        if (BeforeAppendAttemptStopRequested is { } hook)
+        {
+            await hook(cancellationToken).ConfigureAwait(false);
+        }
+
+        return await inner.AppendAttemptStopRequestedAsync(
+            projectRoot, sprintId, attemptId, expectedAttemptVersion, cancellationToken).ConfigureAwait(false);
+    }
+
+    public Task AppendAttemptStopConvergedAsync(
         string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
-        inner.AppendAttemptStopRequestedAsync(projectRoot, sprintId, attemptId, cancellationToken);
+        inner.AppendAttemptStopConvergedAsync(projectRoot, sprintId, attemptId, cancellationToken);
 
     public Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>

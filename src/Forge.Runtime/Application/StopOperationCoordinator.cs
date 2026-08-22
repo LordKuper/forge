@@ -6,20 +6,35 @@ public sealed record StopOperationResult(bool Succeeded, string DiagnosticCode);
 
 /// <summary>
 /// Plan section 7's idempotent, resumable stop-current-operation saga. <see cref="RequestStopAsync"/>
-/// is the mutation half: validates the target attempt is the sprint's exact active operation,
-/// durably records the stop intent before touching anything in-memory, then best-effort cancels the
+/// is the mutation half: validates the target attempt is the sprint's exact active operation, durably
+/// records the stop intent (gated inside <see cref="ISprintStore.AppendAttemptStopRequestedAsync"/>'s
+/// own per-sprint critical section on the exact version this method just validated, so a concurrent
+/// <see cref="SprintScheduler.CompleteAttemptAsync"/>/<see cref="SprintScheduler.SupersedeAttemptAsync"/>
+/// landing in the unlocked window between that validation and this append is caught as a conflict
+/// rather than silently attaching the intent to a now-stale attempt), then best-effort cancels the
 /// live process through <see cref="ActiveOperationRegistry"/> (a no-op if this Host process never
-/// registered it, e.g. after a crash and restart). <see cref="FinishStopAsync"/> is the convergence
-/// half every node-role executor calls once it observes a `running` node whose current attempt
-/// already carries a durable stop intent, whether because this same process's own cancellation
-/// already unblocked the provider run and the next tick found the intent, or because a Host crash
-/// left the intent recorded with nothing yet converged on resume: it durably settles the attempt as
+/// registered it, e.g. after a crash and restart).
+///
+/// <see cref="FinishStopAsync"/> is the convergence half: it durably settles the attempt as
 /// `cancelled`, discards its worktree, re-arms the owning node without touching
-/// <see cref="NodeSnapshot.AttemptCount"/>/<see cref="SprintScheduler.MaxAutomaticRetries"/>, and
-/// pauses the sprint. Every step re-checks current durable state before acting, so a Host crash
-/// between any two steps converges to the same end state on retry instead of duplicating or
-/// skipping one -- the same discipline <see cref="SprintScheduler.SupersedeAttemptAsync"/> already
-/// applies to its own multi-step compound operation.
+/// <see cref="NodeSnapshot.AttemptCount"/>/<see cref="SprintScheduler.MaxAutomaticRetries"/>, pauses
+/// the sprint, then marks the whole saga durably done
+/// (<see cref="ISprintStore.AppendAttemptStopConvergedAsync"/>). Every step re-checks current durable
+/// state before acting, so a Host crash between any two steps converges to the same end state on
+/// retry instead of duplicating or skipping one -- the same discipline
+/// <see cref="SprintScheduler.SupersedeAttemptAsync"/> already applies to its own multi-step compound
+/// operation. Every node-role executor calls this once its own current attempt carries a stop intent
+/// that has not yet converged (<see cref="AttemptSnapshot.StopRequestedAt"/> set,
+/// <see cref="AttemptSnapshot.StopConvergedAt"/> still <see langword="null"/>) -- checked from the
+/// node's <see cref="NodeSnapshot.CurrentAttemptId"/>, not from the node's own current state: that id
+/// is set once by the node's `running` transition and never cleared by any of this saga's own later
+/// steps (see <see cref="WorkflowFold"/>), so it still resolves to the stopping attempt even after a
+/// Host crash has left the node `Failed` (between this method's own node-stopped and node-rearmed
+/// appends) or already re-armed to `Ready` (between node-rearmed and sprint-paused) -- the exact two
+/// windows a node-state-gated check (`node.State == Running`) cannot see past, since nothing else
+/// ever revisits a node once it leaves `Running` on its own. This is what lets a live stop and one
+/// recovered after a Host crash at *any* of this method's own step boundaries converge through the
+/// same code path, whether the process restarted or not.
 /// </summary>
 public sealed class StopOperationCoordinator(ISprintStore store, SprintGitIsolation gitIsolation)
 {
@@ -75,8 +90,21 @@ public sealed class StopOperationCoordinator(ISprintStore store, SprintGitIsolat
             return new(false, DiagnosticCodes.ActiveOperationChanged);
         }
 
-        await store.AppendAttemptStopRequestedAsync(projectRoot, sprintId, attemptId, cancellationToken)
+        // The checks above read a snapshot and validate it; nothing holds a lock across that read and
+        // this append. A concurrent SprintScheduler.CompleteAttemptAsync/SupersedeAttemptAsync landing
+        // in that exact window moves this attempt off being the node's current, live operation --
+        // this store call re-validates the attempt's version inside its own per-sprint critical
+        // section (the same discipline SupersedeAttemptAsync's own AppendTransitionAsync call already
+        // relies on) and reports a conflict instead of silently attaching the stop intent to a
+        // now-stale attempt (round 1 review of PR #95).
+        AppendOutcome recorded = await store
+            .AppendAttemptStopRequestedAsync(projectRoot, sprintId, attemptId, attempt.Version, cancellationToken)
             .ConfigureAwait(false);
+        if (!recorded.Succeeded)
+        {
+            return new(false, DiagnosticCodes.ActiveOperationChanged);
+        }
+
         activeOperations.TryCancel(attemptId);
         return new(true, DiagnosticCodes.None);
     }
@@ -167,6 +195,17 @@ public sealed class StopOperationCoordinator(ISprintStore store, SprintGitIsolat
                 "workflow.sprint_paused", WorkflowStateNames.ToSnakeCase(SprintState.Paused), state.Sprint.Version,
                 Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
         }
+
+        // Appended last and unconditionally, regardless of which steps above this exact call did or
+        // did not need to (re-)run: the durable "this attempt's stop is fully done" marker every
+        // node-role executor's own convergence check relies on (round 1/2 review of PR #95). Without
+        // it, an executor watching AttemptSnapshot.StopRequestedAt alone -- independent of the node's
+        // own current state, which is what closes the crash windows below -- would call this method
+        // again forever, including after an unrelated later `resume_sprint` puts the sprint back in
+        // `Running`, spuriously re-pausing it. Idempotent like every AppendAttempt*Async sibling here:
+        // a second call for the same attempt is a safe no-op.
+        await store.AppendAttemptStopConvergedAsync(projectRoot, sprintId, attemptId, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async Task<SprintWorkflowState> RequireStateAsync(

@@ -163,10 +163,6 @@ public sealed class ReviewExecutionHostedService(
         SprintWorkflowState state = await scheduler
             .AdvanceGraphAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        if (state.Sprint.State != SprintState.Running)
-        {
-            return;
-        }
 
         SprintDefinition? definition = await store
             .LoadDefinitionAsync(options.ProjectRoot, sprintId, cancellationToken)
@@ -183,25 +179,32 @@ public sealed class ReviewExecutionHostedService(
             return;
         }
 
-        if (node.State is not (NodeState.Ready or NodeState.Running))
-        {
-            return;
-        }
-
-        // Plan section 7.3: check the durable stop intent before resuming an attempt. Deliberately
-        // narrower than "any Running node" -- an ordinary unresolved ChangesRequested verdict also
-        // leaves the node Running for the next review iteration (see this class's own remarks), and
-        // must keep doing so; only a Running attempt that actually carries a stop intent short-
-        // circuits here instead of starting another iteration.
-        if (node.State == NodeState.Running && node.CurrentAttemptId is { } stoppingAttemptIdText &&
+        // Plan section 7.3 / ADR 0047 addendum: check the durable stop intent from the node's own
+        // CurrentAttemptId and the attempt's durable state, never from node.State == Running (see
+        // ImplementationExecutionHostedService's own identical check for the full reasoning).
+        // Deliberately still narrower than "any node with a CurrentAttemptId" -- an ordinary
+        // unresolved ChangesRequested verdict also leaves the node Running for the next review
+        // iteration, and must keep doing so; only an attempt that actually carries a not-yet-converged
+        // stop intent short-circuits here instead of starting another iteration.
+        if (node.CurrentAttemptId is { } stoppingAttemptIdText &&
             state.Attempts.TryGetValue(stoppingAttemptIdText, out AttemptSnapshot? stoppingAttempt) &&
-            stoppingAttempt.StopRequestedAt is not null)
+            stoppingAttempt.StopRequestedAt is not null && stoppingAttempt.StopConvergedAt is null)
         {
             Guid stoppingProjectId = await ProjectIdentity
                 .ReadProjectIdAsync(options.ProjectRoot, registry, cancellationToken).ConfigureAwait(false);
             await stopCoordinator.FinishStopAsync(
                 options.ProjectRoot, sprintId, stoppingProjectId, review.Id,
                 new AttemptId(Guid.Parse(stoppingAttemptIdText)), cancellationToken).ConfigureAwait(false);
+            return;
+        }
+
+        if (state.Sprint.State != SprintState.Running)
+        {
+            return;
+        }
+
+        if (node.State is not (NodeState.Ready or NodeState.Running))
+        {
             return;
         }
 

@@ -119,7 +119,18 @@ public sealed record NodeSnapshot(
 /// durable <see cref="WorkflowEvent.AttemptStopRequestedType"/> event lands for this attempt (plan
 /// section 7.3) -- the queryable half of <see cref="StopIntent"/> executors and restart recovery
 /// check before starting or resuming an attempt, so a Host crash between the request and the stop
-/// coordinator's own convergence steps can never resurrect it.</summary>
+/// coordinator's own convergence steps can never resurrect it. <paramref name="StopConvergedAt"/>
+/// is set once a durable <see cref="WorkflowEvent.AttemptStopConvergedType"/> event lands --
+/// <see cref="Forge.Application.StopOperationCoordinator.FinishStopAsync"/>'s own last, unconditional
+/// step, appended only after every other convergence step it owns has landed (or was already a
+/// no-op). An executor checks <see langword="null"/> == <see cref="StopRequestedAt"/> is not
+/// <see langword="null"/> but <see cref="StopConvergedAt"/> is <see langword="null"/> to know a stop
+/// still needs finishing, from the node's <em>current</em> state rather than only while the node is
+/// still `Running` -- a Host crash can land after the node has already moved to `Failed` or been
+/// re-armed to `Ready` but before the sprint itself paused, and nothing else revisits the node once
+/// it leaves `Running` on its own. This is the durable signal that stops that check from re-firing
+/// forever once the saga genuinely finished, even after an unrelated later `resume_sprint` puts the
+/// sprint back in `Running`.</summary>
 public sealed record AttemptSnapshot(
     AttemptId Id,
     AttemptState State,
@@ -131,4 +142,5 @@ public sealed record AttemptSnapshot(
     AttemptActivityKind? LastActivityKind = null,
     string? BaseCommit = null,
     AttemptId? SupersedesAttemptId = null,
-    DateTimeOffset? StopRequestedAt = null);
+    DateTimeOffset? StopRequestedAt = null,
+    DateTimeOffset? StopConvergedAt = null);

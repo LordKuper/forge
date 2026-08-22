@@ -108,6 +108,18 @@ public sealed record WorkflowEvent(
     /// executor or restart-recovery pass must be able to ask "does this running attempt already
     /// carry a stop intent" directly, not merely read it back as audit trail.</summary>
     public const string AttemptStopRequestedType = "AttemptStopRequested";
+
+    /// <summary>ADR 0047 addendum: the stop saga's own durable "fully converged" marker, appended
+    /// once by <see cref="Forge.Application.StopOperationCoordinator.FinishStopAsync"/> as its last
+    /// step, unconditionally, regardless of which of its earlier steps this exact call did or did not
+    /// need to (re-)run. Recorded on the attempt's own aggregate, never a transition itself (no
+    /// <see cref="ToStateArgument"/>), matching <see cref="AttemptStopRequestedType"/>'s own shape.
+    /// Also folded (<see cref="AttemptSnapshot.StopConvergedAt"/>), for the same reason
+    /// <see cref="AttemptStopRequestedType"/> is: every node-role executor must be able to ask "does
+    /// this node's current attempt still need <c>FinishStopAsync</c>" directly, from durable state,
+    /// independent of the node's own current state -- see that field's own remarks for why a check
+    /// gated only on <see cref="AttemptStopRequestedType"/> having landed is not enough on its own.</summary>
+    public const string AttemptStopConvergedType = "AttemptStopConverged";
 }
 
 public sealed record SprintWorkflowState(
@@ -203,6 +215,20 @@ public static class WorkflowFold
                 continue;
             }
 
+            if (current.Type == WorkflowEvent.AttemptStopConvergedType)
+            {
+                // Same treatment as AttemptStopRequestedType, for the same reason: projected into
+                // AttemptSnapshot.StopConvergedAt so an executor can tell a fully-converged stop
+                // apart from one still needing FinishStopAsync, directly from durable state.
+                _ = IsTransitionRecord(current);
+                if (attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? convergedAttempt))
+                {
+                    attempts[current.Aggregate.Id] = convergedAttempt with { StopConvergedAt = current.OccurredAt };
+                }
+
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -280,7 +306,8 @@ public static class WorkflowFold
                         previousAttempt?.LastActivityKind,
                         baseCommit,
                         supersedesAttemptId,
-                        previousAttempt?.StopRequestedAt);
+                        previousAttempt?.StopRequestedAt,
+                        previousAttempt?.StopConvergedAt);
                     break;
                 default:
                     throw new InvalidDataException(
@@ -319,6 +346,13 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Stop-request event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptStopConvergedType)
+        {
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt
+                ? throw new InvalidDataException($"Stop-converged event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

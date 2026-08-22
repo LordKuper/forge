@@ -160,6 +160,58 @@ public sealed class StopOperationCoordinatorTests
         registry.Unregister(attempt.Id);
     }
 
+    /// <summary>Round 1 review of PR #95 (finding 3): <see cref="StopOperationCoordinator.RequestStopAsync"/>
+    /// validates the target attempt is the sprint's exact current, live operation and only then
+    /// durably records the stop intent, but holds no lock across that read and the append that
+    /// follows -- a concurrent <see cref="SprintScheduler.CompleteAttemptAsync"/>/
+    /// <see cref="SprintScheduler.SupersedeAttemptAsync"/> landing in that exact window must never
+    /// let the intent silently attach to the now-stale attempt while still reporting success. Injects
+    /// the race deterministically (no real concurrency needed, so no flakiness) via a
+    /// <see cref="FlakySprintStore"/> hook that runs a real <c>CompleteAttemptAsync</c> immediately
+    /// before the coordinator's own durable append reaches the store.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RequestStopAsyncRejectsCleanlyWhenACompletionRacesInBeforeItsOwnAppendLands()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        // Two independent nodes so the sprint stays Running once "a" completes -- otherwise the
+        // sprint itself leaving Running would mask this case behind the ordinary NoActiveOperation
+        // rejection instead of exercising the race this test targets.
+        (SprintScheduler scheduler, ISprintStore realStore, SprintId sprintId, SprintOrchestrator _, AttemptSnapshot attempt) =
+            await StartAttemptAsync(environment, TwoIndependentNodesGraph, "a");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        FlakySprintStore raceStore = new(realStore)
+        {
+            BeforeAppendAttemptStopRequested = async _ =>
+            {
+                // Simulates a concurrent completion landing in the exact unlocked window between
+                // RequestStopAsync's own validation (already passed, against the snapshot captured
+                // before this hook runs) and its durable append -- the real scheduler, the real
+                // store, no test-only shortcut standing in for the race.
+                CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
+                    environment.ProjectRoot, sprintId, "a", attempt.Id, true, SampleDigest, [], [],
+                    cancellationToken);
+                Assert.True(completed.Succeeded);
+            },
+        };
+        StopOperationCoordinator coordinator = new(raceStore, environment.Resolve<SprintGitIsolation>());
+        ActiveOperationRegistry registry = environment.Resolve<ActiveOperationRegistry>();
+
+        StopOperationResult result = await coordinator.RequestStopAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, registry, cancellationToken);
+
+        // A clean rejection, never a reported success with a stop intent silently attached to the
+        // now-stale, already-succeeded attempt.
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ActiveOperationChanged, result.DiagnosticCode);
+        SprintWorkflowState afterRace =
+            (await realStore.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot racedAttempt = afterRace.Attempts[attempt.Id.Value.ToString("D")];
+        Assert.Null(racedAttempt.StopRequestedAt);
+        Assert.Equal(AttemptState.Succeeded, racedAttempt.State);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task FinishStopAsyncCancelsARunningAttemptDiscardsTheWorktreeRearmsTheNodeAndPausesTheSprint()
@@ -179,7 +231,8 @@ public sealed class StopOperationCoordinatorTests
         GitOperationResult attemptWorktree = await gitIsolation.CreateAttemptWorktreeAsync(
             environment.ProjectRoot, projectId, sprintId, attempt.Id, cancellationToken);
         Assert.True(attemptWorktree.Succeeded);
-        await store.AppendAttemptStopRequestedAsync(environment.ProjectRoot, sprintId, attempt.Id, cancellationToken);
+        await store.AppendAttemptStopRequestedAsync(
+            environment.ProjectRoot, sprintId, attempt.Id, attempt.Version, cancellationToken);
 
         StopOperationCoordinator coordinator = environment.Resolve<StopOperationCoordinator>();
         await coordinator.FinishStopAsync(
