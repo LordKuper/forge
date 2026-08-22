@@ -10,6 +10,7 @@ public sealed class ProcessRunnerCreateStartInfoTests
     /// `git`, ...) even though Forge Host itself starts hidden. `ProcessStartInfo.CreateNoWindow`
     /// is a no-op on non-Windows, so asserting it here needs no OS gate.</summary>
     [Fact]
+    [Trait("Category", "Unit")]
     public void CreateStartInfoDoesNotAllocateAConsoleWindow()
     {
         System.Diagnostics.ProcessStartInfo startInfo =
