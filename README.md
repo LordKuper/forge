@@ -2,12 +2,22 @@
 
 Forge is a local harness for durable, isolated AI-assisted software delivery.
 
-The MVP targets Windows and exposes equivalent CLI/TUI and .NET MAUI Desktop
+The MVP targets Windows and exposes equivalent CLI and .NET MAUI Desktop
 surfaces over a shared application contract. Both hosts run the same ordered
-startup sequence and dispatch the same commands, queries, and status snapshot.
-Self-update, project initialization, scoped configuration, and deterministic
-recommendations are implemented; the provider toolchain and the durable workflow
-engine are not yet.
+startup sequence and dispatch the same versioned commands, queries, and status
+snapshot. Self-update, project initialization, scoped configuration,
+deterministic recommendations, the provider toolchain, and the durable
+implementation-critical workflow engine (planning, implementation, review,
+confirmation, test-work, and finalization, with human gates, stage transitions,
+and a stop-current-operation control) are all implemented.
+
+The Desktop surface is a two-panel workspace: a sidebar listing known projects
+and their active sprints with a global provider/quota status row, a project
+overview, Forge/project settings pages, and a sprint workspace with a sticky
+status header, a chronological timeline, and typed contextual actions (run,
+resume, cancel, stop the active operation, move to another workflow stage).
+It renders the same versioned queries and mutations the CLI uses, never its own
+copy of workflow policy.
 
 - [Accepted architecture decisions](docs/architecture/decisions/0001-stage-0-foundation.md)
 - [Versioned contracts](docs/contracts/v1/README.md)
@@ -47,12 +57,19 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 | `forge next [--json]` | Show the deterministic recommended actions. |
 | `forge events [--after <cursor>] [--follow] [--json]` | Read incremental workflow events. |
 | `forge models [--json] [--refresh]` | Show provider toolchain health. |
+| `forge models quota [--json]` | Show provider/model account quota status (`unknown` unless a provider exposes a verified signal — see ADR 0052). |
 | `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
+| `forge project <add\|list\|remove\|relink\|alias\|select>` | Manage the local, user-scoped project catalog; never modifies a project's own repository or `.forge/` directory. |
+| `forge workspace <summary\|actions> [--json]` | Show the bounded sidebar/status-header summary across every cataloged project, or the Host's own contextual-action list. |
+| `forge sprint <create\|run\|resume\|cancel\|inspect\|timeline\|assess-stage\|move-stage>` | Manage one sprint's lifecycle and workflow stage; `assess-stage`/`move-stage` implement the read-then-commit stage-transition protocol (ADR 0045/0046/0048). |
+| `forge attempt <supersede\|stop> <id> --sprint <id>` | Supersede a non-terminal attempt with a replacement, or stop the sprint's exact active operation without cancelling the sprint (ADR 0044/0047). |
+| `forge gate \| forge confirm \| forge test-work \| forge finalize` | The human-only workflow gates: approve/reject a review gate, record implementation confirmation, record a test-work decision, and finalize a sprint. |
+| `forge integration skill <generate\|install\|remove>` | Preview, write, or remove each enabled provider's native integration file. |
 
-The Desktop surface reads the same snapshot: the dashboard plus a sprint tree
-and a sprint detail view equivalent to `forge tree` and `forge sprint inspect`.
-Its sprint-id box selects which sprint to expand and expands the active sprint
-when left empty.
+The Desktop workspace consumes the same versioned queries and mutations this
+table lists; it never re-derives workflow policy locally (see
+`docs/architecture/decisions/0043-workspace-read-model-projections.md` and the
+subsequent Slice 4-7 ADRs for the read models and presentation architecture).
 
 `--project-root` accepts only an absolute directory and is never resolved
 upward. Values passed to `forge config` follow the declared type of the key, so

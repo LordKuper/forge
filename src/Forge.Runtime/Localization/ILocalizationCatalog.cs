@@ -355,4 +355,20 @@ public static class MessageKeys
     public const string WorkspaceActionMoveToStageAdvanceRationale = "workspace_action.move_to_stage.advance";
     public const string WorkspaceActionMoveToStageRewindRationale = "workspace_action.move_to_stage.rewind";
     public const string WorkspaceActionMoveToStageSameRationale = "workspace_action.move_to_stage.same";
+
+    // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnavailable`
+    // (defined above, Slice 5) is the only state this codebase currently produces -- the remaining
+    // four exist so the sidebar/CLI rendering is complete for every state the plan requires, not
+    // only the one ADR 0052 found verifiable evidence for.
+    public const string ModelsQuotaDescription = "ModelsQuotaDescription";
+    public const string ModelsQuotaTitle = "ModelsQuotaTitle";
+    public const string QuotaStatusUnknownAccessible = "QuotaStatusUnknownAccessible";
+    public const string QuotaStatusReady = "QuotaStatusReady";
+    public const string QuotaStatusReadyAccessible = "QuotaStatusReadyAccessible";
+    public const string QuotaStatusLimited = "QuotaStatusLimited";
+    public const string QuotaStatusLimitedAccessible = "QuotaStatusLimitedAccessible";
+    public const string QuotaStatusDepleted = "QuotaStatusDepleted";
+    public const string QuotaStatusDepletedAccessible = "QuotaStatusDepletedAccessible";
+    public const string QuotaStatusStale = "QuotaStatusStale";
+    public const string QuotaStatusStaleAccessible = "QuotaStatusStaleAccessible";
 }

@@ -119,6 +119,57 @@ public sealed class CliTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
+    public async Task ModelsQuotaCommandReportsUnknownForEveryProvider()
+    {
+        // ADR 0052: no provider integration in this codebase exposes a verified quota signal, so
+        // `forge models quota` truthfully reports "unknown" for every provider rather than
+        // fabricating a ready/limited state.
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready));
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["models", "quota"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string rendered = output.ToString();
+        Assert.Contains("codex", rendered, StringComparison.Ordinal);
+        Assert.Contains("claude_code", rendered, StringComparison.Ordinal);
+        Assert.Contains("unknown", rendered, StringComparison.Ordinal);
+        Assert.Contains("provider_quota_unknown", rendered, StringComparison.Ordinal);
+        // Never fabricated: no ready/limited row can appear since ADR 0052 verified none is real.
+        Assert.DoesNotContain(" ready ", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsQuotaCommandJsonMatchesTheVersionedEnvelope()
+    {
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready));
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(Text(catalog), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["models", "quota", "--json"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        string json = output.ToString();
+        Assert.Contains("\"schema_version\": \"1.0.0\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"availability\": \"unknown\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"diagnostic_code\": \"provider_quota_unknown\"", json, StringComparison.Ordinal);
+        // Plan 6.5: sprint retry budget is never presented as account quota -- this JSON must carry
+        // no retry/routing field of any kind.
+        Assert.DoesNotContain("retry", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
     public async Task ModelsCommandDefaultsToReadOnlyDiscovery()
     {
         using TestEnvironment environment = new();

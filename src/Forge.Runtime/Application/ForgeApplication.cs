@@ -682,6 +682,17 @@ public sealed class ForgeApplication(
     public IReadOnlyList<ProviderHealthEntry> ProjectProviderHealth(ProviderToolchainStatus status) =>
         ProviderHealthProjector.Project(status, providerCatalog);
 
+    /// <summary>Plan section 6.5's reserved `provider.quota_status` query (ADR 0043/0052): every
+    /// enabled and registered-but-disabled provider's quota reading. Read-only and offline, like
+    /// <see cref="GetProviderHealthAsync"/> -- it reuses the same already-cheap toolchain check
+    /// rather than a new probe, since ADR 0052 found no provider integration in this codebase
+    /// exposes a verified quota signal to probe for.</summary>
+    public async Task<IReadOnlyList<ProviderQuotaSnapshot>> GetProviderQuotaStatusAsync(CancellationToken cancellationToken)
+    {
+        ProviderToolchainStatus status = await providerToolchain.CheckAsync(cancellationToken).ConfigureAwait(false);
+        return ProviderQuotaProjector.Project(status, providerCatalog, clock.UtcNow);
+    }
+
     /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
     public async Task<RecoverStartupResult> RecoverStartupAsync(
         string? projectRoot,

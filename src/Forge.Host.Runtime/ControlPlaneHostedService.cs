@@ -5,6 +5,7 @@ using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host.Client;
 using Forge.Presentation;
+using Forge.Providers;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using YamlDotNet.Core;
@@ -364,6 +365,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchGetSprintTimelineAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.GetAvailableActionsKind =>
                     await DispatchGetAvailableActionsAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.GetProviderQuotaStatusKind =>
+                    await DispatchGetProviderQuotaStatusAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -863,6 +866,22 @@ public sealed class ControlPlaneHostedService(
         IReadOnlyList<AvailableAction> result = await application
             .GetAvailableActionsAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    /// <summary>Plan section 6.5's reserved `provider.quota_status` query (Slice 7). Provider quota
+    /// is toolchain-wide, not project-scoped, but still answered by this Host's own process (ADR
+    /// 0005) rather than a shared cross-project service -- matching
+    /// <see cref="DispatchGetWorkspaceSummaryAsync"/>'s own reasoning.</summary>
+    private async Task<ControlResponse> DispatchGetProviderQuotaStatusAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        IReadOnlyList<ProviderQuotaSnapshot> providers = await application
+            .GetProviderQuotaStatusAsync(cancellationToken)
+            .ConfigureAwait(false);
+        ProviderQuotaStatus result = new(ProviderQuotaStatus.ContractVersion, providers);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
     }

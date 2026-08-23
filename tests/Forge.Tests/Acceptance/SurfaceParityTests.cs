@@ -293,6 +293,33 @@ public sealed class SurfaceParityTests
             });
     }
 
+    /// <summary>Same gap-closing purpose as <see cref="WorkspaceSummaryDocumentedCliOptionsMatchTheirActualRequiredness"/>,
+    /// for `provider.quota_status` (Slice 7, ADR 0043/0052).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ProviderQuotaStatusDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("provider.quota_status");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command models = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command quota = Assert.Single(models.Subcommands, subcommand => subcommand.Name == "quota");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(quota, entry.Option);
+                Assert.True(actual is not null, $"'quota' does not expose documented option '{entry.Option}'.");
+                Assert.True(actual!.Required == entry.Required);
+            });
+    }
+
     /// <summary>Every `--option` token a documented `cli` string mentions, paired with whether it is
     /// wrapped in a `[...]` bracket group there -- scanned on the raw, unsplit string since a bracket
     /// group can span multiple space-separated tokens (e.g. `[--sprint &lt;id&gt;]`), unlike

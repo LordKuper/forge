@@ -141,6 +141,7 @@ public partial class WorkspaceShellPage : ContentPage
         SemanticProperties.SetDescription(status, snapshot.Status.ProviderAccessibleText);
         SidebarHost.Children.Add(status);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
+        SemanticProperties.SetDescription(quota, snapshot.Status.QuotaAccessibleText);
         SidebarHost.Children.Add(quota);
 
         // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an

@@ -19,6 +19,9 @@ public static class StatusJson
     public static string Serialize(ProviderHealth health) =>
         JsonSerializer.Serialize(health, Options);
 
+    public static string Serialize(ProviderQuotaStatus status) =>
+        JsonSerializer.Serialize(status, Options);
+
     public static string Serialize(StartupStatus status) =>
         JsonSerializer.Serialize(status, Options);
 

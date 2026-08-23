@@ -1377,6 +1377,49 @@ public static class CliApplication
 
             return Report(diagnostics, diagnosticCode);
         });
+        command.Subcommands.Add(CreateModelsQuotaCommand(text, output, application));
+        return command;
+    }
+
+    /// <summary>Plan section 6.5's reserved `provider.quota_status` query (Slice 7, ADR 0043/0052).
+    /// Every entry currently reports <see cref="ProviderQuotaAvailability.Unknown"/> -- ADR 0052
+    /// found no provider integration in this codebase exposes a verified account/model quota
+    /// signal -- so this command is truthful, not a placeholder pretending readiness. Unlike `forge
+    /// models`, an unknown or degraded quota reading is not itself a process failure (there is no
+    /// analogous <c>DiagnosticCodes</c> member <see cref="ExitCodes.For"/> recognizes for a
+    /// <see cref="ProviderDiagnosticCodes"/> value), so this command always exits
+    /// <see cref="ExitCodes.Ok"/> -- the per-entry diagnostic code is data in the rendered output,
+    /// not a process-level error.</summary>
+    private static Command CreateModelsQuotaCommand(
+        SurfaceText text,
+        TextWriter output,
+        ForgeApplication application)
+    {
+        Option<bool> json = CreateJsonOption();
+        Command command = new("quota", text.Resolve(MessageKeys.ModelsQuotaDescription));
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            IReadOnlyList<ProviderQuotaSnapshot> entries = await application
+                .GetProviderQuotaStatusAsync(cancellationToken)
+                .ConfigureAwait(false);
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(
+                    StatusJson.Serialize(new ProviderQuotaStatus(ProviderQuotaStatus.ContractVersion, entries)));
+                return ExitCodes.Ok;
+            }
+
+            output.WriteLine(text.Resolve(MessageKeys.ModelsQuotaTitle));
+            foreach (ProviderQuotaSnapshot entry in entries)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {SurfaceFormatting.ProviderQuotaRow(entry)}"));
+            }
+
+            return ExitCodes.Ok;
+        });
         return command;
     }
 

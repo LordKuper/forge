@@ -172,4 +172,26 @@ public sealed class SidebarViewModelTests
         Assert.DoesNotContain("providers ready", snapshot.Status.ProviderSummaryText, StringComparison.Ordinal);
         Assert.DoesNotContain("providers are ready", snapshot.Status.ProviderAccessibleText, StringComparison.Ordinal);
     }
+
+    /// <summary>Plan 12.6: the quota state must have both text and an accessible name, never color
+    /// alone. ADR 0052 found no provider integration exposes a verified quota signal, so this must
+    /// truthfully resolve to the "unknown" state rather than fabricating readiness.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncReportsQuotaAsUnknownWithBothTextAndAnAccessibleName()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnavailable), snapshot.Status.QuotaStatusText);
+        Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnknownAccessible), snapshot.Status.QuotaAccessibleText);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaAccessibleText));
+    }
 }
