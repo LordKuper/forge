@@ -94,7 +94,8 @@ public static class CliHost
                 IForgeMutations mutations = await resolveMutations(mutationRoot, ct).ConfigureAwait(false);
                 created = mutations as IAsyncDisposable;
                 return mutations;
-            });
+            },
+            catalog: host.Services.GetRequiredService<ProjectCatalogStore>());
         try
         {
             return await root.Parse(args).InvokeAsync(cancellationToken: cancellationToken).ConfigureAwait(false);

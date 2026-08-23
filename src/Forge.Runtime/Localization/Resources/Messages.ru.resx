@@ -160,4 +160,21 @@
   <data name="SprintManageFailed" xml:space="preserve"><value>Действие со спринтом не выполнено.</value></data>
   <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы выполнить действие.</value></data>
   <data name="SprintStatePaused" xml:space="preserve"><value>Приостановлено</value></data>
+  <data name="WorkspaceDescription" xml:space="preserve"><value>Команды рабочего пространства.</value></data>
+  <data name="WorkspaceSummaryDescription" xml:space="preserve"><value>Показать ограниченную сводку по каждому каталогизированному проекту.</value></data>
+  <data name="WorkspaceActionsDescription" xml:space="preserve"><value>Показать действия, доступные сейчас для проекта или спринта.</value></data>
+  <data name="SprintTimelineDescription" xml:space="preserve"><value>Прочитать проекцию временной шкалы спринта постранично.</value></data>
+  <data name="ProjectDescription" xml:space="preserve"><value>Команды локального каталога проектов.</value></data>
+  <data name="ProjectAddDescription" xml:space="preserve"><value>Добавить инициализированный проект в локальный каталог.</value></data>
+  <data name="ProjectRemoveDescription" xml:space="preserve"><value>Удалить проект из локального каталога, не затрагивая его репозиторий.</value></data>
+  <data name="ProjectRelinkDescription" xml:space="preserve"><value>Перепривязать запись каталога к перемещённому проекту после проверки идентификатора манифеста.</value></data>
+  <data name="ProjectAliasDescription" xml:space="preserve"><value>Задать или очистить локальный псевдоним проекта.</value></data>
+  <data name="ProjectListDescription" xml:space="preserve"><value>Показать список всех каталогизированных проектов.</value></data>
+  <data name="ProjectSelectDescription" xml:space="preserve"><value>Сохранить последний выбранный спринт и маршрут для каталогизированного проекта.</value></data>
+  <data name="ProjectAdded" xml:space="preserve"><value>Проект добавлен.</value></data>
+  <data name="ProjectRemoved" xml:space="preserve"><value>Проект удалён.</value></data>
+  <data name="ProjectRelinked" xml:space="preserve"><value>Проект перепривязан.</value></data>
+  <data name="ProjectAliasSet" xml:space="preserve"><value>Псевдоним обновлён.</value></data>
+  <data name="ProjectSelected" xml:space="preserve"><value>Выбор сохранён.</value></data>
+  <data name="NoProjects" xml:space="preserve"><value>В каталоге пока нет проектов.</value></data>
 </root>

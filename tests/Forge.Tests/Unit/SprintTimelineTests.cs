@@ -1,0 +1,235 @@
+using Forge.Application;
+using Forge.Domain;
+using Forge.Tests.Support;
+
+namespace Forge.UnitTests;
+
+/// <summary>Plan section 6.3's versioned, cursor-paged timeline projection over the existing
+/// append-only workflow journal. Confirms real incremental-loading and redaction behavior before the
+/// smallest risk-based tests were added.</summary>
+public sealed class SprintTimelineTests
+{
+    private static readonly IReadOnlyList<NodeDefinition> OneNodeGraph = [new("a", NodeKind.Work, [])];
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheFirstPageReportsTheSprintsOwnCreationAsASystemItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, page.DiagnosticCode);
+        Assert.Equal(sprintId.Value, page.SprintId);
+        Assert.NotEmpty(page.Items);
+        Assert.All(page.Items, item => Assert.Equal(TimelineActor.System, item.Actor));
+        Assert.Contains(page.Items, item => item.TargetKind == "sprint");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnUnknownSprintIdReportsSprintNotFoundWithAnEmptyPage()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, Guid.NewGuid(), null, cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.SprintNotFound, page.DiagnosticCode);
+        Assert.Empty(page.Items);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RepeatingTheSameCursorNeverRedeliversAnAlreadySeenItemAndANewEventArrivesExactlyOnce()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        SprintTimelinePage firstPage = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.NotEmpty(firstPage.Items);
+
+        SprintTimelinePage caughtUp = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, firstPage.Cursor, cancellationToken);
+        Assert.Empty(caughtUp.Items);
+
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+
+        SprintTimelinePage nextPage = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, firstPage.Cursor, cancellationToken);
+
+        Assert.NotEmpty(nextPage.Items);
+        Assert.Empty(nextPage.Items.Select(item => item.Id).Intersect(firstPage.Items.Select(item => item.Id)));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARawCredentialInAnOperatorInstructionNeverAppearsInAProjectedTimelineItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        const string secret = "password=Sup3rSecretValue!!";
+        await store.AppendAttemptSupersededAsync(
+            environment.ProjectRoot, sprintId, started.AttemptId!, $"Retry, credential was {secret}",
+            cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        SprintTimelineItem supersession =
+            Assert.Single(page.Items, item => item.Type == WorkflowEvent.AttemptSupersededType);
+        Assert.Equal(TimelineActor.Operator, supersession.Actor);
+        Assert.All(
+            supersession.Arguments.Values,
+            value => Assert.DoesNotContain(secret, value ?? string.Empty, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(page);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    // Regression (PR #97 review, finding 6): a cursor's Watermark is a per-sprint, independent,
+    // dense counter -- reusing sprint A's cursor to page sprint B must never silently apply A's
+    // watermark to B's own stream (which could skip B's early items unnoticed). The codec's own
+    // documented contract already treats a malformed or future-versioned token as "foreign,
+    // decodes to Empty, never a silent rebaseline"; a cursor whose bound sprint id does not match
+    // the sprint being paged is exactly as foreign and now gets the same rejection.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACursorIssuedForOneSprintIsRejectedRatherThanSilentlyAppliedToAnotherSprint()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintA = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        SprintId sprintB = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        SprintTimelinePage pageA = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintA.Value, null, cancellationToken);
+        Assert.NotEmpty(pageA.Items);
+
+        SprintTimelinePage crossSprintPage = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintB.Value, pageA.Cursor, cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.ControlCursorStale, crossSprintPage.DiagnosticCode);
+        Assert.Empty(crossSprintPage.Items);
+
+        // Recoverable, not wedged: retrying sprint B fresh (no cursor) still reports every one of
+        // its own items -- nothing was silently skipped by the rejected foreign watermark.
+        SprintTimelinePage freshPageB = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintB.Value, null, cancellationToken);
+        Assert.Equal(DiagnosticCodes.None, freshPageB.DiagnosticCode);
+        Assert.NotEmpty(freshPageB.Items);
+    }
+
+    // Regression (PR #97 review, finding 2): the original test above only proves *some* pass
+    // redacted the planted secret -- pass 1 (SprintTimelineProjector.ToItem) already redacts every
+    // WorkflowEvent.Arguments value on its own, so that test passes even with pass 2 deleted
+    // entirely and proves nothing about it. This test bypasses pass 1's actual coverage instead of
+    // its output: TamperingSprintStore injects a raw secret into WorkflowEvent.MessageKey, a field
+    // pass 1 copies straight through with no redaction at all (only Arguments is ever redacted by
+    // pass 1). The raw page below (pass 1 only, taken directly from a projector built on the same
+    // tampering store) is asserted to still contain the secret -- proving pass 1 alone cannot catch
+    // it -- and only SprintTimelineRedaction.Apply (pass 2) removes it before the page is
+    // serialized.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RedactionPass2CatchesASecretInAFieldPass1NeverTouches()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        const string secret = "password=Sup3rSecretValue!!";
+        TamperingSprintStore tamperingStore = new(environment.Resolve<ISprintStore>(), secret);
+        SprintTimelineProjector projector = new(tamperingStore);
+
+        SprintTimelinePage rawPage = await projector.CreateAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Contains(rawPage.Items, item => item.MessageKey.Contains(secret, StringComparison.Ordinal));
+
+        SprintTimelinePage renderedPage = SprintTimelineRedaction.Apply(rawPage);
+
+        Assert.DoesNotContain(renderedPage.Items, item => item.MessageKey.Contains(secret, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(renderedPage);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    // Regression (PR #97 review round 2, finding 1): the test above proves the Apply *method*
+    // redacts MessageKey, but calls it directly on a locally-built page -- it never exercises
+    // ForgeApplication.GetSprintTimelineAsync, so it cannot observe whether that method still calls
+    // Apply at all. That is precisely the defect this fix (db485d7) closed: the call was missing
+    // from the shared read path every surface (CLI text, CLI --json, Host wire response) actually
+    // uses. This test instead resolves a real ForgeApplication (via
+    // TestEnvironment.ResolveApplicationWithSprintStore, sharing every other real dependency from
+    // the container) whose SprintTimelineProjector is backed by the same TamperingSprintStore, and
+    // asserts the secret is gone from GetSprintTimelineAsync's own returned page -- and from its
+    // StatusJson.Serialize form, covering the --json/Host wire surfaces too. Verified by targeted
+    // mutation: changing ForgeApplication.cs's `return SprintTimelineRedaction.Apply(page);` (line
+    // ~1385) to `return page;` fails this test (the secret survives), while the test above and every
+    // other existing test stay green -- confirming this is the only test that actually pins pass 2
+    // being wired into the shared read path, not merely that the Apply method itself redacts.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetSprintTimelineAsyncRedactsASecretInAFieldPass1NeverTouches()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        const string secret = "password=Sup3rSecretValue!!";
+        ForgeApplication application =
+            environment.ResolveApplicationWithSprintStore(store => new TamperingSprintStore(store, secret));
+
+        SprintTimelinePage page = await application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        Assert.DoesNotContain(page.Items, item => item.MessageKey.Contains(secret, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(page);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    private static async Task RunToRunningAsync(
+        SprintOrchestrator orchestrator,
+        string root,
+        SprintId sprintId,
+        CancellationToken cancellationToken)
+    {
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(root, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(root, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(root, sprintId, toReady.Sprint!.Version, SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+    }
+}

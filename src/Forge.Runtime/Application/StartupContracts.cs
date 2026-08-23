@@ -235,6 +235,34 @@ public static class DiagnosticCodes
     /// call resumes and converges the in-flight rewind -- no separate recovery action exists or is
     /// needed.</summary>
     public const string StageTransitionRewindInProgress = "stage_transition_rewind_in_progress";
+
+    /// <summary>Plan section 6.1: `forge project add` targeting a root whose manifest `project_id`
+    /// is already cataloged. Never thrown from a relink/alias/select/remove call, which key on an
+    /// already-known id instead.</summary>
+    public const string ProjectCatalogEntryExists = "project_catalog_entry_exists";
+
+    /// <summary>Plan section 6.1: `forge project remove|relink|alias|select` naming a project id the
+    /// local catalog has no row for.</summary>
+    public const string ProjectCatalogEntryNotFound = "project_catalog_entry_not_found";
+
+    /// <summary>Plan section 6.1: "a moved project can be relinked after its manifest project ID is
+    /// verified" -- the new root's own manifest `project_id` does not match the catalog entry being
+    /// relinked.</summary>
+    public const string ProjectCatalogRelinkMismatch = "project_catalog_relink_mismatch";
+
+    /// <summary>`forge project alias` given a display alias longer than
+    /// <see cref="ProjectCatalogStore.MaxAliasLength"/>.</summary>
+    public const string ProjectCatalogAliasTooLong = "project_catalog_alias_too_long";
+
+    /// <summary>`forge project select --route` given a route string longer than
+    /// <see cref="ProjectCatalogStore.MaxRouteLength"/>.</summary>
+    public const string ProjectCatalogRouteTooLong = "project_catalog_route_too_long";
+
+    /// <summary>The local `catalog.json` (and its `.previous` recovery copy, if one exists) are both
+    /// unreadable -- a corrupt or malformed file that neither parses nor recovers. Reported instead
+    /// of letting the underlying parse failure propagate as an unhandled exception out of every
+    /// `forge project *`/`forge workspace summary` command (round 1 review of PR #97).</summary>
+    public const string ProjectCatalogUnreadable = "project_catalog_unreadable";
 }
 
 public enum StartupState

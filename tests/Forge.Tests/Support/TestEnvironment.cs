@@ -125,6 +125,48 @@ internal sealed class TestEnvironment : IEnvironmentPaths, IDisposable
         return (orchestrator, scheduler, store);
     }
 
+    /// <summary>Builds a fresh <see cref="ForgeApplication"/> sharing every real dependency from this
+    /// environment's container except <see cref="ISprintStore"/>, which is wrapped by
+    /// <paramref name="decorate"/> — the same "swap one dependency, resolve the rest" technique as
+    /// <see cref="ResolveWithFlakyStore"/>, but for the whole application entry point rather than just
+    /// the orchestrator/scheduler pair. Exists so a test can drive an assertion through the actual
+    /// method every surface calls (e.g. <see cref="ForgeApplication.GetSprintTimelineAsync"/>) instead
+    /// of only through an internal collaborator it happens to call, which would not notice that
+    /// collaborator being bypassed or its result being left unprocessed.</summary>
+    public ForgeApplication ResolveApplicationWithSprintStore(Func<ISprintStore, ISprintStore> decorate)
+    {
+        ISprintStore decorated = decorate(Resolve<ISprintStore>());
+        return new(
+            Resolve<StartupPipeline>(),
+            Resolve<ProjectRootResolver>(),
+            Resolve<ProjectInitializer>(),
+            Resolve<StartupRecovery>(),
+            Resolve<StatusAdvisor>(),
+            Resolve<IConfigurationRegistry>(),
+            Resolve<ScopedConfigurationService>(),
+            Resolve<IProviderToolchainManager>(),
+            Resolve<ProviderCatalog>(),
+            Resolve<ControlEventsReader>(),
+            Resolve<IProviderEnablementSource>(),
+            Resolve<IntegrationInstallationService>(),
+            decorated,
+            Resolve<SprintScheduler>(),
+            Resolve<SprintOrchestrator>(),
+            Resolve<IRepository>(),
+            Resolve<RoutingLedger>(),
+            Resolve<IWorktreeManager>(),
+            Resolve<IEnvironmentPaths>(),
+            Resolve<IFileSystem>(),
+            Resolve<IClock>(),
+            Resolve<StopOperationCoordinator>(),
+            Resolve<ActiveOperationRegistry>(),
+            Resolve<StageTransitionAssessor>(),
+            Resolve<StageTransitionCoordinator>(),
+            Resolve<WorkspaceSummaryProjector>(),
+            new SprintTimelineProjector(decorated),
+            Resolve<AvailableActionProjector>());
+    }
+
     /// <summary>Dispatches initialization exactly like a surface: snapshot first, then command.</summary>
     public async Task<InitializeProjectResult> InitializeAsync(
         string? root,

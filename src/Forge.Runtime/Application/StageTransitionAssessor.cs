@@ -334,8 +334,10 @@ public sealed class StageTransitionAssessor(
     /// good, or the very first node when nothing has run at all. A heuristic over the frozen graph's
     /// declaration order, matching every other "no real ordering exists yet for a parallel DAG"
     /// simplification this codebase already accepts for its currently-linear built-in workflow.
-    /// </summary>
-    private static string? ResolveCurrentStageId(SprintDefinition definition, SprintWorkflowState state)
+    /// Internal rather than private: reused verbatim (never recomputed) by
+    /// <see cref="WorkspaceSummaryProjector"/>/<see cref="AvailableActionProjector"/> so a sprint's
+    /// "current stage" always means the same thing everywhere it is reported.</summary>
+    internal static string? ResolveCurrentStageId(SprintDefinition definition, SprintWorkflowState state)
     {
         foreach (NodeDefinition node in definition.Graph)
         {

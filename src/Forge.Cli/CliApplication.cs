@@ -4,6 +4,7 @@ using Forge.Application;
 using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Infrastructure;
 using Forge.Localization;
 using Forge.Providers;
 using Forge.Updater;
@@ -21,7 +22,8 @@ public static class CliApplication
         Func<CancellationToken, ValueTask<UpdateResult>>? update = null,
         Func<string?, CancellationToken, Task<IForgeMutations>>? resolveMutations = null,
         TextReader? input = null,
-        Func<bool>? isInteractive = null)
+        Func<bool>? isInteractive = null,
+        ProjectCatalogStore? catalog = null)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(output);
@@ -61,6 +63,12 @@ public static class CliApplication
         root.Subcommands.Add(CreateTreeCommand(text, output, diagnostics, application));
         root.Subcommands.Add(
             CreateSprintCommand(text, output, diagnostics, application, effectiveResolver, effectiveIsInteractive));
+        root.Subcommands.Add(CreateWorkspaceCommand(text, output, diagnostics, application, catalog));
+        if (catalog is not null)
+        {
+            root.Subcommands.Add(CreateProjectCommand(text, output, diagnostics, catalog));
+        }
+
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
@@ -420,6 +428,49 @@ public static class CliApplication
         command.Subcommands.Add(CreateSprintAssessStageCommand(text, output, diagnostics, application));
         command.Subcommands.Add(
             CreateSprintMoveStageCommand(text, output, diagnostics, application, resolveMutations, isInteractive));
+        command.Subcommands.Add(CreateSprintTimelineCommand(text, output, diagnostics, application));
+        return command;
+    }
+
+    /// <summary>Plan section 6.3's reserved `sprint.timeline` query. Reads directly against
+    /// <paramref name="application"/> like <see cref="CreateSprintAssessStageCommand"/> -- the
+    /// durable, file-based journal is the sole source of truth regardless of whether a separate Host
+    /// process is also running.</summary>
+    private static Command CreateSprintTimelineCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string?> after = new("--after") { Description = "Opaque cursor from a prior page." };
+        Option<bool> json = CreateJsonOption();
+        Argument<string> id = new("id") { Description = "Sprint id." };
+        Command command = new("timeline", text.Resolve(MessageKeys.SprintTimelineDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(after);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            SprintTimelinePage page = await application
+                .GetSprintTimelineAsync(
+                    parseResult.GetValue(projectRoot), sprintId, parseResult.GetValue(after), cancellationToken)
+                .ConfigureAwait(false);
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(page));
+                return Report(diagnostics, page.DiagnosticCode);
+            }
+
+            WriteTimeline(output, page);
+            return Report(diagnostics, page.DiagnosticCode);
+        });
         return command;
     }
 
@@ -1532,6 +1583,385 @@ public static class CliApplication
     }
 
     /// <summary>Diagnostics go to standard error; machine stdout carries only the contract.</summary>
+    /// <summary>Plan section 6.2/6.4's reserved `workspace.summary`/`workspace.available_actions`
+    /// queries. `summary` fans out across every catalog entry itself (a Host is scoped to one
+    /// project -- ADR 0005/0049) rather than through any one project's Host; `actions` targets one
+    /// already-resolved project, optionally one sprint within it, exactly like every other read
+    /// command in this file.</summary>
+    private static Command CreateWorkspaceCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application,
+        ProjectCatalogStore? catalog)
+    {
+        Command command = new("workspace", text.Resolve(MessageKeys.WorkspaceDescription));
+        command.Subcommands.Add(CreateWorkspaceSummaryCommand(text, output, diagnostics, application, catalog));
+        command.Subcommands.Add(CreateWorkspaceActionsCommand(text, output, diagnostics, application));
+        return command;
+    }
+
+    private static Command CreateWorkspaceSummaryCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application,
+        ProjectCatalogStore? catalog)
+    {
+        Option<bool> json = CreateJsonOption();
+        Command command = new("summary", text.Resolve(MessageKeys.WorkspaceSummaryDescription));
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (catalog is null)
+            {
+                return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+            if (listing.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return Report(diagnostics, listing.DiagnosticCode);
+            }
+
+            IReadOnlyList<ProjectCatalogEntry> entries = listing.Entries;
+            List<(ProjectCatalogEntry Entry, ProjectWorkspaceSummary Summary)> rows = new(entries.Count);
+            foreach (ProjectCatalogEntry entry in entries)
+            {
+                ProjectWorkspaceSummary summary = await application
+                    .GetWorkspaceSummaryAsync(entry.Root, cancellationToken)
+                    .ConfigureAwait(false);
+                rows.Add((entry, summary));
+            }
+
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(rows.Select(row => row.Summary).ToList()));
+                return ExitCodes.Ok;
+            }
+
+            if (rows.Count == 0)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.NoProjects));
+                return ExitCodes.Ok;
+            }
+
+            foreach ((ProjectCatalogEntry entry, ProjectWorkspaceSummary summary) in rows)
+            {
+                string label = entry.Alias ?? entry.Root;
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{label} [{entry.Root}] available={summary.Available} " +
+                        $"startup={SurfaceFormatting.Machine(summary.StartupState)} " +
+                        $"active_sprints={summary.ActiveSprints.Count} attention={summary.AttentionSprintIds.Count}"));
+                foreach (SprintWorkspaceSummary sprint in summary.ActiveSprints)
+                {
+                    output.WriteLine(string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"  {sprint.SprintId} {SurfaceFormatting.Machine(sprint.State)} " +
+                            $"stage={sprint.CurrentStageId ?? "-"} progress={sprint.StagesCompleted}/{sprint.StagesTotal} " +
+                            $"active_operation={sprint.HasActiveOperation}"));
+                }
+            }
+
+            return ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    private static Command CreateWorkspaceActionsCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string?> sprint = new("--sprint") { Description = "Sprint id. Omit for project-level actions." };
+        Option<bool> json = CreateJsonOption();
+        Command command = new("actions", text.Resolve(MessageKeys.WorkspaceActionsDescription));
+        command.Options.Add(projectRoot);
+        command.Options.Add(sprint);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            string? sprintText = parseResult.GetValue(sprint);
+            Guid? sprintId = null;
+            if (sprintText is not null)
+            {
+                if (!Guid.TryParse(sprintText, out Guid parsed))
+                {
+                    return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+                }
+
+                sprintId = parsed;
+            }
+
+            IReadOnlyList<AvailableAction> actions = await application
+                .GetAvailableActionsAsync(parseResult.GetValue(projectRoot), sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(actions));
+                return ExitCodes.Ok;
+            }
+
+            if (actions.Count == 0)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.NoSuggestedActions));
+                return ExitCodes.Ok;
+            }
+
+            foreach (AvailableAction action in actions)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {action.ActionId} enabled={action.Enabled} " +
+                        $"confirm={action.ConfirmationRequired} safety={SurfaceFormatting.Machine(action.SafetyClass)}"));
+                foreach (string blocker in action.Blockers)
+                {
+                    output.WriteLine(string.Create(CultureInfo.InvariantCulture, $"    blocked: {blocker}"));
+                }
+            }
+
+            return ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    /// <summary>Plan section 6.1's user-scoped project catalog (ADR 0043/0049) -- entirely local,
+    /// with no capability id and no Host protocol surface: every subcommand here reads or writes
+    /// only the catalog file, never a project's own `.forge/` directory.</summary>
+    private static Command CreateProjectCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ProjectCatalogStore catalog)
+    {
+        Command command = new("project", text.Resolve(MessageKeys.ProjectDescription));
+        command.Subcommands.Add(CreateProjectAddCommand(text, output, diagnostics, catalog));
+        command.Subcommands.Add(CreateProjectRemoveCommand(text, output, diagnostics, catalog));
+        command.Subcommands.Add(CreateProjectRelinkCommand(text, output, diagnostics, catalog));
+        command.Subcommands.Add(CreateProjectAliasCommand(text, output, diagnostics, catalog));
+        command.Subcommands.Add(CreateProjectListCommand(text, output, diagnostics, catalog));
+        command.Subcommands.Add(CreateProjectSelectCommand(text, output, diagnostics, catalog));
+        return command;
+    }
+
+    private static Command CreateProjectAddCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Argument<string> root = new("root") { Description = "Absolute path of an already-initialized project." };
+        Command command = new("add", text.Resolve(MessageKeys.ProjectAddDescription));
+        command.Arguments.Add(root);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            ProjectCatalogResult result = await catalog
+                .AddAsync(parseResult.GetValue(root), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ProjectAdded));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateProjectRemoveCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Argument<string> id = new("id") { Description = "Project id." };
+        Command command = new("remove", text.Resolve(MessageKeys.ProjectRemoveDescription));
+        command.Arguments.Add(id);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid projectId))
+            {
+                return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogResult result = await catalog.RemoveAsync(projectId, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ProjectRemoved));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateProjectRelinkCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Argument<string> id = new("id") { Description = "Project id." };
+        Argument<string> newRoot = new("new-root") { Description = "The project's new absolute root." };
+        Command command = new("relink", text.Resolve(MessageKeys.ProjectRelinkDescription));
+        command.Arguments.Add(id);
+        command.Arguments.Add(newRoot);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid projectId))
+            {
+                return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogResult result = await catalog
+                .RelinkAsync(projectId, parseResult.GetValue(newRoot), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ProjectRelinked));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateProjectAliasCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Argument<string> id = new("id") { Description = "Project id." };
+        Argument<string?> alias = new("alias") { Description = "New display alias, or empty to clear it." };
+        Command command = new("alias", text.Resolve(MessageKeys.ProjectAliasDescription));
+        command.Arguments.Add(id);
+        command.Arguments.Add(alias);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid projectId))
+            {
+                return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogResult result = await catalog
+                .SetAliasAsync(projectId, parseResult.GetValue(alias), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ProjectAliasSet));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    private static Command CreateProjectListCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Option<bool> json = CreateJsonOption();
+        Command command = new("list", text.Resolve(MessageKeys.ProjectListDescription));
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+            if (listing.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return Report(diagnostics, listing.DiagnosticCode);
+            }
+
+            IReadOnlyList<ProjectCatalogEntry> entries = listing.Entries;
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(entries));
+                return ExitCodes.Ok;
+            }
+
+            if (entries.Count == 0)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.NoProjects));
+                return ExitCodes.Ok;
+            }
+
+            foreach (ProjectCatalogEntry entry in entries)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"  {entry.ProjectId} {entry.Alias ?? "-"} {entry.Root} " +
+                        $"last_opened={entry.LastOpenedAt:O} last_sprint={entry.LastSelectedSprintId?.ToString("D") ?? "-"} " +
+                        $"last_route={entry.LastRoute ?? "-"}"));
+            }
+
+            return ExitCodes.Ok;
+        });
+        return command;
+    }
+
+    private static Command CreateProjectSelectCommand(
+        SurfaceText text, TextWriter output, TextWriter diagnostics, ProjectCatalogStore catalog)
+    {
+        Argument<string> id = new("id") { Description = "Project id." };
+        Option<string?> sprint = new("--sprint") { Description = "Sprint id last selected in this project." };
+        Option<string?> route = new("--route") { Description = "Last selected route within this project." };
+        Command command = new("select", text.Resolve(MessageKeys.ProjectSelectDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(sprint);
+        command.Options.Add(route);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid projectId))
+            {
+                return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            string? sprintText = parseResult.GetValue(sprint);
+            Guid? sprintId = null;
+            if (sprintText is not null)
+            {
+                if (!Guid.TryParse(sprintText, out Guid parsed))
+                {
+                    return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+                }
+
+                sprintId = parsed;
+            }
+
+            ProjectCatalogResult result = await catalog
+                .SelectAsync(projectId, sprintId, parseResult.GetValue(route), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.ProjectSelected));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>Plan section 12.3's redaction guarantee is enforced twice: pass 1 when
+    /// <see cref="SprintTimelineProjector"/> builds each item (before it could ever be persisted by a
+    /// future cache), and pass 2 -- <see cref="SprintTimelineRedaction.Apply"/> -- inside
+    /// <see cref="ForgeApplication.GetSprintTimelineAsync"/>, the single method both this text render
+    /// and the `--json` branch above already call to obtain <paramref name="page"/>. This method
+    /// re-runs <see cref="SecretRedactor"/> over the fully formatted line as a third, independent,
+    /// belt-and-braces check specific to the exact bytes this surface renders, so a redaction gap in
+    /// either upstream pass alone still cannot leak a raw secret to the terminal.</summary>
+    private static void WriteTimeline(TextWriter output, SprintTimelinePage page)
+    {
+        if (page.Items.Count == 0)
+        {
+            return;
+        }
+
+        foreach (SprintTimelineItem item in page.Items)
+        {
+            string argumentText = string.Join(
+                ' ',
+                item.Arguments
+                    .OrderBy(argument => argument.Key, StringComparer.Ordinal)
+                    .Select(argument => $"{argument.Key}={argument.Value}"));
+            string line = string.Create(
+                CultureInfo.InvariantCulture,
+                $"{item.OccurredAt:O} {SurfaceFormatting.Machine(item.Actor)} {item.TargetKind}:{item.TargetId} " +
+                    $"{item.MessageKey} {argumentText}");
+            output.WriteLine(SecretRedactor.Redact(line));
+        }
+    }
+
     private static int Report(TextWriter diagnostics, string diagnosticCode)
     {
         WriteDiagnostic(diagnostics, diagnosticCode);

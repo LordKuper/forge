@@ -49,6 +49,24 @@ public static class StatusJson
     public static string Serialize(StageTransitionAssessment assessment) =>
         JsonSerializer.Serialize(assessment, Options);
 
+    public static string Serialize(ProjectWorkspaceSummary summary) =>
+        JsonSerializer.Serialize(summary, Options);
+
+    public static string Serialize(IReadOnlyList<ProjectWorkspaceSummary> summaries) =>
+        JsonSerializer.Serialize(summaries, Options);
+
+    public static string Serialize(SprintTimelinePage page) =>
+        JsonSerializer.Serialize(page, Options);
+
+    public static string Serialize(IReadOnlyList<AvailableAction> actions) =>
+        JsonSerializer.Serialize(actions, Options);
+
+    public static string Serialize(IReadOnlyList<ProjectCatalogEntry> entries) =>
+        JsonSerializer.Serialize(entries, Options);
+
+    public static string Serialize(ProjectCatalogEntry entry) =>
+        JsonSerializer.Serialize(entry, Options);
+
     private static JsonSerializerOptions Create()
     {
         JsonSerializerOptions options = new()

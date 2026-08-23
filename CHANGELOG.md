@@ -2,6 +2,56 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.66.0
+
+### Added
+
+- Added a local, user-scoped project catalog: `forge project add <root>` registers an
+  already-initialized project by its own manifest id; `forge project list [--json]` shows every
+  known project with its display alias, last-opened time, and last-selected sprint/route;
+  `forge project alias <id> <alias>` sets or clears a local display alias without touching the
+  project's own configuration; `forge project relink <id> <new-root>` re-points a catalog entry to a
+  moved project only after verifying the new root's manifest id actually matches; `forge project
+  remove <id>` drops the catalog entry only, never the repository or its `.forge/` directory; and
+  `forge project select <id> [--sprint <id>] [--route <text>]` records the last selected sprint and
+  route so a future navigation shell can restore it after restart.
+- Added `forge workspace summary [--json]`, a bounded query across every cataloged project reporting
+  availability, active sprints with their current stage and progress, attention reasons, active
+  operation presence, and provider health — without loading any project's full sprint timeline.
+- Added `forge sprint timeline <id> [--after <cursor>] [--json]`, a cursor-paged, chronologically
+  ordered projection of a sprint's existing workflow history (transitions, stop requests, stage
+  revisions) suitable for incremental loading. Content is redacted before being handed back and again
+  before being rendered, so a credential or secret recorded in an operator-authored instruction or
+  rewind reason never reaches the timeline.
+- Added `forge workspace actions [--sprint <id>] [--json]`, listing the concrete actions available
+  right now for a project or a specific sprint (resume, run, cancel, stop the active operation, or
+  move to another workflow stage), each with its safety class, whether confirmation is required, any
+  blocking reasons, and a stable key so a repeated or stale request never has an unintended effect.
+
+### Changed
+
+- `workspace.summary`, `sprint.timeline`, and `workspace.available_actions` move from reserved to
+  implemented on the Host and CLI; Desktop support for all three is deferred to a later release.
+
+### Fixed
+
+- `workspace.available_actions`' `resume_sprint`/`run_sprint`/`cancel_sprint` rows now report the
+  expected version and idempotency key the sprint lifecycle mutation itself actually validates
+  against, instead of the sprint's whole journal position — submitting a reported action back
+  unmodified was previously rejected as stale as soon as any node/attempt event had ever been
+  appended.
+- `forge sprint timeline`'s redaction now applies uniformly to plain-text output, `--json` output,
+  and the Host's wire response alike, and covers every free-text event field, not only its
+  arguments — closing a gap where `--json`/Host consumers received no second redaction pass at all.
+- A `forge sprint timeline` cursor is now bound to the sprint it was issued for; reusing one against
+  a different sprint is rejected instead of silently skipping that sprint's own early items.
+- `forge project list`/`forge workspace summary` now report "No projects in the catalog yet." for an
+  empty catalog instead of the unrelated "No sprints yet." message.
+- The local project catalog (`catalog.json`) now serializes concurrent reads/writes within one
+  process, recovers from its `.previous` backup instead of throwing when corrupted, and rejects a
+  catalog written by an unrecognized schema version instead of silently discarding its unknown
+  fields on the next write.
+
 ## v0.65.0
 
 ### Added

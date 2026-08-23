@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.8.0",
+  "contract_version": "1.9.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -192,7 +192,7 @@
       "desktop": "Sidebar/Refresh",
       "permission": "read_redacted",
       "acceptance": "workspace-summary-parity",
-      "note": "Reserved, not implemented on either surface (desktop workspace redesign plan section 6.2, Slice 4). Deliberately absent from `CapabilityIds.Implemented` so a Host's handshake never advertises it before a real implementation lands -- the same reservation shape `quality.evaluate` used across its own CLI-only slice (ADR 0042)."
+      "note": "Implemented on Host and CLI (plan section 6.2, Slice 4, ADR 0049); Desktop parity is deferred to a later slice, matching ADR 0037's CLI-first precedent. The Host answers only for its own project (ADR 0005); the CLI's `forge workspace summary` fans out across every `forge project`-cataloged root itself. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule)."
     },
     {
       "id": "sprint.timeline",
@@ -203,7 +203,7 @@
       "desktop": "SprintWorkspace/Timeline",
       "permission": "read_redacted",
       "acceptance": "sprint-timeline-parity",
-      "note": "Reserved, not implemented on either surface (plan section 6.3, Slice 4). Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host and CLI (plan section 6.3, Slice 4, ADR 0049); Desktop parity is deferred to a later slice. Projects the existing append-only workflow journal only -- user messages and agent summaries (plan section 6.3's 'separate bounded artifacts') have no durable representation anywhere in this codebase yet and are out of scope for this slice (ADR 0049). Redacted twice: once when the projector builds each item, again at render time. Not yet in `CapabilityIds.Implemented`."
     },
     {
       "id": "workspace.available_actions",
@@ -214,7 +214,7 @@
       "desktop": "SprintWorkspace/ContextualActions",
       "permission": "read_redacted",
       "acceptance": "available-actions-parity",
-      "note": "Reserved, not implemented on either surface (plan section 6.4, Slice 4). Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host and CLI (plan section 6.4, Slice 4, ADR 0049); Desktop parity is deferred to a later slice. Wraps two already-existing computations rather than a parallel policy engine: the project-level suggested-action list (`StatusAdvisor.Recommend`) without a sprint, and `StageTransitionAssessor`'s own assessment per candidate stage plus sprint-lifecycle state for a given sprint. Not yet in `CapabilityIds.Implemented`."
     },
     {
       "id": "workflow.stop_operation",
