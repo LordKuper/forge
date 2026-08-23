@@ -9,6 +9,13 @@ namespace Forge.Application;
 /// <see cref="ProjectId"/> -- never a second, catalog-local identity -- so an entry only exists for
 /// an already-initialized project (<see cref="ProjectCatalogStore.AddAsync"/>). <see cref="Alias"/>
 /// is local display text only; it never modifies the project's own manifest.
+/// <see cref="TimelineReadWatermarks"/> is Slice 6's per-sprint "last read timeline position" (plan
+/// section 4.3's unread tracking) and <see cref="SprintDrafts"/> its minimal unsent-draft
+/// preservation (the sprint workspace's rewind-reason input, the one substantial new free-text field
+/// this slice adds) -- both keyed by the sprint id's <c>"D"</c> string form, matching how every other
+/// catalog id here is already stored on the wire. Every other typed input this slice renders
+/// (gate/confirm/test-work justification) is a one-shot decision entered and submitted in a single
+/// dialog turn, not a draft worth surviving a restart.
 /// </summary>
 public sealed record ProjectCatalogEntry(
     Guid ProjectId,
@@ -16,7 +23,9 @@ public sealed record ProjectCatalogEntry(
     string? Alias,
     DateTimeOffset LastOpenedAt,
     Guid? LastSelectedSprintId,
-    string? LastRoute);
+    string? LastRoute,
+    IReadOnlyDictionary<string, long>? TimelineReadWatermarks = null,
+    IReadOnlyDictionary<string, string>? SprintDrafts = null);
 
 public sealed record ProjectCatalogResult(bool Succeeded, ProjectCatalogEntry? Entry, string DiagnosticCode)
 {
@@ -48,6 +57,11 @@ public sealed class ProjectCatalogStore(
     public const string ContractVersion = "1.0.0";
     public const int MaxAliasLength = 200;
     public const int MaxRouteLength = 200;
+
+    /// <summary>Same bound as <see cref="SprintScheduler.MaxSupersessionInstructionLength"/> and the
+    /// rewind reason itself (ADR 0048): a draft is the not-yet-submitted form of that same bounded
+    /// text, so it can never exceed what the eventual submission would allow anyway.</summary>
+    public const int MaxDraftLength = SprintScheduler.MaxSupersessionInstructionLength;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -289,6 +303,95 @@ public sealed class ProjectCatalogStore(
                 LastSelectedSprintId = sprintId,
                 LastRoute = string.IsNullOrWhiteSpace(route) ? null : route,
             };
+            persisted.Entries[index] = updated;
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    /// <summary>Slice 6's unread-position tracking (plan section 4.3): records the highest
+    /// <see cref="SprintTimelineItem"/> occurrence sequence the user has actually seen for one
+    /// sprint. A caller only ever advances this forward -- a lower watermark than the entry's current
+    /// one is ignored rather than rewinding "read" state, since a stale render racing a later, fresher
+    /// one must never mark newer items unread again.</summary>
+    public Task<ProjectCatalogResult> SetTimelineWatermarkAsync(
+        Guid projectId, Guid sprintId, long watermark, CancellationToken cancellationToken) =>
+        MutateEntryAsync(projectId, entry =>
+        {
+            string key = sprintId.ToString("D");
+            Dictionary<string, long> watermarks = entry.TimelineReadWatermarks is { } existing
+                ? new(existing, StringComparer.Ordinal)
+                : new(StringComparer.Ordinal);
+            if (!watermarks.TryGetValue(key, out long current) || watermark > current)
+            {
+                watermarks[key] = watermark;
+            }
+
+            return entry with { TimelineReadWatermarks = watermarks };
+        }, cancellationToken);
+
+    /// <summary>Slice 6's minimal unsent-draft preservation (plan section 11 Slice 6 item 4): the
+    /// sprint workspace's rewind-reason input text, restored after an app restart. A
+    /// <see langword="null"/> or whitespace-only <paramref name="draft"/> clears the entry, matching
+    /// <see cref="SetAliasAsync"/>'s own empty-clears convention.</summary>
+    public Task<ProjectCatalogResult> SetSprintDraftAsync(
+        Guid projectId, Guid sprintId, string? draft, CancellationToken cancellationToken)
+    {
+        if (draft is { Length: > MaxDraftLength })
+        {
+            return Task.FromResult(ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogDraftTooLong));
+        }
+
+        return MutateEntryAsync(projectId, entry =>
+        {
+            string key = sprintId.ToString("D");
+            Dictionary<string, string> drafts = entry.SprintDrafts is { } existing
+                ? new(existing, StringComparer.Ordinal)
+                : new(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(draft))
+            {
+                drafts.Remove(key);
+            }
+            else
+            {
+                drafts[key] = draft;
+            }
+
+            return entry with { SprintDrafts = drafts };
+        }, cancellationToken);
+    }
+
+    /// <summary>Shared read-modify-write shape every mutating method above already applies inline;
+    /// factored out only for the two Slice 6 additions above so their own logic is the one-line
+    /// transform, not another copy of the lock/read/find/write boilerplate.</summary>
+    private async Task<ProjectCatalogResult> MutateEntryAsync(
+        Guid projectId,
+        Func<ProjectCatalogEntry, ProjectCatalogEntry> mutate,
+        CancellationToken cancellationToken)
+    {
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
+
+            Persisted persisted = read.Persisted;
+            int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
+            if (index < 0)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogEntry updated = mutate(persisted.Entries[index]);
             persisted.Entries[index] = updated;
             await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
             return new(true, updated, DiagnosticCodes.None);
