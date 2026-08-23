@@ -491,6 +491,21 @@ public interface ISprintStore
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// A pure, side-effect-free check against the exact same durable idempotency-key ledger
+    /// <see cref="AppendTransitionAsync"/>/<see cref="AppendStageRevisionRecordedAsync"/> already
+    /// share: returns the already-folded state when <paramref name="idempotencyKey"/> was already
+    /// applied by some earlier call, or <see langword="null"/> otherwise. Needed because a rewind
+    /// commit must recognize a replay of its own already-completed idempotency key *before*
+    /// recomputing a fresh stage-transition assessment against current state -- by the time a
+    /// rewind has already committed once, current state has moved on (the target is no longer at
+    /// the terminal outcome that made it a rewind in the first place), so re-deriving direction from
+    /// scratch on a replay would no longer even classify the call as the same operation. See
+    /// <c>StageTransitionCoordinator.MoveAsync</c>.
+    /// </summary>
+    Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Plan section 8.4/8.5's committed-rewind marker (Slice 3): appends one
     /// <see cref="WorkflowEvent.StageRevisionRecordedType"/> event on the sprint's own aggregate,
     /// gated on <paramref name="expectedSprintVersion"/> matching the sprint's current version
@@ -503,7 +518,8 @@ public interface ISprintStore
     /// detection. Unlike that method, a sprint can be legitimately rewound more than once over its
     /// life, so deduplication here cannot be "has this event type ever landed for this aggregate" --
     /// it must be keyed by the caller's own idempotency key, exactly like an ordinary
-    /// <see cref="AppendTransitionAsync"/> call.
+    /// <see cref="AppendTransitionAsync"/> call. Use <see cref="TryGetIdempotentReplayAsync"/> to
+    /// check for a replay without appending anything.
     /// </summary>
     Task<AppendOutcome> AppendStageRevisionRecordedAsync(
         string projectRoot,

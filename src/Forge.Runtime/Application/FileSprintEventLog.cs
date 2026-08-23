@@ -893,6 +893,28 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        string idempotencyPath = IdempotencyPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Dictionary<Guid, DateTimeOffset> applied =
+                await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
+            return applied.ContainsKey(idempotencyKey)
+                ? await LoadCoreAsync(projectRoot, sprintId, cancellationToken, callerHoldsLock: true)
+                    .ConfigureAwait(false)
+                : null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<AppendOutcome> AppendStageRevisionRecordedAsync(
         string projectRoot,
         SprintId sprintId,
@@ -1612,17 +1634,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Kind = WorkflowStateNames.ToSnakeCase(node.Kind),
             DependsOn = [.. node.DependsOn],
             Role = WorkflowStateNames.ToSnakeCase(node.Role),
+            Optional = node.Optional,
         };
 
     // A sprint frozen before this field existed has no `Role` in its durable definition.json;
     // treated as `Generic` rather than a corrupt-definition failure, since `Generic` was every
-    // node's implicit role before Stage 11 introduced the enum.
+    // node's implicit role before Stage 11 introduced the enum. Likewise `Optional` defaults to
+    // `false` (mandatory) for a sprint frozen before Slice 3 introduced it -- every node the
+    // built-in graph ever produced before this slice was implicitly mandatory.
     private static NodeDefinition FromPersisted(PersistedNode node) =>
         new(
             node.Id,
             WorkflowStateNames.Parse<NodeKind>(node.Kind),
             node.DependsOn ?? [],
-            string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
+            string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role),
+            node.Optional);
 
     private static PersistedExecutionProfile ToPersisted(ExecutionProfile profile) =>
         new()
@@ -2307,6 +2333,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<string>? DependsOn { get; set; } = [];
 
         public string? Role { get; set; }
+
+        public bool Optional { get; set; }
     }
 
     private sealed class PersistedNodeResult

@@ -39,7 +39,8 @@ public sealed class StageTransitionCoordinator(
     StageTransitionAssessor assessor,
     StopOperationCoordinator stopCoordinator,
     ActiveOperationRegistry activeOperations,
-    IConfigurationRegistry registry)
+    IConfigurationRegistry registry,
+    IClock clock)
 {
     private const string BlockedByRewind = "rewind";
 
@@ -55,6 +56,19 @@ public sealed class StageTransitionCoordinator(
         CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(targetStageId);
+
+        // Idempotent replay is recognized *before* any fresh assessment (plan section 8.5: "never
+        // creates a second revision"): a rewind's target is, by definition, a node already at a
+        // terminal outcome before the rewind commits and no longer at one afterward, so re-deriving
+        // direction from current state on a replay would no longer even see the same operation.
+        // Checked first, unconditionally, for both directions -- an advance replay converges to a
+        // safe no-op through its own state-gated steps regardless, so this adds no risk there either.
+        if (await store.TryGetIdempotentReplayAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false) is { } replayed)
+        {
+            return new(true, replayed.Sprint, replayed.Nodes.GetValueOrDefault(targetStageId), DiagnosticCodes.None);
+        }
+
         StageTransitionAssessment assessment = await assessor
             .AssessAsync(projectRoot, sprintId, targetStageId, cancellationToken).ConfigureAwait(false);
         if (!assessment.Found)
@@ -200,12 +214,18 @@ public sealed class StageTransitionCoordinator(
 
         StageRevision currentRevision = revisionOutcome.State!.Sprint.Revision;
 
-        // Step 3: reopen the target for a fresh attempt and invalidate every node strictly
-        // downstream of it -- gated on each node's own current state, so a retry after a crash mid
-        // walk finishes only what remains rather than re-acting on an already-reset node.
+        // Step 3: mark every downstream result/handoff/decision/finding as superseded -- gated on
+        // each record's own `Superseded is null` check inside the Mark*SupersededAsync methods
+        // themselves, so a retry after a crash mid walk only marks what is not already marked.
         SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         HashSet<string> downstream = StageTransitionAssessor.CollectDownstreamClosure(targetStageId, definition.Graph);
+        await SupersedeDownstreamEvidenceAsync(projectRoot, sprintId, downstream, currentRevision, cancellationToken)
+            .ConfigureAwait(false);
+
+        // Step 4: reopen the target for a fresh attempt and invalidate every node strictly
+        // downstream of it -- gated on each node's own current state, so a retry after a crash mid
+        // walk finishes only what remains rather than re-acting on an already-reset node.
         foreach (string nodeId in downstream)
         {
             await ReopenOrInvalidateNodeAsync(
@@ -213,11 +233,11 @@ public sealed class StageTransitionCoordinator(
                 .ConfigureAwait(false);
         }
 
-        // Step 4: recompute eligible stages from the frozen DAG -- the existing graph-advance
+        // Step 5: recompute eligible stages from the frozen DAG -- the existing graph-advance
         // machinery, not a duplicated one.
         await scheduler.AdvanceGraphAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
 
-        // Step 5: walk the sprint back to `ready` through already-legal edges (mirrors
+        // Step 6: walk the sprint back to `ready` through already-legal edges (mirrors
         // `SprintScheduler.TryAdvanceFindingsOnlyBlockedSprintAsync`'s own two/three-hop idiom) --
         // never all the way to `running` on its own, the same "resume reaches ready, a separate run
         // reaches running" contract the paused-sprint resume path already established.
@@ -226,6 +246,79 @@ public sealed class StageTransitionCoordinator(
         SprintWorkflowState final = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         return new(true, final.Sprint, final.Nodes.GetValueOrDefault(targetStageId), DiagnosticCodes.None);
+    }
+
+    /// <summary>Marks every non-superseded result/handoff/decision belonging to a node in
+    /// <paramref name="downstream"/>, and every non-superseded finding either belonging to one of
+    /// those nodes or carrying no node attribution at all (plan section 8.4 point 5; see
+    /// <c>Forge.Domain.Finding.NodeId</c>'s own remarks on why an unattributed finding is treated
+    /// conservatively as affected). Each individual mark is independently idempotent
+    /// (<c>ISprintStore.Mark*SupersededAsync</c> no-ops once already marked), so calling this twice
+    /// for the same revision (a resumed retry) is safe.</summary>
+    private async Task SupersedeDownstreamEvidenceAsync(
+        string projectRoot,
+        SprintId sprintId,
+        HashSet<string> downstream,
+        StageRevision revision,
+        CancellationToken cancellationToken)
+    {
+        SupersededBy marker = new(revision, clock.UtcNow);
+
+        IReadOnlyList<NodeResult> results =
+            await store.GetNodeResultsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        foreach (NodeResult result in results)
+        {
+            if (downstream.Contains(result.NodeId.Value) && result.Superseded is null)
+            {
+                await store.MarkNodeResultSupersededAsync(projectRoot, sprintId, result.AttemptId, marker, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        IReadOnlyList<Handoff> handoffs =
+            await store.GetHandoffsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        foreach (Handoff handoff in handoffs)
+        {
+            if (downstream.Contains(handoff.NodeId.Value) && handoff.Superseded is null)
+            {
+                await store.MarkHandoffSupersededAsync(projectRoot, sprintId, handoff.HandoffId, marker, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        IReadOnlyList<ConfirmationArtifact> confirmations =
+            await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        foreach (ConfirmationArtifact confirmation in confirmations)
+        {
+            if (downstream.Contains(confirmation.NodeId.Value) && confirmation.Superseded is null)
+            {
+                await store.MarkConfirmationSupersededAsync(
+                    projectRoot, sprintId, confirmation.ConfirmationId, marker, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        IReadOnlyList<TestWorkArtifact> testWork =
+            await store.GetTestWorkAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        foreach (TestWorkArtifact artifact in testWork)
+        {
+            if (downstream.Contains(artifact.NodeId.Value) && artifact.Superseded is null)
+            {
+                await store.MarkTestWorkSupersededAsync(projectRoot, sprintId, artifact.TestWorkId, marker, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+
+        IReadOnlyList<Finding> findings =
+            await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        foreach (Finding finding in findings)
+        {
+            bool affected = finding.NodeId is null || downstream.Contains(finding.NodeId.Value);
+            if (affected && finding.Superseded is null)
+            {
+                await store.MarkFindingSupersededAsync(projectRoot, sprintId, finding.FindingId, marker, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
     }
 
     /// <summary>One downstream node's own idempotent reset. <paramref name="isTarget"/> reopens

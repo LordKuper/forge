@@ -163,6 +163,10 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetEventsAsync(projectRoot, sprintId, cancellationToken);
 
+    public Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
+        inner.TryGetIdempotentReplayAsync(projectRoot, sprintId, idempotencyKey, cancellationToken);
+
     public Task<AppendOutcome> AppendStageRevisionRecordedAsync(
         string projectRoot, SprintId sprintId, string targetStageId, string reason, StageRevision newRevision,
         long expectedSprintVersion, Guid idempotencyKey, CancellationToken cancellationToken) =>

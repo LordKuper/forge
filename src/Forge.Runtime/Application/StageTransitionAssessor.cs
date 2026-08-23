@@ -69,8 +69,14 @@ public sealed class StageTransitionAssessor(
 
         Guid projectId = await ProjectIdentity.ReadProjectIdAsync(projectRoot, registry, cancellationToken)
             .ConfigureAwait(false);
+        // LastSequence -- the sprint's whole journal position, not merely the sprint aggregate's own
+        // transition count -- is what "expected state version" means here: a node or attempt
+        // transition (e.g. a predecessor completing) never bumps SprintSnapshot.Version on its own,
+        // but it must still be caught as staleness, since it can flip a prerequisite this exact
+        // assessment already evaluated.
+        long expectedStateVersion = state.LastSequence;
         string? assessmentToken = ComputeToken(
-            projectId, sprintId, targetStageId, state.Sprint.Revision, state.Sprint.Version);
+            projectId, sprintId, targetStageId, state.Sprint.Revision, expectedStateVersion);
 
         bool terminalSprint = WorkflowStateMachines.IsTerminal(state.Sprint.State);
         ActiveOperationImpact activeOperation = ResolveActiveOperation(state, direction);
@@ -90,7 +96,7 @@ public sealed class StageTransitionAssessor(
                 activeOperation,
                 null,
                 direction == StageTransitionDirection.Rewind,
-                state.Sprint.Version,
+                expectedStateVersion,
                 state.Sprint.Revision,
                 assessmentToken);
         }
@@ -262,7 +268,7 @@ public sealed class StageTransitionAssessor(
             activeOperation,
             supersession,
             direction == StageTransitionDirection.Rewind,
-            state.Sprint.Version,
+            expectedStateVersion,
             state.Sprint.Revision,
             assessmentToken);
     }
@@ -317,6 +323,7 @@ public sealed class StageTransitionAssessor(
         string nodeId, IReadOnlyDictionary<string, NodeDefinition> byId, bool includeOptional)
     {
         HashSet<string> predecessors = new(StringComparer.Ordinal);
+        HashSet<string> visited = new(StringComparer.Ordinal);
         void Visit(string id)
         {
             if (!byId.TryGetValue(id, out NodeDefinition? node))
@@ -326,12 +333,17 @@ public sealed class StageTransitionAssessor(
 
             foreach (string dependency in node.DependsOn)
             {
-                if (!includeOptional && byId.TryGetValue(dependency, out NodeDefinition? d) && d.Optional)
+                // Traversal always continues past an optional dependency, even when it is excluded
+                // from the returned (required) set -- an optional node's own upstream predecessors
+                // are still real prerequisites of whatever the optional node would otherwise gate:
+                // skipping it does not also excuse whatever came before it.
+                bool isOptional = byId.TryGetValue(dependency, out NodeDefinition? d) && d.Optional;
+                if (includeOptional || !isOptional)
                 {
-                    continue;
+                    predecessors.Add(dependency);
                 }
 
-                if (predecessors.Add(dependency))
+                if (visited.Add(dependency))
                 {
                     Visit(dependency);
                 }
