@@ -28,15 +28,31 @@ public sealed record SprintId(Guid Value)
 
 /// <summary><paramref name="Revision"/> is the sprint's current stage revision (plan section
 /// 8.4). Starts at <see cref="StageRevision.Initial"/> and is incremented only by the rewind
-/// coordinator introduced in a later slice — nothing in this slice produces a value other than
-/// the default.</summary>
+/// coordinator.
+///
+/// <paramref name="PendingRewindTargetStageId"/>/<paramref name="PendingRewindReason"/>/
+/// <paramref name="PendingRewindIdempotencyKey"/> (round 2 review of PR #96, critical): the
+/// durable "an unconverged `MoveSprintToStage` rewind is in progress" marker, set once by
+/// <see cref="Forge.Application.StageTransitionCoordinator.CommitRewindAsync"/>'s own step 2
+/// (<see cref="WorkflowEvent.StageRevisionRecordedType"/> landing) and cleared only when the
+/// saga's own final <see cref="WorkflowEvent.StageTransitionConvergedType"/> marker lands --
+/// independent of whatever <see cref="NodeSnapshot"/>/<see cref="SprintSnapshot.State"/> have
+/// drifted to in between. Re-deriving "is a rewind in flight" from current node/sprint state
+/// (the way <c>StageTransitionAssessor.ResolveCurrentStageId</c> classifies direction) cannot see
+/// past a crash mid-saga, once steps 3-6 begin mutating exactly the state that derivation reads --
+/// this is the same "durable marker independent of re-derived classification" pattern ADR 0047
+/// established for <see cref="AttemptSnapshot.StopRequestedAt"/>/<see cref="AttemptSnapshot.StopConvergedAt"/>.
+/// All three are non-<see langword="null"/> together or not at all.</summary>
 public sealed record SprintSnapshot(
     SprintId Id,
     SprintState State,
     long Version,
     DateTimeOffset UpdatedAt,
     string? BlockedReason = null,
-    StageRevision Revision = default);
+    StageRevision Revision = default,
+    string? PendingRewindTargetStageId = null,
+    string? PendingRewindReason = null,
+    Guid? PendingRewindIdempotencyKey = null);
 
 public enum NodeState
 {

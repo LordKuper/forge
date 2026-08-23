@@ -21,8 +21,14 @@ User-facing Forge changes are listed by release, newest first.
 - The Host always re-checks a stage move's prerequisites and expected state immediately before
   committing it; a stale or mismatched request is rejected without any partial change, and repeating
   the same move (advance or rewind) is safe and never records a second stage revision. A Host crash
-  at any point during a rewind is safe: on restart, a repeated request either finishes converging the
-  rewind or is rejected as stale — it never reports a half-finished rewind as a success.
+  at any point during a rewind is safe: the sprint durably remembers an unconverged rewind
+  independently of its ordinary node/sprint state, so the very next stage-move or assess-stage
+  request against that sprint automatically finishes converging it — regardless of which step the
+  crash interrupted, and regardless of whether that request carries the original (now-stale) tokens,
+  fresh ones, or an unrelated target. The sprint also refuses to finalize while a rewind has not yet
+  converged, so a crash can never let a half-finished rewind reach `completed`, and `assess-stage`
+  reports the in-progress rewind directly rather than misreporting a stage's direction while one is
+  pending.
 - A blocked prerequisite (an open finding, a dirty integration worktree, an exhausted retry budget,
   or a disallowed model policy) never blocks rewinding to an earlier stage — rewinding past the
   affected work is the intended way to resolve it. These prerequisites still gate advancing to a

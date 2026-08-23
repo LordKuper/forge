@@ -74,6 +74,30 @@ public sealed class StageTransitionCoordinator(
             return new(true, replayed.Sprint, replayed.Nodes.GetValueOrDefault(targetStageId), DiagnosticCodes.None);
         }
 
+        // Round 2 review of PR #96 (critical): an unconverged rewind's own durable marker
+        // (SprintSnapshot.PendingRewindTargetStageId, set by CommitRewindAsync's own step 2 and
+        // cleared only by its final convergence marker) is checked next, independently of whatever
+        // node/sprint state its own later steps have mutated in between -- re-deriving direction from
+        // that drifted state (below) can no longer even recognize an in-flight rewind as the same
+        // operation once steps 3-6 begin: the target may already look like the "current" stage
+        // (misclassified as a fresh Advance, which would wrongly report success without ever
+        // finishing the rewind) or like the graph's only settled node (misclassified as a permanently
+        // rejected Same, wedging the sprint with no recovery path). Resuming bypasses assessment,
+        // staleness, and confirmation entirely -- those gates exist only for *starting* a new
+        // operation, never for finishing one already committed to -- and ignores every caller-supplied
+        // argument except the ones this method's own parameters can't override: the recorded
+        // target/reason/key are the only ones that can still be correct. CommitRewindAsync's own steps
+        // are each individually state-gated and idempotent (round 1 review of PR #96), so re-entering
+        // it from the top converges correctly regardless of which step the crash landed in.
+        SprintWorkflowState? currentState =
+            await store.LoadAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        if (currentState?.Sprint.PendingRewindTargetStageId is { } pendingRewindTarget)
+        {
+            return await CommitRewindAsync(
+                projectRoot, sprintId, pendingRewindTarget, currentState.Sprint.PendingRewindReason!,
+                currentState.Sprint.PendingRewindIdempotencyKey!.Value, cancellationToken).ConfigureAwait(false);
+        }
+
         StageTransitionAssessment assessment = await assessor
             .AssessAsync(projectRoot, sprintId, targetStageId, cancellationToken).ConfigureAwait(false);
         if (!assessment.Found)
@@ -99,7 +123,15 @@ public sealed class StageTransitionCoordinator(
         }
 
         bool isRewind = assessment.Direction == StageTransitionDirection.Rewind;
-        if (!confirmed)
+
+        // Round 2 review of PR #96 (non-critical contract mismatch): confirmation is required only
+        // when the assessment itself says so -- currently true for a rewind, never for an advance
+        // (plan section 8.3 requires no confirmation to move into normal, unstarted territory). Before
+        // this fix, an advance unconditionally required confirmed=true even though
+        // AssessStageTransition's own ConfirmationRequired field reports false for it, so a caller
+        // that trusted the assessment's own field (rather than blindly always passing true) could
+        // never advance at all.
+        if (assessment.ConfirmationRequired && !confirmed)
         {
             return new(false, null, null, DiagnosticCodes.ConfirmationRequired);
         }

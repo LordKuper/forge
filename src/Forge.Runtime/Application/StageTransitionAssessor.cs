@@ -50,6 +50,36 @@ public sealed class StageTransitionAssessor(
             return StageTransitionAssessment.NotFound(sprintId, DiagnosticCodes.SprintNotFound);
         }
 
+        if (state.Sprint.PendingRewindTargetStageId is { } pendingRewindTarget)
+        {
+            // Round 2 review of PR #96 (critical): a Host crash inside CommitRewindAsync (after its
+            // step 2 recorded the revision, before its final convergence marker landed) leaves
+            // Direction un-derivable from current node state -- the target may already look like the
+            // sprint's own "current" stage, misclassifying a resumed retry as Advance, or look like
+            // the graph's only settled node, misclassifying it as a permanent Same. Reporting the
+            // durable marker directly here, before any of that derivation runs, tells the caller the
+            // truth regardless of the specific target they asked about: this sprint has an unconverged
+            // rewind, and no other stage move is possible until it resumes and converges (which the
+            // next MoveSprintToStage/AssessStageTransition call against this sprint does automatically
+            // -- see StageTransitionCoordinator.MoveAsync).
+            return new(
+                true,
+                DiagnosticCodes.StageTransitionRewindInProgress,
+                sprintId,
+                ResolveCurrentStageId(definition, state),
+                pendingRewindTarget,
+                StageTransitionDirection.Rewind,
+                false,
+                [],
+                [],
+                new(false, null, null, false),
+                null,
+                false,
+                state.LastSequence,
+                state.Sprint.Revision,
+                null);
+        }
+
         Dictionary<string, NodeDefinition> byId = definition.Graph.ToDictionary(
             node => node.Id, node => node, StringComparer.Ordinal);
         if (!byId.TryGetValue(targetStageId, out NodeDefinition? target))

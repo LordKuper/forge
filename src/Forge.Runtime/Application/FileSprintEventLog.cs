@@ -1021,6 +1021,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.RevisionArgument] = newRevision.Value.ToString(CultureInfo.InvariantCulture),
                     [WorkflowEvent.TargetStageIdArgument] = targetStageId,
                     [WorkflowEvent.RewindReasonArgument] = reason,
+                    // Round 2 review of PR #96 (critical): durable so a resumed retry can recover the
+                    // *original* caller's key and re-enter this method's own ledger-keyed replay branch
+                    // (checked above, first) rather than mint a new key that would never match it.
+                    [WorkflowEvent.IdempotencyKeyArgument] = idempotencyKey.ToString("D"),
                 });
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
                 .ConfigureAwait(false);

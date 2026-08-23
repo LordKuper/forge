@@ -87,6 +87,59 @@ any fresh assessment: by the time a rewind has already committed once, the targe
 at the terminal outcome that made it a rewind, so re-deriving direction from current state on a
 replay would no longer even classify the call as the same operation.
 
+### An unconverged rewind is resumed from a durable marker, never re-derived from drifted state
+
+Round 2 review of PR #96 (critical) found that round 1's fix (the previous decision above) only
+narrowed the false-success window; it did not make an interrupted rewind resumable. `MoveAsync`
+still re-derived `Direction` from current node/sprint state on every call, and `CommitRewindAsync`'s
+own steps 3-6 mutate exactly the state that derivation reads. Two concrete crash windows followed a
+step-2 crash (the one round 1's own regression test covers) further into the saga:
+
+- Mid-step-4 (target already reopened to `ready`, downstream siblings not yet invalidated): a fresh
+  assessment saw the target as the sprint's own "current" stage and flipped `Direction` to `Advance`,
+  so `CommitAdvanceAsync` ran instead, found the target already non-`pending`, reported success, and
+  durably sealed the half-finished rewind as a completed advance — the downstream siblings stayed
+  `Succeeded` forever.
+- After step 4, before steps 5-6 (every node reset, sprint not yet walked back to `ready`): with no
+  node left `Succeeded`/`Skipped`, direction-resolution fell back to treating the target as the
+  graph's only settled node, so `Direction` became permanently `Same` and every subsequent
+  `MoveAsync` call was rejected before ever reaching `CommitRewindAsync` again — a sprint no client
+  action could recover, and still finalizable via `CompleteSprintAsync` (which only checked
+  `state == ready_to_finalize`) despite the rewound stages having done zero real work.
+
+The fix follows this same repo's Slice 2 precedent (ADR 0047's `StopOperationCoordinator`): keying
+resumability on a durable "this saga started and has not yet converged" marker, checked
+independently of any re-derived business classification, rather than tightening that classification
+further. `WorkflowEvent.StageRevisionRecordedType` — already CommitRewindAsync's own step 2, and
+already durable — now also carries the caller's `IdempotencyKeyArgument` and is folded (not merely
+audit-scanned) into three new `SprintSnapshot` fields: `PendingRewindTargetStageId`,
+`PendingRewindReason`, `PendingRewindIdempotencyKey`. `WorkflowEvent.StageTransitionConvergedType`
+(the saga's own final, unconditional step) clears all three on landing — mirroring
+`AttemptSnapshot.StopRequestedAt`/`StopConvergedAt`'s own "set once at the start, cleared only by the
+saga's own last step" shape exactly, rather than `node.State == Running`'s re-derived classification
+that ADR 0047 replaced for the same reason.
+
+`StageTransitionCoordinator.MoveAsync` checks this marker immediately after the existing
+converged-key replay check and, when set, re-enters `CommitRewindAsync` directly for the *recorded*
+target/reason/key — bypassing assessment, the `expectedStateVersion`/`assessmentToken` staleness
+check, and the `confirmed`/`reason` re-validation entirely. Those gates exist only for *starting* a
+new operation; resuming one already committed to must never be blocked by a caller's now-irrelevant
+tokens, and the recorded values are the only ones that can still be correct. This works from any of
+`CommitRewindAsync`'s own steps because every one of them was already individually state-gated and
+idempotent (round 1's own fix): step 2 short-circuits on the recovered key before touching its
+`newRevision`/`expectedSprintVersion` arguments at all; steps 3-4 no-op per already-settled
+node/evidence; steps 5-6 no-op once the graph/sprint state they drive toward is already reached.
+Verified with dedicated crash-simulation tests for steps 3, 4 (both windows above), 5, and 6, each
+calling the resumed `MoveAsync` with deliberately wrong target/reason/confirmation/tokens/idempotency
+key to prove none of them can be honored during a resume.
+
+`StageTransitionAssessor.AssessAsync` checks the same marker before deriving `Direction` for any
+requested target, returning `Allowed: false`, `DiagnosticCode: stage_transition_rewind_in_progress`,
+and the *recorded* rewind's real target (never whatever stage was actually queried) — surfacing the
+truth instead of misclassifying a resumed retry as the previous section's crash windows did.
+`SprintScheduler.CompleteSprintAsync` refuses to finalize (same diagnostic code) while the marker
+holds, closing the "still finalizable with zero real work redone" gap directly.
+
 ### "Current stage" and transition direction are derived from node state, not a topological rank
 
 Computing a fragile total order over a graph the plan explicitly requires to "remain valid if a
@@ -264,6 +317,13 @@ assessment depends on a Host's own in-memory state.
 - `IForgeMutations` gains `MoveSprintToStageAsync`; `RemoteForgeMutations` and both
   `TestEnvironment.cs` fakes implement it. `AssessStageTransitionAsync` is a plain `ForgeApplication`
   method, not part of `IForgeMutations`, matching every other query in this codebase.
+- Round 2 review of PR #96: `SprintSnapshot` gains `PendingRewindTargetStageId`/`PendingRewindReason`/
+  `PendingRewindIdempotencyKey`; `WorkflowEvent.StageRevisionRecordedType` gains
+  `IdempotencyKeyArgument` (additive on the open `arguments` map — no `event.schema.json` change).
+  `DiagnosticCodes.StageTransitionRewindInProgress` is new (mapped to the `workflow` exit-code
+  category). `StageTransitionCoordinator.MoveAsync` no longer requires `confirmed == true`
+  unconditionally — only when `StageTransitionAssessment.ConfirmationRequired` actually says so
+  (never true for an advance), matching what `AssessStageTransition` already reported.
 
 ## References
 

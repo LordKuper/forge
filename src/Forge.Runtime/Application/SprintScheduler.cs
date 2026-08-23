@@ -1343,6 +1343,19 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, state.Sprint, DiagnosticCodes.SprintTransitionInvalid);
         }
 
+        if (state.Sprint.PendingRewindTargetStageId is not null)
+        {
+            // Round 2 review of PR #96 (critical): a sprint can reach `ready_to_finalize` while an
+            // earlier rewind's own saga never finished converging -- e.g. a Host crash between
+            // StageTransitionCoordinator.CommitRewindAsync's step 2 (revision recorded) and step 4
+            // (downstream nodes actually invalidated) can leave every node still Succeeded/Ready while
+            // the rewind that was supposed to redo them never touched anything. Finalizing that sprint
+            // would seal a half-finished rewind as if it were a genuinely completed one. Refused until
+            // the in-flight rewind resumes and converges -- which the next MoveSprintToStage/
+            // AssessStageTransition call against this sprint does automatically.
+            return new(false, state.Sprint, DiagnosticCodes.StageTransitionRewindInProgress);
+        }
+
         AppendOutcome outcome = await store.AppendTransitionAsync(
             projectRoot, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
             "workflow.sprint_completed", WorkflowStateNames.ToSnakeCase(SprintState.Completed),

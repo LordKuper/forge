@@ -43,7 +43,7 @@ public static class ExitCodes
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
         DiagnosticCodes.ModelPolicyViolation or DiagnosticCodes.NoActiveOperation or
-            DiagnosticCodes.ActiveOperationChanged => Workflow,
+            DiagnosticCodes.ActiveOperationChanged or DiagnosticCodes.StageTransitionRewindInProgress => Workflow,
         _ => Internal,
     };
 }
