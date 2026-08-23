@@ -156,6 +156,22 @@ public sealed record MoveSprintToStageRequest(
     bool Confirmed,
     Guid IdempotencyKey);
 
+/// <summary><see cref="ControlProtocol.GetWorkspaceSummaryKind"/>'s request payload (plan section
+/// 6.2, Slice 4). Empty: the Host always reports its own project's bounded summary row -- the
+/// client-side catalog fan-out across projects lives entirely outside any one Host (ADR 0049).
+/// </summary>
+public sealed record GetWorkspaceSummaryRequest;
+
+/// <summary><see cref="ControlProtocol.GetSprintTimelineKind"/>'s request payload (plan section 6.3,
+/// Slice 4). No expected version travels on the wire -- a query has nothing to gate optimistic
+/// concurrency against, matching <see cref="AssessStageTransitionRequest"/>.</summary>
+public sealed record GetSprintTimelineRequest(Guid SprintId, string? Cursor);
+
+/// <summary><see cref="ControlProtocol.GetAvailableActionsKind"/>'s request payload (plan section
+/// 6.4, Slice 4). <see cref="SprintId"/> is <see langword="null"/> for the project-level action set.
+/// </summary>
+public sealed record GetAvailableActionsRequest(Guid? SprintId);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -262,6 +278,23 @@ public static class ControlProtocol
     /// payload: a `MoveStageResult` instance
     /// (<c>{"succeeded": bool, "sprint"?: {...}, "target_node"?: {...}, "diagnostic_code": string}</c>).</summary>
     public const string MoveSprintToStageKind = "move_sprint_to_stage";
+
+    /// <summary>Plan section 6.2's reserved `workspace.summary` query (Slice 4, ADR 0043/0049): one
+    /// project's bounded sidebar/status-header row. Request payload: a
+    /// <see cref="GetWorkspaceSummaryRequest"/>. Response payload: a `ProjectWorkspaceSummary`
+    /// instance.</summary>
+    public const string GetWorkspaceSummaryKind = "get_workspace_summary";
+
+    /// <summary>Plan section 6.3's reserved `sprint.timeline` query (Slice 4, ADR 0043/0049): a
+    /// bounded, cursor-paged projection of one sprint's existing workflow journal. Request payload: a
+    /// <see cref="GetSprintTimelineRequest"/>. Response payload: a `SprintTimelinePage` instance.
+    /// </summary>
+    public const string GetSprintTimelineKind = "get_sprint_timeline";
+
+    /// <summary>Plan section 6.4's reserved `workspace.available_actions` query (Slice 4, ADR
+    /// 0043/0049). Request payload: a <see cref="GetAvailableActionsRequest"/>. Response payload:
+    /// <c>{"actions": [...]}</c>.</summary>
+    public const string GetAvailableActionsKind = "get_available_actions";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

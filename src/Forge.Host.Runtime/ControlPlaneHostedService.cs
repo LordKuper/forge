@@ -358,6 +358,12 @@ public sealed class ControlPlaneHostedService(
                     await DispatchAssessStageTransitionAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.MoveSprintToStageKind =>
                     await DispatchMoveSprintToStageAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.GetWorkspaceSummaryKind =>
+                    await DispatchGetWorkspaceSummaryAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.GetSprintTimelineKind =>
+                    await DispatchGetSprintTimelineAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.GetAvailableActionsKind =>
+                    await DispatchGetAvailableActionsAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -804,6 +810,58 @@ public sealed class ControlPlaneHostedService(
             .MoveSprintToStageAsync(
                 options.ProjectRoot, payload.SprintId, payload.TargetStageId, payload.ExpectedStateVersion,
                 payload.AssessmentToken, payload.Reason, payload.Confirmed, payload.IdempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    /// <summary>Plan section 6.2's reserved `workspace.summary` query (Slice 4). A Host is always
+    /// scoped to exactly one project (ADR 0005), so this only ever answers for this Host's own
+    /// project root -- the client-side catalog fan-out across every known project lives entirely
+    /// outside any one Host (ADR 0049).</summary>
+    private async Task<ControlResponse> DispatchGetWorkspaceSummaryAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        ProjectWorkspaceSummary result = await application
+            .GetWorkspaceSummaryAsync(options.ProjectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchGetSprintTimelineAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        GetSprintTimelineRequest? payload = request.Payload is { } value
+            ? value.Deserialize<GetSprintTimelineRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The get_sprint_timeline payload is required.");
+        }
+
+        SprintTimelinePage result = await application
+            .GetSprintTimelineAsync(options.ProjectRoot, payload.SprintId, payload.Cursor, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchGetAvailableActionsAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        Guid? sprintId = null;
+        if (request.Payload is { } value)
+        {
+            GetAvailableActionsRequest? payload = value.Deserialize<GetAvailableActionsRequest>(ControlProtocol.JsonOptions);
+            sprintId = payload?.SprintId;
+        }
+
+        IReadOnlyList<AvailableAction> result = await application
+            .GetAvailableActionsAsync(options.ProjectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
