@@ -28,7 +28,7 @@ public sealed class SurfaceParityTests
     /// </summary>
     private static readonly Dictionary<string, string[]> DesktopCapabilityCalls = new(StringComparer.Ordinal)
     {
-        [CapabilityIds.ProjectSnapshot] = [".RefreshAsync(", "projectOverview.LoadAsync("],
+        [CapabilityIds.ProjectSnapshot] = [".RefreshHeaderAsync(", "projectOverview.LoadAsync("],
         [CapabilityIds.ProjectInitialize] = [".InitializeAsync(", ".InitializePrompt("],
         [CapabilityIds.ConfigurationManage] = [".SaveAsync("],
         [CapabilityIds.ProviderHealth] = ["snapshot.KnownProviders", "snapshot.Providers"],
@@ -413,7 +413,8 @@ public sealed class SurfaceParityTests
     public void FinalizeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName() =>
         Assert.Contains("sprintWorkspace.FinalizePrompt(", DesktopSourceText(), StringComparison.Ordinal);
 
-    /// <summary>Same reasoning as <see cref="SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog"/>,
+    /// <summary>Same reasoning as
+    /// <see cref="SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog"/>,
     /// for `workflow.confirm`'s own required free-text fields (ADR 0037): neither has a default to
     /// fall back to, so both must be refused before the dialog shows, not after. Unlike the previous
     /// monolithic page, this guard lives in a local function (<c>ConfirmAsync</c>) rather than a
@@ -511,23 +512,30 @@ public sealed class SurfaceParityTests
             Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
 
         Assert.Contains(
-            ".ResolveGateAsync(root, sprintId, nodeId.Text, approved, confirmed, CancellationToken.None)",
+            ".ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            ".SupersedeAttemptAsync(root, sprintId, attemptId.Text, instruction.Text, confirmed, CancellationToken.None)",
+            "attemptId.ToString(\"D\"), instruction.Text, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "evidenceKind.SelectedItem as string, evidence.Text, dialogConfirmed, CancellationToken.None)",
+            "evidence.Text, dialogConfirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
             "outcome, justification.Text, dialogConfirmed,",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            ".FinalizeSprintAsync(root, sprintId, finalizeNodeId.Text, dialogConfirmed, CancellationToken.None)",
+            ".FinalizeSprintAsync(root, sprintId, null, dialogConfirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
-        // None of the five mutation calls above may pass a literal `true` for the confirmation
+        // Slice 6's own two new destructive actions (stop, stage move) must pass the same real
+        // dialog answer, never a literal true -- the exact bug class this file already had to fix
+        // once for the five gates above.
+        Assert.Contains(".StopAsync(root, fresh, confirmed, CancellationToken.None)", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "isRewind ? rewindReasonEntry.Text : null, confirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        // None of the mutation calls above may pass a literal `true` for the confirmation
         // argument -- every occurrence of `true` immediately before `CancellationToken.None)` in
-        // this file must instead be one of the two dialog-answer variable names.
+        // this file must instead be one of the dialog-answer variable names.
         Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
     }
 
@@ -582,21 +590,20 @@ public sealed class SurfaceParityTests
         Assert.Contains("snapshot.Providers", source, StringComparison.Ordinal);
     }
 
-    /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
-    /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
-    /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's
-    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the source text.</summary>
+    /// <summary>Plan section 11 Slice 6 item 3 ("remove manual ID fields from ordinary workflows"):
+    /// the attempt id superseded is derived from the sprint's own current active attempt
+    /// (<see cref="SprintWorkspaceViewModel.FindActiveAttemptId"/>), never typed into an
+    /// <c>Entry</c> -- the exact raw-ID-entry field the old sprint-workspace page had here before
+    /// this slice. No MAUI control can be instantiated headlessly (see the dialog-naming checks
+    /// above), so this pins the fix directly in the source text.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog()
+    public void SupersedeNeverCollectsTheAttemptIdFromAManualEntry()
     {
-        string method = SupersedeAttemptClickHandlerBody();
+        string source = DesktopSourceText();
 
-        int guardIndex = method.IndexOf("attemptId.Text", StringComparison.Ordinal);
-        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank attempt id.");
-        Assert.True(
-            guardIndex < dialogIndex, "The blank-attempt-id guard must run before the confirmation dialog.");
+        Assert.Contains("SprintWorkspaceViewModel.FindActiveAttemptId(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AttemptIdLabel", source, StringComparison.Ordinal);
     }
 
     /// <summary>Round 3 review: a blank replacement instruction was refused only after the user

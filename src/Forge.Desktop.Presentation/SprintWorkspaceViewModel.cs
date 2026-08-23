@@ -1,24 +1,70 @@
 using System.Globalization;
+using Forge.Application;
 using Forge.Domain;
+using Forge.Localization;
 
 namespace Forge.Desktop.Presentation;
 
 /// <summary>
 /// Plan section 4.3's sprint-workspace route, scoped to a caller-known project/sprint (routing
-/// already resolved this before the page is shown, so unlike <see cref="MainPageViewModel"/>'s own
-/// blank-means-active-sprint entry, this never re-asks for the sprint itself). The status
-/// header/timeline/contextual-action renderer plan section 4.3 describes are Slice 6's own
-/// deliverable; this view-model exists so every gate/confirm/test-work/finalize/supersede/poll/
-/// lifecycle capability <see cref="MainPageViewModel"/> already exposes remains reachable from the
-/// new shell in the meantime (plan 12.1) rather than being dropped while Slice 6 is pending. Node and
-/// attempt ids are still caller-supplied here -- removing those, too, is explicitly Slice 6's job
-/// ("remove manual ID fields from ordinary workflows").
+/// already resolved this before the page is shown, so this never re-asks for the sprint itself).
+/// Composes three things: <see cref="MainPageViewModel"/>'s already-tested human-only capabilities
+/// (gate/confirm/test-work/finalize/supersede -- ADR 0037; a nodeId of <see langword="null"/> always
+/// resolves to the built-in graph's own canonical node, so the caller never needs a manual entry
+/// field for the ordinary path), <see cref="Timeline"/> (Slice 6's timeline pane), and
+/// <see cref="Actions"/> (Slice 6's stop/stage-transition renderer). Node/attempt ids remain
+/// parameters here because the underlying capability itself is generic (the CLI accepts an explicit
+/// `--node`/attempt id too); it is <c>WorkspaceShellPage.SprintWorkspace.cs</c>'s job to never
+/// collect one from a manual text field, deriving it from context instead (see
+/// <see cref="FindActiveAttemptId"/>).
 /// </summary>
-public sealed class SprintWorkspaceViewModel(MainPageViewModel legacy)
+public sealed class SprintWorkspaceViewModel(
+    MainPageViewModel legacy,
+    ForgeApplication application,
+    ProjectCatalogStore catalog,
+    Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+    SurfaceText text)
 {
     private readonly MainPageViewModel legacy = legacy ?? throw new ArgumentNullException(nameof(legacy));
+    private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
+
+    public SprintTimelineViewModel Timeline { get; } = new(application, catalog);
+
+    public SprintActionsViewModel Actions { get; } = new(application, resolveMutations, text);
 
     private static string Id(Guid value) => value.ToString("D", CultureInfo.InvariantCulture);
+
+    /// <summary>Plan 4.3's sticky status header, sourced from the same full project-snapshot query
+    /// the CLI already uses (<see cref="ForgeApplication.GetProjectSnapshotAsync(string?,SnapshotDetail,Guid?,CancellationToken)"/>)
+    /// plus the bounded workspace summary (Slice 4) for current-stage/progress -- never a
+    /// locally-recomputed notion of either (see <see cref="SprintStatusHeaderProjector"/>).</summary>
+    public async Task<(SprintStatusHeaderData Header, ProjectSnapshot Snapshot)> RefreshHeaderAsync(
+        string? projectRoot, string projectDisplayName, Guid sprintId, CancellationToken cancellationToken)
+    {
+        ProjectSnapshot snapshot = await application
+            .GetProjectSnapshotAsync(projectRoot, SnapshotDetail.Full, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        ProjectWorkspaceSummary summary = await application
+            .GetWorkspaceSummaryAsync(projectRoot, cancellationToken)
+            .ConfigureAwait(false);
+        return (SprintStatusHeaderProjector.Build(projectDisplayName, snapshot, summary, text), snapshot);
+    }
+
+    /// <summary>The sprint's exact currently-running attempt, if any -- the context-derived default
+    /// for attempt supersession (plan 12.1/11 Slice 6 item 3: never a manually typed attempt id).
+    /// <see langword="null"/> when nothing is running, in which case the caller shows no supersede
+    /// control at all rather than one that would fail.</summary>
+    public static Guid? FindActiveAttemptId(SprintDetails? details) =>
+        details?.Attempts
+            .Where(attempt => attempt.State == "running")
+            .Select(attempt => Guid.TryParse(attempt.Id, out Guid id) ? (Guid?)id : null)
+            .FirstOrDefault(id => id is not null);
+
+    /// <summary>Whether the sprint's current stage has a pending human gate at all -- the
+    /// context-derived condition for showing the approve/reject controls (no gate, no controls;
+    /// never a manual node id to decide otherwise).</summary>
+    public static bool HasPendingGate(SprintDetails? details) =>
+        details?.Nodes.Any(node => node.State == "awaiting_human") ?? false;
 
     public Task<MainPageSnapshot> RefreshAsync(string? projectRoot, Guid sprintId, CancellationToken cancellationToken) =>
         legacy.RefreshAsync(projectRoot, Id(sprintId), cancellationToken);

@@ -3,19 +3,22 @@
     x:Class="Forge.Desktop.WorkspaceShellPage"
     xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
     xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml">
-  <Grid ColumnDefinitions="280,*" RowDefinitions="Auto,*,Auto">
+  <Grid ColumnDefinitions="280,*" RowDefinitions="Auto,Auto,*,Auto">
     <!-- Plan section 4: fixed two-panel workspace with a collapsible sidebar. Every visible string
          is assigned in code-behind (never a XAML Text attribute) so the ArchitectureTests
          HostsDoNotContainHardCodedLabelText check keeps guaranteeing every user-facing string
          routes through SurfaceTextProvider. -->
-    <ScrollView Grid.Column="0" Grid.Row="0" Grid.RowSpan="3">
+    <ScrollView Grid.Column="0" Grid.Row="0" Grid.RowSpan="4">
       <VerticalStackLayout x:Name="SidebarHost" Padding="12" Spacing="8" />
     </ScrollView>
     <BoxView Grid.Column="1" Grid.Row="0" HeightRequest="1" Color="Gray" />
     <Label x:Name="PageStatusHeader" Grid.Column="1" Grid.Row="0" Padding="16,10" SemanticProperties.HeadingLevel="Level1" />
-    <ScrollView Grid.Column="1" Grid.Row="1">
+    <!-- Plan section 4.3's sticky sprint-workspace status header: outside the scrollable timeline
+         below, so it never scrolls away. Empty (no children) on every other route. -->
+    <VerticalStackLayout x:Name="StickyHeaderHost" Grid.Column="1" Grid.Row="1" Padding="16,0" Spacing="4" />
+    <ScrollView Grid.Column="1" Grid.Row="2">
       <VerticalStackLayout x:Name="ContentHost" Padding="16" Spacing="12" />
     </ScrollView>
-    <VerticalStackLayout x:Name="ContextualActionHost" Grid.Column="1" Grid.Row="2" Padding="16,8" Spacing="8" />
+    <VerticalStackLayout x:Name="ContextualActionHost" Grid.Column="1" Grid.Row="3" Padding="16,8" Spacing="8" />
   </Grid>
 </ContentPage>

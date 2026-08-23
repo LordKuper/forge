@@ -233,4 +233,49 @@
   <data name="SidebarProjectUnavailable" xml:space="preserve"><value>unavailable</value></data>
   <data name="SidebarActiveSprintsLabel" xml:space="preserve"><value>active sprints</value></data>
   <data name="SidebarAttentionNeededLabel" xml:space="preserve"><value>need attention</value></data>
+  <data name="SprintStatusHeaderStageLabel" xml:space="preserve"><value>Stage</value></data>
+  <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Progress</value></data>
+  <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Last activity</value></data>
+  <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Active provider/model is not yet available.</value></data>
+  <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Resume not before</value></data>
+  <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Details</value></data>
+  <data name="TimelineTitle" xml:space="preserve"><value>Timeline</value></data>
+  <data name="TimelineNoItems" xml:space="preserve"><value>No timeline items yet.</value></data>
+  <data name="TimelineLoadMoreAction" xml:space="preserve"><value>Load more</value></data>
+  <data name="TimelineFilterAllOption" xml:space="preserve"><value>All</value></data>
+  <data name="TimelineFilterLabel" xml:space="preserve"><value>Filter</value></data>
+  <data name="TimelineCopyAction" xml:space="preserve"><value>Copy</value></data>
+  <data name="TimelineCopiedNotice" xml:space="preserve"><value>Copied to clipboard.</value></data>
+  <data name="TimelineDetailsAction" xml:space="preserve"><value>Details</value></data>
+  <data name="TimelineMarkAllReadAction" xml:space="preserve"><value>Mark all read</value></data>
+  <data name="TimelineUnreadLabel" xml:space="preserve"><value>{0} unread</value></data>
+  <data name="ActionsTitle" xml:space="preserve"><value>Actions</value></data>
+  <data name="ActionsNoneAvailable" xml:space="preserve"><value>No actions available right now.</value></data>
+  <data name="ActionsBlockedPrefix" xml:space="preserve"><value>Blocked:</value></data>
+  <data name="AttemptStopAction" xml:space="preserve"><value>Stop operation</value></data>
+  <data name="AttemptStopConfirmationRequired" xml:space="preserve"><value>Confirm stopping the active operation before it is applied.</value></data>
+  <data name="AttemptStopTargetLabel" xml:space="preserve"><value>This will stop the active operation on node</value></data>
+  <data name="AttemptStopNoLongerActive" xml:space="preserve"><value>This operation is no longer active; the view has been refreshed.</value></data>
+  <data name="MoveToStageAction" xml:space="preserve"><value>Move to stage</value></data>
+  <data name="MoveToStageConfirmationRequired" xml:space="preserve"><value>Confirm moving the sprint to this stage before it is applied.</value></data>
+  <data name="MoveToStageSourceLabel" xml:space="preserve"><value>Current stage</value></data>
+  <data name="MoveToStageTargetLabel" xml:space="preserve"><value>Target stage</value></data>
+  <data name="MoveToStageDirectionLabel" xml:space="preserve"><value>Direction</value></data>
+  <data name="MoveToStageSatisfiedLabel" xml:space="preserve"><value>Satisfied</value></data>
+  <data name="MoveToStageUnsatisfiedLabel" xml:space="preserve"><value>Unsatisfied</value></data>
+  <data name="MoveToStageConsequencesLabel" xml:space="preserve"><value>Moving back will supersede</value></data>
+  <data name="MoveToStageConsequencesStagesLabel" xml:space="preserve"><value>stages</value></data>
+  <data name="MoveToStageConsequencesAttemptsLabel" xml:space="preserve"><value>attempts</value></data>
+  <data name="MoveToStageConsequencesArtifactsLabel" xml:space="preserve"><value>artifacts</value></data>
+  <data name="MoveToStageBlockedCannotProceed" xml:space="preserve"><value>This target is blocked and cannot be moved to yet.</value></data>
+  <data name="ActionRewindReasonLabel" xml:space="preserve"><value>Reason for moving back (required)</value></data>
+  <data name="ActionRewindReasonRequired" xml:space="preserve"><value>A reason is required to move back to an earlier stage.</value></data>
+  <data name="ActionStaleRefreshed" xml:space="preserve"><value>This action was no longer current; the view has been refreshed.</value></data>
+  <data name="workspace_action.resume_sprint" xml:space="preserve"><value>Resume the paused, blocked, or failed sprint.</value></data>
+  <data name="workspace_action.run_sprint" xml:space="preserve"><value>Advance the sprint from draft or ready.</value></data>
+  <data name="workspace_action.cancel_sprint" xml:space="preserve"><value>Cancel the sprint.</value></data>
+  <data name="workspace_action.stop_current_operation" xml:space="preserve"><value>Stop the exact active operation without cancelling the sprint.</value></data>
+  <data name="workspace_action.move_to_stage.advance" xml:space="preserve"><value>Advance to this stage.</value></data>
+  <data name="workspace_action.move_to_stage.rewind" xml:space="preserve"><value>Rewind to this stage.</value></data>
+  <data name="workspace_action.move_to_stage.same" xml:space="preserve"><value>This is already the current stage.</value></data>
 </root>
