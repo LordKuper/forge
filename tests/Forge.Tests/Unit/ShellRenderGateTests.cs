@@ -123,6 +123,71 @@ public sealed class ShellRenderGateTests
         Assert.Equal(1, contentRenders);
     }
 
+    /// <summary>
+    /// PR #99 review finding 1: the sprint workspace's periodic timeline poll used to route its whole
+    /// fetch-then-render step through <see cref="ShellRenderGate.RunAsync"/> -- the same guard user
+    /// clicks use -- taking <c>busy</c> for the duration of an unattended Host round-trip. A user
+    /// click landing in that window was silently dropped before its own mutation ever started (not
+    /// merely deferred), reproducing PR #98's "navigation silently does nothing" bug via a different
+    /// path. <see cref="ShellRenderGate.RequestRender"/> is the fix: it never sets <c>busy</c> itself,
+    /// so a poll using it for its render step can never block, drop, or delay a concurrent mutation.
+    /// This test reproduces the exact interleaving: a render requested (simulating the poll's
+    /// already-completed fetch) while a real mutation is in flight must not prevent a second,
+    /// genuinely user-driven mutation attempt from being correctly evaluated against the guard (still
+    /// rejected as a double click, exactly as without the pending render), and the deferred render
+    /// must still apply exactly once after the mutation releases the guard.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARenderRequestDeferredDuringAnInFlightMutationNeverBlocksOrDropsAConcurrentMutation()
+    {
+        int renders = 0;
+        TaskCompletionSource mutationReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ShellRenderGate gate = new(
+            renderSidebarAsync: () => Task.CompletedTask,
+            renderContentAsync: () => Task.CompletedTask);
+
+        Task mutation = gate.RunAsync(async () =>
+        {
+            // Simulates the timeline poll's fetch having already completed while this user-driven
+            // mutation still holds the guard -- the render must be deferred, not run immediately.
+            gate.RequestRender(() => renders++);
+            Assert.Equal(0, renders);
+            await mutationReleased.Task;
+        });
+
+        // A second, genuinely user-driven mutation attempted while the first is still in flight must
+        // still be rejected as a double click -- proving RequestRender never itself takes or releases
+        // the guard (the exact bug: a poll's own fetch previously held `busy`, so a concurrent user
+        // click's RunAsync saw `busy` and was silently dropped before it could even start).
+        int secondMutationCalls = 0;
+        await gate.RunAsync(() =>
+        {
+            secondMutationCalls++;
+            return Task.CompletedTask;
+        });
+        Assert.Equal(0, secondMutationCalls);
+
+        mutationReleased.SetResult();
+        await mutation;
+
+        Assert.Equal(1, renders);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void ARequestRenderWhileIdleRunsImmediately()
+    {
+        int renders = 0;
+        ShellRenderGate gate = new(
+            renderSidebarAsync: () => Task.CompletedTask,
+            renderContentAsync: () => Task.CompletedTask);
+
+        gate.RequestRender(() => renders++);
+
+        Assert.Equal(1, renders);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ASecondMutationCannotReenterWhileTheFirstIsStillInFlight()

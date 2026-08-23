@@ -27,6 +27,7 @@ public sealed class ShellRenderGate(Func<Task> renderSidebarAsync, Func<Task> re
     private bool busy;
     private bool sidebarRenderPending;
     private bool contentRenderPending;
+    private Action? pendingRender;
 
     /// <summary>Runs <paramref name="action"/> unless a mutation or render is already in flight, in
     /// which case this call is a no-op -- a genuine double click, matching the previous guard's own
@@ -64,6 +65,12 @@ public sealed class ShellRenderGate(Func<Task> renderSidebarAsync, Func<Task> re
             contentRenderPending = false;
             await RunAsync(renderContentAsync).ConfigureAwait(true);
         }
+
+        if (pendingRender is { } render)
+        {
+            pendingRender = null;
+            render();
+        }
     }
 
     /// <summary>Requests a sidebar re-render. Runs immediately when the gate is idle; otherwise
@@ -92,5 +99,32 @@ public sealed class ShellRenderGate(Func<Task> renderSidebarAsync, Func<Task> re
         }
 
         _ = RunAsync(renderContentAsync);
+    }
+
+    /// <summary>Applies a synchronous, one-off render <paramref name="render"/> that must never
+    /// itself compete for the mutation guard -- immediately when the gate is idle, or deferred until
+    /// the in-flight mutation releases the guard otherwise (last request wins, same coalescing as
+    /// <see cref="RequestSidebarRender"/>/<see cref="RequestContentRender"/>).</summary>
+    /// <remarks>
+    /// PR #99 review finding 1: the sprint workspace's periodic timeline poll used to run its whole
+    /// fetch-then-render step through <see cref="RunAsync"/>, taking <c>busy</c> for the duration of
+    /// an unattended Host round-trip. A user click landing in that window was silently dropped before
+    /// its own <c>RunAsync</c> call ever started -- not merely deferred -- because a poll tick is not
+    /// a user gesture and has no business contending for the same guard clicks use. The fix is for
+    /// the poll to fetch outside any guard (with its own private in-flight flag to stop overlapping
+    /// ticks) and use this method only for the fast, synchronous step that actually touches the UI
+    /// tree, so it can never block, drop, or delay a real mutation -- while still not racing a render
+    /// a concurrent mutation might be producing.
+    /// </remarks>
+    public void RequestRender(Action render)
+    {
+        ArgumentNullException.ThrowIfNull(render);
+        if (busy)
+        {
+            pendingRender = render;
+            return;
+        }
+
+        render();
     }
 }

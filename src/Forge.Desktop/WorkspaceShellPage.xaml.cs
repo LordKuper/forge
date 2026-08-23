@@ -85,7 +85,7 @@ public partial class WorkspaceShellPage : ContentPage
             freshLegacy,
             new(application, freshLegacy),
             new(application, catalog, freshLegacy, resolveMutations, folderPicker, text),
-            new(freshLegacy));
+            new(freshLegacy, application, catalog, resolveMutations, text.Current));
     }
 
     protected override async void OnAppearing()
@@ -97,6 +97,17 @@ public partial class WorkspaceShellPage : ContentPage
             await RenderSidebarAsync().ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         }).ConfigureAwait(true);
+    }
+
+    /// <summary>The sprint workspace's timeline poll (plan 12.3: "new items appear without manual
+    /// refresh while the sprint page is visible") must not keep ticking once the page itself is
+    /// gone -- <see cref="StopTimelinePoll"/> is also called on every route change (see
+    /// <see cref="RenderContentAsync"/>), so this is the backstop for closing the page entirely.
+    /// </summary>
+    protected override void OnDisappearing()
+    {
+        base.OnDisappearing();
+        StopTimelinePoll();
     }
 
     /// <summary>Serializes shell-driven mutations so a second click cannot re-enter one while the
@@ -239,14 +250,22 @@ public partial class WorkspaceShellPage : ContentPage
     private async Task RenderContentAsync()
     {
         WorkspaceRoute route = workspace.Route;
+        StopTimelinePoll();
+        // PR #99 review finding 11: scrollTrackedSprintId is only ever set to a real sprint id by
+        // RenderSprintWorkspaceAsync itself (see WorkspaceShellPage.SprintWorkspace.cs) -- resetting
+        // it here for every render means a scroll on any other route is never attributed to the
+        // last-open sprint's saved position, since ContentHost's shared ScrollView.Scrolled handler
+        // ignores Guid.Empty.
+        scrollTrackedSprintId = Guid.Empty;
         ContentHost.Children.Clear();
         ContextualActionHost.Children.Clear();
+        StickyHeaderHost.Children.Clear();
         PageStatusHeader.Text = route.Page switch
         {
             WorkspacePage.ForgeSettings => text.Resolve(MessageKeys.ForgeSettingsTitle),
             WorkspacePage.ProjectOverview => text.Resolve(MessageKeys.ProjectOverviewTitle),
             WorkspacePage.ProjectSettings => text.Resolve(MessageKeys.ProjectSettingsTitle),
-            WorkspacePage.SprintWorkspace => text.Resolve(MessageKeys.SprintWorkspacePlaceholderTitle),
+            WorkspacePage.SprintWorkspace => text.Resolve(MessageKeys.SprintWorkspaceTitle),
             _ => text.Resolve(MessageKeys.WorkspaceEmptyStateTitle),
         };
 

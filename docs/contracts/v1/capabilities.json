@@ -203,7 +203,7 @@
       "desktop": "SprintWorkspace/Timeline",
       "permission": "read_redacted",
       "acceptance": "sprint-timeline-parity",
-      "note": "Implemented on Host and CLI (plan section 6.3, Slice 4, ADR 0049); Desktop parity is deferred to a later slice. Projects the existing append-only workflow journal only -- user messages and agent summaries (plan section 6.3's 'separate bounded artifacts') have no durable representation anywhere in this codebase yet and are out of scope for this slice (ADR 0049). Redacted twice: once when the projector builds each item, again at render time. Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 6.3, Slice 4/ADR 0049; Desktop's SprintWorkspace/Timeline, Slice 6/ADR 0051). Projects the existing append-only workflow journal only -- user messages and agent summaries (plan section 6.3's 'separate bounded artifacts') have no durable representation anywhere in this codebase yet and are out of scope for this slice (ADR 0049). Redacted twice: once when the projector builds each item, again at render time. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved, matching ADR 0047/0048/0049/0050's own precedent, since promoting it also requires widening `SurfaceParityTests.DesktopControls`'s fixed dictionary, a separable follow-up."
     },
     {
       "id": "workspace.available_actions",
@@ -214,7 +214,7 @@
       "desktop": "SprintWorkspace/ContextualActions",
       "permission": "read_redacted",
       "acceptance": "available-actions-parity",
-      "note": "Implemented on Host and CLI (plan section 6.4, Slice 4, ADR 0049); Desktop parity is deferred to a later slice. Wraps two already-existing computations rather than a parallel policy engine: the project-level suggested-action list (`StatusAdvisor.Recommend`) without a sprint, and `StageTransitionAssessor`'s own assessment per candidate stage plus sprint-lifecycle state for a given sprint. Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 6.4, Slice 4/ADR 0049; Desktop's SprintWorkspace/ContextualActions, Slice 6/ADR 0051). Wraps two already-existing computations rather than a parallel policy engine: the project-level suggested-action list (`StatusAdvisor.Recommend`) without a sprint, and `StageTransitionAssessor`'s own assessment per candidate stage plus sprint-lifecycle state for a given sprint. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved for the same reason as `sprint.timeline`."
     },
     {
       "id": "workflow.stop_operation",
@@ -225,7 +225,7 @@
       "desktop": "SprintWorkspace/StopOperation",
       "permission": "human_stop_operation_confirm",
       "acceptance": "stop-operation-parity",
-      "note": "Implemented on Host and CLI (plan section 7, Slice 2); Desktop parity is deferred to Slice 6, matching ADR 0037's CLI-first precedent for workflow.confirm/workflow.test_work/workflow.finalize. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule), so an older Desktop is never silently invited into a control it has no UI for."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 7, Slice 2/ADR 0044/0047; Desktop's SprintWorkspace/StopOperation, Slice 6/ADR 0051). The Desktop control re-validates the exact stoppable operation immediately before showing its confirmation, which names the target node/attempt. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule); ADR 0051 keeps it reserved as a separable cleanup, matching ADR 0047/0048/0049/0050's own precedent."
     },
     {
       "id": "workflow.assess_stage_transition",
@@ -236,7 +236,7 @@
       "desktop": "SprintWorkspace/AssessStageTransition",
       "permission": "read_redacted",
       "acceptance": "stage-assessment-parity",
-      "note": "Implemented on Host and CLI (plan section 8.1, Slice 3); Desktop parity is deferred to a later slice, matching ADR 0037's CLI-first precedent for workflow.confirm/workflow.test_work/workflow.finalize. Read-only by design -- the UI may render this projection but never calculates or overrides it. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule)."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 8.1, Slice 3/ADR 0045/0046/0048; Desktop's SprintWorkspace/AssessStageTransition, Slice 6/ADR 0051). Read-only by design -- the UI may render this projection but never calculates or overrides it; Desktop re-fetches a fresh assessment immediately before every confirmation and commit rather than trusting an earlier render. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved for the same reason as `workflow.stop_operation`."
     },
     {
       "id": "sprint.move_stage",
@@ -247,7 +247,7 @@
       "desktop": "SprintWorkspace/MoveStage",
       "permission": "human_stage_transition_confirm",
       "acceptance": "stage-transition-parity",
-      "note": "Implemented on Host and CLI (plan section 8.5, Slice 3); Desktop parity is deferred to a later slice, matching ADR 0037's CLI-first precedent. The Host recomputes the assessment immediately before mutation; a rewind always requires a bounded reason and mandatory confirmation (plan section 8.4). Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule)."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 8.5, Slice 3/ADR 0045/0046/0048; Desktop's SprintWorkspace/MoveStage, Slice 6/ADR 0051). The Host recomputes the assessment immediately before mutation; a rewind always requires a bounded reason and mandatory confirmation (plan section 8.4), which Desktop's own dialog collects and forwards verbatim, never a hardcoded value. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved for the same reason as `workflow.stop_operation`."
     },
     {
       "id": "provider.quota_status",

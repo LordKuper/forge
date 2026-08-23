@@ -291,4 +291,63 @@ public sealed class ProjectCatalogStoreTests
         Assert.Null(result.Entry!.LastSelectedSprintId);
         Assert.Equal("project_overview", result.Entry.LastRoute);
     }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TimelineWatermarkOnlyEverAdvancesForwardForItsOwnSprint()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintA = Guid.NewGuid();
+        Guid sprintB = Guid.NewGuid();
+
+        ProjectCatalogResult first = await catalog.SetTimelineWatermarkAsync(projectId, sprintA, 100, cancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(100, first.Entry!.TimelineReadWatermarks![sprintA.ToString("D")]);
+
+        // A lower watermark than the one already recorded must never rewind "read" state.
+        ProjectCatalogResult regressed = await catalog.SetTimelineWatermarkAsync(projectId, sprintA, 40, cancellationToken);
+        Assert.True(regressed.Succeeded);
+        Assert.Equal(100, regressed.Entry!.TimelineReadWatermarks![sprintA.ToString("D")]);
+
+        ProjectCatalogResult advanced = await catalog.SetTimelineWatermarkAsync(projectId, sprintA, 250, cancellationToken);
+        Assert.True(advanced.Succeeded);
+        Assert.Equal(250, advanced.Entry!.TimelineReadWatermarks![sprintA.ToString("D")]);
+
+        // A second sprint's watermark is independent of the first's.
+        ProjectCatalogResult other = await catalog.SetTimelineWatermarkAsync(projectId, sprintB, 5, cancellationToken);
+        Assert.True(other.Succeeded);
+        Assert.Equal(250, other.Entry!.TimelineReadWatermarks![sprintA.ToString("D")]);
+        Assert.Equal(5, other.Entry.TimelineReadWatermarks[sprintB.ToString("D")]);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintDraftIsSetAndClearedByBlankInputAndRejectedWhenTooLong()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintId = Guid.NewGuid();
+
+        ProjectCatalogResult saved = await catalog.SetSprintDraftAsync(projectId, sprintId, "found a stale finding", cancellationToken);
+        Assert.True(saved.Succeeded);
+        Assert.Equal("found a stale finding", saved.Entry!.SprintDrafts![sprintId.ToString("D")]);
+
+        ProjectCatalogResult cleared = await catalog.SetSprintDraftAsync(projectId, sprintId, "   ", cancellationToken);
+        Assert.True(cleared.Succeeded);
+        Assert.False(cleared.Entry!.SprintDrafts!.ContainsKey(sprintId.ToString("D")));
+
+        ProjectCatalogResult tooLong = await catalog.SetSprintDraftAsync(
+            projectId, sprintId, new string('x', ProjectCatalogStore.MaxDraftLength + 1), cancellationToken);
+        Assert.False(tooLong.Succeeded);
+        Assert.Equal(DiagnosticCodes.ProjectCatalogDraftTooLong, tooLong.DiagnosticCode);
+    }
 }

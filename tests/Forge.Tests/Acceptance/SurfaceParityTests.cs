@@ -28,7 +28,7 @@ public sealed class SurfaceParityTests
     /// </summary>
     private static readonly Dictionary<string, string[]> DesktopCapabilityCalls = new(StringComparer.Ordinal)
     {
-        [CapabilityIds.ProjectSnapshot] = [".RefreshAsync(", "projectOverview.LoadAsync("],
+        [CapabilityIds.ProjectSnapshot] = [".RefreshHeaderAsync(", "projectOverview.LoadAsync("],
         [CapabilityIds.ProjectInitialize] = [".InitializeAsync(", ".InitializePrompt("],
         [CapabilityIds.ConfigurationManage] = [".SaveAsync("],
         [CapabilityIds.ProviderHealth] = ["snapshot.KnownProviders", "snapshot.Providers"],
@@ -413,7 +413,8 @@ public sealed class SurfaceParityTests
     public void FinalizeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName() =>
         Assert.Contains("sprintWorkspace.FinalizePrompt(", DesktopSourceText(), StringComparison.Ordinal);
 
-    /// <summary>Same reasoning as <see cref="SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog"/>,
+    /// <summary>Same reasoning as
+    /// <see cref="SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog"/>,
     /// for `workflow.confirm`'s own required free-text fields (ADR 0037): neither has a default to
     /// fall back to, so both must be refused before the dialog shows, not after. Unlike the previous
     /// monolithic page, this guard lives in a local function (<c>ConfirmAsync</c>) rather than a
@@ -424,8 +425,8 @@ public sealed class SurfaceParityTests
     {
         string method = SprintWorkspaceBody("async Task ConfirmAsync(ConfirmationOutcome outcome)");
 
-        int definitionGuardIndex = method.IndexOf("definitionOfDone.Text", StringComparison.Ordinal);
-        int evidenceGuardIndex = method.IndexOf("evidence.Text", StringComparison.Ordinal);
+        int definitionGuardIndex = method.IndexOf("definitionOfDoneEntry.Text", StringComparison.Ordinal);
+        int evidenceGuardIndex = method.IndexOf("evidenceEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(definitionGuardIndex >= 0, "ConfirmAsync no longer refuses a blank definition of done.");
         Assert.True(evidenceGuardIndex >= 0, "ConfirmAsync no longer refuses blank evidence.");
@@ -445,7 +446,7 @@ public sealed class SurfaceParityTests
     {
         string method = SprintWorkspaceBody("async Task TestWorkAsync(TestWorkOutcome outcome)");
 
-        int guardIndex = method.IndexOf("justification.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("justificationEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "TestWorkAsync no longer refuses a blank justification.");
         Assert.True(dialogIndex >= 0, "TestWorkAsync no longer shows a confirmation dialog.");
@@ -511,24 +512,84 @@ public sealed class SurfaceParityTests
             Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
 
         Assert.Contains(
-            ".ResolveGateAsync(root, sprintId, nodeId.Text, approved, confirmed, CancellationToken.None)",
+            ".ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            ".SupersedeAttemptAsync(root, sprintId, attemptId.Text, instruction.Text, confirmed, CancellationToken.None)",
+            "attemptId.ToString(\"D\"), instructionEntry.Text, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "evidenceKind.SelectedItem as string, evidence.Text, dialogConfirmed, CancellationToken.None)",
+            "evidenceEntry.Text, dialogConfirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "outcome, justification.Text, dialogConfirmed,",
+            "outcome, justificationEntry.Text, dialogConfirmed,",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            ".FinalizeSprintAsync(root, sprintId, finalizeNodeId.Text, dialogConfirmed, CancellationToken.None)",
+            ".FinalizeSprintAsync(root, sprintId, null, dialogConfirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
-        // None of the five mutation calls above may pass a literal `true` for the confirmation
+        // Slice 6's own two new destructive actions (stop, stage move) must pass the same real
+        // dialog answer, never a literal true -- the exact bug class this file already had to fix
+        // once for the five gates above.
+        Assert.Contains(".StopAsync(root, fresh, confirmed, CancellationToken.None)", source, StringComparison.Ordinal);
+        Assert.Contains(
+            "isRewind ? rewindReasonEntry.Text : null, confirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        // None of the mutation calls above may pass a literal `true` for the confirmation
         // argument -- every occurrence of `true` immediately before `CancellationToken.None)` in
-        // this file must instead be one of the two dialog-answer variable names.
+        // this file must instead be one of the dialog-answer variable names.
         Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR #99 review finding 5: every gated action above (gate/supersede/confirm/test-work/finalize/
+    /// stop/stage-move) aborts before touching the Host when its own confirmation dialog is declined
+    /// -- except "cancel sprint," which used to call <c>CancelSprintAsync</c> unconditionally
+    /// regardless of the dialog's answer. No MAUI control can be instantiated headlessly in this
+    /// suite (see this file's other dialog checks), so this pins the fix the same way
+    /// <see cref="ConfirmNodeRefusesBlankRequiredFieldsBeforeShowingTheConfirmationDialog"/> and
+    /// <see cref="SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog"/> pin
+    /// their own guards: the decline branch must appear, and it must run before the mutation call.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void CancelSprintAbortsBeforeMutatingWhenTheConfirmationDialogIsDeclined()
+    {
+        string method = SprintWorkspaceBody(
+            "actions, AvailableActionProjector.CancelSprintActionId, text.Resolve(MessageKeys.SprintCancelAction),");
+
+        int guardIndex = method.IndexOf("if (!dialogConfirmed)", StringComparison.Ordinal);
+        int mutationIndex = method.IndexOf(".CancelSprintAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "The cancel-sprint handler no longer aborts on a declined confirmation.");
+        Assert.True(mutationIndex >= 0, "The cancel-sprint handler no longer calls CancelSprintAsync.");
+        Assert.True(guardIndex < mutationIndex, "The decline guard must run before the mutation call.");
+    }
+
+    /// <summary>
+    /// PR #99 round-2 review, non-blocking: round-1 finding 1 fixed a dropped-click bug caused by
+    /// routing the timeline poll's entire fetch-then-render step through the shell's shared mutation
+    /// guard (<c>RunAsync</c>/<c>ShellRenderGate.RunAsync</c>), which held <c>busy</c> for the
+    /// duration of an unattended Host round-trip and silently swallowed a user click landing in that
+    /// window. The regression test for that fix, <c>ShellRenderGateTests.
+    /// ARenderRequestDeferredDuringAnInFlightMutationNeverBlocksOrDropsAConcurrentMutation</c>,
+    /// exercises <see cref="Forge.Desktop.Presentation.ShellRenderGate"/> directly and has no way to
+    /// notice which caller actually invokes it, so a future edit could silently re-wrap the poll's
+    /// tick or its fetch in <c>RunAsync</c> again -- reintroducing the exact bug -- with every
+    /// existing test still green. No MAUI control can be instantiated headlessly in this suite (see
+    /// this file's other dialog/source pins), so this pins the fix directly in the source text: the
+    /// poll's own fetch method and the timer's tick handler must never call <c>RunAsync(</c>, the
+    /// fetch must still call <c>LoadMoreAsync(</c> directly, and the render step must still go through
+    /// <c>renderGate.RequestRender(</c>, never <c>RunAsync(</c>.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void TimelinePollNeverRoutesThroughTheSharedMutationGate()
+    {
+        string pollMethod = SprintWorkspaceBody("async Task PollTimelineAsync()");
+        string tickHandler = SprintWorkspaceBody("timelinePollTimer.Tick += (_, _) =>");
+
+        Assert.DoesNotContain("RunAsync(", pollMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunAsync(", tickHandler, StringComparison.Ordinal);
+        Assert.Contains(".LoadMoreAsync(", pollMethod, StringComparison.Ordinal);
+        Assert.Contains("renderGate.RequestRender(", pollMethod, StringComparison.Ordinal);
     }
 
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
@@ -582,21 +643,20 @@ public sealed class SurfaceParityTests
         Assert.Contains("snapshot.Providers", source, StringComparison.Ordinal);
     }
 
-    /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
-    /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
-    /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's
-    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the source text.</summary>
+    /// <summary>Plan section 11 Slice 6 item 3 ("remove manual ID fields from ordinary workflows"):
+    /// the attempt id superseded is derived from the sprint's own current active attempt
+    /// (<see cref="SprintWorkspaceViewModel.FindActiveAttemptId"/>), never typed into an
+    /// <c>Entry</c> -- the exact raw-ID-entry field the old sprint-workspace page had here before
+    /// this slice. No MAUI control can be instantiated headlessly (see the dialog-naming checks
+    /// above), so this pins the fix directly in the source text.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog()
+    public void SupersedeNeverCollectsTheAttemptIdFromAManualEntry()
     {
-        string method = SupersedeAttemptClickHandlerBody();
+        string source = DesktopSourceText();
 
-        int guardIndex = method.IndexOf("attemptId.Text", StringComparison.Ordinal);
-        int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank attempt id.");
-        Assert.True(
-            guardIndex < dialogIndex, "The blank-attempt-id guard must run before the confirmation dialog.");
+        Assert.Contains("SprintWorkspaceViewModel.FindActiveAttemptId(", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("AttemptIdLabel", source, StringComparison.Ordinal);
     }
 
     /// <summary>Round 3 review: a blank replacement instruction was refused only after the user
@@ -608,7 +668,7 @@ public sealed class SurfaceParityTests
     {
         string method = SupersedeAttemptClickHandlerBody();
 
-        int guardIndex = method.IndexOf("instruction.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("instructionEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank instruction.");
         Assert.True(

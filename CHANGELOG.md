@@ -2,6 +2,42 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.68.0
+
+### Added
+
+- Added a chronological sprint timeline: incremental "load more" paging backed by the real cursor,
+  automatic polling for new items while the page is open, filtering by item type, per-item
+  copy-to-clipboard, collapsed-by-default technical detail (correlation/causation ids, structured
+  arguments), unread-position tracking that survives a restart, and a "mark all read" action.
+  Timeline rows never render raw provider output — only the existing redacted, bounded event
+  projection.
+- Added a typed contextual-action renderer driven by the Host's own action list: sprint
+  run/resume/cancel now show and enable themselves from that list rather than always-on raw
+  buttons.
+- Added a stop-current-operation control, visible only when the sprint has an exact stoppable
+  operation. Its confirmation names the exact node and attempt being stopped and is clearly
+  distinct from attempt supersession and sprint cancellation in label, explanation, and result.
+- Added a stage-transition (move-to-stage) control that lists only stages in the sprint's own
+  frozen workflow, shows the Host's fresh assessment (satisfied/unsatisfied prerequisites and, for
+  a rewind, exactly what would be superseded) before confirming, and re-validates immediately
+  before committing — a target is never shown as available from a locally cached or computed
+  guess. Rewinding requires a reason, which is preserved as a draft across an app restart.
+
+### Changed
+
+- Replaced the sprint workspace's placeholder controls with a real sticky status header showing
+  project name, sprint sequence, lifecycle state (including `paused`), current stage, stage
+  progress, last activity, open finding count, retry budget, and `resume_not_before`; UUIDs, the
+  project root, base commit, and workflow id now live behind an expandable "details" toggle instead
+  of crowding the main row.
+
+### Removed
+
+- Removed every remaining manual project/sprint/node/attempt-id entry field from the sprint
+  workspace: gate, confirm, test-work, finalize, and attempt supersession now resolve their target
+  from the already-selected sprint's own current state.
+
 ## v0.67.0
 
 ### Added

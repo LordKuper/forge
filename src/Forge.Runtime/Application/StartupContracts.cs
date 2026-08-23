@@ -263,6 +263,10 @@ public static class DiagnosticCodes
     /// of letting the underlying parse failure propagate as an unhandled exception out of every
     /// `forge project *`/`forge workspace summary` command (round 1 review of PR #97).</summary>
     public const string ProjectCatalogUnreadable = "project_catalog_unreadable";
+
+    /// <summary>Slice 6's sprint-workspace draft preservation given text longer than
+    /// <see cref="ProjectCatalogStore.MaxDraftLength"/>.</summary>
+    public const string ProjectCatalogDraftTooLong = "project_catalog_draft_too_long";
 }
 
 public enum StartupState

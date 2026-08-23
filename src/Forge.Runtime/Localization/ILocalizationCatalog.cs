@@ -191,6 +191,7 @@ public static class MessageKeys
     public const string SprintRunAction = "SprintRunAction";
     public const string SprintResumeAction = "SprintResumeAction";
     public const string SprintCancelAction = "SprintCancelAction";
+    public const string SprintCancelConfirmationRequired = "SprintCancelConfirmationRequired";
     public const string SprintManageFailed = "SprintManageFailed";
     public const string SprintManageSprintAmbiguous = "SprintManageSprintAmbiguous";
 
@@ -276,7 +277,7 @@ public static class MessageKeys
     public const string ProjectSettingsRelinkAction = "ProjectSettingsRelinkAction";
     public const string ProjectSettingsRemoveFromCatalogAction = "ProjectSettingsRemoveFromCatalogAction";
     public const string ProjectSettingsDiagnosticBundleAction = "ProjectSettingsDiagnosticBundleAction";
-    public const string SprintWorkspacePlaceholderTitle = "SprintWorkspacePlaceholderTitle";
+    public const string SprintWorkspaceTitle = "SprintWorkspaceTitle";
 
     // PR #98 review round 1: findings 3/4 (catalog-operation outcomes were silent or unconditionally
     // "saved"), 7 (project overview's providers section), and 8 (hardcoded English in
@@ -296,4 +297,62 @@ public static class MessageKeys
     public const string SidebarProjectUnavailable = "SidebarProjectUnavailable";
     public const string SidebarActiveSprintsLabel = "SidebarActiveSprintsLabel";
     public const string SidebarAttentionNeededLabel = "SidebarAttentionNeededLabel";
+
+    // Slice 6: sprint workspace status header, timeline, and contextual-action renderer (plan
+    // section 4.3, 12.3-12.6).
+    public const string SprintStatusHeaderStageLabel = "SprintStatusHeaderStageLabel";
+    public const string SprintStatusHeaderProgressLabel = "SprintStatusHeaderProgressLabel";
+    public const string SprintStatusHeaderLastActivityLabel = "SprintStatusHeaderLastActivityLabel";
+    public const string SprintStatusHeaderProviderModelUnavailable = "SprintStatusHeaderProviderModelUnavailable";
+    public const string SprintStatusHeaderResumeNotBeforeLabel = "SprintStatusHeaderResumeNotBeforeLabel";
+    public const string SprintStatusHeaderDetailsAction = "SprintStatusHeaderDetailsAction";
+    public const string TimelineTitle = "TimelineTitle";
+    public const string TimelineNoItems = "TimelineNoItems";
+    public const string TimelineLoadMoreAction = "TimelineLoadMoreAction";
+    public const string TimelineFilterAllOption = "TimelineFilterAllOption";
+    public const string TimelineFilterLabel = "TimelineFilterLabel";
+    public const string TimelineCopyAction = "TimelineCopyAction";
+    public const string TimelineCopiedNotice = "TimelineCopiedNotice";
+    public const string TimelineDetailsAction = "TimelineDetailsAction";
+    public const string TimelineMarkAllReadAction = "TimelineMarkAllReadAction";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// unread count, e.g. "{0} unread".</summary>
+    public const string TimelineUnreadLabel = "TimelineUnreadLabel";
+    public const string ActionsTitle = "ActionsTitle";
+    public const string ActionsNoneAvailable = "ActionsNoneAvailable";
+    public const string ActionsBlockedPrefix = "ActionsBlockedPrefix";
+    public const string AttemptStopAction = "AttemptStopAction";
+    public const string AttemptStopConfirmationRequired = "AttemptStopConfirmationRequired";
+    public const string AttemptStopTargetLabel = "AttemptStopTargetLabel";
+    public const string AttemptStopNoLongerActive = "AttemptStopNoLongerActive";
+    public const string MoveToStageAction = "MoveToStageAction";
+    public const string MoveToStageConfirmationRequired = "MoveToStageConfirmationRequired";
+    public const string MoveToStageSourceLabel = "MoveToStageSourceLabel";
+    public const string MoveToStageTargetLabel = "MoveToStageTargetLabel";
+    public const string MoveToStageDirectionLabel = "MoveToStageDirectionLabel";
+    public const string MoveToStageSatisfiedLabel = "MoveToStageSatisfiedLabel";
+    public const string MoveToStageUnsatisfiedLabel = "MoveToStageUnsatisfiedLabel";
+    public const string MoveToStageConsequencesLabel = "MoveToStageConsequencesLabel";
+    public const string MoveToStageConsequencesStagesLabel = "MoveToStageConsequencesStagesLabel";
+    public const string MoveToStageConsequencesAttemptsLabel = "MoveToStageConsequencesAttemptsLabel";
+    public const string MoveToStageConsequencesArtifactsLabel = "MoveToStageConsequencesArtifactsLabel";
+    public const string MoveToStageBlockedCannotProceed = "MoveToStageBlockedCannotProceed";
+    public const string ActionRewindReasonLabel = "ActionRewindReasonLabel";
+    public const string ActionRewindReasonRequired = "ActionRewindReasonRequired";
+    public const string ActionRewindReasonDraftSaveFailed = "ActionRewindReasonDraftSaveFailed";
+    public const string ActionStaleRefreshed = "ActionStaleRefreshed";
+
+    /// <summary><c>AvailableActionProjector</c>'s sprint-lifecycle rationale keys, resolved as
+    /// descriptive text (the contextual-action renderer's row label uses
+    /// <see cref="SprintRunAction"/>/<see cref="SprintResumeAction"/>/<see cref="SprintCancelAction"/>/
+    /// <see cref="AttemptStopAction"/> as the button verb instead).</summary>
+    public const string WorkspaceActionResumeSprintRationale = "workspace_action.resume_sprint";
+
+    public const string WorkspaceActionRunSprintRationale = "workspace_action.run_sprint";
+    public const string WorkspaceActionCancelSprintRationale = "workspace_action.cancel_sprint";
+    public const string WorkspaceActionStopCurrentOperationRationale = "workspace_action.stop_current_operation";
+    public const string WorkspaceActionMoveToStageAdvanceRationale = "workspace_action.move_to_stage.advance";
+    public const string WorkspaceActionMoveToStageRewindRationale = "workspace_action.move_to_stage.rewind";
+    public const string WorkspaceActionMoveToStageSameRationale = "workspace_action.move_to_stage.same";
 }

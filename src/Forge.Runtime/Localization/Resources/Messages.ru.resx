@@ -157,6 +157,7 @@
   <data name="SprintRunAction" xml:space="preserve"><value>Запустить спринт</value></data>
   <data name="SprintResumeAction" xml:space="preserve"><value>Возобновить спринт</value></data>
   <data name="SprintCancelAction" xml:space="preserve"><value>Отменить спринт</value></data>
+  <data name="SprintCancelConfirmationRequired" xml:space="preserve"><value>Подтвердите отмену спринта перед выполнением.</value></data>
   <data name="SprintManageFailed" xml:space="preserve"><value>Действие со спринтом не выполнено.</value></data>
   <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы выполнить действие.</value></data>
   <data name="SprintStatePaused" xml:space="preserve"><value>Приостановлено</value></data>
@@ -221,7 +222,7 @@
   <data name="ProjectSettingsRelinkAction" xml:space="preserve"><value>Перепривязать папку проекта</value></data>
   <data name="ProjectSettingsRemoveFromCatalogAction" xml:space="preserve"><value>Удалить из каталога</value></data>
   <data name="ProjectSettingsDiagnosticBundleAction" xml:space="preserve"><value>Сформировать диагностический пакет</value></data>
-  <data name="SprintWorkspacePlaceholderTitle" xml:space="preserve"><value>Рабочая область спринта (базовый вид; расширенный вид появится позже)</value></data>
+  <data name="SprintWorkspaceTitle" xml:space="preserve"><value>Рабочая область спринта</value></data>
   <data name="ProjectAddFailed" xml:space="preserve"><value>Не удалось добавить проект.</value></data>
   <data name="ProjectRemoveFailed" xml:space="preserve"><value>Не удалось удалить проект.</value></data>
   <data name="ProjectRelinkFailed" xml:space="preserve"><value>Не удалось перепривязать проект.</value></data>
@@ -233,4 +234,50 @@
   <data name="SidebarProjectUnavailable" xml:space="preserve"><value>недоступен</value></data>
   <data name="SidebarActiveSprintsLabel" xml:space="preserve"><value>активных спринтов</value></data>
   <data name="SidebarAttentionNeededLabel" xml:space="preserve"><value>требуют внимания</value></data>
+  <data name="SprintStatusHeaderStageLabel" xml:space="preserve"><value>Стадия</value></data>
+  <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Прогресс</value></data>
+  <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Последняя активность</value></data>
+  <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Активный провайдер/модель пока недоступны.</value></data>
+  <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Возобновление не раньше</value></data>
+  <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Подробности</value></data>
+  <data name="TimelineTitle" xml:space="preserve"><value>Хронология</value></data>
+  <data name="TimelineNoItems" xml:space="preserve"><value>Записей хронологии пока нет.</value></data>
+  <data name="TimelineLoadMoreAction" xml:space="preserve"><value>Загрузить ещё</value></data>
+  <data name="TimelineFilterAllOption" xml:space="preserve"><value>Все</value></data>
+  <data name="TimelineFilterLabel" xml:space="preserve"><value>Фильтр</value></data>
+  <data name="TimelineCopyAction" xml:space="preserve"><value>Копировать</value></data>
+  <data name="TimelineCopiedNotice" xml:space="preserve"><value>Скопировано в буфер обмена.</value></data>
+  <data name="TimelineDetailsAction" xml:space="preserve"><value>Подробности</value></data>
+  <data name="TimelineMarkAllReadAction" xml:space="preserve"><value>Отметить всё прочитанным</value></data>
+  <data name="TimelineUnreadLabel" xml:space="preserve"><value>Непрочитано: {0}</value></data>
+  <data name="ActionsTitle" xml:space="preserve"><value>Действия</value></data>
+  <data name="ActionsNoneAvailable" xml:space="preserve"><value>Сейчас нет доступных действий.</value></data>
+  <data name="ActionsBlockedPrefix" xml:space="preserve"><value>Заблокировано:</value></data>
+  <data name="AttemptStopAction" xml:space="preserve"><value>Остановить операцию</value></data>
+  <data name="AttemptStopConfirmationRequired" xml:space="preserve"><value>Подтвердите остановку активной операции перед выполнением.</value></data>
+  <data name="AttemptStopTargetLabel" xml:space="preserve"><value>Будет остановлена активная операция на узле</value></data>
+  <data name="AttemptStopNoLongerActive" xml:space="preserve"><value>Эта операция больше не активна; экран обновлён.</value></data>
+  <data name="MoveToStageAction" xml:space="preserve"><value>Перейти на стадию</value></data>
+  <data name="MoveToStageConfirmationRequired" xml:space="preserve"><value>Подтвердите перевод спринта на эту стадию перед выполнением.</value></data>
+  <data name="MoveToStageSourceLabel" xml:space="preserve"><value>Текущая стадия</value></data>
+  <data name="MoveToStageTargetLabel" xml:space="preserve"><value>Целевая стадия</value></data>
+  <data name="MoveToStageDirectionLabel" xml:space="preserve"><value>Направление</value></data>
+  <data name="MoveToStageSatisfiedLabel" xml:space="preserve"><value>Выполнено</value></data>
+  <data name="MoveToStageUnsatisfiedLabel" xml:space="preserve"><value>Не выполнено</value></data>
+  <data name="MoveToStageConsequencesLabel" xml:space="preserve"><value>Возврат назад заменит собой</value></data>
+  <data name="MoveToStageConsequencesStagesLabel" xml:space="preserve"><value>стадии</value></data>
+  <data name="MoveToStageConsequencesAttemptsLabel" xml:space="preserve"><value>попытки</value></data>
+  <data name="MoveToStageConsequencesArtifactsLabel" xml:space="preserve"><value>артефакты</value></data>
+  <data name="MoveToStageBlockedCannotProceed" xml:space="preserve"><value>Эта цель заблокирована, перейти на неё пока нельзя.</value></data>
+  <data name="ActionRewindReasonLabel" xml:space="preserve"><value>Причина возврата назад (обязательно)</value></data>
+  <data name="ActionRewindReasonRequired" xml:space="preserve"><value>Для возврата на более раннюю стадию требуется указать причину.</value></data>
+  <data name="ActionStaleRefreshed" xml:space="preserve"><value>Это действие устарело; экран обновлён.</value></data>
+  <data name="ActionRewindReasonDraftSaveFailed" xml:space="preserve"><value>Не удалось сохранить черновик причины.</value></data>
+  <data name="workspace_action.resume_sprint" xml:space="preserve"><value>Возобновить приостановленный, заблокированный или неудавшийся спринт.</value></data>
+  <data name="workspace_action.run_sprint" xml:space="preserve"><value>Продвинуть спринт из черновика или готовности.</value></data>
+  <data name="workspace_action.cancel_sprint" xml:space="preserve"><value>Отменить спринт.</value></data>
+  <data name="workspace_action.stop_current_operation" xml:space="preserve"><value>Остановить именно активную операцию, не отменяя спринт.</value></data>
+  <data name="workspace_action.move_to_stage.advance" xml:space="preserve"><value>Перейти вперёд на эту стадию.</value></data>
+  <data name="workspace_action.move_to_stage.rewind" xml:space="preserve"><value>Вернуться на эту стадию.</value></data>
+  <data name="workspace_action.move_to_stage.same" xml:space="preserve"><value>Это уже текущая стадия.</value></data>
 </root>
