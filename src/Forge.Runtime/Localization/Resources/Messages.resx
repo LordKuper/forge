@@ -177,4 +177,60 @@
   <data name="ProjectAliasSet" xml:space="preserve"><value>Alias updated.</value></data>
   <data name="ProjectSelected" xml:space="preserve"><value>Selection recorded.</value></data>
   <data name="NoProjects" xml:space="preserve"><value>No projects in the catalog yet.</value></data>
+  <data name="SprintReadyToFinalizeReason" xml:space="preserve"><value>Ready to finalize</value></data>
+  <data name="QuotaStatusUnavailable" xml:space="preserve"><value>Quota status not yet available.</value></data>
+  <data name="SettingsLanguageUnsupported" xml:space="preserve"><value>This language is not supported.</value></data>
+  <data name="SettingsUnknownProvider" xml:space="preserve"><value>This provider is not known to this Forge build.</value></data>
+  <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Token budget must be a positive number.</value></data>
+  <data name="SidebarAddProjectAction" xml:space="preserve"><value>Add project</value></data>
+  <data name="SidebarAddProjectPathLabel" xml:space="preserve"><value>Project folder (optional if using Browse)</value></data>
+  <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Forge settings</value></data>
+  <data name="SidebarHistoryLabel" xml:space="preserve"><value>History</value></data>
+  <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Remove from list</value></data>
+  <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Add a project to get started.</value></data>
+  <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>No project selected yet.</value></data>
+  <data name="ProjectOverviewTitle" xml:space="preserve"><value>Project overview</value></data>
+  <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Active sprints</value></data>
+  <data name="ProjectOverviewHistoryTitle" xml:space="preserve"><value>Recent history</value></data>
+  <data name="ForgeSettingsTitle" xml:space="preserve"><value>Forge settings</value></data>
+  <data name="ForgeSettingsLanguageGroupTitle" xml:space="preserve"><value>Language</value></data>
+  <data name="ForgeSettingsSafetyGroupTitle" xml:space="preserve"><value>Safety</value></data>
+  <data name="ForgeSettingsProvidersGroupTitle" xml:space="preserve"><value>Providers</value></data>
+  <data name="ForgeSettingsNotificationsGroupTitle" xml:space="preserve"><value>Notifications</value></data>
+  <data name="ForgeSettingsLanguageUiLabel" xml:space="preserve"><value>Interface language</value></data>
+  <data name="ForgeSettingsLanguageInteractionLabel" xml:space="preserve"><value>Interaction language</value></data>
+  <data name="ForgeSettingsLanguageLlmLabel" xml:space="preserve"><value>Provider language</value></data>
+  <data name="ForgeSettingsInheritOption" xml:space="preserve"><value>(inherit)</value></data>
+  <data name="ForgeSettingsConfirmDestructiveLabel" xml:space="preserve"><value>Confirm destructive actions</value></data>
+  <data name="ForgeSettingsConfirmDestructiveDisclaimer" xml:space="preserve"><value>Mandatory human, stop, and rewind confirmations are never bypassed by this setting.</value></data>
+  <data name="ForgeSettingsProvidersEnabledLabel" xml:space="preserve"><value>Enabled providers</value></data>
+  <data name="ForgeSettingsNotificationsEnabledLabel" xml:space="preserve"><value>Notifications enabled</value></data>
+  <data name="SettingsSaveAction" xml:space="preserve"><value>Save</value></data>
+  <data name="SettingsDiscardAction" xml:space="preserve"><value>Discard</value></data>
+  <data name="SettingsSaved" xml:space="preserve"><value>Settings saved.</value></data>
+  <data name="SettingsValidationFailed" xml:space="preserve"><value>Some values are invalid; nothing was saved.</value></data>
+  <data name="SettingsProvenanceLabel" xml:space="preserve"><value>Source</value></data>
+  <data name="ProjectSettingsTitle" xml:space="preserve"><value>Project settings</value></data>
+  <data name="ProjectSettingsRootLabel" xml:space="preserve"><value>Project root (read-only)</value></data>
+  <data name="ProjectSettingsProjectIdLabel" xml:space="preserve"><value>Project id (read-only)</value></data>
+  <data name="ProjectSettingsAliasLabel" xml:space="preserve"><value>Display name (local only)</value></data>
+  <data name="ProjectSettingsUserFacingLanguageLabel" xml:space="preserve"><value>User-facing artifact language</value></data>
+  <data name="ProjectSettingsAgentFacingLanguageLabel" xml:space="preserve"><value>Agent-facing artifact language</value></data>
+  <data name="ProjectSettingsTokenBudgetLabel" xml:space="preserve"><value>Context token budget</value></data>
+  <data name="ProjectSettingsAllowedModelsLabel" xml:space="preserve"><value>Allowed models</value></data>
+  <data name="ProjectSettingsRelinkAction" xml:space="preserve"><value>Relink project folder</value></data>
+  <data name="ProjectSettingsRemoveFromCatalogAction" xml:space="preserve"><value>Remove from catalog</value></data>
+  <data name="ProjectSettingsDiagnosticBundleAction" xml:space="preserve"><value>Generate diagnostic bundle</value></data>
+  <data name="SprintWorkspacePlaceholderTitle" xml:space="preserve"><value>Sprint workspace (basic view; a richer view is coming)</value></data>
+  <data name="ProjectAddFailed" xml:space="preserve"><value>Could not add project.</value></data>
+  <data name="ProjectRemoveFailed" xml:space="preserve"><value>Could not remove project.</value></data>
+  <data name="ProjectRelinkFailed" xml:space="preserve"><value>Could not relink project.</value></data>
+  <data name="ProjectAliasSetFailed" xml:space="preserve"><value>Could not update alias.</value></data>
+  <data name="ProjectOverviewProvidersTitle" xml:space="preserve"><value>Providers</value></data>
+  <data name="SidebarProvidersReadyStatus" xml:space="preserve"><value>{0}/{1} providers ready</value></data>
+  <data name="SidebarProvidersReadyAccessible" xml:space="preserve"><value>{0} of {1} enabled providers are ready</value></data>
+  <data name="SidebarProjectAvailable" xml:space="preserve"><value>available</value></data>
+  <data name="SidebarProjectUnavailable" xml:space="preserve"><value>unavailable</value></data>
+  <data name="SidebarActiveSprintsLabel" xml:space="preserve"><value>active sprints</value></data>
+  <data name="SidebarAttentionNeededLabel" xml:space="preserve"><value>need attention</value></data>
 </root>

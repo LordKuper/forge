@@ -223,4 +223,77 @@ public static class MessageKeys
     /// list within one already-identified project, not the zero-projects-in-the-catalog case these
     /// two commands report.</summary>
     public const string NoProjects = "NoProjects";
+
+    // Desktop workspace shell (Slice 5): sidebar, project overview, Forge/project settings, and the
+    // sprint-workspace stub route. Gate/confirm/test-work/finalize/supersede/events/sprint-lifecycle
+    // controls reuse the existing keys above verbatim -- SprintWorkspaceViewModel only re-scopes
+    // MainPageViewModel's own already-localized capabilities, it adds no new interaction text.
+    public const string SprintReadyToFinalizeReason = "SprintReadyToFinalizeReason";
+    public const string QuotaStatusUnavailable = "QuotaStatusUnavailable";
+    public const string SettingsLanguageUnsupported = "SettingsLanguageUnsupported";
+    public const string SettingsUnknownProvider = "SettingsUnknownProvider";
+    public const string SettingsTokenBudgetInvalid = "SettingsTokenBudgetInvalid";
+    public const string SidebarAddProjectAction = "SidebarAddProjectAction";
+    public const string SidebarAddProjectPathLabel = "SidebarAddProjectPathLabel";
+    public const string SidebarForgeSettingsAction = "SidebarForgeSettingsAction";
+    public const string SidebarHistoryLabel = "SidebarHistoryLabel";
+    public const string SidebarRemoveProjectAction = "SidebarRemoveProjectAction";
+    public const string SidebarNoProjectsHint = "SidebarNoProjectsHint";
+    public const string WorkspaceEmptyStateTitle = "WorkspaceEmptyStateTitle";
+    public const string ProjectOverviewTitle = "ProjectOverviewTitle";
+    public const string ProjectOverviewActiveSprintsTitle = "ProjectOverviewActiveSprintsTitle";
+    public const string ProjectOverviewHistoryTitle = "ProjectOverviewHistoryTitle";
+    public const string ForgeSettingsTitle = "ForgeSettingsTitle";
+    public const string ForgeSettingsLanguageGroupTitle = "ForgeSettingsLanguageGroupTitle";
+    public const string ForgeSettingsSafetyGroupTitle = "ForgeSettingsSafetyGroupTitle";
+    public const string ForgeSettingsProvidersGroupTitle = "ForgeSettingsProvidersGroupTitle";
+    public const string ForgeSettingsNotificationsGroupTitle = "ForgeSettingsNotificationsGroupTitle";
+    public const string ForgeSettingsLanguageUiLabel = "ForgeSettingsLanguageUiLabel";
+    public const string ForgeSettingsLanguageInteractionLabel = "ForgeSettingsLanguageInteractionLabel";
+    public const string ForgeSettingsLanguageLlmLabel = "ForgeSettingsLanguageLlmLabel";
+    public const string ForgeSettingsInheritOption = "ForgeSettingsInheritOption";
+    public const string ForgeSettingsConfirmDestructiveLabel = "ForgeSettingsConfirmDestructiveLabel";
+
+    /// <summary>Plan 5.1's required "mandatory-gate disclaimer" for
+    /// <see cref="ForgeSettingsConfirmDestructiveLabel"/>'s row (PR #98 review finding 10): human,
+    /// stop, and rewind confirmations are never bypassed by this setting.</summary>
+    public const string ForgeSettingsConfirmDestructiveDisclaimer = "ForgeSettingsConfirmDestructiveDisclaimer";
+    public const string ForgeSettingsProvidersEnabledLabel = "ForgeSettingsProvidersEnabledLabel";
+    public const string ForgeSettingsNotificationsEnabledLabel = "ForgeSettingsNotificationsEnabledLabel";
+    public const string SettingsSaveAction = "SettingsSaveAction";
+    public const string SettingsDiscardAction = "SettingsDiscardAction";
+    public const string SettingsSaved = "SettingsSaved";
+    public const string SettingsValidationFailed = "SettingsValidationFailed";
+    public const string SettingsProvenanceLabel = "SettingsProvenanceLabel";
+    public const string ProjectSettingsTitle = "ProjectSettingsTitle";
+    public const string ProjectSettingsRootLabel = "ProjectSettingsRootLabel";
+    public const string ProjectSettingsProjectIdLabel = "ProjectSettingsProjectIdLabel";
+    public const string ProjectSettingsAliasLabel = "ProjectSettingsAliasLabel";
+    public const string ProjectSettingsUserFacingLanguageLabel = "ProjectSettingsUserFacingLanguageLabel";
+    public const string ProjectSettingsAgentFacingLanguageLabel = "ProjectSettingsAgentFacingLanguageLabel";
+    public const string ProjectSettingsTokenBudgetLabel = "ProjectSettingsTokenBudgetLabel";
+    public const string ProjectSettingsAllowedModelsLabel = "ProjectSettingsAllowedModelsLabel";
+    public const string ProjectSettingsRelinkAction = "ProjectSettingsRelinkAction";
+    public const string ProjectSettingsRemoveFromCatalogAction = "ProjectSettingsRemoveFromCatalogAction";
+    public const string ProjectSettingsDiagnosticBundleAction = "ProjectSettingsDiagnosticBundleAction";
+    public const string SprintWorkspacePlaceholderTitle = "SprintWorkspacePlaceholderTitle";
+
+    // PR #98 review round 1: findings 3/4 (catalog-operation outcomes were silent or unconditionally
+    // "saved"), 7 (project overview's providers section), and 8 (hardcoded English in
+    // SidebarViewModel).
+    public const string ProjectAddFailed = "ProjectAddFailed";
+    public const string ProjectRemoveFailed = "ProjectRemoveFailed";
+    public const string ProjectRelinkFailed = "ProjectRelinkFailed";
+    public const string ProjectAliasSetFailed = "ProjectAliasSetFailed";
+    public const string ProjectOverviewProvidersTitle = "ProjectOverviewProvidersTitle";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?)"/> template
+    /// taking the ready provider count then the enabled provider count, e.g. "{0}/{1} providers
+    /// ready".</summary>
+    public const string SidebarProvidersReadyStatus = "SidebarProvidersReadyStatus";
+    public const string SidebarProvidersReadyAccessible = "SidebarProvidersReadyAccessible";
+    public const string SidebarProjectAvailable = "SidebarProjectAvailable";
+    public const string SidebarProjectUnavailable = "SidebarProjectUnavailable";
+    public const string SidebarActiveSprintsLabel = "SidebarActiveSprintsLabel";
+    public const string SidebarAttentionNeededLabel = "SidebarAttentionNeededLabel";
 }
