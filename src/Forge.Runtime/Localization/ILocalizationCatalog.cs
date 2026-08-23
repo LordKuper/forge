@@ -200,4 +200,21 @@ public static class MessageKeys
     /// per-state label today (CLI/Desktop render the raw snake_case value); this key exists so the
     /// later slice that adds one has an already-reviewed, parity-checked label to reuse.</summary>
     public const string SprintStatePaused = "SprintStatePaused";
+
+    public const string WorkspaceDescription = "WorkspaceDescription";
+    public const string WorkspaceSummaryDescription = "WorkspaceSummaryDescription";
+    public const string WorkspaceActionsDescription = "WorkspaceActionsDescription";
+    public const string SprintTimelineDescription = "SprintTimelineDescription";
+    public const string ProjectDescription = "ProjectDescription";
+    public const string ProjectAddDescription = "ProjectAddDescription";
+    public const string ProjectRemoveDescription = "ProjectRemoveDescription";
+    public const string ProjectRelinkDescription = "ProjectRelinkDescription";
+    public const string ProjectAliasDescription = "ProjectAliasDescription";
+    public const string ProjectListDescription = "ProjectListDescription";
+    public const string ProjectSelectDescription = "ProjectSelectDescription";
+    public const string ProjectAdded = "ProjectAdded";
+    public const string ProjectRemoved = "ProjectRemoved";
+    public const string ProjectRelinked = "ProjectRelinked";
+    public const string ProjectAliasSet = "ProjectAliasSet";
+    public const string ProjectSelected = "ProjectSelected";
 }
