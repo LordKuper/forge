@@ -522,86 +522,155 @@ prior behavior or an equivalent mutation.
 
 ### 12.1 Workspace and navigation
 
-- [ ] On launch, Desktop renders a sidebar and content area instead of the monolithic form.
-- [ ] A user can add, relink, and remove a project from the local catalog without editing or
+- [x] On launch, Desktop renders a sidebar and content area instead of the monolithic form.
+- [x] A user can add, relink, and remove a project from the local catalog without editing or
       deleting repository data.
 - [ ] Every known project shows availability and every non-terminal sprint shows an accessible
-      state indicator.
-- [ ] Selecting a project, sprint, Forge settings, or project settings opens the matching page.
+      state indicator. *(Partial: sprint state is both visible and accessible-named. Project
+      availability today is accessible-name-only — the sidebar's visible project row carries no
+      glyph/color/suffix; it only becomes visible once Project Overview is opened.)*
+- [x] Selecting a project, sprint, Forge settings, or project settings opens the matching page.
 - [ ] The last valid route, sidebar expansion, timeline position, and unsent draft survive restart.
-- [ ] Completed and cancelled sprints remain reachable without crowding the active list.
+      *(Partial: route and draft persist via the catalog. Sidebar expand/collapse state does not
+      exist anywhere yet — every project's sprints always render fully expanded. Timeline scroll
+      position is held in an in-memory dictionary on the page instance and is lost on restart,
+      though it survives in-session navigation.)*
+- [ ] Completed and cancelled sprints remain reachable without crowding the active list. *(Partial:
+      not-crowding is satisfied — a capped, separate history list exists. Reachable is not: history
+      entries render as plain non-interactive labels with no navigation, unlike active sprint cards'
+      "open" button.)*
 
 ### 12.2 Settings
 
-- [ ] Every registered user-scoped key is editable through a typed control.
-- [ ] Inherited language values and every effective configuration provenance are visible.
-- [ ] Invalid edits cannot be saved and do not partially modify configuration.
-- [ ] Saving a UI language change updates all visible text without restart.
-- [ ] Every registered project-scoped key is editable from the selected project's settings page.
-- [ ] Mandatory human, stop, and rewind confirmations cannot be disabled by user configuration.
+- [x] Every registered user-scoped key is editable through a typed control.
+- [x] Inherited language values and every effective configuration provenance are visible.
+- [x] Invalid edits cannot be saved and do not partially modify configuration.
+- [x] Saving a UI language change updates all visible text without restart.
+- [x] Every registered project-scoped key is editable from the selected project's settings page.
+- [x] Mandatory human, stop, and rewind confirmations cannot be disabled by user configuration.
 
 ### 12.3 Sprint status and timeline
 
 - [ ] The sticky header shows project, sprint, lifecycle state, current stage, progress, activity,
-      findings, routing budget, and applicable provider/model information.
+      findings, routing budget, and applicable provider/model information. *(Partial: every field
+      renders from real data except provider/model, which always shows a "not yet available"
+      placeholder — `AttemptSnapshot` has no provider/model field anywhere in the domain model, so
+      this is a structural gap, not a wiring bug.)*
 - [ ] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
-- [ ] New items appear without manual refresh while the sprint page is visible.
-- [ ] Raw provider streams, credentials, full environments, and unredacted sensitive paths never
-      enter the timeline contract, persistent store, logs, or rendered details.
-- [ ] Every current Desktop capability remains reachable without typing a project, sprint, node,
+      *(Partial: ordering, cursor paging, and restart-survival are all real and tested. Localization
+      is not — an item's rendered message is its raw `workflow.*` journal key verbatim; none of the
+      ~30 such keys are registered in `Messages.resx`, so only the surrounding chrome, not the
+      timeline content itself, is localized.)*
+- [x] New items appear without manual refresh while the sprint page is visible.
+- [x] Raw provider streams, credentials, full environments, and unredacted sensitive paths never
+      enter the timeline contract, persistent store, logs, or rendered details. *(Verified via two
+      independent, mutation-tested redaction passes for credentials; streams/environments are
+      structurally excluded since the timeline only ever projects the workflow event journal. Note:
+      `SecretRedactor` has no dedicated path-scrubbing pattern — protection against a stray sensitive
+      path relies on producers never placing one in event arguments, not on an active filter.)*
+- [x] Every current Desktop capability remains reachable without typing a project, sprint, node,
       or attempt ID.
 
 ### 12.4 Stop current operation
 
-- [ ] The Stop action is visible only when the selected sprint has an exact stoppable operation.
-- [ ] Stopping terminates the entire owned process tree, including descendants.
-- [ ] The stopped attempt becomes `cancelled`, its partial worktree is discarded, and no partial
-      change reaches the integration branch.
-- [ ] The owning node can run again, the sprint becomes `paused`, and automatic retry budget is
+- [x] The Stop action is visible only when the selected sprint has an exact stoppable operation.
+- [x] Stopping terminates the entire owned process tree, including descendants.
+- [x] The stopped attempt becomes `cancelled`, its partial worktree is discarded, and no partial
+      change reaches the integration branch. *(One narrow, untested edge case noted: `CompleteAttemptAsync`
+      does not itself check the stop intent, so a stop landing in the brief window after a provider
+      already succeeded but before integration could theoretically still integrate.)*
+- [x] The owning node can run again, the sprint becomes `paused`, and automatic retry budget is
       unchanged.
-- [ ] No other sprint, attempt, process, or worktree is affected.
-- [ ] Resume starts a fresh attempt from the current integration base.
-- [ ] A stale stop cannot cancel an attempt that started after the targeted one.
-- [ ] Repeating the same stop request is idempotent.
+- [x] No other sprint, attempt, process, or worktree is affected.
+- [x] Resume starts a fresh attempt from the current integration base.
+- [x] A stale stop cannot cancel an attempt that started after the targeted one.
+- [x] Repeating the same stop request is idempotent.
 - [ ] A Host crash at every durable boundary recovers without resurrecting the stopped attempt or
-      leaking its process/worktree.
-- [ ] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
+      leaking its process/worktree. *(Partial: strong crash-simulation coverage exists for most
+      boundaries, but no test covers a crash between the sprint-paused append and the final
+      convergence marker, and no test simulates an abrupt Host process kill to verify no orphaned
+      provider process — this codebase has no process-group/job-object containment, so that risk is
+      real but unverified rather than known-fixed.)*
+- [x] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
       explanation, confirmation, and result.
 
 ### 12.5 Stage transition
 
-- [ ] Desktop lists only stages in the sprint's frozen workflow definition.
-- [ ] Every target has a Host-produced assessment with satisfied prerequisites, blockers, and
+- [x] Desktop lists only stages in the sprint's frozen workflow definition.
+- [x] Every target has a Host-produced assessment with satisfied prerequisites, blockers, and
       consequences.
-- [ ] Desktop cannot enable a blocked target by local calculation or client-side state changes.
-- [ ] The Host rechecks prerequisites and state version immediately before committing a move.
-- [ ] Advancing never fabricates results or skips a mandatory unsatisfied stage.
-- [ ] Confirmation, test-work, review, human-approval, finding, policy, artifact, Git, routing, and
-      active-operation prerequisites are enforced where applicable.
-- [ ] Rewinding requires a reason and mandatory confirmation, creates exactly one new stage
+- [x] Desktop cannot enable a blocked target by local calculation or client-side state changes.
+- [x] The Host rechecks prerequisites and state version immediately before committing a move.
+- [x] Advancing never fabricates results or skips a mandatory unsatisfied stage.
+- [x] Confirmation, test-work, review, human-approval, finding, policy, artifact, Git, routing, and
+      active-operation prerequisites are enforced where applicable. *(All 10 categories present and
+      enforced; the active-operation prerequisite has no dedicated named test blocking an Advance
+      specifically, only Rewind's stop-path is directly tested — a test-coverage gap, not a known
+      behavior gap.)*
+- [x] Rewinding requires a reason and mandatory confirmation, creates exactly one new stage
       revision, preserves prior history, and supersedes downstream evidence.
-- [ ] Superseded evidence cannot satisfy prerequisites in the new revision.
-- [ ] A move with an active operation first completes the specified stop protocol or is rejected
+- [x] Superseded evidence cannot satisfy prerequisites in the new revision.
+- [x] A move with an active operation first completes the specified stop protocol or is rejected
       without partial transition.
-- [ ] Repeating the same move is idempotent; a stale assessment or changed target is rejected
+- [x] Repeating the same move is idempotent; a stale assessment or changed target is rejected
       without side effects.
 - [ ] A Host crash during a move resumes or converges to one valid revision and never leaves two
-      active stages for a linear workflow.
-- [ ] Completed and cancelled sprints cannot be moved to another stage.
+      active stages for a linear workflow. *(Partial: the rewind saga has rigorous, real
+      crash-simulation tests for every step boundary via its durable pending-rewind marker. The
+      advance path has no equivalent crash-simulation test — it has no durable "pending" marker and
+      relies on each step being independently idempotent, which is plausible but unexercised.)*
+- [x] Completed and cancelled sprints cannot be moved to another stage.
 
 ### 12.6 Status, accessibility, and parity
 
 - [ ] The global status row distinguishes provider health, authentication, model availability,
-      quota, unknown quota, Host connectivity, and stale data.
+      quota, unknown quota, Host connectivity, and stale data. *(Not satisfied: only provider-health
+      count and quota exist in the status row today. Authentication, model availability, and Host
+      connectivity have no representation anywhere in it — `ForgeHostClient.IsConnected` exists but
+      is never surfaced, and `SidebarStatusRow.AnyKnownProviderUnavailable` is computed but never
+      read by anything.)*
 - [ ] All actions are keyboard reachable, screen-reader named, focus-stable after refresh, usable
-      at supported text scaling, and never communicate status by color alone.
-- [ ] English and Russian surfaces contain no missing or machine-only user-facing strings.
+      at supported text scaling, and never communicate status by color alone. *(Partial: accessible
+      names are real, wired, and tested throughout. No mechanism or test exists yet for keyboard
+      reachability, focus stability after a refresh, or text scaling — these concepts don't appear
+      anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
+      at all today, not because of an enforced rule.)*
+- [ ] English and Russian surfaces contain no missing or machine-only user-facing strings. *(Partial:
+      key-set parity (291/291) is enforced by an automated test and currently holds — spot-checked
+      manually for translation quality. That test checks key sets only, not that values are actually
+      translated, so a future regression copying an English value into `Messages.ru.resx` would not
+      be caught.)*
 - [ ] CLI and Desktop invoke the same Host commands and render semantically identical results for
-      stop, stage assessment, stage move, configuration, and existing workflow operations.
-- [ ] Neutral code builds and tests on Windows, Linux, and macOS; Windows adapter tests pass on
+      stop, stage assessment, stage move, configuration, and existing workflow operations. *(Partial:
+      genuine output-equality parity tests exist for sprint tree/detail, events, startup checks,
+      providers, suggested actions, configuration, integration, and sprint lifecycle commands. No
+      equivalent Desktop-vs-CLI result-equality test exists yet for stop, stage-assessment, or
+      stage-move specifically — both surfaces implement them via the same shared formatting code, so
+      they very likely already render identically, but this is unverified by a dedicated test.)*
+- [x] Neutral code builds and tests on Windows, Linux, and macOS; Windows adapter tests pass on
       Windows; architecture checks reject new platform leakage.
-- [ ] Build, formatting, static analysis, security checks, focused tests, and required acceptance
-      checks pass from a clean checkout.
+- [x] Build, formatting, static analysis, security checks, focused tests, and required acceptance
+      checks pass from a clean checkout. *(Verified via this branch's own CI run reporting success
+      for every required check; not re-executed independently of CI's reported status.)*
+
+### Known gaps (Slice 7 final sweep)
+
+The items left unchecked above are genuine, honestly-assessed gaps found during Slice 7's
+release-hardening sweep (PR #100) rather than silently-passed boxes. None block the redesign's core
+correctness guarantees (workflow state machines, stop/rewind crash-recovery sagas, and redaction all
+hold under adversarial review). They fall into three groups:
+
+1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
+   completed/cancelled sprint navigability are UI-only additions not yet built.
+2. **Missing data/localization** — the sticky header's provider/model field and timeline item content
+   have no real data source or localized rendering yet; the global status row covers only provider
+   health and quota, not authentication/model-availability/Host-connectivity.
+3. **Missing test coverage** (not missing behavior) — a handful of crash-recovery and cross-surface
+   parity scenarios are plausible-and-unexercised rather than known-broken: the advance-path crash
+   saga, the active-operation-blocks-advance prerequisite, a Host-process-kill orphan check, and
+   Desktop-vs-CLI result parity for stop/assess-stage/move-stage.
+
+These are tracked as follow-up work rather than blocking this final slice's merge.
 
 ## 13. Explicitly out of scope
 

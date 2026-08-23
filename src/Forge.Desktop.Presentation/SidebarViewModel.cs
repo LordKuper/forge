@@ -111,9 +111,12 @@ public sealed class SidebarViewModel(
                 AccessibleProjectName(displayName, summary)));
         }
 
-        IReadOnlyList<ProviderQuotaSnapshot> quota = await application
-            .GetProviderQuotaStatusAsync(cancellationToken)
-            .ConfigureAwait(false);
+        // Projects the ProviderHealthEntry set the loop above already collected (each from that
+        // project's own GetWorkspaceSummaryAsync toolchain check) rather than calling
+        // GetProviderQuotaStatusAsync, which would issue a second, uncached, redundant
+        // ProviderToolchainManager.CheckAsync probe on every render for a value ADR 0052 guarantees
+        // is constant regardless (PR #100 review finding 1).
+        IReadOnlyList<ProviderQuotaSnapshot> quota = application.ProjectProviderQuota(knownProviders.Values);
         return new(projects, BuildStatusRow(knownProviders.Values, quota));
     }
 

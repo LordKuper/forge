@@ -190,8 +190,37 @@ public sealed class SidebarViewModelTests
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
-        Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnavailable), snapshot.Status.QuotaStatusText);
+        Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnknown), snapshot.Status.QuotaStatusText);
         Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnknownAccessible), snapshot.Status.QuotaAccessibleText);
         Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaAccessibleText));
+    }
+
+    /// <summary>PR #100 review finding 1: <c>GetProviderQuotaStatusAsync</c> issues its own fresh,
+    /// uncached <c>ProviderToolchainManager.CheckAsync</c> probe (a `--version` child process plus an
+    /// authentication probe per enabled provider). Calling it a second time from
+    /// <see cref="SidebarViewModel.LoadAsync"/> -- on top of the <c>EnsureReadyAsync</c> check
+    /// <see cref="ForgeApplication.GetWorkspaceSummaryAsync"/> already ran once per project in the
+    /// same render -- would spawn redundant provider child processes on every sidebar render for a
+    /// value ADR 0052 guarantees is always "unknown" regardless. This proves the toolchain's own
+    /// <c>CheckAsync</c> is never called by a sidebar load: the quota row must be projected from the
+    /// <see cref="Forge.Providers.ProviderHealthEntry"/> set the same render pass already
+    /// collected.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeProviderToolchainManager toolchain = new();
+        using TestEnvironment environment = new(providers: toolchain);
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(0, toolchain.CheckCalls);
+        Assert.NotEmpty(snapshot.Projects);
+        Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaStatusText));
     }
 }

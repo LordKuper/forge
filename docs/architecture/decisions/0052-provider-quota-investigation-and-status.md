@@ -95,14 +95,19 @@ slice closes alongside the query wiring, not a pre-existing, deliberately-deferr
 ### Audit: no existing surface presents sprint retry budget as account quota
 
 Plan 6.5's explicit anti-requirement ("sprint retry budget is never presented as account quota") was
-audited across every surface that renders either concept. `SurfaceFormatting.SprintDetailLines`
-renders `RoutingLabel retry_remaining={details.Routing.RetryRemaining}` under a `RoutingLabel`
-heading distinct from any quota text; the CLI's `forge sprint inspect`/`forge status --detail full`
-and the Desktop sprint workspace both render it through that one shared method, so neither surface
-has its own competing label. No code path assigns `RoutingStatus.RetryRemaining` (or any routing/
-retry-ledger value) to a `ProviderQuotaSnapshot` field, and `ProviderQuotaSnapshot` itself has no
-retry/routing-shaped field to receive one. No change was needed to satisfy this requirement; it holds
-by construction and this ADR records the audit rather than a fix.
+audited across every surface that renders either concept. There are two independent render sites, not
+one shared method: `SurfaceFormatting.SprintDetailLines` renders
+`RoutingLabel retry_remaining={details.Routing.RetryRemaining}` for the CLI's `forge sprint inspect`/
+`forge status --detail full`, while the Desktop sprint workspace's sticky status header
+(`WorkspaceShellPage.SprintWorkspace.cs`, `retry_remaining={header.RetryRemaining}`, sourced from
+`SprintStatusHeader.RetryRemaining`/`details?.Routing.RetryRemaining`) renders the same value inline,
+independently. Both sites happen to use the same `RoutingLabel` heading and `retry_remaining=` shape,
+so neither has a competing "quota" label today, but that agreement is not enforced by any shared
+formatting code -- a future edit to either site could drift without the other noticing. No code path
+assigns `RoutingStatus.RetryRemaining` (or any routing/retry-ledger value) to a `ProviderQuotaSnapshot`
+field, and `ProviderQuotaSnapshot` itself has no retry/routing-shaped field to receive one. No change
+was needed to satisfy this requirement today; it holds by current inspection, not by construction, and
+this ADR records the audit rather than a fix.
 
 ## What stays deferred
 
@@ -121,15 +126,21 @@ by construction and this ADR records the audit rather than a fix.
 
 - `Forge.Runtime` gains `Providers/ProviderQuota.cs` (`ProviderQuotaAvailability`,
   `ProviderQuotaSnapshot`, `ProviderQuotaStatus`, `ProviderQuotaProjector`, `ProviderQuotaAggregation`)
-  and `ProviderDiagnosticCodes.QuotaUnknown`; `ForgeApplication` gains `GetProviderQuotaStatusAsync`;
+  and `ProviderDiagnosticCodes.QuotaUnknown`; `ForgeApplication` gains `GetProviderQuotaStatusAsync`
+  (a fresh, uncached toolchain probe, for a caller like `forge models quota` that has not already
+  checked the toolchain this invocation) and `ProjectProviderQuota` (a pure projection over an
+  already-computed `ProviderHealthEntry` set, for a caller like `SidebarViewModel` that has -- PR
+  #100 review finding 1 closed a redundant second toolchain probe on every sidebar render);
   `StatusJson` gains a `ProviderQuotaStatus` overload; `SurfaceFormatting` gains `ProviderQuotaRow`/
   `QuotaStatusSummary`.
 - `Forge.Host.Client`/`Forge.Host.Runtime` gain the `get_provider_quota_status` `ControlProtocol` kind,
   request record, and dispatch case, mirroring `get_workspace_summary`.
 - `Forge.Cli` gains `forge models quota [--json]`.
 - `Forge.Desktop.Presentation`'s `SidebarStatusRow` gains `QuotaAccessibleText`; `SidebarViewModel`
-  calls the new query and both formatting helpers. `Forge.Desktop`'s sidebar quota label gains a
-  `SemanticProperties.SetDescription` call it previously lacked.
+  projects it from the `ProviderHealthEntry` set it already collected (`ProjectProviderQuota`, not
+  the toolchain-probing `GetProviderQuotaStatusAsync` -- PR #100 review finding 1) through both
+  formatting helpers. `Forge.Desktop`'s sidebar quota label gains a `SemanticProperties.SetDescription`
+  call it previously lacked.
 - `Forge.Localization` gains eleven new Slice-7 message keys (English and Russian):
   `ModelsQuotaDescription`, `ModelsQuotaTitle`, `QuotaStatusUnknownAccessible`, and a (text,
   accessible) pair each for `Ready`/`Limited`/`Depleted`/`Stale`.
@@ -138,7 +149,10 @@ by construction and this ADR records the audit rather than a fix.
 - `tests/Forge.Tests` gains `ProviderQuotaProjectorTests`, `ProviderQuotaAggregationTests`, two
   `ModelsQuotaCommand*` CLI acceptance tests, `SurfaceParityTests.ProviderQuotaStatusDocumentedCliOptionsMatchTheirActualRequiredness`,
   and a `SidebarViewModelTests` case proving the quota row resolves to the truthful "unknown" text
-  and accessible name.
+  and accessible name. PR #100's review pass adds `SurfaceFormattingTests` (every
+  `ProviderQuotaAvailability` value resolves to its own distinct message pair),
+  `SidebarViewModelTests.LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow`, and
+  `CliTests.ModelsQuotaCommandWritesTheWorstDiagnosticCodeEvenThoughItAlwaysExitsOk`.
 - `VERSION` moves to `0.69.0` (MINOR: new capability surface, no breaking contract change; this
   redesign has been additive throughout).
 

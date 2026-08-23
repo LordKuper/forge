@@ -4,7 +4,8 @@ namespace Forge.Providers;
 /// One provider/model quota reading's normalized, presentation-safe state (plan section 6.5). Every
 /// value beyond <see cref="Unknown"/> requires a verified signal from the provider's own CLI/API --
 /// see ADR 0052: no provider integration in this codebase exposes one today, so
-/// <see cref="ProviderQuotaProjector.Project"/> only ever produces <see cref="Unknown"/>. The
+/// <see cref="ProviderQuotaProjector"/>'s <c>Project</c> overloads only ever produce
+/// <see cref="Unknown"/>. The
 /// remaining members exist so the projection, the CLI row, and the Desktop status row all handle
 /// every state the plan requires from the start, rather than special-casing "unknown" as the only
 /// code path and leaving the others to be invented later under review pressure.
@@ -75,7 +76,12 @@ public static class ProviderQuotaProjector
     /// provider (from <paramref name="catalog"/>) always projects as <see cref="ProviderQuotaAvailability.Unknown"/>
     /// today (see the type's own remarks). <paramref name="observedAt"/> is the caller's current time
     /// (<c>IClock.UtcNow</c>) -- this method takes no clock dependency itself, keeping it as pure as
-    /// <see cref="ProviderHealthProjector.Project"/>.</summary>
+    /// <see cref="ProviderHealthProjector.Project"/>. Issues no probe of its own, but a fresh
+    /// <paramref name="status"/> requires one from the caller (<see cref="IProviderToolchainManager.CheckAsync"/>)
+    /// -- a caller that already holds a merged <see cref="ProviderHealthEntry"/> set from an earlier
+    /// probe this render pass (e.g. <c>WorkspaceSummaryProjector.CreateAsync</c>) should call this
+    /// class's other <c>Project</c> overload (taking an <see cref="IReadOnlyCollection{T}"/> of
+    /// <see cref="ProviderHealthEntry"/>) instead, to avoid re-probing (PR #100 review).</summary>
     public static IReadOnlyList<ProviderQuotaSnapshot> Project(
         ProviderToolchainStatus status, ProviderCatalog catalog, DateTimeOffset observedAt)
     {
@@ -86,6 +92,32 @@ public static class ProviderQuotaProjector
         [
             .. status.Providers.Select(provider =>
                 Unverified(provider.Id, ResolveModel(catalog, provider.Id), observedAt)),
+            .. catalog.Providers
+                .Where(provider => !discovered.Contains(provider.Id.Value))
+                .Select(provider => Unverified(provider.Id, provider.DefaultModel, observedAt)),
+        ];
+    }
+
+    /// <summary>Same projection as this class's other <c>Project</c> overload, sourced from an
+    /// already-computed <see cref="ProviderHealthEntry"/> set (itself
+    /// <see cref="ProviderHealthProjector.Project"/>'s own enabled-plus-disabled union) instead of a
+    /// fresh <see cref="ProviderToolchainStatus"/> probe -- for a caller that already paid for one
+    /// toolchain check this render pass and must not issue a second (PR #100 review finding 1:
+    /// <c>SidebarViewModel.LoadAsync</c> previously called <see cref="ProviderToolchainManager.CheckAsync"/>
+    /// a second time here on every render, on top of the one <c>WorkspaceSummaryProjector.CreateAsync</c>
+    /// already ran). <paramref name="catalog"/> still fills in any registered provider missing from
+    /// <paramref name="providers"/> (e.g. an empty <paramref name="providers"/> set), matching the
+    /// other overload's own disabled-provider fallback.</summary>
+    public static IReadOnlyList<ProviderQuotaSnapshot> Project(
+        IReadOnlyCollection<ProviderHealthEntry> providers, ProviderCatalog catalog, DateTimeOffset observedAt)
+    {
+        ArgumentNullException.ThrowIfNull(providers);
+        ArgumentNullException.ThrowIfNull(catalog);
+        HashSet<string> discovered = new(providers.Select(provider => provider.Id), StringComparer.Ordinal);
+        return
+        [
+            .. providers.Select(provider =>
+                Unverified(new ProviderId(provider.Id), ResolveModel(catalog, new ProviderId(provider.Id)), observedAt)),
             .. catalog.Providers
                 .Where(provider => !discovered.Contains(provider.Id.Value))
                 .Select(provider => Unverified(provider.Id, provider.DefaultModel, observedAt)),
@@ -107,6 +139,11 @@ public static class ProviderQuotaProjector
 /// </summary>
 public static class ProviderQuotaAggregation
 {
+    // Every named ProviderQuotaAvailability member has its own explicit arm; the compiler cannot
+    // make an enum switch exhaustive against a genuinely new member (enums are not closed types at
+    // the CLR level -- see SurfaceFormatting.QuotaStatusSummary's own remarks), so the fallback
+    // throws instead of silently ranking an unmapped value as least-severe (PR #100 review,
+    // non-blocking finding).
     private static int Severity(ProviderQuotaAvailability availability) => availability switch
     {
         ProviderQuotaAvailability.Unavailable => 4,
@@ -114,7 +151,8 @@ public static class ProviderQuotaAggregation
         ProviderQuotaAvailability.Stale => 2,
         ProviderQuotaAvailability.Unknown => 1,
         ProviderQuotaAvailability.Ready => 0,
-        _ => 0,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(availability), availability, "Unmapped ProviderQuotaAvailability value."),
     };
 
     /// <summary>The most severe <see cref="ProviderQuotaAvailability"/> present, or

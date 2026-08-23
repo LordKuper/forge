@@ -230,7 +230,12 @@ public static class MessageKeys
     // controls reuse the existing keys above verbatim -- SprintWorkspaceViewModel only re-scopes
     // MainPageViewModel's own already-localized capabilities, it adds no new interaction text.
     public const string SprintReadyToFinalizeReason = "SprintReadyToFinalizeReason";
-    public const string QuotaStatusUnavailable = "QuotaStatusUnavailable";
+
+    /// <summary>"No verified quota signal exists" (<see cref="Forge.Providers.ProviderQuotaAvailability.Unknown"/>)
+    /// -- deliberately not named "Unavailable": <see cref="Forge.Providers.ProviderQuotaAvailability.Unavailable"/>
+    /// means "quota is exhausted" (see <see cref="QuotaStatusDepleted"/>), a different concept this
+    /// key must never be confused with (PR #100 review).</summary>
+    public const string QuotaStatusUnknown = "QuotaStatusUnknown";
     public const string SettingsLanguageUnsupported = "SettingsLanguageUnsupported";
     public const string SettingsUnknownProvider = "SettingsUnknownProvider";
     public const string SettingsTokenBudgetInvalid = "SettingsTokenBudgetInvalid";
@@ -356,7 +361,7 @@ public static class MessageKeys
     public const string WorkspaceActionMoveToStageRewindRationale = "workspace_action.move_to_stage.rewind";
     public const string WorkspaceActionMoveToStageSameRationale = "workspace_action.move_to_stage.same";
 
-    // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnavailable`
+    // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnknown`
     // (defined above, Slice 5) is the only state this codebase currently produces -- the remaining
     // four exist so the sidebar/CLI rendering is complete for every state the plan requires, not
     // only the one ADR 0052 found verifiable evidence for.

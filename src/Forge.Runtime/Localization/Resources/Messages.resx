@@ -179,7 +179,7 @@
   <data name="ProjectSelected" xml:space="preserve"><value>Selection recorded.</value></data>
   <data name="NoProjects" xml:space="preserve"><value>No projects in the catalog yet.</value></data>
   <data name="SprintReadyToFinalizeReason" xml:space="preserve"><value>Ready to finalize</value></data>
-  <data name="QuotaStatusUnavailable" xml:space="preserve"><value>Quota status not yet available.</value></data>
+  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Quota status not yet available.</value></data>
   <data name="SettingsLanguageUnsupported" xml:space="preserve"><value>This language is not supported.</value></data>
   <data name="SettingsUnknownProvider" xml:space="preserve"><value>This provider is not known to this Forge build.</value></data>
   <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Token budget must be a positive number.</value></data>

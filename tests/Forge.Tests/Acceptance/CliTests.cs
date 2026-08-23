@@ -168,6 +168,35 @@ public sealed class CliTests
         Assert.DoesNotContain("retry", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>PR #100 review finding 2: `forge models quota` was the only query command that
+    /// never took the diagnostics writer, so it emitted no machine-readable code on any channel --
+    /// unlike `forge next`'s identical "always exits Ok, but still writes a diagnostic" shape. Exit
+    /// code stays 0 (an unknown reading is not a process failure), but a scripted caller must still
+    /// see <see cref="ProviderDiagnosticCodes.QuotaUnknown"/> on the diagnostics channel for the only
+    /// state this codebase currently produces.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task ModelsQuotaCommandWritesTheWorstDiagnosticCodeEvenThoughItAlwaysExitsOk()
+    {
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready));
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics);
+
+        int exitCode = await root
+            .Parse(["models", "quota"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, exitCode);
+        Assert.Equal($"provider_quota_unknown{Environment.NewLine}", diagnostics.ToString());
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task ModelsCommandDefaultsToReadOnlyDiscovery()

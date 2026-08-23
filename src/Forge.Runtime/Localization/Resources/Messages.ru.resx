@@ -179,7 +179,7 @@
   <data name="ProjectSelected" xml:space="preserve"><value>Выбор сохранён.</value></data>
   <data name="NoProjects" xml:space="preserve"><value>В каталоге пока нет проектов.</value></data>
   <data name="SprintReadyToFinalizeReason" xml:space="preserve"><value>Готово к финализации</value></data>
-  <data name="QuotaStatusUnavailable" xml:space="preserve"><value>Статус квоты пока недоступен.</value></data>
+  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Статус квоты пока недоступен.</value></data>
   <data name="SettingsLanguageUnsupported" xml:space="preserve"><value>Этот язык не поддерживается.</value></data>
   <data name="SettingsUnknownProvider" xml:space="preserve"><value>Этот провайдер неизвестен данной сборке Forge.</value></data>
   <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Бюджет токенов должен быть положительным числом.</value></data>

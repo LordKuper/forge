@@ -18,6 +18,12 @@ User-facing Forge changes are listed by release, newest first.
 
 - The Desktop sidebar's provider-quota status label now has a screen-reader accessible name; it
   previously showed only visible text.
+- `forge models quota` now writes its worst-case diagnostic code to the diagnostics channel, like
+  every other query command (e.g. `forge next`); it previously exited `0` without ever emitting a
+  machine-readable code, leaving scripted callers with only the human-readable row text.
+- The Desktop sidebar no longer issues a second, uncached provider-toolchain probe (spawning extra
+  `--version`/authentication child processes) to compute the quota row on every render; it now
+  reuses the toolchain check the same render already performed.
 
 ## v0.68.0
 

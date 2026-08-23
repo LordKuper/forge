@@ -72,19 +72,30 @@ public static class SurfaceFormatting
     /// single most severe state present (<see cref="ProviderQuotaAggregation.Worst"/>) as one
     /// localized sentence plus its accessible counterpart, so a degraded provider's quota is never
     /// communicated by color alone and is never hidden behind an otherwise-unremarkable majority.
-    /// </summary>
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no verified signal yet") and
+    /// <see cref="ProviderQuotaAvailability.Unavailable"/> ("quota is exhausted") are easy to
+    /// conflate by name -- every named member below has its own explicit arm (no arm reached by more
+    /// than one member), so this codebase's own single meeting point for the two vocabularies can no
+    /// longer hide a mismatch behind a `_` wildcard. C# cannot make an enum switch expression
+    /// exhaustive against a genuinely new named member at compile time (the CLR does not treat enums
+    /// as closed types), so the remaining `_` arm throws instead of silently falling back to any one
+    /// of the arms above -- a future <see cref="ProviderQuotaAvailability"/> member added without a
+    /// matching arm here fails loudly at first use, not silently (PR #100 review finding 5).</summary>
     public static (string Text, string Accessible) QuotaStatusSummary(
         SurfaceText text, IReadOnlyList<ProviderQuotaSnapshot> snapshots)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(snapshots);
-        (string textKey, string accessibleKey) = ProviderQuotaAggregation.Worst(snapshots) switch
+        ProviderQuotaAvailability worst = ProviderQuotaAggregation.Worst(snapshots);
+        (string textKey, string accessibleKey) = worst switch
         {
+            ProviderQuotaAvailability.Unknown => (MessageKeys.QuotaStatusUnknown, MessageKeys.QuotaStatusUnknownAccessible),
             ProviderQuotaAvailability.Ready => (MessageKeys.QuotaStatusReady, MessageKeys.QuotaStatusReadyAccessible),
             ProviderQuotaAvailability.Limited => (MessageKeys.QuotaStatusLimited, MessageKeys.QuotaStatusLimitedAccessible),
             ProviderQuotaAvailability.Unavailable => (MessageKeys.QuotaStatusDepleted, MessageKeys.QuotaStatusDepletedAccessible),
             ProviderQuotaAvailability.Stale => (MessageKeys.QuotaStatusStale, MessageKeys.QuotaStatusStaleAccessible),
-            _ => (MessageKeys.QuotaStatusUnavailable, MessageKeys.QuotaStatusUnknownAccessible),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(snapshots), worst, "Unmapped ProviderQuotaAvailability value."),
         };
         return (text.Resolve(textKey), text.Resolve(accessibleKey));
     }

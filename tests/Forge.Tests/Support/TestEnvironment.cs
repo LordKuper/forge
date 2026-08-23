@@ -294,11 +294,27 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
 
     private readonly ProviderToolchainStatus status = status ?? NotReady;
 
-    public Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(status);
+    /// <summary>Counts every <see cref="CheckAsync"/> call -- distinct from
+    /// <see cref="EnsureReadyCalls"/> -- so a test can prove a caller never issues the uncached
+    /// discovery-plus-authentication probe <see cref="CheckAsync"/> represents (PR #100 review
+    /// finding 1: <c>SidebarViewModel.LoadAsync</c> previously called it a second time per render on
+    /// top of <see cref="EnsureReadyAsync"/>, which every startup/workspace-summary check already
+    /// pays for).</summary>
+    public int CheckCalls { get; private set; }
 
-    public Task<ProviderToolchainStatus> EnsureReadyAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
-        Task.FromResult(status);
+    public int EnsureReadyCalls { get; private set; }
+
+    public Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken)
+    {
+        CheckCalls++;
+        return Task.FromResult(status);
+    }
+
+    public Task<ProviderToolchainStatus> EnsureReadyAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
+    {
+        EnsureReadyCalls++;
+        return Task.FromResult(status);
+    }
 }
 
 /// <summary>A minimal, in-memory provider: reports a fixed state and counts install calls,

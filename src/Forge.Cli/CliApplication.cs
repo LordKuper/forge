@@ -1377,7 +1377,7 @@ public static class CliApplication
 
             return Report(diagnostics, diagnosticCode);
         });
-        command.Subcommands.Add(CreateModelsQuotaCommand(text, output, application));
+        command.Subcommands.Add(CreateModelsQuotaCommand(text, output, diagnostics, application));
         return command;
     }
 
@@ -1388,11 +1388,14 @@ public static class CliApplication
     /// models`, an unknown or degraded quota reading is not itself a process failure (there is no
     /// analogous <c>DiagnosticCodes</c> member <see cref="ExitCodes.For"/> recognizes for a
     /// <see cref="ProviderDiagnosticCodes"/> value), so this command always exits
-    /// <see cref="ExitCodes.Ok"/> -- the per-entry diagnostic code is data in the rendered output,
-    /// not a process-level error.</summary>
+    /// <see cref="ExitCodes.Ok"/> regardless of state. That does not mean the outcome is silent,
+    /// though: like <c>CreateNextCommand</c>, it still writes <see cref="ProviderQuotaAggregation.WorstDiagnosticCode"/>
+    /// to <paramref name="diagnostics"/>, so a scripted caller has a machine-readable signal for the
+    /// worst reading present even on the always-<c>Ok</c> exit code (PR #100 review finding 2).</summary>
     private static Command CreateModelsQuotaCommand(
         SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         ForgeApplication application)
     {
         Option<bool> json = CreateJsonOption();
@@ -1403,10 +1406,12 @@ public static class CliApplication
             IReadOnlyList<ProviderQuotaSnapshot> entries = await application
                 .GetProviderQuotaStatusAsync(cancellationToken)
                 .ConfigureAwait(false);
+            string diagnosticCode = ProviderQuotaAggregation.WorstDiagnosticCode(entries);
             if (parseResult.GetValue(json))
             {
                 output.WriteLine(
                     StatusJson.Serialize(new ProviderQuotaStatus(ProviderQuotaStatus.ContractVersion, entries)));
+                WriteDiagnostic(diagnostics, diagnosticCode);
                 return ExitCodes.Ok;
             }
 
@@ -1418,6 +1423,7 @@ public static class CliApplication
                     $"  {SurfaceFormatting.ProviderQuotaRow(entry)}"));
             }
 
+            WriteDiagnostic(diagnostics, diagnosticCode);
             return ExitCodes.Ok;
         });
         return command;
