@@ -49,17 +49,38 @@ public sealed record TimelineState(
 /// item born already-read. <see cref="SprintTimelineItem.Sequence"/> has no such gap: it is the exact
 /// per-item value <see cref="SprintTimelineCursor"/>'s own opaque watermark already advances by.
 /// </remarks>
-public sealed class SprintTimelineViewModel(ForgeApplication application, ProjectCatalogStore catalog)
+/// <remarks>
+/// PR #99 round-2 review, critical finding: this instance is shared and long-lived (one per
+/// <c>SprintWorkspaceViewModel</c>, reused across every sprint the workspace ever opens -- see
+/// <c>WorkspaceShellPage.SprintWorkspace.cs</c>'s single <c>sprintWorkspace</c> field), while the 15s
+/// timeline poll deliberately runs its Host fetch outside the shell's mutation guard (round-1 finding
+/// 1). Without protection, that leaves <see cref="cursor"/>/<see cref="loaded"/>'s read-fetch-write
+/// concurrently reachable from the poll tick, "Load more", <c>RefreshAllAsync</c>'s post-mutation
+/// refresh, and <see cref="InitializeAsync"/> itself (sprint navigation reuses this same instance
+/// rather than constructing a fresh one) -- two overlapping fetches duplicate items and over-count
+/// unread, and a fetch that outlives a navigation to a different sprint can append the wrong sprint's
+/// items into the new sprint's state and persist a wrong, durable watermark. <see cref="gate"/>
+/// serializes only the brief read/write of this type's own fields (never the Host round-trip itself,
+/// so fetches still run concurrently and navigation is never blocked waiting on a stale one).
+/// <see cref="generation"/> is bumped by every <see cref="InitializeAsync"/> call and snapshotted by
+/// every fetch before it starts; a fetch whose generation or starting cursor no longer matches this
+/// instance's current state when it completes belongs to a superseded sprint or lost a race to
+/// another concurrent fetch, and is discarded without touching any field -- the caller simply
+/// receives whatever the winning call (or the newer sprint) already established.
+/// </remarks>
+public sealed class SprintTimelineViewModel(ForgeApplication application, ProjectCatalogStore catalog) : IDisposable
 {
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
     private readonly ProjectCatalogStore catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly List<SprintTimelineItem> loaded = [];
+    private readonly SemaphoreSlim gate = new(1, 1);
     private Guid projectId;
     private Guid sprintId;
     private string? cursor;
     private bool hasMore;
     private long readWatermarkSequence;
     private string? filterType;
+    private int generation;
 
     /// <summary>Resets all paging/unread state for a newly opened sprint and loads the first page.
     /// Must be called once before <see cref="LoadMoreAsync"/>/<see cref="SetFilter"/> for a given
@@ -67,56 +88,155 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
     public async Task<TimelineState> InitializeAsync(
         Guid projectIdValue, string? projectRoot, Guid sprintIdValue, CancellationToken cancellationToken)
     {
-        projectId = projectIdValue;
-        sprintId = sprintIdValue;
-        loaded.Clear();
-        cursor = null;
-        hasMore = false;
-        filterType = null;
-        readWatermarkSequence = await LoadWatermarkAsync(cancellationToken).ConfigureAwait(false);
-        return await LoadMoreAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        int myGeneration;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Bumping generation here immediately invalidates every fetch already in flight for
+            // whatever sprint this instance previously represented -- see the type-level remarks.
+            myGeneration = ++generation;
+            projectId = projectIdValue;
+            sprintId = sprintIdValue;
+            loaded.Clear();
+            cursor = null;
+            hasMore = false;
+            filterType = null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        long watermark = await LoadWatermarkAsync(cancellationToken).ConfigureAwait(false);
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // A second, later InitializeAsync call (e.g. a rapid double navigation) may have already
+            // reset this instance again while the watermark read above was outstanding -- only the
+            // newest call may ever apply its own state.
+            if (myGeneration == generation)
+            {
+                readWatermarkSequence = watermark;
+            }
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        return await FetchAsync(projectRoot, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Loads the next page from the current cursor -- used identically for an explicit
     /// "load more" click and for a bounded-interval poll while the page is visible (plan 12.3: "new
     /// items appear without manual refresh").</summary>
-    public async Task<TimelineState> LoadMoreAsync(string? projectRoot, CancellationToken cancellationToken)
+    public Task<TimelineState> LoadMoreAsync(string? projectRoot, CancellationToken cancellationToken) =>
+        FetchAsync(projectRoot, cancellationToken);
+
+    /// <summary>The single fetch-and-apply step both <see cref="InitializeAsync"/> and
+    /// <see cref="LoadMoreAsync"/> use. Snapshots the sprint identity and cursor to fetch from, runs
+    /// the Host round-trip with no lock held (so a slow fetch never blocks navigation or another
+    /// fetch), then re-validates the snapshot against this instance's current state before applying
+    /// the result -- see the type-level remarks for exactly which races this closes.</summary>
+    private async Task<TimelineState> FetchAsync(string? projectRoot, CancellationToken cancellationToken)
     {
+        int myGeneration;
+        Guid mySprintId;
+        string? myCursor;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            myGeneration = generation;
+            mySprintId = sprintId;
+            myCursor = cursor;
+        }
+        finally
+        {
+            gate.Release();
+        }
+
         SprintTimelinePage page = await application
-            .GetSprintTimelineAsync(projectRoot, sprintId, cursor, cancellationToken)
+            .GetSprintTimelineAsync(projectRoot, mySprintId, myCursor, cancellationToken)
             .ConfigureAwait(false);
-        cursor = page.Cursor;
-        // A full page (the projector's own bound) means real, already-known backlog remains beyond
-        // what was just loaded; a partial or empty page means this call has caught up to "now" --
-        // the next new item, if any, arrives through a later poll rather than a "load more" click.
-        hasMore = page.Items.Count == SprintTimelineProjector.MaxItemsPerPage;
-        loaded.AddRange(page.Items);
-        return BuildState();
+
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (generation != myGeneration || !string.Equals(cursor, myCursor, StringComparison.Ordinal))
+            {
+                // Either a newer InitializeAsync switched this instance to a different sprint (or
+                // reloaded the same one), or another concurrent fetch already advanced the cursor
+                // first -- applying this page now would duplicate items already appended by the
+                // winner, or mix a stale sprint's items into the current one. Discard: BuildState()
+                // already reflects whichever fetch actually won.
+                return BuildState();
+            }
+
+            cursor = page.Cursor;
+            // A full page (the projector's own bound) means real, already-known backlog remains
+            // beyond what was just loaded; a partial or empty page means this call has caught up to
+            // "now" -- the next new item, if any, arrives through a later poll rather than a "load
+            // more" click.
+            hasMore = page.Items.Count == SprintTimelineProjector.MaxItemsPerPage;
+            loaded.AddRange(page.Items);
+            return BuildState();
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     public TimelineState SetFilter(string? type)
     {
-        filterType = string.IsNullOrEmpty(type) ? null : type;
-        return BuildState();
+        gate.Wait();
+        try
+        {
+            filterType = string.IsNullOrEmpty(type) ? null : type;
+            return BuildState();
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>Advances the persisted read watermark to the newest loaded item -- a no-op when
     /// nothing loaded is newer than what was already recorded (never rewinds "read" state).</summary>
     public async Task MarkAllReadAsync(CancellationToken cancellationToken)
     {
-        if (loaded.Count == 0)
+        Guid myProjectId;
+        Guid mySprintId;
+        long maxSequence;
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return;
+            if (loaded.Count == 0)
+            {
+                return;
+            }
+
+            maxSequence = loaded.Max(item => item.Sequence);
+            if (maxSequence <= readWatermarkSequence)
+            {
+                return;
+            }
+
+            readWatermarkSequence = maxSequence;
+            myProjectId = projectId;
+            mySprintId = sprintId;
+        }
+        finally
+        {
+            gate.Release();
         }
 
-        long maxSequence = loaded.Max(item => item.Sequence);
-        if (maxSequence <= readWatermarkSequence)
-        {
-            return;
-        }
-
-        readWatermarkSequence = maxSequence;
-        await catalog.SetTimelineWatermarkAsync(projectId, sprintId, maxSequence, cancellationToken).ConfigureAwait(false);
+        // The catalog write itself runs unlocked, after capturing projectId/sprintId/maxSequence as
+        // local snapshots -- so even if a concurrent InitializeAsync switches this instance to a
+        // different sprint while this write is outstanding, it still durably targets the sprint the
+        // user actually clicked "mark all read" for, never whatever sprint is current by the time the
+        // write completes.
+        await catalog.SetTimelineWatermarkAsync(myProjectId, mySprintId, maxSequence, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Plan section 11 Slice 6 item 4's rewind-reason draft, restored on
@@ -166,6 +286,12 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
         int unread = loaded.Count(item => item.Sequence > readWatermarkSequence);
         return new(items, hasMore, unread, filterType, availableTypes);
     }
+
+    /// <summary>Releases <see cref="gate"/>. This instance is owned for the lifetime of its
+    /// <c>SprintWorkspaceViewModel</c>, which is itself app-lifetime -- disposal exists only to
+    /// satisfy the "owns a disposable field" analysis rule, not because a real leak is reachable in
+    /// practice.</summary>
+    public void Dispose() => gate.Dispose();
 
     private TimelineItemView ToView(SprintTimelineItem item)
     {

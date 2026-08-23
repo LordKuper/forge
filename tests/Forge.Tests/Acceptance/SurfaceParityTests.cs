@@ -563,6 +563,35 @@ public sealed class SurfaceParityTests
         Assert.True(guardIndex < mutationIndex, "The decline guard must run before the mutation call.");
     }
 
+    /// <summary>
+    /// PR #99 round-2 review, non-blocking: round-1 finding 1 fixed a dropped-click bug caused by
+    /// routing the timeline poll's entire fetch-then-render step through the shell's shared mutation
+    /// guard (<c>RunAsync</c>/<c>ShellRenderGate.RunAsync</c>), which held <c>busy</c> for the
+    /// duration of an unattended Host round-trip and silently swallowed a user click landing in that
+    /// window. The regression test for that fix, <c>ShellRenderGateTests.
+    /// ARenderRequestDeferredDuringAnInFlightMutationNeverBlocksOrDropsAConcurrentMutation</c>,
+    /// exercises <see cref="Forge.Desktop.Presentation.ShellRenderGate"/> directly and has no way to
+    /// notice which caller actually invokes it, so a future edit could silently re-wrap the poll's
+    /// tick or its fetch in <c>RunAsync</c> again -- reintroducing the exact bug -- with every
+    /// existing test still green. No MAUI control can be instantiated headlessly in this suite (see
+    /// this file's other dialog/source pins), so this pins the fix directly in the source text: the
+    /// poll's own fetch method and the timer's tick handler must never call <c>RunAsync(</c>, the
+    /// fetch must still call <c>LoadMoreAsync(</c> directly, and the render step must still go through
+    /// <c>renderGate.RequestRender(</c>, never <c>RunAsync(</c>.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void TimelinePollNeverRoutesThroughTheSharedMutationGate()
+    {
+        string pollMethod = SprintWorkspaceBody("async Task PollTimelineAsync()");
+        string tickHandler = SprintWorkspaceBody("timelinePollTimer.Tick += (_, _) =>");
+
+        Assert.DoesNotContain("RunAsync(", pollMethod, StringComparison.Ordinal);
+        Assert.DoesNotContain("RunAsync(", tickHandler, StringComparison.Ordinal);
+        Assert.Contains(".LoadMoreAsync(", pollMethod, StringComparison.Ordinal);
+        Assert.Contains("renderGate.RequestRender(", pollMethod, StringComparison.Ordinal);
+    }
+
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
     /// parameter entirely (<c>(string labelKeyIgnored, View control) =&gt; control</c>), so
     /// confirm-destructive and notifications-enabled shipped as bare switches with no visible
