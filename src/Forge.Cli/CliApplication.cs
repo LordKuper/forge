@@ -1618,8 +1618,13 @@ public static class CliApplication
                 return Report(diagnostics, DiagnosticCodes.ProjectCatalogEntryNotFound);
             }
 
-            IReadOnlyList<ProjectCatalogEntry> entries =
-                await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+            ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+            if (listing.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return Report(diagnostics, listing.DiagnosticCode);
+            }
+
+            IReadOnlyList<ProjectCatalogEntry> entries = listing.Entries;
             List<(ProjectCatalogEntry Entry, ProjectWorkspaceSummary Summary)> rows = new(entries.Count);
             foreach (ProjectCatalogEntry entry in entries)
             {
@@ -1637,7 +1642,7 @@ public static class CliApplication
 
             if (rows.Count == 0)
             {
-                output.WriteLine(text.Resolve(MessageKeys.NoSprints));
+                output.WriteLine(text.Resolve(MessageKeys.NoProjects));
                 return ExitCodes.Ok;
             }
 
@@ -1852,8 +1857,13 @@ public static class CliApplication
         command.Options.Add(json);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
-            IReadOnlyList<ProjectCatalogEntry> entries = await catalog.ListAsync(cancellationToken)
-                .ConfigureAwait(false);
+            ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+            if (listing.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return Report(diagnostics, listing.DiagnosticCode);
+            }
+
+            IReadOnlyList<ProjectCatalogEntry> entries = listing.Entries;
             if (parseResult.GetValue(json))
             {
                 output.WriteLine(StatusJson.Serialize(entries));
@@ -1862,7 +1872,7 @@ public static class CliApplication
 
             if (entries.Count == 0)
             {
-                output.WriteLine(text.Resolve(MessageKeys.NoSprints));
+                output.WriteLine(text.Resolve(MessageKeys.NoProjects));
                 return ExitCodes.Ok;
             }
 
@@ -1922,11 +1932,14 @@ public static class CliApplication
         return command;
     }
 
-    /// <summary>Plan section 12.3's redaction guarantee is enforced twice: once when
+    /// <summary>Plan section 12.3's redaction guarantee is enforced twice: pass 1 when
     /// <see cref="SprintTimelineProjector"/> builds each item (before it could ever be persisted by a
-    /// future cache), and again here, independently, immediately before the line reaches the
-    /// terminal -- so a redaction gap in one pass alone still cannot leak a raw secret to a
-    /// rendered surface.</summary>
+    /// future cache), and pass 2 -- <see cref="SprintTimelineRedaction.Apply"/> -- inside
+    /// <see cref="ForgeApplication.GetSprintTimelineAsync"/>, the single method both this text render
+    /// and the `--json` branch above already call to obtain <paramref name="page"/>. This method
+    /// re-runs <see cref="SecretRedactor"/> over the fully formatted line as a third, independent,
+    /// belt-and-braces check specific to the exact bytes this surface renders, so a redaction gap in
+    /// either upstream pass alone still cannot leak a raw secret to the terminal.</summary>
     private static void WriteTimeline(TextWriter output, SprintTimelinePage page)
     {
         if (page.Items.Count == 0)

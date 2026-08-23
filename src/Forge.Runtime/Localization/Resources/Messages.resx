@@ -176,4 +176,5 @@
   <data name="ProjectRelinked" xml:space="preserve"><value>Project relinked.</value></data>
   <data name="ProjectAliasSet" xml:space="preserve"><value>Alias updated.</value></data>
   <data name="ProjectSelected" xml:space="preserve"><value>Selection recorded.</value></data>
+  <data name="NoProjects" xml:space="preserve"><value>No projects in the catalog yet.</value></data>
 </root>

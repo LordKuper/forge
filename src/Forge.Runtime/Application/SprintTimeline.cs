@@ -39,18 +39,26 @@ public sealed record SprintTimelineItem(
 /// <summary>The single-sprint watermark cursor <see cref="SprintTimelineProjector"/> pages with.
 /// Deliberately simpler than <see cref="ControlEventsCursor"/>'s per-sprint dictionary: this
 /// projection only ever reads one sprint's own already-contiguous <see cref="WorkflowEvent.Sequence"/>
-/// stream, never a cross-sprint merge, so a single watermark is exact.</summary>
-public sealed record SprintTimelineCursor(string Version, long Watermark)
+/// stream, never a cross-sprint merge, so a single watermark is exact. <see cref="SprintId"/> binds
+/// the token to the exact sprint it was issued for -- each sprint's own <see cref="Watermark"/> is an
+/// independent, dense counter, so without this a cursor issued for one sprint would silently (and
+/// wrongly) apply to another (round 1 review of PR #97, finding 6).</summary>
+public sealed record SprintTimelineCursor(string Version, Guid SprintId, long Watermark)
 {
     public const string CurrentVersion = "1.0.0";
 
-    public static SprintTimelineCursor Empty { get; } = new(CurrentVersion, -1);
+    /// <summary><see cref="SprintId"/> is <see cref="Guid.Empty"/> here deliberately: an empty
+    /// cursor's <see cref="Watermark"/> of -1 means "start from scratch" regardless of which sprint
+    /// is being requested, so no sprint binding is meaningful for it yet -- the next page this
+    /// projects always re-encodes the cursor with the actual requested sprint id.</summary>
+    public static SprintTimelineCursor Empty { get; } = new(CurrentVersion, Guid.Empty, -1);
 }
 
 /// <summary>Encodes/decodes <see cref="SprintTimelineCursor"/> as an opaque base64 token -- same
-/// fail-safe decode contract as <see cref="ControlEventsCursorCodec"/>: a malformed, foreign, or
-/// future-versioned token decodes to <see cref="SprintTimelineCursor.Empty"/> with
-/// <see langword="false"/>, never a silent rebaseline.</summary>
+/// fail-safe decode contract as <see cref="ControlEventsCursorCodec"/>: a malformed,
+/// future-versioned, or sprint-foreign token decodes to <see cref="SprintTimelineCursor.Empty"/>
+/// with <see langword="false"/>, never a silent rebaseline or a silent misapplication to the wrong
+/// sprint.</summary>
 public static class SprintTimelineCursorCodec
 {
     private static readonly JsonSerializerOptions Options = new()
@@ -64,7 +72,11 @@ public static class SprintTimelineCursorCodec
         return Convert.ToBase64String(JsonSerializer.SerializeToUtf8Bytes(cursor, Options));
     }
 
-    public static bool TryDecode(string? token, out SprintTimelineCursor cursor)
+    /// <summary><paramref name="sprintId"/> is the sprint this cursor is about to page -- a
+    /// successfully decoded token whose own <see cref="SprintTimelineCursor.SprintId"/> does not
+    /// match it is treated exactly like a foreign token from a different codec version: rejected,
+    /// never silently applied to the wrong sprint's watermark stream.</summary>
+    public static bool TryDecode(string? token, Guid sprintId, out SprintTimelineCursor cursor)
     {
         if (string.IsNullOrEmpty(token))
         {
@@ -76,7 +88,8 @@ public static class SprintTimelineCursorCodec
         {
             byte[] bytes = Convert.FromBase64String(token);
             SprintTimelineCursor? decoded = JsonSerializer.Deserialize<SprintTimelineCursor>(bytes, Options);
-            if (decoded is null || decoded.Version != SprintTimelineCursor.CurrentVersion)
+            if (decoded is null || decoded.Version != SprintTimelineCursor.CurrentVersion ||
+                decoded.SprintId != sprintId)
             {
                 cursor = SprintTimelineCursor.Empty;
                 return false;
@@ -105,7 +118,8 @@ public sealed record SprintTimelinePage(
 
     public static SprintTimelinePage Empty(Guid sprintId, string? requestedCursor, string diagnosticCode)
     {
-        bool valid = SprintTimelineCursorCodec.TryDecode(requestedCursor, out SprintTimelineCursor decoded);
+        bool valid =
+            SprintTimelineCursorCodec.TryDecode(requestedCursor, sprintId, out SprintTimelineCursor decoded);
         return new(
             ContractVersion,
             sprintId,
@@ -113,6 +127,40 @@ public sealed record SprintTimelinePage(
             SprintTimelineCursorCodec.Encode(valid ? decoded : SprintTimelineCursor.Empty),
             valid ? diagnosticCode : DiagnosticCodes.ControlCursorStale);
     }
+}
+
+/// <summary>
+/// Redaction pass 2 of 2 (plan 12.3, ADR 0049): reruns <see cref="SecretRedactor"/> independently
+/// of pass 1 (<see cref="SprintTimelineProjector.ToItem"/>), applied once inside
+/// <see cref="ForgeApplication.GetSprintTimelineAsync"/> -- the single method every surface (the CLI's
+/// plain-text render, its <c>--json</c> output, and the Host's wire response) calls to obtain a
+/// timeline page -- so a redaction gap in either pass alone still cannot leak a raw secret to any
+/// rendered surface, regardless of output shape. Also closes pass 1's field-coverage gap: pass 1 only
+/// ever redacts <see cref="SprintTimelineItem.Arguments"/>; this pass covers every free-text field an
+/// item carries, including the ones pass 1 does not touch at all
+/// (<see cref="SprintTimelineItem.MessageKey"/>, <see cref="SprintTimelineItem.Type"/>,
+/// <see cref="SprintTimelineItem.TargetKind"/>, <see cref="SprintTimelineItem.TargetId"/>).
+/// </summary>
+public static class SprintTimelineRedaction
+{
+    public static SprintTimelinePage Apply(SprintTimelinePage page)
+    {
+        ArgumentNullException.ThrowIfNull(page);
+        return page with { Items = [.. page.Items.Select(Apply)] };
+    }
+
+    private static SprintTimelineItem Apply(SprintTimelineItem item) =>
+        item with
+        {
+            Type = SecretRedactor.Redact(item.Type),
+            TargetKind = SecretRedactor.Redact(item.TargetKind),
+            TargetId = SecretRedactor.Redact(item.TargetId),
+            MessageKey = SecretRedactor.Redact(item.MessageKey),
+            Arguments = item.Arguments.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value is null ? null : SecretRedactor.Redact(entry.Value),
+                StringComparer.Ordinal),
+        };
 }
 
 /// <summary>
@@ -144,7 +192,7 @@ public sealed class SprintTimelineProjector(ISprintStore store)
         string projectRoot, Guid sprintId, string? cursorToken, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(projectRoot);
-        if (!SprintTimelineCursorCodec.TryDecode(cursorToken, out SprintTimelineCursor cursor))
+        if (!SprintTimelineCursorCodec.TryDecode(cursorToken, sprintId, out SprintTimelineCursor cursor))
         {
             return SprintTimelinePage.Empty(sprintId, cursorToken, DiagnosticCodes.ControlCursorStale);
         }
@@ -166,7 +214,7 @@ public sealed class SprintTimelineProjector(ISprintStore store)
         ];
         long nextWatermark = page.Count > 0 ? page[^1].Sequence : cursor.Watermark;
         string nextCursor =
-            SprintTimelineCursorCodec.Encode(new(SprintTimelineCursor.CurrentVersion, nextWatermark));
+            SprintTimelineCursorCodec.Encode(new(SprintTimelineCursor.CurrentVersion, sprintId, nextWatermark));
         return new(
             SprintTimelinePage.ContractVersion,
             sprintId,

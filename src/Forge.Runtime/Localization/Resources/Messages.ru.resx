@@ -176,4 +176,5 @@
   <data name="ProjectRelinked" xml:space="preserve"><value>Проект перепривязан.</value></data>
   <data name="ProjectAliasSet" xml:space="preserve"><value>Псевдоним обновлён.</value></data>
   <data name="ProjectSelected" xml:space="preserve"><value>Выбор сохранён.</value></data>
+  <data name="NoProjects" xml:space="preserve"><value>В каталоге пока нет проектов.</value></data>
 </root>

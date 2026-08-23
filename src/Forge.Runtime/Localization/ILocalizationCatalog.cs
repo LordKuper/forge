@@ -217,4 +217,10 @@ public static class MessageKeys
     public const string ProjectRelinked = "ProjectRelinked";
     public const string ProjectAliasSet = "ProjectAliasSet";
     public const string ProjectSelected = "ProjectSelected";
+
+    /// <summary>The empty-catalog message for `forge project list` and `forge workspace summary`
+    /// (round 1 review of PR #97): distinct from <see cref="NoSprints"/>, which is about a sprint
+    /// list within one already-identified project, not the zero-projects-in-the-catalog case these
+    /// two commands report.</summary>
+    public const string NoProjects = "NoProjects";
 }

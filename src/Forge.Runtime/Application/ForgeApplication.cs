@@ -1368,7 +1368,10 @@ public sealed class ForgeApplication(
     /// <summary>Plan section 6.3's reserved `sprint.timeline` query: a bounded, cursor-paged
     /// projection of one sprint's existing append-only workflow journal (ADR 0043/0049). Matches
     /// every other read here (<see cref="AssessStageTransitionAsync"/>, <see cref="ReadControlEventsAsync"/>):
-    /// resolve root, delegate to a pure computation, return.</summary>
+    /// resolve root, delegate to a pure computation, return. This is the one method every surface
+    /// (CLI text, CLI `--json`, and the Host's wire response) calls to obtain a timeline page, so
+    /// <see cref="SprintTimelineRedaction.Apply(SprintTimelinePage)"/> (redaction pass 2 of 2, plan
+    /// 12.3) runs exactly once, right here, rather than being left to each caller to remember.</summary>
     public async Task<SprintTimelinePage> GetSprintTimelineAsync(
         string? projectRoot, Guid sprintId, string? cursor, CancellationToken cancellationToken)
     {
@@ -1376,8 +1379,10 @@ public sealed class ForgeApplication(
             await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
         if (status.Initialized)
         {
-            return await sprintTimeline.CreateAsync(status.Root, sprintId, cursor, cancellationToken)
+            SprintTimelinePage page = await sprintTimeline
+                .CreateAsync(status.Root, sprintId, cursor, cancellationToken)
                 .ConfigureAwait(false);
+            return SprintTimelineRedaction.Apply(page);
         }
 
         SprintTimelinePage empty = SprintTimelinePage.Empty(sprintId, cursor, DiagnosticCodes.None);
