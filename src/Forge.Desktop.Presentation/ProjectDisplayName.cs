@@ -12,8 +12,15 @@ public static class ProjectDisplayName
             return alias;
         }
 
+        // Deliberately not Path.GetFileName: it only recognizes the host OS's own separator
+        // (backslash is an ordinary character on Linux/macOS), so a Windows-recorded root read
+        // back on a different OS -- or, as CI's cross-platform run caught, a Windows-style path in
+        // a portable-core test -- would fail to resolve at all. Neutral code must behave
+        // identically on every OS (AGENTS.md Portability), so both separators are always
+        // recognized here regardless of which OS is actually running.
         string trimmed = root.TrimEnd('/', '\\');
-        string name = Path.GetFileName(trimmed);
+        int lastSeparator = trimmed.LastIndexOfAny(['/', '\\']);
+        string name = lastSeparator >= 0 ? trimmed[(lastSeparator + 1)..] : trimmed;
         return string.IsNullOrEmpty(name) ? root : name;
     }
 }
