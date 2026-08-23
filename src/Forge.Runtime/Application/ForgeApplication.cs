@@ -241,7 +241,10 @@ public sealed class ForgeApplication(
     StopOperationCoordinator stopCoordinator,
     ActiveOperationRegistry activeOperations,
     StageTransitionAssessor stageAssessor,
-    StageTransitionCoordinator stageCoordinator) : IForgeMutations
+    StageTransitionCoordinator stageCoordinator,
+    WorkspaceSummaryProjector workspaceSummary,
+    SprintTimelineProjector sprintTimeline,
+    AvailableActionProjector availableActions) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -1351,6 +1354,60 @@ public sealed class ForgeApplication(
         return await stageCoordinator.MoveAsync(
             status.Root, new(sprintId), targetStageId, expectedStateVersion, assessmentToken, reason, confirmed,
             idempotencyKey, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Plan section 6.2's reserved `workspace.summary` query: one project's bounded
+    /// sidebar/status-header row (ADR 0043/0049). Deliberately catalog-agnostic -- the CLI's own
+    /// `forge workspace summary` calls this once per <see cref="ProjectCatalogEntry"/> and pairs each
+    /// result with that entry's own alias/last-route, since a project's Host has no notion of the
+    /// local catalog at all.</summary>
+    public Task<ProjectWorkspaceSummary> GetWorkspaceSummaryAsync(
+        string? projectRoot, CancellationToken cancellationToken) =>
+        workspaceSummary.CreateAsync(projectRoot, cancellationToken);
+
+    /// <summary>Plan section 6.3's reserved `sprint.timeline` query: a bounded, cursor-paged
+    /// projection of one sprint's existing append-only workflow journal (ADR 0043/0049). Matches
+    /// every other read here (<see cref="AssessStageTransitionAsync"/>, <see cref="ReadControlEventsAsync"/>):
+    /// resolve root, delegate to a pure computation, return.</summary>
+    public async Task<SprintTimelinePage> GetSprintTimelineAsync(
+        string? projectRoot, Guid sprintId, string? cursor, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (status.Initialized)
+        {
+            return await sprintTimeline.CreateAsync(status.Root, sprintId, cursor, cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        SprintTimelinePage empty = SprintTimelinePage.Empty(sprintId, cursor, DiagnosticCodes.None);
+        return empty.DiagnosticCode == DiagnosticCodes.None
+            ? empty with { DiagnosticCode = DiagnosticCodes.ProjectNotInitialized }
+            : empty;
+    }
+
+    /// <summary>Plan section 6.4's reserved `workspace.available_actions` query. With
+    /// <paramref name="sprintId"/> given, wraps <see cref="AvailableActionProjector.ForSprintAsync"/>
+    /// (lifecycle actions plus one <see cref="StageTransitionAssessor"/>-backed row per candidate
+    /// stage) -- requires an initialized project, since there is no sprint state to derive from
+    /// otherwise. Without one, wraps the same project-level <see cref="SuggestedAction"/> list the
+    /// project overview already shows (ADR 0043/0049: extends, never duplicates, that existing
+    /// concept) -- computed the same way for an uninitialized project as for an initialized one,
+    /// since <c>initialize_project</c> is itself one of those suggestions.</summary>
+    public async Task<IReadOnlyList<AvailableAction>> GetAvailableActionsAsync(
+        string? projectRoot, Guid? sprintId, CancellationToken cancellationToken)
+    {
+        if (sprintId is { } id)
+        {
+            ProjectRootStatus status =
+                await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+            return status.Initialized
+                ? await availableActions.ForSprintAsync(status.Root, id, cancellationToken).ConfigureAwait(false)
+                : [];
+        }
+
+        ProjectSnapshot snapshot = await GetProjectSnapshotAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        return AvailableActionProjector.ForProject(snapshot.Project.Root, snapshot.SuggestedActions);
     }
 
     public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)

@@ -64,6 +64,10 @@ public static class ForgeHost
         services.AddSingleton<StageTransitionCoordinator>();
         services.AddSingleton<RoutingLedger>();
         services.AddSingleton<ControlEventsReader>();
+        services.AddSingleton<ProjectCatalogStore>();
+        services.AddSingleton<WorkspaceSummaryProjector>();
+        services.AddSingleton<SprintTimelineProjector>();
+        services.AddSingleton<AvailableActionProjector>();
         // ADR 0024: overridden by a platform composition root the same way IPlatformPreflight is —
         // no OS adapter means notifications are silently discarded, never an error.
         services.TryAddSingleton<INotificationService, NullNotificationService>();
