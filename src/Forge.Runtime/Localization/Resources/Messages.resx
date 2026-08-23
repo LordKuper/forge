@@ -141,6 +141,9 @@
   <data name="AttemptInstructionRequired" xml:space="preserve"><value>Enter a replacement instruction.</value></data>
   <data name="AttemptStopDescription" xml:space="preserve"><value>Stop the sprint's active operation without cancelling the sprint.</value></data>
   <data name="AttemptStopped" xml:space="preserve"><value>Stop requested.</value></data>
+  <data name="SprintAssessStageDescription" xml:space="preserve"><value>Assess whether a sprint can move to another workflow stage.</value></data>
+  <data name="SprintMoveStageDescription" xml:space="preserve"><value>Move a sprint to another workflow stage.</value></data>
+  <data name="SprintStageMoved" xml:space="preserve"><value>Stage moved.</value></data>
   <data name="NotificationAwaitingHumanTitle" xml:space="preserve"><value>Forge: awaiting your decision</value></data>
   <data name="NotificationBlockedTitle" xml:space="preserve"><value>Forge: sprint blocked</value></data>
   <data name="NotificationFailedTitle" xml:space="preserve"><value>Forge: sprint failed</value></data>

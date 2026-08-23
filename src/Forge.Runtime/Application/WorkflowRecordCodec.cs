@@ -50,6 +50,9 @@ internal static class WorkflowRecordCodec
                     MessageKey = item.MessageKey,
                     Arguments = new(item.Arguments, StringComparer.Ordinal),
                 })],
+            Revision = result.Revision.Value,
+            SupersededAtRevision = result.Superseded?.AtRevision.Value,
+            SupersededAt = result.Superseded?.RecordedAt,
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions),
@@ -73,6 +76,10 @@ internal static class WorkflowRecordCodec
             Location = finding.Location is { } location
                 ? new() { Path = location.Path, Line = location.Line }
                 : null,
+            NodeId = finding.NodeId?.Value,
+            Revision = finding.Revision.Value,
+            SupersededAtRevision = finding.Superseded?.AtRevision.Value,
+            SupersededAt = finding.Superseded?.RecordedAt,
         };
         SchemaValidation.Validate(JsonSerializer.SerializeToElement(wire, JsonOptions), FindingSchema, "finding");
     }
@@ -100,6 +107,9 @@ internal static class WorkflowRecordCodec
                 })],
             OpenRisks = [.. handoff.OpenRisks],
             NextNodeIds = handoff.NextNodeIds is null ? null : [.. handoff.NextNodeIds],
+            Revision = handoff.Revision.Value,
+            SupersededAtRevision = handoff.Superseded?.AtRevision.Value,
+            SupersededAt = handoff.Superseded?.RecordedAt,
         };
         SchemaValidation.Validate(JsonSerializer.SerializeToElement(wire, JsonOptions), HandoffSchema, "handoff");
     }
@@ -121,6 +131,9 @@ internal static class WorkflowRecordCodec
                     Description = item.Description,
                 })],
             RecordedAt = confirmation.RecordedAt,
+            Revision = confirmation.Revision.Value,
+            SupersededAtRevision = confirmation.Superseded?.AtRevision.Value,
+            SupersededAt = confirmation.Superseded?.RecordedAt,
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), ConfirmationSchema, "confirmation result");
@@ -137,6 +150,9 @@ internal static class WorkflowRecordCodec
             Outcome = WorkflowStateNames.ToSnakeCase(testWork.Outcome),
             Justification = testWork.Justification,
             RecordedAt = testWork.RecordedAt,
+            Revision = testWork.Revision.Value,
+            SupersededAtRevision = testWork.Superseded?.AtRevision.Value,
+            SupersededAt = testWork.Superseded?.RecordedAt,
         };
         SchemaValidation.Validate(
             JsonSerializer.SerializeToElement(wire, JsonOptions), TestWorkSchema, "test-work result");
@@ -225,6 +241,12 @@ internal static class WorkflowRecordCodec
         public List<string> Outputs { get; set; } = [];
 
         public List<WireDiagnostic> Diagnostics { get; set; } = [];
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededAt { get; set; }
     }
 
     private sealed class WireDiagnostic
@@ -259,6 +281,14 @@ internal static class WorkflowRecordCodec
         public List<string> Evidence { get; set; } = [];
 
         public WireLocation? Location { get; set; }
+
+        public string? NodeId { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededAt { get; set; }
     }
 
     private sealed class WireLocation
@@ -289,6 +319,12 @@ internal static class WorkflowRecordCodec
         public List<string> OpenRisks { get; set; } = [];
 
         public List<string>? NextNodeIds { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededAt { get; set; }
     }
 
     private sealed class WireArtifact
@@ -323,6 +359,12 @@ internal static class WorkflowRecordCodec
         public List<WireEvidence> Evidence { get; set; } = [];
 
         public DateTimeOffset RecordedAt { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededAt { get; set; }
     }
 
     private sealed class WireEvidence
@@ -347,6 +389,12 @@ internal static class WorkflowRecordCodec
         public string Justification { get; set; } = string.Empty;
 
         public DateTimeOffset RecordedAt { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededAt { get; set; }
     }
 
     private sealed class WireExecutionProfile

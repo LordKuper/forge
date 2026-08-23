@@ -38,6 +38,10 @@ public sealed record ConfirmationEvidence(ConfirmationEvidenceKind Kind, string 
 /// earlier `Confirmed` artifact must never outlive a later `NotConfirmed` one. See
 /// <c>SprintScheduler.IsTestWorkEligibleAsync</c>.
 /// </summary>
+/// <summary><paramref name="Revision"/>/<paramref name="Superseded"/> follow the same rewind
+/// supersession rule as <c>Forge.Domain.NodeResult</c> (plan section 8.4, ADR 0045) --
+/// <c>SprintScheduler.IsTestWorkEligibleAsync</c> excludes a superseded artifact from "the latest
+/// recorded one" regardless of its own <see cref="RecordedAt"/>.</summary>
 public sealed record ConfirmationArtifact(
     Guid ConfirmationId,
     SprintId SprintId,
@@ -45,4 +49,6 @@ public sealed record ConfirmationArtifact(
     ConfirmationOutcome Outcome,
     string DefinitionOfDone,
     IReadOnlyList<ConfirmationEvidence> Evidence,
-    DateTimeOffset RecordedAt);
+    DateTimeOffset RecordedAt,
+    StageRevision Revision = default,
+    SupersededBy? Superseded = null);

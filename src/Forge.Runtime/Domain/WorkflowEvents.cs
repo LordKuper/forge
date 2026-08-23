@@ -120,6 +120,34 @@ public sealed record WorkflowEvent(
     /// independent of the node's own current state -- see that field's own remarks for why a check
     /// gated only on <see cref="AttemptStopRequestedType"/> having landed is not enough on its own.</summary>
     public const string AttemptStopConvergedType = "AttemptStopConverged";
+
+    /// <summary>Plan section 8.4's committed-rewind marker (Slice 3): recorded once per committed
+    /// <c>MoveSprintToStage</c> rewind, on the sprint's own aggregate. Never a transition itself (no
+    /// <see cref="ToStateArgument"/>) -- a rewind's sprint-level effect is a revision bump, not
+    /// necessarily a sprint-state change, matching <see cref="AttemptSupersededType"/>'s own
+    /// non-transition shape. Folded into <see cref="SprintSnapshot.Revision"/> (never decremented,
+    /// never skipped): every node-role executor and prerequisite check reads a sprint's *current*
+    /// revision directly from this projection, the same way <see cref="AttemptStopRequestedType"/>
+    /// is folded rather than left as audit-only.</summary>
+    public const string StageRevisionRecordedType = "StageRevisionRecorded";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the new revision value
+    /// (<see cref="StageRevision.Value"/>, as a base-10 integer) this rewind commits to. Also carried
+    /// on a node's own `succeeded -> ready`/`succeeded -> pending`/`failed -> pending`/
+    /// `awaiting_human -> pending` transitions (plan section 8.4's reopen/invalidate edges) so
+    /// <see cref="NodeSnapshot.Revision"/> tracks which revision that node's own execution state now
+    /// belongs to -- node identity stays stable; only this argument's value changes.</summary>
+    public const string RevisionArgument = "revision";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the stage the rewind
+    /// targeted, for the timeline's own actor-visible rendering.</summary>
+    public const string TargetStageIdArgument = "target_stage_id";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the operator's bounded,
+    /// mandatory reason for the rewind (plan section 8.4 point 1) -- augments the durable record, the
+    /// same "never hides the original input" discipline <see cref="SupersessionInstructionArgument"/>
+    /// already follows for attempt supersession.</summary>
+    public const string RewindReasonArgument = "rewind_reason";
 }
 
 public sealed record SprintWorkflowState(
@@ -229,6 +257,23 @@ public static class WorkflowFold
                 continue;
             }
 
+            if (current.Type == WorkflowEvent.StageRevisionRecordedType)
+            {
+                // Never a transition (no ToStateArgument) -- but projected, like
+                // AttemptStopRequestedType: every prerequisite check and node-role executor must be
+                // able to read a sprint's current stage revision directly from its snapshot, not by
+                // re-scanning the raw journal.
+                _ = IsTransitionRecord(current);
+                if (sprint is not null)
+                {
+                    int revisionValue = int.Parse(
+                        current.Arguments[WorkflowEvent.RevisionArgument]!, NumberStyles.Integer, CultureInfo.InvariantCulture);
+                    sprint = sprint with { Revision = new(revisionValue) };
+                }
+
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -246,12 +291,16 @@ public static class WorkflowFold
                         out string? blockedReasonValue)
                         ? blockedReasonValue
                         : null;
+                    // Carried forward from whatever StageRevisionRecordedType last set (never
+                    // produced by an ordinary sprint transition) -- an ordinary transition must never
+                    // reset a sprint's own revision counter back to Initial.
                     sprint = new(
                         sprintId,
                         WorkflowStateNames.Parse<SprintState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
-                        blockedReason);
+                        blockedReason,
+                        sprint?.Revision ?? default);
                     break;
                 case AggregateKind.Node:
                     nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previousNode);
@@ -265,13 +314,23 @@ public static class WorkflowFold
                         out string? currentAttemptIdValue) && currentAttemptIdValue is not null
                         ? currentAttemptIdValue
                         : previousNode?.CurrentAttemptId;
+                    // Carried only on the rewind coordinator's own reopen/invalidate transitions
+                    // (`succeeded -> ready`/`succeeded -> pending`/`failed -> pending`/
+                    // `awaiting_human -> pending`); every ordinary transition omits it and this node
+                    // simply keeps whatever revision it already belonged to.
+                    StageRevision nodeRevision = current.Arguments.TryGetValue(
+                        WorkflowEvent.RevisionArgument,
+                        out string? revisionText) && revisionText is not null
+                        ? new(int.Parse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture))
+                        : previousNode?.Revision ?? default;
                     nodes[current.Aggregate.Id] = new(
                         new(current.Aggregate.Id),
                         WorkflowStateNames.Parse<NodeState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
                         attemptCount,
-                        currentAttemptId);
+                        currentAttemptId,
+                        nodeRevision);
                     break;
                 case AggregateKind.Attempt:
                     attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? previousAttempt);
@@ -353,6 +412,20 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Stop-converged event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.StageRevisionRecordedType)
+        {
+            bool hasRevision = current.Arguments.TryGetValue(
+                WorkflowEvent.RevisionArgument, out string? revision) && revision is not null;
+            bool hasTarget = current.Arguments.TryGetValue(
+                WorkflowEvent.TargetStageIdArgument, out string? target) && target is not null;
+            bool hasReason = current.Arguments.TryGetValue(
+                WorkflowEvent.RewindReasonArgument, out string? reason) && reason is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint ||
+                !hasRevision || !hasTarget || !hasReason
+                ? throw new InvalidDataException($"Stage-revision event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

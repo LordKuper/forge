@@ -141,6 +141,9 @@
   <data name="AttemptInstructionRequired" xml:space="preserve"><value>Введите инструкцию для замены.</value></data>
   <data name="AttemptStopDescription" xml:space="preserve"><value>Остановить активную операцию спринта, не отменяя сам спринт.</value></data>
   <data name="AttemptStopped" xml:space="preserve"><value>Остановка запрошена.</value></data>
+  <data name="SprintAssessStageDescription" xml:space="preserve"><value>Оценить, может ли спринт перейти на другой этап рабочего процесса.</value></data>
+  <data name="SprintMoveStageDescription" xml:space="preserve"><value>Переместить спринт на другой этап рабочего процесса.</value></data>
+  <data name="SprintStageMoved" xml:space="preserve"><value>Этап перемещён.</value></data>
   <data name="NotificationAwaitingHumanTitle" xml:space="preserve"><value>Forge: ожидает вашего решения</value></data>
   <data name="NotificationBlockedTitle" xml:space="preserve"><value>Forge: спринт заблокирован</value></data>
   <data name="NotificationFailedTitle" xml:space="preserve"><value>Forge: спринт завершился с ошибкой</value></data>

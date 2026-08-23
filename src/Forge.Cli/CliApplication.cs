@@ -59,7 +59,8 @@ public static class CliApplication
         root.Subcommands.Add(CreateNextCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateEventsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateTreeCommand(text, output, diagnostics, application));
-        root.Subcommands.Add(CreateSprintCommand(text, output, diagnostics, application, effectiveResolver));
+        root.Subcommands.Add(
+            CreateSprintCommand(text, output, diagnostics, application, effectiveResolver, effectiveIsInteractive));
         root.Subcommands.Add(CreateModelsCommand(text, output, diagnostics, application));
         root.Subcommands.Add(CreateConfigCommand(text, output, diagnostics, application, effectiveResolver));
         root.Subcommands.Add(CreateIntegrationCommand(text, output, diagnostics, application, effectiveResolver));
@@ -407,7 +408,8 @@ public static class CliApplication
         TextWriter output,
         TextWriter diagnostics,
         ForgeApplication application,
-        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
     {
         Command command = new("sprint", text.Resolve(MessageKeys.SprintDescription));
         command.Subcommands.Add(CreateSprintInspectCommand(text, output, diagnostics, application));
@@ -415,6 +417,126 @@ public static class CliApplication
         command.Subcommands.Add(CreateSprintRunCommand(text, output, diagnostics, resolveMutations));
         command.Subcommands.Add(CreateSprintResumeCommand(text, output, diagnostics, resolveMutations));
         command.Subcommands.Add(CreateSprintCancelCommand(text, output, diagnostics, resolveMutations));
+        command.Subcommands.Add(CreateSprintAssessStageCommand(text, output, diagnostics, application));
+        command.Subcommands.Add(
+            CreateSprintMoveStageCommand(text, output, diagnostics, application, resolveMutations, isInteractive));
+        return command;
+    }
+
+    private static Command CreateSprintAssessStageCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> targetStage = new("--target-stage") { Description = "Target stage id.", Required = true };
+        Option<bool> json = CreateJsonOption();
+        Argument<string> id = new("id") { Description = "Sprint id." };
+        Command command = new("assess-stage", text.Resolve(MessageKeys.SprintAssessStageDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(targetStage);
+        command.Options.Add(json);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            StageTransitionAssessment assessment = await application
+                .AssessStageTransitionAsync(
+                    parseResult.GetValue(projectRoot), sprintId, parseResult.GetValue(targetStage)!, cancellationToken)
+                .ConfigureAwait(false);
+            if (parseResult.GetValue(json))
+            {
+                output.WriteLine(StatusJson.Serialize(assessment));
+            }
+            else if (assessment.Found)
+            {
+                output.WriteLine(string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"{assessment.SourceStageId} -> {assessment.TargetStageId}: {assessment.Direction}, allowed={assessment.Allowed}"));
+                foreach (StagePrerequisite prerequisite in assessment.UnsatisfiedPrerequisites)
+                {
+                    output.WriteLine(string.Create(
+                        CultureInfo.InvariantCulture, $"  blocked: {prerequisite.Id} ({prerequisite.MessageKey})"));
+                }
+            }
+
+            return Report(diagnostics, assessment.Found ? DiagnosticCodes.None : assessment.DiagnosticCode);
+        });
+        return command;
+    }
+
+    /// <summary>ADR 0046's human-only `sprint.move_stage` capability. Same interactive-session
+    /// technical control and mandatory, never-bypassed confirmation as
+    /// <see cref="CreateAttemptStopCommand"/> -- moving a sprint to another stage is as
+    /// irreversible-in-effect as stopping its active operation. The assessment read below always
+    /// runs locally against <paramref name="application"/>, exactly like every other read command in
+    /// this file (<see cref="CreateSprintInspectCommand"/>'s own "queries run directly against the
+    /// durable event log" convention) -- a query needs no Host-routing indirection, since the
+    /// durable, file-based journal is the sole source of truth either way. The commit itself still
+    /// goes through <paramref name="resolveMutations"/> so a reachable Host remains the one process
+    /// that ever mutates `.forge/` (ADR 0005). The Host recomputes this exact assessment fresh
+    /// immediately before committing and rejects a mismatch (plan section 8.5); this CLI-side read
+    /// only supplies the expected version/token the mutation call presents, never trusted on its
+    /// own.</summary>
+    private static Command CreateSprintMoveStageCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        ForgeApplication application,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
+        Func<bool> isInteractive)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Option<string> targetStage = new("--target-stage") { Description = "Target stage id.", Required = true };
+        Option<string?> reason = new("--reason") { Description = "Why the sprint is moving to this stage." };
+        Option<bool> confirm = new("--yes") { Description = "Confirm the move." };
+        Argument<string> id = new("id") { Description = "Sprint id." };
+        Command command = new("move-stage", text.Resolve(MessageKeys.SprintMoveStageDescription));
+        command.Arguments.Add(id);
+        command.Options.Add(projectRoot);
+        command.Options.Add(targetStage);
+        command.Options.Add(reason);
+        command.Options.Add(confirm);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            // ADR 0023: same earliest-reachable, unconditional refusal as attempt stop/supersede.
+            if (!isInteractive())
+            {
+                return Report(diagnostics, DiagnosticCodes.PermissionDenied);
+            }
+
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            string targetStageId = parseResult.GetValue(targetStage)!;
+            StageTransitionAssessment assessment = await application
+                .AssessStageTransitionAsync(root, sprintId, targetStageId, cancellationToken)
+                .ConfigureAwait(false);
+            if (!assessment.Found)
+            {
+                return Report(diagnostics, assessment.DiagnosticCode);
+            }
+
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            MoveStageResult result = await mutations.MoveSprintToStageAsync(
+                root, sprintId, targetStageId, assessment.ExpectedStateVersion, assessment.AssessmentToken,
+                parseResult.GetValue(reason), parseResult.GetValue(confirm), Guid.NewGuid(), cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.SprintStageMoved));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
         return command;
     }
 

@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.2.0",
+  "contract_version": "1.3.0",
   "machines": {
     "self_update": {
       "initial": "current",
@@ -47,14 +47,14 @@
     },
     "node": {
       "initial": "pending",
-      "terminal": ["succeeded", "skipped", "cancelled"],
+      "terminal": ["skipped", "cancelled"],
       "transitions": {
         "pending": ["ready", "skipped", "cancelled"],
         "ready": ["running", "skipped", "cancelled"],
         "running": ["awaiting_human", "succeeded", "failed", "cancelled"],
-        "awaiting_human": ["running", "failed", "cancelled"],
-        "succeeded": [],
-        "failed": ["ready"],
+        "awaiting_human": ["running", "failed", "cancelled", "pending"],
+        "succeeded": ["ready", "pending"],
+        "failed": ["ready", "pending"],
         "skipped": [],
         "cancelled": []
       }

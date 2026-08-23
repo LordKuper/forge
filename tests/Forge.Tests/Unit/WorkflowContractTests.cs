@@ -88,7 +88,19 @@ public sealed class WorkflowContractTests
     [InlineData(NodeState.Pending, NodeState.Ready, true)]
     [InlineData(NodeState.Running, NodeState.Succeeded, true)]
     [InlineData(NodeState.Failed, NodeState.Ready, true)]
-    [InlineData(NodeState.Succeeded, NodeState.Ready, false)]
+    // `state-machines.json` 1.3.0 (plan section 8.4, Slice 3) added `succeeded -> ready`/
+    // `succeeded -> pending` and `failed -> pending`/`awaiting_human -> pending` for the rewind
+    // coordinator's own reopen/invalidate edges (see `WorkflowStateMachines.Node`'s remarks) --
+    // reached only through `Forge.Application.StageTransitionCoordinator`, never a generic public
+    // API. `Succeeded` is no longer a terminal node state; nothing in production ever called
+    // `WorkflowStateMachines.IsTerminal(NodeState)`.
+    [InlineData(NodeState.Succeeded, NodeState.Ready, true)]
+    [InlineData(NodeState.Succeeded, NodeState.Pending, true)]
+    [InlineData(NodeState.Succeeded, NodeState.Failed, false)]
+    [InlineData(NodeState.Failed, NodeState.Pending, true)]
+    [InlineData(NodeState.AwaitingHuman, NodeState.Pending, true)]
+    [InlineData(NodeState.Skipped, NodeState.Ready, false)]
+    [InlineData(NodeState.Cancelled, NodeState.Ready, false)]
     public void NodeTransitionsMatchFrozenV1Contract(NodeState from, NodeState to, bool expected) =>
         Assert.Equal(expected, WorkflowStateMachines.CanTransition(from, to));
 

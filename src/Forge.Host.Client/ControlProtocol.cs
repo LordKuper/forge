@@ -134,6 +134,28 @@ public sealed record SprintIdRequest(Guid SprintId);
 /// <see cref="IntegrationWriteRequest"/>), so it also carries <see cref="Confirmed"/>.</summary>
 public sealed record CancelSprintRequest(Guid SprintId, bool Confirmed);
 
+/// <summary><see cref="ControlProtocol.AssessStageTransitionKind"/>'s request payload (plan section
+/// 8.1: read-only `workflow.assess_stage_transition`). No expected version travels on the wire — a
+/// query has nothing to gate optimistic concurrency against; the response itself carries the
+/// expected state version a subsequent <see cref="MoveSprintToStageRequest"/> must present.</summary>
+public sealed record AssessStageTransitionRequest(Guid SprintId, string TargetStageId);
+
+/// <summary><see cref="ControlProtocol.MoveSprintToStageKind"/>'s request payload (ADR 0046:
+/// human-only `sprint.move_stage`). <see cref="AssessmentToken"/>/<see cref="ExpectedStateVersion"/>
+/// are bound to the project/sprint/target/current-revision/state-version an
+/// <see cref="AssessStageTransitionRequest"/> just returned (plan section 8.5); the Host recomputes
+/// both fresh immediately before mutating and rejects any mismatch. <see cref="Reason"/> is
+/// mandatory for a rewind, ignored for an advance. <see cref="IdempotencyKey"/> makes a repeated
+/// commit a safe no-op that never records a second stage revision.</summary>
+public sealed record MoveSprintToStageRequest(
+    Guid SprintId,
+    string TargetStageId,
+    long ExpectedStateVersion,
+    string? AssessmentToken,
+    string? Reason,
+    bool Confirmed,
+    Guid IdempotencyKey);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -229,6 +251,17 @@ public static class ControlProtocol
     /// payload: a `SprintTransitionResult` instance (same shape as
     /// <see cref="ResumeSprintKind"/>'s response).</summary>
     public const string CancelSprintKind = "cancel_sprint";
+
+    /// <summary>Plan section 8.1: the read-only `workflow.assess_stage_transition` query. Request
+    /// payload: an <see cref="AssessStageTransitionRequest"/>. Response payload: a
+    /// `StageTransitionAssessment` instance.</summary>
+    public const string AssessStageTransitionKind = "assess_stage_transition";
+
+    /// <summary>ADR 0046: the human-only `sprint.move_stage` capability — commits an already-assessed
+    /// advance or rewind. Request payload: a <see cref="MoveSprintToStageRequest"/>. Response
+    /// payload: a `MoveStageResult` instance
+    /// (<c>{"succeeded": bool, "sprint"?: {...}, "target_node"?: {...}, "diagnostic_code": string}</c>).</summary>
+    public const string MoveSprintToStageKind = "move_sprint_to_stage";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

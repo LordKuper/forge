@@ -12,6 +12,9 @@
     "node_id": {"type": "string", "minLength": 1},
     "outcome": {"enum": ["tests_added", "no_new_tests_justified"]},
     "justification": {"type": "string", "minLength": 1},
-    "recorded_at": {"type": "string", "format": "date-time"}
+    "recorded_at": {"type": "string", "format": "date-time"},
+    "revision": {"type": "integer", "minimum": 0},
+    "superseded_at_revision": {"type": "integer", "minimum": 1},
+    "superseded_at": {"type": "string", "format": "date-time"}
   }
 }

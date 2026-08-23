@@ -627,6 +627,44 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new StopOperationResult(true, DiagnosticCodes.None));
     }
 
+    public int MoveSprintToStageCalls { get; private set; }
+
+    public Guid? LastMoveStageSprintId { get; private set; }
+
+    public string? LastMoveStageTargetStageId { get; private set; }
+
+    public long? LastMoveStageExpectedStateVersion { get; private set; }
+
+    public string? LastMoveStageAssessmentToken { get; private set; }
+
+    public string? LastMoveStageReason { get; private set; }
+
+    public bool? LastMoveStageConfirmed { get; private set; }
+
+    public Guid? LastMoveStageIdempotencyKey { get; private set; }
+
+    public Task<MoveStageResult> MoveSprintToStageAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string targetStageId,
+        long expectedStateVersion,
+        string? assessmentToken,
+        string? reason,
+        bool confirmed,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        MoveSprintToStageCalls++;
+        LastMoveStageSprintId = sprintId;
+        LastMoveStageTargetStageId = targetStageId;
+        LastMoveStageExpectedStateVersion = expectedStateVersion;
+        LastMoveStageAssessmentToken = assessmentToken;
+        LastMoveStageReason = reason;
+        LastMoveStageConfirmed = confirmed;
+        LastMoveStageIdempotencyKey = idempotencyKey;
+        return Task.FromResult(new MoveStageResult(true, null, null, DiagnosticCodes.None));
+    }
+
     public int ConfirmNodeCalls { get; private set; }
 
     public ConfirmationOutcome? LastConfirmOutcome { get; private set; }
@@ -804,6 +842,18 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new StopOperationResult(true, DiagnosticCodes.None));
+
+    public Task<MoveStageResult> MoveSprintToStageAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string targetStageId,
+        long expectedStateVersion,
+        string? assessmentToken,
+        string? reason,
+        bool confirmed,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(new MoveStageResult(true, null, null, DiagnosticCodes.None));
 
     public Task<RecordConfirmationResult> ConfirmNodeAsync(
         string? projectRoot,

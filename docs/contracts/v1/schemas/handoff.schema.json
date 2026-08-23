@@ -15,7 +15,10 @@
     "decisions": {"type": "array", "items": {"type": "string"}},
     "artifacts": {"type": "array", "items": {"$ref": "#/$defs/artifact"}},
     "open_risks": {"type": "array", "items": {"type": "string"}},
-    "next_node_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+    "next_node_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "revision": {"type": "integer", "minimum": 0},
+    "superseded_at_revision": {"type": "integer", "minimum": 1},
+    "superseded_at": {"type": "string", "format": "date-time"}
   },
   "$defs": {
     "artifact": {

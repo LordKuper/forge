@@ -216,6 +216,13 @@ public static class DiagnosticCodes
     /// and the <c>SprintOrchestrator.CreateSprintAsync</c> gate are unaffected -- an unmatched entry
     /// still enforces no restriction there, by design.</summary>
     public const string ModelPolicyProviderUnknown = "model_policy_provider_unknown";
+
+    /// <summary>Plan section 8.4 point 1: a rewind's bounded operator reason was empty or
+    /// whitespace-only. Checked before <c>StageTransitionCoordinator.MoveAsync</c> commits anything
+    /// -- the same "invalid input, nothing recorded" placement <see cref="TestWorkJustificationRequired"/>
+    /// and <see cref="ConfirmationTextRequired"/> already use for their own mandatory text fields.
+    /// Never applies to an advance, which plan section 8.3 does not require a reason for.</summary>
+    public const string StageTransitionReasonRequired = "stage_transition_reason_required";
 }
 
 public enum StartupState

@@ -162,4 +162,36 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
     public Task<IReadOnlyList<WorkflowEvent>> GetEventsAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken) =>
         inner.GetEventsAsync(projectRoot, sprintId, cancellationToken);
+
+    public Task<AppendOutcome> AppendStageRevisionRecordedAsync(
+        string projectRoot, SprintId sprintId, string targetStageId, string reason, StageRevision newRevision,
+        long expectedSprintVersion, Guid idempotencyKey, CancellationToken cancellationToken) =>
+        inner.AppendStageRevisionRecordedAsync(
+            projectRoot, sprintId, targetStageId, reason, newRevision, expectedSprintVersion, idempotencyKey,
+            cancellationToken);
+
+    public Task MarkNodeResultSupersededAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, SupersededBy marker,
+        CancellationToken cancellationToken) =>
+        inner.MarkNodeResultSupersededAsync(projectRoot, sprintId, attemptId, marker, cancellationToken);
+
+    public Task MarkHandoffSupersededAsync(
+        string projectRoot, SprintId sprintId, Guid handoffId, SupersededBy marker,
+        CancellationToken cancellationToken) =>
+        inner.MarkHandoffSupersededAsync(projectRoot, sprintId, handoffId, marker, cancellationToken);
+
+    public Task MarkConfirmationSupersededAsync(
+        string projectRoot, SprintId sprintId, Guid confirmationId, SupersededBy marker,
+        CancellationToken cancellationToken) =>
+        inner.MarkConfirmationSupersededAsync(projectRoot, sprintId, confirmationId, marker, cancellationToken);
+
+    public Task MarkTestWorkSupersededAsync(
+        string projectRoot, SprintId sprintId, Guid testWorkId, SupersededBy marker,
+        CancellationToken cancellationToken) =>
+        inner.MarkTestWorkSupersededAsync(projectRoot, sprintId, testWorkId, marker, cancellationToken);
+
+    public Task MarkFindingSupersededAsync(
+        string projectRoot, SprintId sprintId, Guid findingId, SupersededBy marker,
+        CancellationToken cancellationToken) =>
+        inner.MarkFindingSupersededAsync(projectRoot, sprintId, findingId, marker, cancellationToken);
 }

@@ -23,6 +23,10 @@
         "path": {"type": "string"},
         "line": {"type": "integer", "minimum": 1}
       }
-    }
+    },
+    "node_id": {"type": "string", "minLength": 1},
+    "revision": {"type": "integer", "minimum": 0},
+    "superseded_at_revision": {"type": "integer", "minimum": 1},
+    "superseded_at": {"type": "string", "format": "date-time"}
   }
 }

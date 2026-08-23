@@ -41,12 +41,17 @@ public enum NodeRole
 /// One node in a sprint's frozen graph. <see cref="Id"/> is the stable, workflow-assigned string
 /// identity (see <see cref="NodeId"/>); <see cref="DependsOn"/> names other nodes in the same
 /// graph that must reach `succeeded` or `skipped` before this one can become `ready`.
+/// <paramref name="Optional"/> is plan section 8.3's "explicitly optional in the frozen workflow" —
+/// a skip-ahead advance target may leave an optional intervening node unsatisfied. The built-in
+/// `implementation-critical` graph declares none (every node defaults to mandatory); nothing before
+/// Slice 3 (plan section 11) ever reads this field.
 /// </summary>
 public sealed record NodeDefinition(
     string Id,
     NodeKind Kind,
     IReadOnlyList<string> DependsOn,
-    NodeRole Role = NodeRole.Generic);
+    NodeRole Role = NodeRole.Generic,
+    bool Optional = false);
 
 /// <summary>
 /// Validates a graph before it is ever frozen into a sprint: every dependency must name a node

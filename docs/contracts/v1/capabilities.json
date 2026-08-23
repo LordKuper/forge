@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.7.0",
+  "contract_version": "1.8.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -236,7 +236,7 @@
       "desktop": "SprintWorkspace/AssessStageTransition",
       "permission": "read_redacted",
       "acceptance": "stage-assessment-parity",
-      "note": "Reserved, not implemented on either surface (plan section 8.1, Slice 3). Read-only by design -- the UI may render this projection but never calculates or overrides it. Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host and CLI (plan section 8.1, Slice 3); Desktop parity is deferred to a later slice, matching ADR 0037's CLI-first precedent for workflow.confirm/workflow.test_work/workflow.finalize. Read-only by design -- the UI may render this projection but never calculates or overrides it. Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule)."
     },
     {
       "id": "sprint.move_stage",
@@ -247,7 +247,7 @@
       "desktop": "SprintWorkspace/MoveStage",
       "permission": "human_stage_transition_confirm",
       "acceptance": "stage-transition-parity",
-      "note": "Reserved, not implemented on either surface (plan section 8.5, Slice 3). The Host recomputes the assessment immediately before mutation; a rewind always requires a bounded reason and mandatory confirmation (plan section 8.4). Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host and CLI (plan section 8.5, Slice 3); Desktop parity is deferred to a later slice, matching ADR 0037's CLI-first precedent. The Host recomputes the assessment immediately before mutation; a rewind always requires a bounded reason and mandatory confirmation (plan section 8.4). Not yet in `CapabilityIds.Implemented` -- that list requires both surfaces (capabilities.json's own `public_requires_both_surfaces` rule)."
     },
     {
       "id": "provider.quota_status",

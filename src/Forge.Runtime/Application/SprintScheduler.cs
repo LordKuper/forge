@@ -472,7 +472,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 clock.UtcNow,
                 inputDigest,
                 outputs ?? [],
-                diagnostics ?? []);
+                diagnostics ?? [],
+                // The node's own current revision, not necessarily the sprint's global counter: an
+                // untouched upstream node never advances past whatever revision it was last reopened
+                // at, and this result belongs to that node's own generation.
+                node.Revision);
             // Validated *before* anything below becomes durable: a malformed result (e.g. a caller
             // passing a garbled digest) must never leave the node succeeded/failed with no result to
             // show for it, wedging the sprint with an unrecoverable state and a record that was
@@ -1287,7 +1291,10 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         {
             IReadOnlyList<Finding> findings =
                 await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-            if (findings.Any(finding => finding.Status == FindingStatus.Open))
+            // A superseded finding is excluded here too (plan section 8.4): a rewind that
+            // invalidates the stage a still-open finding concerned must not leave that finding
+            // blocking completion forever with no node left that could ever resolve it.
+            if (findings.Any(finding => finding.Status == FindingStatus.Open && finding.Superseded is null))
             {
                 // Not a distinct sprint state: the sprint just stays `running` until every open
                 // finding is resolved, then a later call (see ResolveFindingAsync) re-evaluates.
@@ -1444,7 +1451,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
 
         IReadOnlyList<Finding> findings =
             await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-        if (findings.Any(finding => finding.Status == FindingStatus.Open))
+        if (findings.Any(finding => finding.Status == FindingStatus.Open && finding.Superseded is null))
         {
             return;
         }
@@ -1485,8 +1492,15 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         IReadOnlyDictionary<string, string?> arguments,
         IReadOnlyList<string> evidence,
         FindingLocation? location,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        NodeId? nodeId = null)
     {
+        // Only RecordReviewIterationAsync currently has a node in scope when it raises a finding;
+        // every other caller passes none. Stamped with the sprint's *current* stage revision (plan
+        // section 8.4) so a later rewind can tell which revision this finding belongs to when
+        // deciding what to supersede.
+        StageRevision revision = (await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false)).Sprint.Revision;
         Finding finding = new(
             Guid.NewGuid(),
             sprintId,
@@ -1496,7 +1510,9 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             messageKey,
             arguments,
             evidence,
-            location);
+            location,
+            nodeId,
+            revision);
         try
         {
             await store.SaveFindingAsync(projectRoot, finding, cancellationToken).ConfigureAwait(false);
@@ -1570,8 +1586,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         IReadOnlyList<string>? nextNodeIds,
         CancellationToken cancellationToken)
     {
+        StageRevision handoffRevision = (await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false)).Sprint.Revision;
         Handoff handoff = new(
-            Guid.NewGuid(), sprintId, new(nodeId), baseSha, summary, decisions, [], openRisks, nextNodeIds);
+            Guid.NewGuid(), sprintId, new(nodeId), baseSha, summary, decisions, [], openRisks, nextNodeIds,
+            handoffRevision);
         try
         {
             await store.SaveHandoffAsync(projectRoot, handoff, cancellationToken).ConfigureAwait(false);
@@ -1632,8 +1651,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return new(false, null, DiagnosticCodes.NodeKindMismatch);
         }
 
+        StageRevision confirmationRevision = (await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false)).Sprint.Revision;
         ConfirmationArtifact confirmation = new(
-            Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence, clock.UtcNow);
+            Guid.NewGuid(), sprintId, new(nodeId), outcome, definitionOfDone, evidence, clock.UtcNow,
+            confirmationRevision);
         try
         {
             await store.SaveConfirmationAsync(projectRoot, confirmation, cancellationToken).ConfigureAwait(false);
@@ -1897,7 +1919,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
         else
         {
-            recorded = new(Guid.NewGuid(), sprintId, new(nodeId), outcome, justification, clock.UtcNow);
+            recorded = new(
+                Guid.NewGuid(), sprintId, new(nodeId), outcome, justification, clock.UtcNow, state.Sprint.Revision);
             try
             {
                 await store.SaveTestWorkAsync(projectRoot, recorded, cancellationToken).ConfigureAwait(false);
@@ -2073,7 +2096,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 {
                     RecordFindingResult recorded = await RecordFindingAsync(
                         projectRoot, sprintId, finding.Severity, finding.MessageKey, finding.Arguments,
-                        finding.Evidence, finding.Location, cancellationToken).ConfigureAwait(false);
+                        finding.Evidence, finding.Location, cancellationToken, new(nodeId)).ConfigureAwait(false);
                     if (!recorded.Succeeded)
                     {
                         // The iteration record is already durable (it governs eligibility/counting
@@ -2172,7 +2195,10 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// confirmation-role dependency (not the built-in graph's shape, but nothing stops a
     /// caller-supplied one) is vacuously eligible: there is nothing to gate on.
     /// </summary>
-    private async Task<bool> IsTestWorkEligibleAsync(
+    /// <summary>Internal, not private, so <see cref="StageTransitionAssessor"/> can reuse the exact
+    /// eligibility rule (including its tie-breaking discipline) rather than recomputing a
+    /// second, possibly-drifting copy of it.</summary>
+    internal async Task<bool> IsTestWorkEligibleAsync(
         string projectRoot,
         SprintId sprintId,
         SprintDefinition definition,
@@ -2186,8 +2212,14 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             return true;
         }
 
-        IReadOnlyList<ConfirmationArtifact> confirmations =
-            await store.GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        // Superseded confirmations are excluded before "latest" is even determined (plan section
+        // 8.4: "excludes superseded evidence from all future prerequisite checks") -- a stale,
+        // pre-rewind `Confirmed` artifact must never keep a downstream test-work node eligible
+        // merely because nothing newer has been recorded yet.
+        IReadOnlyList<ConfirmationArtifact> confirmations = (await store
+            .GetConfirmationsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false))
+            .Where(artifact => artifact.Superseded is null)
+            .ToArray();
         return confirmationDependencies.All(dependency =>
         {
             List<ConfirmationArtifact> forNode = [.. confirmations.Where(artifact => artifact.NodeId.Value == dependency)];
