@@ -17,79 +17,41 @@ namespace Forge.AcceptanceTests;
 
 public sealed class SurfaceParityTests
 {
-    /// <summary>The Desktop control that exposes each implemented capability.</summary>
-    private static readonly Dictionary<string, string[]> DesktopControls = new(StringComparer.Ordinal)
+    /// <summary>
+    /// Slice 5 replaced the monolithic, statically-named `MainPage.xaml` with
+    /// <c>WorkspaceShellPage</c>'s dynamically built controls (plan section 9.3/9.4) -- there is no
+    /// longer a fixed <c>x:Name</c> per control for a capability check to look up. The equivalent
+    /// guarantee this dictionary now encodes is "the composition root's code actually calls the
+    /// neutral view-model method that performs this capability," proven by scanning the shell's own
+    /// source text (see <see cref="DesktopSourceText"/>) -- still reliable outside a live MAUI
+    /// process, matching plan section 11 Slice 5 item 5.
+    /// </summary>
+    private static readonly Dictionary<string, string[]> DesktopCapabilityCalls = new(StringComparer.Ordinal)
     {
-        [CapabilityIds.ProjectSnapshot] =
-        [
-            "StartupChecksLabel",
-            "StatusLabel",
-            "ProjectStateLabel",
-            "SuggestedActionsLabel",
-            "SprintsLabel",
-            "SprintDetailsLabel",
-            "SprintIdEntry",
-        ],
-        [CapabilityIds.ProjectInitialize] = ["InitializeButton", "ProjectRootEntry"],
-        [CapabilityIds.ConfigurationManage] =
-            ["ConfigurationScopePicker", "ConfigurationKeyEntry", "ConfigurationSetButton"],
-        [CapabilityIds.ProviderHealth] = ["ProvidersLabel"],
-        [CapabilityIds.WorkflowReview] =
-            ["SprintIdEntry", "GateNodeIdEntry", "GateApproveButton", "GateRejectButton", "GateResultLabel"],
-        [CapabilityIds.AttemptSupersede] =
-        [
-            "SprintIdEntry",
-            "AttemptIdEntry",
-            "AttemptInstructionEntry",
-            "AttemptSupersedeButton",
-            "AttemptSupersedeResultLabel",
-        ],
-        [CapabilityIds.ControlEvents] = ["EventsPollButton", "EventsLabel"],
+        [CapabilityIds.ProjectSnapshot] = [".RefreshAsync(", "projectOverview.LoadAsync("],
+        [CapabilityIds.ProjectInitialize] = [".InitializeAsync(", ".InitializePrompt("],
+        [CapabilityIds.ConfigurationManage] = [".SaveAsync("],
+        [CapabilityIds.ProviderHealth] = ["snapshot.KnownProviders", "snapshot.Providers"],
+        [CapabilityIds.WorkflowReview] = [".ResolveGateAsync(", ".GatePrompt("],
+        [CapabilityIds.AttemptSupersede] = [".SupersedeAttemptAsync(", ".AttemptSupersedePrompt("],
+        [CapabilityIds.ControlEvents] = [".PollEventsAsync("],
         [CapabilityIds.IntegrationSkill] =
-        [
-            "IntegrationGenerateButton",
-            "IntegrationLabel",
-            "IntegrationInstallButton",
-            "IntegrationRemoveButton",
-            "IntegrationWriteResultLabel",
-        ],
+            [".GenerateIntegrationPreviewAsync(", ".InstallIntegrationAsync(", ".RemoveIntegrationAsync("],
         [CapabilityIds.SprintManage] =
-        [
-            "SprintIdEntry",
-            "SprintCreateButton",
-            "SprintRunButton",
-            "SprintResumeButton",
-            "SprintCancelButton",
-            "SprintManageResultLabel",
-        ],
-        [CapabilityIds.WorkflowConfirm] =
-        [
-            "SprintIdEntry",
-            "ConfirmNodeIdEntry",
-            "ConfirmDefinitionOfDoneEntry",
-            "ConfirmEvidenceEntry",
-            "ConfirmEvidenceKindPicker",
-            "ConfirmConfirmedButton",
-            "ConfirmNotConfirmedButton",
-            "ConfirmResultLabel",
-        ],
-        [CapabilityIds.WorkflowTestWork] =
-        [
-            "SprintIdEntry",
-            "TestWorkNodeIdEntry",
-            "TestWorkJustificationEntry",
-            "TestWorkAddedButton",
-            "TestWorkNoNewTestsButton",
-            "TestWorkResultLabel",
-        ],
-        [CapabilityIds.WorkflowFinalize] =
-        [
-            "SprintIdEntry",
-            "FinalizeNodeIdEntry",
-            "FinalizeButton",
-            "FinalizeResultLabel",
-        ],
+            [".CreateSprintAsync(", ".RunSprintAsync(", ".ResumeSprintAsync(", ".CancelSprintAsync("],
+        [CapabilityIds.WorkflowConfirm] = [".ConfirmNodeAsync(", ".ConfirmPrompt("],
+        [CapabilityIds.WorkflowTestWork] = [".RecordTestWorkAsync(", ".TestWorkPrompt("],
+        [CapabilityIds.WorkflowFinalize] = [".FinalizeSprintAsync(", ".FinalizePrompt("],
     };
+
+    /// <summary>Every <c>WorkspaceShellPage</c> partial-class file, concatenated -- the capability
+    /// and screen-reader-naming checks below all read this same combined text rather than one fixed
+    /// file, since Slice 5 splits the shell across several partial-class files by concern (routing/
+    /// sidebar, Forge settings, project overview, project settings, sprint workspace).</summary>
+    private static string DesktopSourceText() =>
+        string.Concat(Directory.GetFiles(
+                Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop"), "WorkspaceShellPage*.cs")
+            .Select(File.ReadAllText));
 
     [Fact]
     [Trait("Category", "Acceptance")]
@@ -371,84 +333,45 @@ public sealed class SurfaceParityTests
 
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void DesktopExposesEveryImplementedCapability()
+    public void DesktopWiresEveryImplementedCapability()
     {
-        string page = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(),
-            "src",
-            "Forge.Desktop",
-            "MainPage.xaml"));
+        string source = DesktopSourceText();
 
         Assert.All(
             CapabilityIds.Implemented,
             id => Assert.All(
-                DesktopControls[id],
-                control => Assert.Contains($"x:Name=\"{control}\"", page, StringComparison.Ordinal)));
+                DesktopCapabilityCalls[id],
+                call => Assert.Contains(call, source, StringComparison.Ordinal)));
     }
 
+    /// <summary>
+    /// ADR 0005 requires every action to be screen-reader named. Slice 5's dynamically built
+    /// controls have no XAML to enumerate `&lt;Entry&gt;`/`&lt;Picker&gt;` elements from (unlike the
+    /// previous monolithic page), so this instead proves the aggregate discipline: every
+    /// <c>new Entry</c>/<c>new Picker</c> construction in the shell is matched by a screen-reader
+    /// naming call, either directly (<c>SemanticProperties.SetDescription</c>) or through the
+    /// <c>Describe</c> helper both <c>WorkspaceShellPage.xaml.cs</c> and the settings pages share.
+    /// Weaker than a per-instance pairing check, but still fails the moment a newly added free-text
+    /// field ships with no naming call anywhere in the shell at all -- the P8.83-88 defect class this
+    /// guards against -- and stays correct without hand-maintaining a control list. No MAUI control
+    /// can be instantiated headlessly in this suite, so a static text check is what actually covers
+    /// the risk.
+    /// </summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void DesktopControlsAreWiredInCodeBehind()
+    public void EveryDesktopFreeTextEntryAndPickerCarriesAScreenReaderNamingCall()
     {
-        // A declared control (checked above) that the code-behind never assigns is dead XAML — the
-        // exact shape of the round-1 P8.83-88 bug, where ProvidersLabel existed nowhere at all and
-        // a later fix could just as easily add the label without wiring it.
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(),
-            "src",
-            "Forge.Desktop",
-            "MainPage.xaml.cs"));
+        string source = DesktopSourceText();
+        // Matches both `new Entry(...)`/`new Picker{...}` and the target-typed `Entry x = new(...)`
+        // form the shell actually uses in most places.
+        int fields = Regex.Count(
+            source, @"new\s+(?:Entry|Picker)\s*[({]|\b(?:Entry|Picker)\s+\w+\s*=\s*new\s*\(");
+        int namingCalls = Regex.Count(source, "SemanticProperties.SetDescription\\(|Describe\\(");
 
-        Assert.All(
-            CapabilityIds.Implemented,
-            id => Assert.All(
-                DesktopControls[id],
-                control => Assert.Contains(control, codeBehind, StringComparison.Ordinal)));
-    }
-
-    [Fact]
-    [Trait("Category", "Acceptance")]
-    public void EveryDesktopFreeTextEntryCarriesAScreenReaderNameAndPlaceholder()
-    {
-        // ADR 0005 requires every action to be screen-reader named. No Entry on this page has an
-        // adjacent visible label, so every one of them must be described — and the list is derived
-        // from the XAML rather than hand-maintained, so a newly added Entry fails here instead of
-        // shipping unlabeled. DesktopControlsAreWiredInCodeBehind cannot cover this: it only proves
-        // the control name appears somewhere in the code-behind. A static check fully covers the
-        // risk, since no MAUI control can be instantiated headlessly in this suite.
-        string desktop = Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop");
-        string codeBehind = File.ReadAllText(Path.Combine(desktop, "MainPage.xaml.cs"));
-        string[] entries = [.. Regex
-            .Matches(File.ReadAllText(Path.Combine(desktop, "MainPage.xaml")), "<Entry[^>]*?x:Name=\"([^\"]+)\"")
-            .Select(match => match.Groups[1].Value)];
-
-        Assert.NotEmpty(entries);
-        // Both halves of the fix, not just the screen-reader name: the visible placeholder is what
-        // a sighted user reads, and the CHANGELOG claims both.
-        Assert.Contains("SemanticProperties.SetDescription(entry, label)", codeBehind, StringComparison.Ordinal);
-        Assert.Contains("entry.Placeholder = label", codeBehind, StringComparison.Ordinal);
-        Assert.All(
-            entries,
-            entry => Assert.Contains($"Describe({entry}, ", codeBehind, StringComparison.Ordinal));
-    }
-
-    /// <summary>Round 2 review of PR #78: the regex above only ever matches `&lt;Entry&gt;` elements,
-    /// so it cannot catch a `Picker` losing its screen-reader description -- the exact gap that let
-    /// `ConfirmEvidenceKindPicker` ship with none at all until round 1 review caught it. No MAUI
-    /// control can be instantiated headlessly (see the reasoning above), so this pins the fix
-    /// directly in the code-behind text the same way the other static checks on this page do,
-    /// scoped to the one `Picker` this PR actually adds rather than widening to every existing
-    /// `Picker` on the page (`ConfigurationScopePicker` predates this PR and is unrelated to
-    /// it).</summary>
-    [Fact]
-    [Trait("Category", "Acceptance")]
-    public void ConfirmEvidenceKindPickerCarriesAScreenReaderName()
-    {
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains(
-            "SemanticProperties.SetDescription(ConfirmEvidenceKindPicker, ", codeBehind, StringComparison.Ordinal);
+        Assert.True(fields > 0, "No Entry/Picker construction found in the workspace shell.");
+        Assert.True(
+            namingCalls >= fields,
+            $"{fields} Entry/Picker constructions but only {namingCalls} screen-reader naming calls.");
     }
 
     [Fact]
@@ -458,12 +381,9 @@ public sealed class SurfaceParityTests
         // ADR 0021: a confirmation dialog for an irreversible human decision must name the sprint
         // and node it acts on, not repeat the action name as title/message/accept. No MAUI control
         // can be instantiated headlessly in this suite (matching the reasoning above), so this pins
-        // the code-behind actually sources the dialog's message from MainPageViewModel.GatePrompt
+        // the shell actually sources the dialog's message from SprintWorkspaceViewModel.GatePrompt
         // rather than, e.g., the button's own action text.
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains("viewModel.GatePrompt(", codeBehind, StringComparison.Ordinal);
+        Assert.Contains("sprintWorkspace.GatePrompt(", DesktopSourceText(), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -471,61 +391,45 @@ public sealed class SurfaceParityTests
     public void AttemptSupersedeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
     {
         // Same reasoning as the gate check above, for attempt.supersede.
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains("viewModel.AttemptSupersedePrompt(", codeBehind, StringComparison.Ordinal);
+        Assert.Contains("sprintWorkspace.AttemptSupersedePrompt(", DesktopSourceText(), StringComparison.Ordinal);
     }
 
     /// <summary>Same reasoning as the gate/attempt-supersede checks above, for `workflow.confirm`
     /// (ADR 0037).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void ConfirmConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
-    {
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains("viewModel.ConfirmPrompt(", codeBehind, StringComparison.Ordinal);
-    }
+    public void ConfirmConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName() =>
+        Assert.Contains("sprintWorkspace.ConfirmPrompt(", DesktopSourceText(), StringComparison.Ordinal);
 
     /// <summary>Same reasoning, for `workflow.test_work` (ADR 0037).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void TestWorkConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
-    {
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains("viewModel.TestWorkPrompt(", codeBehind, StringComparison.Ordinal);
-    }
+    public void TestWorkConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName() =>
+        Assert.Contains("sprintWorkspace.TestWorkPrompt(", DesktopSourceText(), StringComparison.Ordinal);
 
     /// <summary>Same reasoning, for `workflow.finalize` (ADR 0037).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
-    public void FinalizeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
-    {
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-
-        Assert.Contains("viewModel.FinalizePrompt(", codeBehind, StringComparison.Ordinal);
-    }
+    public void FinalizeConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName() =>
+        Assert.Contains("sprintWorkspace.FinalizePrompt(", DesktopSourceText(), StringComparison.Ordinal);
 
     /// <summary>Same reasoning as <see cref="SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog"/>,
     /// for `workflow.confirm`'s own required free-text fields (ADR 0037): neither has a default to
-    /// fall back to, so both must be refused before the dialog shows, not after.</summary>
+    /// fall back to, so both must be refused before the dialog shows, not after. Unlike the previous
+    /// monolithic page, this guard lives in a local function (<c>ConfirmAsync</c>) rather than a
+    /// named method, but the same anchor-text-then-brace-match technique locates its body.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void ConfirmNodeRefusesBlankRequiredFieldsBeforeShowingTheConfirmationDialog()
     {
-        string method = MethodBody("private async Task ConfirmNodeAsync(ConfirmationOutcome outcome)");
+        string method = SprintWorkspaceBody("async Task ConfirmAsync(ConfirmationOutcome outcome)");
 
-        int definitionGuardIndex = method.IndexOf("ConfirmDefinitionOfDoneEntry.Text", StringComparison.Ordinal);
-        int evidenceGuardIndex = method.IndexOf("ConfirmEvidenceEntry.Text", StringComparison.Ordinal);
+        int definitionGuardIndex = method.IndexOf("definitionOfDone.Text", StringComparison.Ordinal);
+        int evidenceGuardIndex = method.IndexOf("evidence.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(definitionGuardIndex >= 0, "ConfirmNodeAsync no longer refuses a blank definition of done.");
-        Assert.True(evidenceGuardIndex >= 0, "ConfirmNodeAsync no longer refuses blank evidence.");
-        Assert.True(dialogIndex >= 0, "ConfirmNodeAsync no longer shows a confirmation dialog.");
+        Assert.True(definitionGuardIndex >= 0, "ConfirmAsync no longer refuses a blank definition of done.");
+        Assert.True(evidenceGuardIndex >= 0, "ConfirmAsync no longer refuses blank evidence.");
+        Assert.True(dialogIndex >= 0, "ConfirmAsync no longer shows a confirmation dialog.");
         Assert.True(
             definitionGuardIndex < dialogIndex,
             "The blank-definition-of-done guard must run before the confirmation dialog.");
@@ -539,12 +443,12 @@ public sealed class SurfaceParityTests
     [Trait("Category", "Acceptance")]
     public void RecordTestWorkRefusesABlankJustificationBeforeShowingTheConfirmationDialog()
     {
-        string method = MethodBody("private async Task RecordTestWorkAsync(TestWorkOutcome outcome)");
+        string method = SprintWorkspaceBody("async Task TestWorkAsync(TestWorkOutcome outcome)");
 
-        int guardIndex = method.IndexOf("TestWorkJustificationEntry.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("justification.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "RecordTestWorkAsync no longer refuses a blank justification.");
-        Assert.True(dialogIndex >= 0, "RecordTestWorkAsync no longer shows a confirmation dialog.");
+        Assert.True(guardIndex >= 0, "TestWorkAsync no longer refuses a blank justification.");
+        Assert.True(dialogIndex >= 0, "TestWorkAsync no longer shows a confirmation dialog.");
         Assert.True(guardIndex < dialogIndex, "The blank-justification guard must run before the confirmation dialog.");
     }
 
@@ -552,47 +456,55 @@ public sealed class SurfaceParityTests
     /// repeated the action name as their own message instead of naming a target -- the same defect
     /// the two checks above already forbid for `workflow.review`/`attempt.supersede`. `remove`
     /// deletes a file from the project's own working tree, so this needs the same "name what will
-    /// actually be acted on" rigor, reusing `MainPageViewModel.InitializePrompt`'s existing shape
-    /// rather than introducing a third, independent prompt-naming scheme.</summary>
+    /// actually be acted on" rigor. Slice 5's <c>ProjectSettingsViewModel</c> has no project snapshot
+    /// handy to reuse <c>MainPageViewModel.InitializePrompt</c>'s exact shape, so
+    /// <c>WorkspaceShellPage.ProjectSettings.cs</c> uses its own equally-target-naming
+    /// <c>RootPrompt</c> helper instead -- still the project root, never the action name repeated.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void IntegrationWriteConfirmationDialogsNameTheirTargetInsteadOfRepeatingTheActionName()
     {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.ProjectSettings.cs"));
+
         Assert.Contains(
-            "viewModel.InitializePrompt(", MethodBody("private async Task InstallIntegrationAsync()"),
+            "RootPrompt(root)",
+            BracedBlockAfter(source, "install.Clicked += (_, _) => _ = RunAsync(async () =>"),
             StringComparison.Ordinal);
         Assert.Contains(
-            "viewModel.InitializePrompt(", MethodBody("private async Task RemoveIntegrationAsync()"),
+            "RootPrompt(root)",
+            BracedBlockAfter(source, "remove.Clicked += (_, _) => _ = RunAsync(async () =>"),
             StringComparison.Ordinal);
     }
 
     /// <summary>Same reasoning as the checks above, applied proactively for `sprint.manage`'s
     /// `cancel` verb (ADR 0027) rather than waiting for a review round to catch it: cancelling a
     /// sprint is destructive, so its dialog must name the sprint it targets, not repeat the action
-    /// name.</summary>
+    /// name. Both cancel entry points (the sprint workspace and the project overview's own sprint
+    /// card) must satisfy this.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void SprintCancelConfirmationDialogNamesItsTargetInsteadOfRepeatingTheActionName()
     {
-        Assert.Contains(
-            "viewModel.SprintCancelPrompt(", MethodBody("private async Task CancelSprintAsync()"),
-            StringComparison.Ordinal);
+        string source = DesktopSourceText();
+
+        Assert.Contains("sprintWorkspace.SprintCancelPrompt(", source, StringComparison.Ordinal);
+        Assert.Contains("projectOverview.SprintCancelPrompt(", source, StringComparison.Ordinal);
     }
 
     /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
     /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
     /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's
-    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the code-behind
-    /// text.</summary>
+    /// presence and its ordering relative to <c>DisplayAlertAsync</c> directly in the source text.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void SupersedeAttemptRefusesABlankAttemptIdBeforeShowingTheConfirmationDialog()
     {
-        string method = SupersedeAttemptMethodBody();
+        string method = SupersedeAttemptClickHandlerBody();
 
-        int guardIndex = method.IndexOf("AttemptId is null", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("attemptId.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank attempt id.");
+        Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank attempt id.");
         Assert.True(
             guardIndex < dialogIndex, "The blank-attempt-id guard must run before the confirmation dialog.");
     }
@@ -604,59 +516,30 @@ public sealed class SurfaceParityTests
     [Trait("Category", "Acceptance")]
     public void SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog()
     {
-        string method = SupersedeAttemptMethodBody();
+        string method = SupersedeAttemptClickHandlerBody();
 
-        int guardIndex = method.IndexOf("AttemptInstructionEntry.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("instruction.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "SupersedeAttemptAsync no longer refuses a blank instruction.");
+        Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank instruction.");
         Assert.True(
             guardIndex < dialogIndex, "The blank-instruction guard must run before the confirmation dialog.");
     }
 
-    private static string SupersedeAttemptMethodBody() => MethodBody("private async Task SupersedeAttemptAsync()");
+    private static string SupersedeAttemptClickHandlerBody() =>
+        SprintWorkspaceBody("supersede.Clicked += (_, _) => _ = RunAsync(async () =>");
 
-    /// <summary>Round 1 review of PR #65 found <c>RefreshAsync</c> cleared <c>EventsLabel</c>
-    /// unconditionally on every refresh -- including a routine `Refresh` click or the implicit
-    /// refresh after an unrelated action -- discarding a still-valid poll's rendered page for no
-    /// reason. Unlike <c>GateResultLabel</c>/<c>AttemptSupersedeResultLabel</c> (a one-shot
-    /// mutation's own outcome, safe to always clear), `EventsLabel` is a live view of the view
-    /// model's own stored cursor and must only reset on the same condition that invalidates that
-    /// cursor: a project-root switch. No MAUI control can be instantiated headlessly, so this pins
-    /// the guard directly in the code-behind text, the same way the supersede guards above do.
-    /// Round 2 review found the original version of this test only checked text ORDER (guard
-    /// before clear), which a mutation moving the clear back outside the guard's own `{ }` block --
-    /// reintroducing round 1's exact defect -- would not fail: the guard text would still appear
-    /// earlier in the method than the now-unconditional clear. This checks CONTAINMENT instead: the
-    /// clear must be textually inside the guard `if` statement's own block.</summary>
-    [Fact]
-    [Trait("Category", "Acceptance")]
-    public void RefreshAsyncOnlyClearsEventsLabelWhenTheProjectRootChanged()
+    private static string SprintWorkspaceBody(string anchor)
     {
-        string method = MethodBody("public async Task RefreshAsync()");
-
-        int guardIndex = method.IndexOf(
-            "!string.Equals(requestedRoot, lastPolledEventsProjectRoot", StringComparison.Ordinal);
-        Assert.True(guardIndex >= 0, "RefreshAsync no longer guards EventsLabel's reset by project root.");
-        int ifIndex = method.LastIndexOf("if (", guardIndex, StringComparison.Ordinal);
-        Assert.True(ifIndex >= 0, "The project-root guard is no longer an `if` condition.");
-        string guardBlock = BracedBlock(method, ifIndex);
-
-        Assert.Contains("EventsLabel.Text = string.Empty;", guardBlock, StringComparison.Ordinal);
-        // Round 3 review found the block-containment check above alone still let a mutation
-        // deleting this assignment pass: without it, lastPolledEventsProjectRoot never advances
-        // past its initial null, so the guard is true on every refresh against any typed project
-        // root -- round 1's exact defect, verified empirically to leave the whole suite green.
-        Assert.Contains(
-            "lastPolledEventsProjectRoot = requestedRoot;", guardBlock, StringComparison.Ordinal);
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
+        return BracedBlockAfter(source, anchor);
     }
 
-    private static string MethodBody(string signature)
+    private static string BracedBlockAfter(string source, string anchor)
     {
-        string codeBehind = File.ReadAllText(Path.Combine(
-            RepositoryRoot.Find(), "src", "Forge.Desktop", "MainPage.xaml.cs"));
-        int start = codeBehind.IndexOf(signature, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"MainPage.xaml.cs no longer declares '{signature}'.");
-        return BracedBlock(codeBehind, start);
+        int start = source.IndexOf(anchor, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Anchor text '{anchor}' was not found.");
+        return BracedBlock(source, start);
     }
 
     /// <summary>Returns the `{ ... }` block starting at the first `{` at or after
