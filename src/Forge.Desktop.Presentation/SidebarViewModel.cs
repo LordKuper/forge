@@ -32,14 +32,18 @@ public sealed record SidebarProjectItem(
     int HistoryCount,
     string AccessibleName);
 
-/// <summary>Plan section 4.1's bottom status row. <see cref="QuotaStatusText"/> is always a
-/// deliberately unknown/"not yet available" placeholder in this slice (Slice 7 owns real quota data;
-/// plan: "render... unknown, never inferred") -- never a fabricated number.</summary>
+/// <summary>Plan section 4.1's bottom status row. <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
+/// report the worst-case state across every known provider's <see cref="ProviderQuotaSnapshot"/>
+/// (<see cref="Forge.Localization.SurfaceFormatting.QuotaStatusSummary"/>). ADR 0052 found no
+/// provider integration in this codebase exposes a verified quota signal, so today this always
+/// resolves to the "unknown" text -- a truthful report, never a fabricated number (plan: "render...
+/// unknown, never inferred").</summary>
 public sealed record SidebarStatusRow(
     string ProviderSummaryText,
     string ProviderAccessibleText,
     bool AnyKnownProviderUnavailable,
-    string QuotaStatusText);
+    string QuotaStatusText,
+    string QuotaAccessibleText);
 
 public sealed record SidebarSnapshot(
     IReadOnlyList<SidebarProjectItem> Projects,
@@ -107,7 +111,13 @@ public sealed class SidebarViewModel(
                 AccessibleProjectName(displayName, summary)));
         }
 
-        return new(projects, BuildStatusRow(knownProviders.Values));
+        // Projects the ProviderHealthEntry set the loop above already collected (each from that
+        // project's own GetWorkspaceSummaryAsync toolchain check) rather than calling
+        // GetProviderQuotaStatusAsync, which would issue a second, uncached, redundant
+        // ProviderToolchainManager.CheckAsync probe on every render for a value ADR 0052 guarantees
+        // is constant regardless (PR #100 review finding 1).
+        IReadOnlyList<ProviderQuotaSnapshot> quota = application.ProjectProviderQuota(knownProviders.Values);
+        return new(projects, BuildStatusRow(knownProviders.Values, quota));
     }
 
     public async Task<AddProjectResult> AddProjectAsync(string? manualPath, CancellationToken cancellationToken)
@@ -179,7 +189,8 @@ public sealed class SidebarViewModel(
     /// <summary>Same finding-8 reasoning as <see cref="AccessibleProjectName"/>: both the visible
     /// status-row text and its accessible name are now resolved templates instead of hardcoded
     /// English literals.</summary>
-    private SidebarStatusRow BuildStatusRow(IEnumerable<ProviderHealthEntry> providers)
+    private SidebarStatusRow BuildStatusRow(
+        IEnumerable<ProviderHealthEntry> providers, IReadOnlyList<ProviderQuotaSnapshot> quota)
     {
         List<ProviderHealthEntry> known = [.. providers];
         int ready = known.Count(provider => provider.Enabled && provider.State == ProviderState.Ready);
@@ -195,6 +206,7 @@ public sealed class SidebarViewModel(
             ready,
             enabled);
         bool anyUnavailable = enabled > ready;
-        return new(summaryText, accessible, anyUnavailable, text.Resolve(MessageKeys.QuotaStatusUnavailable));
+        (string quotaText, string quotaAccessible) = SurfaceFormatting.QuotaStatusSummary(text.Current, quota);
+        return new(summaryText, accessible, anyUnavailable, quotaText, quotaAccessible);
     }
 }

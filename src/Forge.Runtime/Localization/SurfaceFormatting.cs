@@ -46,6 +46,60 @@ public static class SurfaceFormatting
                 $"{entry.Version ?? "-"} {updateAvailable} {Machine(entry.Authentication)} {entry.DiagnosticCode}");
     }
 
+    /// <summary>One provider's quota row, shared by every surface that lists quota status (`forge
+    /// models quota`) so the `provider-quota-parity` capability can never drift between them --
+    /// mirrors <see cref="ProviderRow"/>'s shape and, like it, is never localized (CLI machine
+    /// output). See ADR 0052: every row currently projects
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset
+    /// time, since no provider integration in this codebase exposes a verified quota signal.</summary>
+    public static string ProviderQuotaRow(ProviderQuotaSnapshot entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        string remaining = entry.RemainingAmount is { } amount
+            ? string.Create(CultureInfo.InvariantCulture, $"{amount}{entry.Unit ?? string.Empty}")
+            : "-";
+        string resetAt = entry.ResetAt is { } reset
+            ? reset.ToString("O", CultureInfo.InvariantCulture)
+            : "-";
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"{entry.ProviderId} {entry.Model ?? "-"} {Machine(entry.Availability)} {remaining} {resetAt} " +
+                $"{entry.DiagnosticCode}");
+    }
+
+    /// <summary>The sidebar/status-row aggregate across every provider's quota reading (plan 12.6:
+    /// the global status row "distinguishes... quota, unknown quota... and stale data"). Reports the
+    /// single most severe state present (<see cref="ProviderQuotaAggregation.Worst"/>) as one
+    /// localized sentence plus its accessible counterpart, so a degraded provider's quota is never
+    /// communicated by color alone and is never hidden behind an otherwise-unremarkable majority.
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no verified signal yet") and
+    /// <see cref="ProviderQuotaAvailability.Unavailable"/> ("quota is exhausted") are easy to
+    /// conflate by name -- every named member below has its own explicit arm (no arm reached by more
+    /// than one member), so this codebase's own single meeting point for the two vocabularies can no
+    /// longer hide a mismatch behind a `_` wildcard. C# cannot make an enum switch expression
+    /// exhaustive against a genuinely new named member at compile time (the CLR does not treat enums
+    /// as closed types), so the remaining `_` arm throws instead of silently falling back to any one
+    /// of the arms above -- a future <see cref="ProviderQuotaAvailability"/> member added without a
+    /// matching arm here fails loudly at first use, not silently (PR #100 review finding 5).</summary>
+    public static (string Text, string Accessible) QuotaStatusSummary(
+        SurfaceText text, IReadOnlyList<ProviderQuotaSnapshot> snapshots)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentNullException.ThrowIfNull(snapshots);
+        ProviderQuotaAvailability worst = ProviderQuotaAggregation.Worst(snapshots);
+        (string textKey, string accessibleKey) = worst switch
+        {
+            ProviderQuotaAvailability.Unknown => (MessageKeys.QuotaStatusUnknown, MessageKeys.QuotaStatusUnknownAccessible),
+            ProviderQuotaAvailability.Ready => (MessageKeys.QuotaStatusReady, MessageKeys.QuotaStatusReadyAccessible),
+            ProviderQuotaAvailability.Limited => (MessageKeys.QuotaStatusLimited, MessageKeys.QuotaStatusLimitedAccessible),
+            ProviderQuotaAvailability.Unavailable => (MessageKeys.QuotaStatusDepleted, MessageKeys.QuotaStatusDepletedAccessible),
+            ProviderQuotaAvailability.Stale => (MessageKeys.QuotaStatusStale, MessageKeys.QuotaStatusStaleAccessible),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(snapshots), worst, "Unmapped ProviderQuotaAvailability value."),
+        };
+        return (text.Resolve(textKey), text.Resolve(accessibleKey));
+    }
+
     /// <summary>One provider's row for `forge integration skill generate`'s preview: provider id,
     /// target path, and whether installing would write/no-op/refuse. Private -- reached only
     /// through <see cref="IntegrationInspectionLines"/>, the shared, tested no-drift surface (ADR

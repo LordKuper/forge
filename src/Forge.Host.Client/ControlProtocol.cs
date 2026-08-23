@@ -172,6 +172,11 @@ public sealed record GetSprintTimelineRequest(Guid SprintId, string? Cursor);
 /// </summary>
 public sealed record GetAvailableActionsRequest(Guid? SprintId);
 
+/// <summary><see cref="ControlProtocol.GetProviderQuotaStatusKind"/>'s request payload (plan section
+/// 6.5, Slice 7). Empty, like <see cref="GetWorkspaceSummaryRequest"/>: quota is a toolchain-wide
+/// reading with no sprint/project-specific parameter.</summary>
+public sealed record GetProviderQuotaStatusRequest;
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -295,6 +300,13 @@ public static class ControlProtocol
     /// 0043/0049). Request payload: a <see cref="GetAvailableActionsRequest"/>. Response payload:
     /// <c>{"actions": [...]}</c>.</summary>
     public const string GetAvailableActionsKind = "get_available_actions";
+
+    /// <summary>Plan section 6.5's reserved `provider.quota_status` query (Slice 7, ADR 0043/0052):
+    /// every enabled and registered-but-disabled provider's quota reading. Request payload: a
+    /// <see cref="GetProviderQuotaStatusRequest"/>. Response payload: a `ProviderQuotaStatus`
+    /// instance. ADR 0052 found no provider integration in this codebase exposes a verified quota
+    /// signal, so every reading is currently `unknown`.</summary>
+    public const string GetProviderQuotaStatusKind = "get_provider_quota_status";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

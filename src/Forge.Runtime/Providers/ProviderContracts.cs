@@ -88,6 +88,12 @@ public static class ProviderDiagnosticCodes
 
     public const string QuotaExceeded = "provider_quota_exceeded";
 
+    /// <summary>ADR 0052: no provider integration in this codebase exposes a verified account/model
+    /// quota signal today, so every <see cref="ProviderQuotaSnapshot"/> this codebase produces
+    /// carries this code -- distinct from <see cref="QuotaExceeded"/>, which classifies an actual
+    /// run failure's stderr text, not a queried quota reading.</summary>
+    public const string QuotaUnknown = "provider_quota_unknown";
+
     public const string RunPolicyViolation = "provider_run_policy_violation";
 
     public const string RunTransientFailure = "provider_run_transient_failure";

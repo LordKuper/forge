@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.9.0",
+  "contract_version": "1.10.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -255,10 +255,10 @@
       "contract": "GetProviderQuotaStatus",
       "events": ["ProviderToolchainChanged"],
       "cli": "forge models quota [--json]",
-      "desktop": "Providers/QuotaStatus",
+      "desktop": "Sidebar/QuotaStatus",
       "permission": "read",
       "acceptance": "provider-quota-parity",
-      "note": "Reserved, not implemented on either surface (plan section 6.5, Slice 7). Distinct from `provider.health`: reports verified account/model quota, never sprint retry budget. Not yet in `CapabilityIds.Implemented`."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 6.5, Slice 7, ADR 0043/0052). Distinct from `provider.health`: reports verified account/model quota, never sprint retry budget. ADR 0052's investigation found no provider integration in this codebase (Claude Code, Codex) exposes a verified quota signal, so every reading currently projects `unknown`, truthfully -- see ADR 0052. Not yet in `CapabilityIds.Implemented`, matching ADR 0049/0050/0051's own precedent for `workspace.summary`/`sprint.timeline`/`workspace.available_actions`: promoting it is a separable follow-up (widening `SurfaceParityTests.DesktopControls`'s fixed dictionary) that does not gate this capability's own functional correctness, since Desktop already consumes it through the same local, in-process call every other reserved read model uses."
     }
   ]
 }

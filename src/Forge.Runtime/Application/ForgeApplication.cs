@@ -682,6 +682,31 @@ public sealed class ForgeApplication(
     public IReadOnlyList<ProviderHealthEntry> ProjectProviderHealth(ProviderToolchainStatus status) =>
         ProviderHealthProjector.Project(status, providerCatalog);
 
+    /// <summary>Plan section 6.5's reserved `provider.quota_status` query (ADR 0043/0052): every
+    /// enabled and registered-but-disabled provider's quota reading. Read-only and offline, like
+    /// <see cref="GetProviderHealthAsync"/> -- but, like that method, it issues its own fresh,
+    /// uncached <see cref="IProviderToolchainManager.CheckAsync"/> probe (a `--version` child process
+    /// plus an authentication probe per enabled provider); it is not "cheap" to call repeatedly. For
+    /// `forge models quota`, which has not already checked the toolchain this invocation, that cost
+    /// is the whole point. A caller that already holds a <see cref="ProviderHealthEntry"/> set from
+    /// an earlier probe in the same render pass (e.g. <c>SidebarViewModel</c>, which gets one
+    /// from <see cref="GetWorkspaceSummaryAsync"/> per project) must call
+    /// <see cref="ProjectProviderQuota"/> instead of this method, to avoid a redundant second probe
+    /// for a value ADR 0052 guarantees is constant (`Unknown`) regardless (PR #100 review finding 1).</summary>
+    public async Task<IReadOnlyList<ProviderQuotaSnapshot>> GetProviderQuotaStatusAsync(CancellationToken cancellationToken)
+    {
+        ProviderToolchainStatus status = await providerToolchain.CheckAsync(cancellationToken).ConfigureAwait(false);
+        return ProviderQuotaProjector.Project(status, providerCatalog, clock.UtcNow);
+    }
+
+    /// <summary>Projects an already-computed <see cref="ProviderHealthEntry"/> set onto the quota
+    /// contract without any new toolchain probe -- the counterpart to
+    /// <see cref="ProjectProviderHealth"/> for a caller that already holds provider health from
+    /// earlier in the same render pass and must not pay for
+    /// <see cref="GetProviderQuotaStatusAsync"/>'s own fresh probe again (PR #100 review finding 1).</summary>
+    public IReadOnlyList<ProviderQuotaSnapshot> ProjectProviderQuota(IReadOnlyCollection<ProviderHealthEntry> providers) =>
+        ProviderQuotaProjector.Project(providers, providerCatalog, clock.UtcNow);
+
     /// <summary>Quarantines unreadable configuration so a failed startup can reach a usable state.</summary>
     public async Task<RecoverStartupResult> RecoverStartupAsync(
         string? projectRoot,

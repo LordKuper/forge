@@ -2,6 +2,29 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.69.0
+
+### Added
+
+- Added `forge models quota [--json]` and a Desktop sidebar quota status row, both truthfully
+  reporting `unknown` for every provider today: neither Claude Code's nor Codex's CLI exposes a
+  verified account/model quota signal (see ADR 0052). The full `ready`/`limited`/`unavailable`/
+  `unknown`/`stale` state set is wired end to end with distinct text and an accessible name for
+  every state, so a future provider that does publish real quota data needs no rendering changes.
+  Quota is never inferred from a provider's own retry/rate-limit failures, and a sprint's retry
+  budget is never presented as account quota.
+
+### Fixed
+
+- The Desktop sidebar's provider-quota status label now has a screen-reader accessible name; it
+  previously showed only visible text.
+- `forge models quota` now writes its worst-case diagnostic code to the diagnostics channel, like
+  every other query command (e.g. `forge next`); it previously exited `0` without ever emitting a
+  machine-readable code, leaving scripted callers with only the human-readable row text.
+- The Desktop sidebar no longer issues a second, uncached provider-toolchain probe (spawning extra
+  `--version`/authentication child processes) to compute the quota row on every render; it now
+  reuses the toolchain check the same render already performed.
+
 ## v0.68.0
 
 ### Added
