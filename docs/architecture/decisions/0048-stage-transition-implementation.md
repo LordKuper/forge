@@ -76,6 +76,18 @@ node. Direction needs no rank comparison at all: a target whose own `NodeState` 
 still `pending`/`ready` is `advance`; the frontier node itself is `same`. This generalizes correctly
 to a parallel DAG without guessing at an ordering it does not have.
 
+### The finding-severity prerequisite reuses the completion gate's own binary rule, not a new policy
+
+ADR 0046's category 5 ("no unresolved finding violates the target stage's severity policy") reads as
+if a per-stage severity threshold exists to check against. None does: the only finding policy this
+codebase has ever had is `SprintScheduler.EvaluateCompletionAsync`'s binary rule — any `Open` finding
+blocks, regardless of severity; `Resolved`/`Accepted`/`Dismissed` never do.
+`StagePrerequisiteIds.NoBlockingFindings` reuses exactly that rule (extended only to exclude
+superseded findings), rather than inventing a new per-target-stage severity-threshold policy this
+slice would then own alone with no other caller. Introducing a real per-severity gate belongs to
+whatever future work first needs one, not to a prerequisite evaluator whose job is to reuse existing
+policy, not author new policy.
+
 ### Advance's skip-ahead reuses `SprintScheduler.SkipNodeAsync`, gated on the frozen `Optional` flag
 
 `NodeDefinition.Optional` (new, default `false`, additive) is the plan's own "explicitly optional in

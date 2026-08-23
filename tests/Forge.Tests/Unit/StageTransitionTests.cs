@@ -277,6 +277,43 @@ public sealed class StageTransitionTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task RewindWithoutABoundedReasonIsRejectedWithoutSideEffects()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId =
+            await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Rewind, assessment.Direction);
+
+        MoveStageResult withoutReason = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            "   ", true, Guid.NewGuid(), cancellationToken);
+        Assert.False(withoutReason.Succeeded);
+        Assert.Equal(DiagnosticCodes.StageTransitionReasonRequired, withoutReason.DiagnosticCode);
+
+        MoveStageResult unconfirmed = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            "a real reason", false, Guid.NewGuid(), cancellationToken);
+        Assert.False(unconfirmed.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfirmationRequired, unconfirmed.DiagnosticCode);
+
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(StageRevision.Initial, final.Sprint.Revision);
+        Assert.Equal(NodeState.Succeeded, final.Nodes["a"].State);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task ReplayingTheSameIdempotencyKeyNeverCreatesASecondRevision()
     {
         using TestEnvironment environment = await InitializedAsync();
