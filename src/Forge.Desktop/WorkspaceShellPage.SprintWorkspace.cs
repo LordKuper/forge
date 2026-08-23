@@ -21,7 +21,23 @@ public partial class WorkspaceShellPage
 {
     private async Task RenderSprintWorkspaceAsync(string root, Guid sprintId)
     {
+        // Declared before RefreshSnapshotAsync (PR #98 review finding 6) so it can clear every
+        // one-shot outcome label on every refresh, matching the deleted MainPage.RefreshAsync's own
+        // deliberate behavior: a prior decision's outcome (a gate approval, a supersession, a
+        // confirm/test-work/finalize result, a lifecycle action, or a stale events page) must never
+        // survive into an unrelated later refresh and read as though it still describes what is now
+        // on screen. Each action re-assigns its own label immediately after calling
+        // RefreshSnapshotAsync, so the decision's own outcome still shows correctly right after
+        // making it -- only a *different*, later refresh clears it.
         Label snapshotLabel = new();
+        Label gateResult = new();
+        Label supersedeResult = new();
+        Label confirmResult = new();
+        Label testWorkResult = new();
+        Label finalizeResult = new();
+        Label lifecycleResult = new();
+        Label events = new();
+
         async Task RefreshSnapshotAsync()
         {
             MainPageSnapshot snapshot = await sprintWorkspace.RefreshAsync(root, sprintId, CancellationToken.None)
@@ -30,6 +46,13 @@ public partial class WorkspaceShellPage
                 Environment.NewLine,
                 snapshot.StatusText, snapshot.ProjectStateText, snapshot.SprintsText, snapshot.SprintDetailsText,
                 snapshot.SuggestedActionsText, snapshot.DiagnosticsText);
+            gateResult.Text = string.Empty;
+            supersedeResult.Text = string.Empty;
+            confirmResult.Text = string.Empty;
+            testWorkResult.Text = string.Empty;
+            finalizeResult.Text = string.Empty;
+            lifecycleResult.Text = string.Empty;
+            events.Text = string.Empty;
         }
 
         await RefreshSnapshotAsync().ConfigureAwait(true);
@@ -38,7 +61,6 @@ public partial class WorkspaceShellPage
         Entry nodeId = Describe(new Entry(), text.Resolve(MessageKeys.GateNodeIdLabel));
         Button approve = new() { Text = text.Resolve(MessageKeys.GateApproveAction) };
         Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction) };
-        Label gateResult = new();
         async Task ResolveGateAsync(bool approved)
         {
             string action = text.Resolve(approved ? MessageKeys.GateApproveAction : MessageKeys.GateRejectAction);
@@ -51,10 +73,17 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            gateResult.Text = await sprintWorkspace
-                .ResolveGateAsync(root, sprintId, nodeId.Text, approved, true, CancellationToken.None)
+            string message = await sprintWorkspace
+                // PR #98 review finding 9: pass the dialog's own answer, not a literal `true` --
+                // the guard above already returns before this line when it is false, but the
+                // literal removed all local evidence that the argument came from a real dialog.
+                .ResolveGateAsync(root, sprintId, nodeId.Text, approved, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
+            // After RefreshSnapshotAsync, which clears gateResult as part of its own one-shot-label
+            // reset (finding 6), so this decision's own outcome is what the user sees, not a stale
+            // value that reset just wiped.
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            gateResult.Text = message;
         }
 
         approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
@@ -66,7 +95,6 @@ public partial class WorkspaceShellPage
         Entry attemptId = Describe(new Entry(), text.Resolve(MessageKeys.AttemptIdLabel));
         Entry instruction = Describe(new Entry(), text.Resolve(MessageKeys.AttemptInstructionLabel));
         Button supersede = new() { Text = text.Resolve(MessageKeys.AttemptSupersedeAction) };
-        Label supersedeResult = new();
         supersede.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             if (string.IsNullOrWhiteSpace(attemptId.Text))
@@ -92,10 +120,13 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            supersedeResult.Text = await sprintWorkspace
-                .SupersedeAttemptAsync(root, sprintId, attemptId.Text, instruction.Text, true, CancellationToken.None)
+            string message = await sprintWorkspace
+                // PR #98 review finding 9: the dialog's own answer, not a literal `true`.
+                .SupersedeAttemptAsync(root, sprintId, attemptId.Text, instruction.Text, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
+            // Same ordering reasoning as ResolveGateAsync above (finding 6).
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            supersedeResult.Text = message;
         });
         ContentHost.Children.Add(attemptId);
         ContentHost.Children.Add(instruction);
@@ -110,7 +141,6 @@ public partial class WorkspaceShellPage
         SemanticProperties.SetDescription(evidenceKind, text.Resolve(MessageKeys.ConfirmEvidenceKindLabel));
         Button confirmed = new() { Text = text.Resolve(MessageKeys.ConfirmConfirmedAction) };
         Button notConfirmed = new() { Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction) };
-        Label confirmResult = new();
         async Task ConfirmAsync(ConfirmationOutcome outcome)
         {
             if (string.IsNullOrWhiteSpace(definitionOfDone.Text))
@@ -139,12 +169,15 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            confirmResult.Text = await sprintWorkspace
+            string message = await sprintWorkspace
+                // PR #98 review finding 9: the dialog's own answer, not a literal `true`.
                 .ConfirmNodeAsync(
                     root, sprintId, confirmNodeId.Text, outcome, definitionOfDone.Text,
-                    evidenceKind.SelectedItem as string, evidence.Text, true, CancellationToken.None)
+                    evidenceKind.SelectedItem as string, evidence.Text, dialogConfirmed, CancellationToken.None)
                 .ConfigureAwait(true);
+            // Same ordering reasoning as ResolveGateAsync above (finding 6).
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            confirmResult.Text = message;
         }
 
         confirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.Confirmed));
@@ -160,7 +193,6 @@ public partial class WorkspaceShellPage
         Entry justification = Describe(new Entry(), text.Resolve(MessageKeys.TestWorkJustificationLabel));
         Button added = new() { Text = text.Resolve(MessageKeys.TestWorkAddedAction) };
         Button noNewTests = new() { Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction) };
-        Label testWorkResult = new();
         async Task TestWorkAsync(TestWorkOutcome outcome)
         {
             if (string.IsNullOrWhiteSpace(justification.Text))
@@ -182,10 +214,15 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            testWorkResult.Text = await sprintWorkspace
-                .RecordTestWorkAsync(root, sprintId, testWorkNodeId.Text, outcome, justification.Text, true, CancellationToken.None)
+            string message = await sprintWorkspace
+                // PR #98 review finding 9: the dialog's own answer, not a literal `true`.
+                .RecordTestWorkAsync(
+                    root, sprintId, testWorkNodeId.Text, outcome, justification.Text, dialogConfirmed,
+                    CancellationToken.None)
                 .ConfigureAwait(true);
+            // Same ordering reasoning as ResolveGateAsync above (finding 6).
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            testWorkResult.Text = message;
         }
 
         added.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.TestsAdded));
@@ -197,7 +234,6 @@ public partial class WorkspaceShellPage
 
         Entry finalizeNodeId = Describe(new Entry(), text.Resolve(MessageKeys.FinalizeNodeIdLabel));
         Button finalize = new() { Text = text.Resolve(MessageKeys.FinalizeAction) };
-        Label finalizeResult = new();
         finalize.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.FinalizeAction);
@@ -211,17 +247,19 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            finalizeResult.Text = await sprintWorkspace
-                .FinalizeSprintAsync(root, sprintId, finalizeNodeId.Text, true, CancellationToken.None)
+            string message = await sprintWorkspace
+                // PR #98 review finding 9: the dialog's own answer, not a literal `true`.
+                .FinalizeSprintAsync(root, sprintId, finalizeNodeId.Text, dialogConfirmed, CancellationToken.None)
                 .ConfigureAwait(true);
+            // Same ordering reasoning as ResolveGateAsync above (finding 6).
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            finalizeResult.Text = message;
         });
         ContentHost.Children.Add(finalizeNodeId);
         ContentHost.Children.Add(finalize);
         ContentHost.Children.Add(finalizeResult);
 
         Button poll = new() { Text = text.Resolve(MessageKeys.EventsPollAction) };
-        Label events = new();
         poll.Clicked += (_, _) => _ = RunAsync(async () =>
             events.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));
         ContentHost.Children.Add(poll);
@@ -230,18 +268,20 @@ public partial class WorkspaceShellPage
         Button run = new() { Text = text.Resolve(MessageKeys.SprintRunAction) };
         Button resume = new() { Text = text.Resolve(MessageKeys.SprintResumeAction) };
         Button cancel = new() { Text = text.Resolve(MessageKeys.SprintCancelAction) };
-        Label lifecycleResult = new();
         run.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            lifecycleResult.Text = await sprintWorkspace.RunSprintAsync(root, sprintId, CancellationToken.None)
+            string message = await sprintWorkspace.RunSprintAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
+            // Same ordering reasoning as ResolveGateAsync above (finding 6).
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            lifecycleResult.Text = message;
         });
         resume.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            lifecycleResult.Text = await sprintWorkspace.ResumeSprintAsync(root, sprintId, CancellationToken.None)
+            string message = await sprintWorkspace.ResumeSprintAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            lifecycleResult.Text = message;
         });
         cancel.Clicked += (_, _) => _ = RunAsync(async () =>
         {
@@ -249,10 +289,11 @@ public partial class WorkspaceShellPage
             bool dialogConfirmed = await DisplayAlertAsync(
                     action, sprintWorkspace.SprintCancelPrompt(sprintId), action, text.Resolve(MessageKeys.CancelAction))
                 .ConfigureAwait(true);
-            lifecycleResult.Text = await sprintWorkspace
+            string message = await sprintWorkspace
                 .CancelSprintAsync(root, sprintId, dialogConfirmed, CancellationToken.None)
                 .ConfigureAwait(true);
             await RefreshSnapshotAsync().ConfigureAwait(true);
+            lifecycleResult.Text = message;
         });
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { run, resume, cancel } });
         ContentHost.Children.Add(lifecycleResult);

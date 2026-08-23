@@ -164,21 +164,36 @@ public sealed class SidebarViewModel(
         _ => MessageKeys.NotificationAwaitingHumanTitle,
     };
 
-    private static string AccessibleProjectName(string displayName, ProjectWorkspaceSummary summary) =>
+    /// <summary>PR #98 review finding 8: every word here now routes through
+    /// <see cref="SurfaceTextProvider"/>/<see cref="MessageKeys"/> like the rest of this class --
+    /// "available"/"unavailable", "active sprints", and "need attention" were hardcoded English,
+    /// breaking localization for this accessible name under <c>language.ui = ru</c>.</summary>
+    private string AccessibleProjectName(string displayName, ProjectWorkspaceSummary summary) =>
         string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{displayName}, {(summary.Available ? "available" : "unavailable")}, {summary.ActiveSprints.Count} active sprints, {summary.AttentionSprintIds.Count} need attention");
+            $"{displayName}, " +
+                $"{text.Resolve(summary.Available ? MessageKeys.SidebarProjectAvailable : MessageKeys.SidebarProjectUnavailable)}, " +
+                $"{summary.ActiveSprints.Count} {text.Resolve(MessageKeys.SidebarActiveSprintsLabel)}, " +
+                $"{summary.AttentionSprintIds.Count} {text.Resolve(MessageKeys.SidebarAttentionNeededLabel)}");
 
+    /// <summary>Same finding-8 reasoning as <see cref="AccessibleProjectName"/>: both the visible
+    /// status-row text and its accessible name are now resolved templates instead of hardcoded
+    /// English literals.</summary>
     private SidebarStatusRow BuildStatusRow(IEnumerable<ProviderHealthEntry> providers)
     {
         List<ProviderHealthEntry> known = [.. providers];
         int ready = known.Count(provider => provider.Enabled && provider.State == ProviderState.Ready);
         int enabled = known.Count(provider => provider.Enabled);
-        string summaryText = string.Create(
-            System.Globalization.CultureInfo.InvariantCulture, $"{ready}/{enabled} providers ready");
-        string accessible = string.Create(
+        string summaryText = string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{ready} of {enabled} enabled providers are ready");
+            text.Resolve(MessageKeys.SidebarProvidersReadyStatus),
+            ready,
+            enabled);
+        string accessible = string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            text.Resolve(MessageKeys.SidebarProvidersReadyAccessible),
+            ready,
+            enabled);
         bool anyUnavailable = enabled > ready;
         return new(summaryText, accessible, anyUnavailable, text.Resolve(MessageKeys.QuotaStatusUnavailable));
     }

@@ -1,6 +1,7 @@
 using Forge.Application;
 using Forge.Desktop.Presentation;
 using Forge.Localization;
+using Forge.Providers;
 
 namespace Forge.Desktop;
 
@@ -16,6 +17,28 @@ public partial class WorkspaceShellPage
             .FirstOrDefault(project => project.ProjectId == projectId)?.DisplayName;
         ProjectOverviewSnapshot snapshot =
             await projectOverview.LoadAsync(root, alias, CancellationToken.None).ConfigureAwait(true);
+
+        // PR #98 review finding 7: DisplayName/Root/Initialized/StartupReady/Providers were already
+        // computed on the snapshot but never bound -- plan 4.2 and CHANGELOG.md both claim the
+        // overview shows startup/repository readiness and provider status.
+        Label header = new() { Text = snapshot.DisplayName };
+        SemanticProperties.SetHeadingLevel(header, SemanticHeadingLevel.Level1);
+        ContentHost.Children.Add(header);
+        ContentHost.Children.Add(new Label
+        {
+            Text = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{text.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Root}"),
+        });
+        ContentHost.Children.Add(new Label
+        {
+            Text = text.Resolve(
+                snapshot.Initialized ? MessageKeys.ProjectInitialized : MessageKeys.ProjectNotInitialized),
+        });
+        ContentHost.Children.Add(new Label
+        {
+            Text = text.Resolve(snapshot.StartupReady ? MessageKeys.StartupReady : MessageKeys.StartupFailed),
+        });
 
         Label result = new();
         if (snapshot.InitializeEnabled)
@@ -99,6 +122,19 @@ public partial class WorkspaceShellPage
                         System.Globalization.CultureInfo.InvariantCulture,
                         $"{action.ActionId} ({(action.Enabled ? "enabled" : "blocked")})"),
                 });
+            }
+        }
+
+        if (snapshot.Providers.Count > 0)
+        {
+            // PR #98 review finding 7: provider integration status was computed but never rendered.
+            // Reuses SurfaceFormatting.ProviderRow -- the same already-tested, parity-checked
+            // per-provider projection `forge models` and the Forge settings page's own provider
+            // section rely on -- rather than a new ad hoc rendering.
+            ContentHost.Children.Add(GroupTitle(MessageKeys.ProjectOverviewProvidersTitle));
+            foreach (ProviderHealthEntry provider in snapshot.Providers)
+            {
+                ContentHost.Children.Add(new Label { Text = SurfaceFormatting.ProviderRow(provider) });
             }
         }
 

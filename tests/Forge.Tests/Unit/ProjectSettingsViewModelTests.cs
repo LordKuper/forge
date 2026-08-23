@@ -16,7 +16,8 @@ public sealed class ProjectSettingsViewModelTests
             environment.Resolve<ProjectCatalogStore>(),
             new MainPageViewModel(Text(), environment.Application),
             (_, _) => Task.FromResult<IForgeMutations>(environment.Application),
-            picker ?? new FakeFolderPicker());
+            picker ?? new FakeFolderPicker(),
+            new SurfaceTextProvider(new ResourceLocalizationCatalog(), "en"));
 
     private static SurfaceText Text() =>
         new(new ResourceLocalizationCatalog(), System.Globalization.CultureInfo.GetCultureInfo("en"));
@@ -122,11 +123,36 @@ public sealed class ProjectSettingsViewModelTests
         ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         ProjectSettingsViewModel viewModel = Create(environment);
 
-        string diagnosticCode = await viewModel.SetAliasAsync(added.Entry!.ProjectId, "New alias", cancellationToken);
+        // PR #98 review finding 4: SetAliasAsync now returns the write's real, already-localized
+        // outcome (not the raw diagnostic code, and not an unconditional "saved" regardless of the
+        // actual result).
+        string message = await viewModel.SetAliasAsync(added.Entry!.ProjectId, "New alias", cancellationToken);
 
-        Assert.Equal(DiagnosticCodes.None, diagnosticCode);
+        Assert.Equal(Text().Resolve(MessageKeys.ProjectAliasSet), message);
         ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken);
         Assert.Equal("New alias", Assert.Single(listing.Entries).Alias);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetAliasAsyncReportsFailureInsteadOfClaimingSuccess()
+    {
+        // PR #98 review finding 4: the alias path previously reported SettingsSaved unconditionally,
+        // so a failed write (here, an alias past ProjectCatalogStore's own length limit) read as
+        // success. Regression test: an alias write that ProjectCatalogStore actually rejects must
+        // never render the same text as a successful one.
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        ProjectSettingsViewModel viewModel = Create(environment);
+
+        string message = await viewModel.SetAliasAsync(
+            added.Entry!.ProjectId, new string('a', 10_000), cancellationToken);
+
+        Assert.NotEqual(Text().Resolve(MessageKeys.ProjectAliasSet), message);
+        Assert.Contains(DiagnosticCodes.ProjectCatalogAliasTooLong, message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -144,12 +170,16 @@ public sealed class ProjectSettingsViewModelTests
         FakeFolderPicker picker = new(otherRoot);
         ProjectSettingsViewModel viewModel = Create(environment, picker);
 
-        string diagnosticCode = await viewModel.RelinkAsync(added.Entry!.ProjectId, cancellationToken);
+        string message = await viewModel.RelinkAsync(added.Entry!.ProjectId, cancellationToken);
 
         // otherRoot is a different, independently initialized project, so its own manifest id
         // never matches the entry being relinked -- ProjectCatalogStore.RelinkAsync must reject
-        // this rather than trust the picked path.
-        Assert.Equal(DiagnosticCodes.ProjectCatalogRelinkMismatch, diagnosticCode);
+        // this rather than trust the picked path. PR #98 review finding 4: the failure reaches the
+        // user as localized text with the machine diagnostic code appended, not the raw code alone.
+        Assert.Equal(
+            Text().Resolve(MessageKeys.ProjectRelinkFailed) +
+                $" ({DiagnosticCodes.ProjectCatalogRelinkMismatch})",
+            message);
     }
 
     [Fact]

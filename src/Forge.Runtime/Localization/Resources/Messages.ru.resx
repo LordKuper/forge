@@ -202,6 +202,7 @@
   <data name="ForgeSettingsLanguageLlmLabel" xml:space="preserve"><value>Язык провайдера</value></data>
   <data name="ForgeSettingsInheritOption" xml:space="preserve"><value>(наследовать)</value></data>
   <data name="ForgeSettingsConfirmDestructiveLabel" xml:space="preserve"><value>Подтверждать деструктивные действия</value></data>
+  <data name="ForgeSettingsConfirmDestructiveDisclaimer" xml:space="preserve"><value>Обязательные подтверждения (человеком, остановкой и откатом) этот параметр никогда не отключает.</value></data>
   <data name="ForgeSettingsProvidersEnabledLabel" xml:space="preserve"><value>Включённые провайдеры</value></data>
   <data name="ForgeSettingsNotificationsEnabledLabel" xml:space="preserve"><value>Уведомления включены</value></data>
   <data name="SettingsSaveAction" xml:space="preserve"><value>Сохранить</value></data>
@@ -221,4 +222,15 @@
   <data name="ProjectSettingsRemoveFromCatalogAction" xml:space="preserve"><value>Удалить из каталога</value></data>
   <data name="ProjectSettingsDiagnosticBundleAction" xml:space="preserve"><value>Сформировать диагностический пакет</value></data>
   <data name="SprintWorkspacePlaceholderTitle" xml:space="preserve"><value>Рабочая область спринта (базовый вид; расширенный вид появится позже)</value></data>
+  <data name="ProjectAddFailed" xml:space="preserve"><value>Не удалось добавить проект.</value></data>
+  <data name="ProjectRemoveFailed" xml:space="preserve"><value>Не удалось удалить проект.</value></data>
+  <data name="ProjectRelinkFailed" xml:space="preserve"><value>Не удалось перепривязать проект.</value></data>
+  <data name="ProjectAliasSetFailed" xml:space="preserve"><value>Не удалось обновить псевдоним.</value></data>
+  <data name="ProjectOverviewProvidersTitle" xml:space="preserve"><value>Провайдеры</value></data>
+  <data name="SidebarProvidersReadyStatus" xml:space="preserve"><value>Готово провайдеров: {0}/{1}</value></data>
+  <data name="SidebarProvidersReadyAccessible" xml:space="preserve"><value>Готово {0} из {1} включённых провайдеров</value></data>
+  <data name="SidebarProjectAvailable" xml:space="preserve"><value>доступен</value></data>
+  <data name="SidebarProjectUnavailable" xml:space="preserve"><value>недоступен</value></data>
+  <data name="SidebarActiveSprintsLabel" xml:space="preserve"><value>активных спринтов</value></data>
+  <data name="SidebarAttentionNeededLabel" xml:space="preserve"><value>требуют внимания</value></data>
 </root>

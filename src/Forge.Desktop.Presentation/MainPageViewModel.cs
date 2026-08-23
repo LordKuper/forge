@@ -2,7 +2,6 @@ using System.Globalization;
 using System.Text;
 using Forge.Application;
 using Forge.Compiler;
-using Forge.Configuration;
 using Forge.Domain;
 using Forge.Localization;
 
@@ -205,28 +204,6 @@ public sealed class MainPageViewModel(
         }).ConfigureAwait(false);
     }
 
-    public async Task<string> SetConfigurationAsync(
-        ConfigurationScope scope,
-        string? projectRoot,
-        string key,
-        string? value,
-        CancellationToken cancellationToken)
-    {
-        // User-scope configuration is not `.forge/` project state (ADR 0005 protects the latter),
-        // so it stays local even when a Host connection is available for project mutations.
-        IForgeMutations mutations = scope == ConfigurationScope.Project
-            ? await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false)
-            : application;
-        return await UseMutationsAsync(mutations, async () =>
-        {
-            ConfigurationWriteResult result = await mutations
-                .SetConfigurationAsync(scope, projectRoot, key, value, cancellationToken)
-                .ConfigureAwait(false);
-            return Message(
-                text.Resolve(result.Succeeded ? MessageKeys.ConfigurationUpdated : MessageKeys.ConfigurationRejected),
-                result.DiagnosticCode);
-        }).ConfigureAwait(false);
-    }
 
     /// <summary>ADR 0005/0018's human-only `workflow.review` capability. <paramref name="sprintId"/>
     /// reuses the same entry the sprint-tree expansion uses: a blank value targets the active

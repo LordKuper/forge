@@ -492,6 +492,96 @@ public sealed class SurfaceParityTests
         Assert.Contains("projectOverview.SprintCancelPrompt(", source, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// PR #98 review round 1 finding 9: all five human-only gates (gate/supersede/confirm/test-work/
+    /// finalize) passed a literal <c>true</c> for <c>confirmed</c> at their mutation call site
+    /// instead of the dialog's own answer. Every one of them already returns before reaching that
+    /// line when the dialog is declined, so there was no live bypass -- but the literal removed all
+    /// local evidence the argument came from a real dialog, exactly the bug class this PR already
+    /// had to fix once (see the ADR 0050 remarks on this file's own dialog-per-action discipline). No
+    /// MAUI control can be instantiated headlessly in this suite (see the dialog-naming checks
+    /// above), so this pins the fix directly in the source text: each call must pass its own local
+    /// <c>confirmed</c>/<c>dialogConfirmed</c> variable, not the literal <c>true</c>.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void HumanOnlyGatesPassTheDialogsOwnAnswerInsteadOfALiteralTrue()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
+
+        Assert.Contains(
+            ".ResolveGateAsync(root, sprintId, nodeId.Text, approved, confirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            ".SupersedeAttemptAsync(root, sprintId, attemptId.Text, instruction.Text, confirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            "evidenceKind.SelectedItem as string, evidence.Text, dialogConfirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            "outcome, justification.Text, dialogConfirmed,",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            ".FinalizeSprintAsync(root, sprintId, finalizeNodeId.Text, dialogConfirmed, CancellationToken.None)",
+            source, StringComparison.Ordinal);
+        // None of the five mutation calls above may pass a literal `true` for the confirmation
+        // argument -- every occurrence of `true` immediately before `CancellationToken.None)` in
+        // this file must instead be one of the two dialog-answer variable names.
+        Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
+    /// parameter entirely (<c>(string labelKeyIgnored, View control) =&gt; control</c>), so
+    /// confirm-destructive and notifications-enabled shipped as bare switches with no visible
+    /// caption. No MAUI control can be instantiated headlessly in this suite, so this pins the fix
+    /// directly in the source: the helper must actually resolve and render the label.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ForgeSettingsLabeledRowRendersItsLabelInsteadOfDiscardingIt()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.ForgeSettings.cs"));
+        string method = BracedBlockAfter(source, "private HorizontalStackLayout LabeledRow(string labelKey, View control) =>");
+
+        Assert.DoesNotContain("labelKeyIgnored", source, StringComparison.Ordinal);
+        Assert.Contains("text.Resolve(labelKey)", method, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #98 review round 1 finding 10: plan 5.1 requires
+    /// <c>interaction.confirm_destructive</c>'s row to carry a "mandatory-gate disclaimer" explaining
+    /// that human/stop/rewind confirmations are never bypassed by this setting -- otherwise the
+    /// toggle reads as a global "stop asking me" switch.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ForgeSettingsConfirmDestructiveRowRendersItsMandatoryGateDisclaimer()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.ForgeSettings.cs"));
+
+        Assert.Contains(
+            "text.Resolve(MessageKeys.ForgeSettingsConfirmDestructiveDisclaimer)", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #98 review round 1 finding 7: <c>ProjectOverviewSnapshot</c> already computed
+    /// <c>DisplayName</c>/<c>Root</c>/<c>Initialized</c>/<c>StartupReady</c>/<c>Providers</c>, but
+    /// <c>RenderProjectOverviewAsync</c> rendered none of them, even though plan 4.2 and
+    /// CHANGELOG.md's v0.67.0 entry both claim the overview shows startup/repository readiness and
+    /// provider status.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ProjectOverviewRendersReadinessAndProviderStatus()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.ProjectOverview.cs"));
+
+        Assert.Contains("snapshot.DisplayName", source, StringComparison.Ordinal);
+        Assert.Contains("snapshot.Root", source, StringComparison.Ordinal);
+        Assert.Contains("snapshot.Initialized", source, StringComparison.Ordinal);
+        Assert.Contains("snapshot.StartupReady", source, StringComparison.Ordinal);
+        Assert.Contains("snapshot.Providers", source, StringComparison.Ordinal);
+    }
+
     /// <summary>Round 3 review: the blank-attempt-id guard had no test proving it runs at all, let
     /// alone before the dialog -- deleting it left every other test green. No MAUI control can be
     /// instantiated headlessly (see the dialog-naming checks above), so this pins both the guard's

@@ -32,9 +32,16 @@ public partial class WorkspaceShellPage
         Switch confirmDestructive = new() { IsToggled = snapshot.ConfirmDestructive };
         SemanticProperties.SetDescription(confirmDestructive, text.Resolve(MessageKeys.ForgeSettingsConfirmDestructiveLabel));
         ContentHost.Children.Add(LabeledRow(MessageKeys.ForgeSettingsConfirmDestructiveLabel, confirmDestructive));
+        // Plan 5.1: this row needs its own "mandatory-gate disclaimer" -- otherwise the toggle reads
+        // as a global "stop asking me," which it is not (PR #98 review finding 10).
+        ContentHost.Children.Add(new Label { Text = text.Resolve(MessageKeys.ForgeSettingsConfirmDestructiveDisclaimer) });
         ContentHost.Children.Add(ProvenanceLabel(snapshot.ConfirmDestructiveProvenance));
 
         ContentHost.Children.Add(GroupTitle(MessageKeys.ForgeSettingsProvidersGroupTitle));
+        // Wires the previously-declared-but-unrendered ForgeSettingsProvidersEnabledLabel key: plan
+        // 5.1's settings table lists this row with its own visible label, like every other row on
+        // this page.
+        ContentHost.Children.Add(new Label { Text = text.Resolve(MessageKeys.ForgeSettingsProvidersEnabledLabel) });
         Dictionary<string, CheckBox> providerToggles = [];
         foreach (ProviderHealthEntry provider in snapshot.KnownProviders)
         {
@@ -46,6 +53,8 @@ public partial class WorkspaceShellPage
                 Children = { toggle, new Label { Text = provider.Id } },
             });
         }
+
+        ContentHost.Children.Add(ProvenanceLabel(snapshot.ProvidersEnabledProvenance));
 
         ContentHost.Children.Add(GroupTitle(MessageKeys.ForgeSettingsNotificationsGroupTitle));
         Switch notifications = new() { IsToggled = snapshot.NotificationsEnabled };
@@ -91,7 +100,14 @@ public partial class WorkspaceShellPage
             $"{text.Resolve(MessageKeys.SettingsProvenanceLabel)}: {provenance}"),
     };
 
-    private static View LabeledRow(string labelKeyIgnored, View control) => control;
+    /// <summary>Renders the control alongside its own visible, localized label -- PR #98 review
+    /// finding 2: the previous implementation discarded <paramref name="labelKey"/> entirely, so
+    /// confirm-destructive and notifications-enabled shipped as bare switches with no visible
+    /// caption (only a screen-reader name).</summary>
+    private HorizontalStackLayout LabeledRow(string labelKey, View control) => new()
+    {
+        Children = { new Label { Text = text.Resolve(labelKey) }, control },
+    };
 
     private string? ResolveInheritable(string? selected) =>
         selected is null || string.Equals(selected, text.Resolve(MessageKeys.ForgeSettingsInheritOption), StringComparison.Ordinal)

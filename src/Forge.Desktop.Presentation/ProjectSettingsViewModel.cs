@@ -51,18 +51,20 @@ public sealed record ProjectSettingsSaveResult(bool Succeeded, IReadOnlyList<str
 /// integration inspection/install/removal, startup recovery, and diagnostic bundle generation. The
 /// last three delegate to <see cref="MainPageViewModel"/> unchanged -- the same capabilities the
 /// previous monolithic page already exposed (plan 12.1). Configuration writes resolve
-/// <see cref="IForgeMutations"/> exactly like <see cref="MainPageViewModel.SetConfigurationAsync"/>
-/// does (ADR 0005: a project mutation is routed through its Host once one is reachable), calling its
-/// <see cref="IForgeMutations.SetConfigurationAsync"/> method directly rather than through that
-/// method's own text-rendering wrapper, so a save can validate the whole edit set atomically instead
-/// of losing each write's structured result to a rendered string.
+/// <see cref="IForgeMutations"/> the same way the previous monolithic page's own generic
+/// configuration editor did (ADR 0005: a project mutation is routed through its Host once one is
+/// reachable; that generic editor is gone -- ADR 0050's finding-11 update), calling
+/// <see cref="IForgeMutations.SetConfigurationAsync"/> directly rather than through a
+/// text-rendering wrapper, so a save can validate the whole edit set atomically instead of losing
+/// each write's structured result to a rendered string.
 /// </summary>
 public sealed class ProjectSettingsViewModel(
     ForgeApplication application,
     ProjectCatalogStore catalog,
     MainPageViewModel legacy,
     Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-    IFolderPickerPort folderPicker)
+    IFolderPickerPort folderPicker,
+    SurfaceTextProvider text)
 {
     public const string UserFacingLanguageKey = "artifacts.language.user_facing";
     public const string AgentFacingLanguageKey = "artifacts.language.agent_facing";
@@ -77,6 +79,7 @@ public sealed class ProjectSettingsViewModel(
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations =
         resolveMutations ?? throw new ArgumentNullException(nameof(resolveMutations));
     private readonly IFolderPickerPort folderPicker = folderPicker ?? throw new ArgumentNullException(nameof(folderPicker));
+    private readonly SurfaceTextProvider text = text ?? throw new ArgumentNullException(nameof(text));
 
     public async Task<ProjectSettingsSnapshot> LoadAsync(
         Guid projectId, string root, string? alias, CancellationToken cancellationToken)
@@ -183,33 +186,48 @@ public sealed class ProjectSettingsViewModel(
         return ProjectSettingsSaveResult.Success;
     }
 
+    /// <summary>PR #98 review finding 4: the alias write's actual outcome, not an unconditional
+    /// <see cref="MessageKeys.SettingsSaved"/> -- a failed catalog write must not report
+    /// success.</summary>
     public async Task<string> SetAliasAsync(Guid projectId, string? alias, CancellationToken cancellationToken)
     {
         ProjectCatalogResult result = await catalog.SetAliasAsync(projectId, alias, cancellationToken)
             .ConfigureAwait(false);
-        return result.DiagnosticCode;
+        return Message(
+            text.Resolve(result.Succeeded ? MessageKeys.ProjectAliasSet : MessageKeys.ProjectAliasSetFailed),
+            result.DiagnosticCode);
     }
 
     /// <summary>Plan section 6.1's relink: picks a new folder through the same neutral port the
     /// sidebar's add-project flow uses, then verifies it against the catalog entry's own project id
-    /// (<see cref="ProjectCatalogStore.RelinkAsync"/> never trusts the caller's claim).</summary>
+    /// (<see cref="ProjectCatalogStore.RelinkAsync"/> never trusts the caller's claim). PR #98
+    /// review finding 4: returns already-localized text (like <see cref="RecoverAsync"/> below),
+    /// never the raw machine <see cref="ProjectCatalogResult.DiagnosticCode"/>.</summary>
     public async Task<string> RelinkAsync(Guid projectId, CancellationToken cancellationToken)
     {
         string? newRoot = await folderPicker.PickFolderAsync(cancellationToken).ConfigureAwait(false);
         if (newRoot is null)
         {
-            return DiagnosticCodes.None;
+            // The user dismissed the folder picker -- not a failure, nothing to report (matching
+            // AddProjectResult.Cancelled's own reasoning in SidebarViewModel).
+            return string.Empty;
         }
 
         ProjectCatalogResult result = await catalog.RelinkAsync(projectId, newRoot, cancellationToken)
             .ConfigureAwait(false);
-        return result.DiagnosticCode;
+        return Message(
+            text.Resolve(result.Succeeded ? MessageKeys.ProjectRelinked : MessageKeys.ProjectRelinkFailed),
+            result.DiagnosticCode);
     }
 
+    /// <summary>PR #98 review finding 4: returns already-localized text instead of the raw
+    /// diagnostic code.</summary>
     public async Task<string> RemoveFromCatalogAsync(Guid projectId, CancellationToken cancellationToken)
     {
         ProjectCatalogResult result = await catalog.RemoveAsync(projectId, cancellationToken).ConfigureAwait(false);
-        return result.DiagnosticCode;
+        return Message(
+            text.Resolve(result.Succeeded ? MessageKeys.ProjectRemoved : MessageKeys.ProjectRemoveFailed),
+            result.DiagnosticCode);
     }
 
     public Task<string> RecoverAsync(string? root, bool confirmed, CancellationToken cancellationToken) =>
@@ -233,6 +251,14 @@ public sealed class ProjectSettingsViewModel(
             .ConfigureAwait(false);
         return StatusJson.Serialize(bundle);
     }
+
+    /// <summary>Same shape as <see cref="MainPageViewModel"/>'s own private helper of the same name
+    /// (PR #98 review finding 4): appends a failure's machine diagnostic code parenthetically so it
+    /// stays available without being the whole message.</summary>
+    private static string Message(string message, string diagnosticCode) =>
+        diagnosticCode == DiagnosticCodes.None
+            ? message
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{message} ({diagnosticCode})");
 
     private static ConfigurationProvenance Provenance(ConfigurationView view, string key) =>
         view.Values.FirstOrDefault(value => value.Key == key)?.Provenance ?? ConfigurationProvenance.BuiltInDefault;

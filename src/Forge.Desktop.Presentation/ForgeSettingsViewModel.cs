@@ -62,12 +62,13 @@ public sealed record ForgeSettingsSaveResult(bool Succeeded, IReadOnlyList<strin
 
 /// <summary>
 /// Plan section 5.1's Forge (user-scoped) settings page. Every key here is user-scope, so -- matching
-/// <see cref="MainPageViewModel.SetConfigurationAsync"/>'s own documented reasoning -- it is always
-/// written through the local <see cref="ForgeApplication"/> directly, never a project's Host. Reads
-/// and writes reuse <see cref="ForgeApplication.GetUserConfigurationAsync"/>/
+/// ADR 0005's own reasoning for user-scope configuration -- it is always written through the local
+/// <see cref="ForgeApplication"/> directly, never a project's Host. Reads and writes reuse
+/// <see cref="ForgeApplication.GetUserConfigurationAsync"/>/
 /// <see cref="ForgeApplication.SetConfigurationAsync(ConfigurationScope,string?,string,string?,CancellationToken)"/>
-/// verbatim -- the exact surface <see cref="MainPageViewModel.SetConfigurationAsync"/> already calls
-/// into -- rather than a second configuration I/O path.
+/// directly -- the same interface surface the previous monolithic page's own generic
+/// configuration editor called into (since deleted as dead code; ADR 0050's finding-11 update) --
+/// rather than a second configuration I/O path.
 /// </summary>
 public sealed class ForgeSettingsViewModel(
     ForgeApplication application, ProviderCatalog providerCatalog, SurfaceTextProvider text)

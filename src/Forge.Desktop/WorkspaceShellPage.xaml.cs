@@ -22,7 +22,12 @@ public partial class WorkspaceShellPage : ContentPage
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations;
     private readonly WorkspaceViewModel workspace;
     private readonly SidebarViewModel sidebar;
-    private bool busy;
+    private readonly ShellRenderGate renderGate;
+    /// <summary>Set right before a sidebar re-render whose triggering action (add/remove project)
+    /// has a result worth telling the user about (PR #98 review finding 3); read once by
+    /// <see cref="RenderSidebarAsync"/> and left in place until the next add/remove so it survives
+    /// that render instead of a stale value flashing and vanishing.</summary>
+    private string? sidebarNotice;
     private MainPageViewModel legacy;
     private ProjectOverviewViewModel projectOverview;
     private ProjectSettingsViewModel projectSettings;
@@ -53,15 +58,22 @@ public partial class WorkspaceShellPage : ContentPage
         sidebar = new(catalog, application, folderPicker, text);
         forgeSettings = new(application, providerCatalog, text);
         (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
-        workspace.RouteChanged += (_, _) => RenderContent();
+        renderGate = new(RenderSidebarAsync, RenderContentAsync);
+        // PR #98 review finding 1: NavigateAsync raises RouteChanged synchronously from inside the
+        // very click handler whose own mutation guard is still held, so the render this triggers
+        // must not go through that same guard directly -- ShellRenderGate.RequestContentRender
+        // records it instead and flushes it the moment the guard releases (see its own remarks).
+        workspace.RouteChanged += (_, _) => renderGate.RequestContentRender();
         // Plan 5.1/12.2: a UI-language save applies without restart -- every legacy-backed
         // view-model wraps a MainPageViewModel bound to one fixed SurfaceText snapshot, so a
         // language change rebuilds all of them against the newly current text before re-rendering.
+        // Same finding-1 reasoning as RouteChanged above: SaveAsync raises this event from inside
+        // its own save button's guard.
         text.Changed += (_, _) =>
         {
             (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
-            RenderSidebar();
-            RenderContent();
+            renderGate.RequestSidebarRender();
+            renderGate.RequestContentRender();
         };
     }
 
@@ -72,7 +84,7 @@ public partial class WorkspaceShellPage : ContentPage
         return (
             freshLegacy,
             new(application, freshLegacy),
-            new(application, catalog, freshLegacy, resolveMutations, folderPicker),
+            new(application, catalog, freshLegacy, resolveMutations, folderPicker, text),
             new(freshLegacy));
     }
 
@@ -88,28 +100,11 @@ public partial class WorkspaceShellPage : ContentPage
     }
 
     /// <summary>Serializes shell-driven mutations so a second click cannot re-enter one while the
-    /// first is still in flight -- the same discipline the previous monolithic page applied.</summary>
-    private async Task RunAsync(Func<Task> action)
-    {
-        if (busy)
-        {
-            return;
-        }
-
-        busy = true;
-        try
-        {
-            await action().ConfigureAwait(true);
-        }
-        finally
-        {
-            busy = false;
-        }
-    }
-
-    private void RenderSidebar() => _ = RunAsync(RenderSidebarAsync);
-
-    private void RenderContent() => _ = RunAsync(RenderContentAsync);
+    /// first is still in flight -- the same discipline the previous monolithic page applied. Delegates
+    /// to <see cref="ShellRenderGate"/> (see its own remarks for PR #98 review finding 1: a route or
+    /// language change raised while this guard is held must still produce a real re-render once the
+    /// guard releases, not be silently dropped).</summary>
+    private Task RunAsync(Func<Task> action) => renderGate.RunAsync(action);
 
     private async Task RenderSidebarAsync()
     {
@@ -136,6 +131,15 @@ public partial class WorkspaceShellPage : ContentPage
         SidebarHost.Children.Add(status);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
         SidebarHost.Children.Add(quota);
+
+        // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an
+        // invalid root, an already-cataloged entry, a catalog write failure) completely silent.
+        // `sidebarNotice` is set by the add/remove handlers just before they trigger this render, so
+        // it survives the rebuild instead of being wiped by it.
+        if (!string.IsNullOrEmpty(sidebarNotice))
+        {
+            SidebarHost.Children.Add(Describe(new Label { Text = sidebarNotice }));
+        }
     }
 
     private VerticalStackLayout BuildAddProjectRow()
@@ -145,7 +149,18 @@ public partial class WorkspaceShellPage : ContentPage
         Button addButton = new() { Text = text.Resolve(MessageKeys.SidebarAddProjectAction) };
         addButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            await sidebar.AddProjectAsync(pathEntry.Text, CancellationToken.None).ConfigureAwait(true);
+            AddProjectResult addResult = await sidebar.AddProjectAsync(pathEntry.Text, CancellationToken.None)
+                .ConfigureAwait(true);
+            // A dismissed folder picker is not a failure and has nothing to report (see
+            // AddProjectResult.Cancelled's own remarks) -- leave any earlier notice alone rather
+            // than replacing it with a blank one.
+            if (addResult != AddProjectResult.Cancelled)
+            {
+                sidebarNotice = Message(
+                    text.Resolve(addResult.Succeeded ? MessageKeys.ProjectAdded : MessageKeys.ProjectAddFailed),
+                    addResult.DiagnosticCode);
+            }
+
             await RenderSidebarAsync().ConfigureAwait(true);
         });
         return new VerticalStackLayout { Children = { pathEntry, addButton } };
@@ -200,7 +215,21 @@ public partial class WorkspaceShellPage : ContentPage
         Button removeButton = new() { Text = text.Resolve(MessageKeys.SidebarRemoveProjectAction) };
         removeButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            await sidebar.RemoveProjectAsync(project.ProjectId, CancellationToken.None).ConfigureAwait(true);
+            string diagnosticCode = await sidebar.RemoveProjectAsync(project.ProjectId, CancellationToken.None)
+                .ConfigureAwait(true);
+            bool succeeded = diagnosticCode == DiagnosticCodes.None;
+            // PR #98 review finding 3: surface the outcome instead of discarding it.
+            sidebarNotice = Message(
+                text.Resolve(succeeded ? MessageKeys.ProjectRemoved : MessageKeys.ProjectRemoveFailed), diagnosticCode);
+            // PR #98 review finding 5: removing the currently open project must not leave its page
+            // live and actionable -- mirror WorkspaceShellPage.ProjectSettings.cs's own
+            // remove-from-catalog handler, which already resets the route in this situation.
+            if (succeeded && workspace.Route.ProjectId == project.ProjectId)
+            {
+                await workspace.RestoreAsync(CancellationToken.None).ConfigureAwait(true);
+                await RenderContentAsync().ConfigureAwait(true);
+            }
+
             await RenderSidebarAsync().ConfigureAwait(true);
         });
         column.Children.Add(removeButton);
@@ -240,6 +269,14 @@ public partial class WorkspaceShellPage : ContentPage
                 break;
         }
     }
+
+    /// <summary>Same shape as <see cref="MainPageViewModel"/>'s own private helper of the same name:
+    /// appends a failure's machine diagnostic code parenthetically so it stays available without
+    /// being the whole message (PR #98 review findings 3/4).</summary>
+    private static string Message(string message, string diagnosticCode) =>
+        diagnosticCode == DiagnosticCodes.None
+            ? message
+            : string.Create(System.Globalization.CultureInfo.InvariantCulture, $"{message} ({diagnosticCode})");
 
     private static Entry Describe(Entry entry, string label)
     {

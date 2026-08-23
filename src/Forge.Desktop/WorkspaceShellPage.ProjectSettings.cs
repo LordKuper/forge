@@ -36,8 +36,11 @@ public partial class WorkspaceShellPage
         Label result = new();
         aliasSave.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            await projectSettings.SetAliasAsync(projectId, aliasEntry.Text, CancellationToken.None).ConfigureAwait(true);
-            result.Text = text.Resolve(MessageKeys.SettingsSaved);
+            // PR #98 review finding 4: report the alias write's real outcome instead of an
+            // unconditional "saved" -- SetAliasAsync now returns the actual, already-localized
+            // result (success or failure).
+            result.Text = await projectSettings.SetAliasAsync(projectId, aliasEntry.Text, CancellationToken.None)
+                .ConfigureAwait(true);
         });
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { aliasEntry, aliasSave } });
 

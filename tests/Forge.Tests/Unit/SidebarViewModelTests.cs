@@ -10,6 +10,8 @@ public sealed class SidebarViewModelTests
 {
     private static SurfaceTextProvider Text() => new(new ResourceLocalizationCatalog(), "en");
 
+    private static SurfaceTextProvider TextRu() => new(new ResourceLocalizationCatalog(), "ru");
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task LoadAsyncOrdersActiveSprintsByThePlanSection41Rule()
@@ -139,5 +141,35 @@ public sealed class SidebarViewModelTests
 
         Assert.Equal(DiagnosticCodes.None, diagnosticCode);
         Assert.Empty((await catalog.ListAsync(cancellationToken)).Entries);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncLocalizesTheStatusRowAndAccessibleProjectNameInsteadOfHardcodedEnglish()
+    {
+        // PR #98 review finding 8: "available"/"unavailable", "active sprints", "need attention",
+        // and both provider-ready phrases were hardcoded English literals in this neutral view-model
+        // -- under language.ui = ru they must resolve through the Russian catalog instead.
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider ru = TextRu();
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), ru);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        string expectedAvailability =
+            ru.Resolve(project.Available ? MessageKeys.SidebarProjectAvailable : MessageKeys.SidebarProjectUnavailable);
+        Assert.Contains(expectedAvailability, project.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(ru.Resolve(MessageKeys.SidebarActiveSprintsLabel), project.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(ru.Resolve(MessageKeys.SidebarAttentionNeededLabel), project.AccessibleName, StringComparison.Ordinal);
+        Assert.DoesNotContain("available", project.AccessibleName, StringComparison.Ordinal);
+        Assert.DoesNotContain("active sprints", project.AccessibleName, StringComparison.Ordinal);
+        Assert.DoesNotContain("need attention", project.AccessibleName, StringComparison.Ordinal);
+        Assert.DoesNotContain("providers ready", snapshot.Status.ProviderSummaryText, StringComparison.Ordinal);
+        Assert.DoesNotContain("providers are ready", snapshot.Status.ProviderAccessibleText, StringComparison.Ordinal);
     }
 }

@@ -23,21 +23,32 @@ already-reviewed, already-tested capability code across them, each new view-mode
 
 - `ProjectOverviewViewModel` forwards initialize/recover/create/run/resume/cancel-sprint.
 - `ProjectSettingsViewModel` forwards recover, integration inspect/install/remove; it calls
-  `IForgeMutations.SetConfigurationAsync` directly (the same interface method
-  `MainPageViewModel.SetConfigurationAsync` itself calls) rather than through that method's
+  `IForgeMutations.SetConfigurationAsync` directly (the same interface method the previous
+  monolithic page's own generic configuration editor called) rather than through that editor's
   text-rendering wrapper, so a settings save gets a structured `ConfigurationWriteResult` instead of
-  a rendered string.
+  a rendered string. That generic editor (`MainPageViewModel.SetConfigurationAsync`) has since been
+  deleted as dead code -- see the finding-11 update below.
 - `SprintWorkspaceViewModel` forwards every gate/confirm/test-work/finalize/supersede/poll-events/
   lifecycle method, converting a route's `Guid` sprint id to `MainPageViewModel`'s own string-id
   convention (`"D"` format) at the boundary.
 
 This is not a workaround: `MainPageViewModel`'s own tests (`MainPageViewModelTests`,
 `DesktopAndCliRenderTheSame*ForOneSnapshot` in `SurfaceParityTests`) exercise it directly and remain
-valid unchanged, and every method it exposes stays reachable (plan 12.1) without re-deriving or
-re-testing its already-covered behavior. `ForgeSettingsViewModel` and `SidebarViewModel` are the two
-exceptions: they hold `ForgeApplication`/`ProjectCatalogStore` directly, because user-scope
-configuration and the catalog never route through a project's Host (ADR 0005/0049) and gain nothing
-from the delegation.
+valid unchanged, and every capability plan 12.1 requires stays reachable through a typed control
+without re-deriving or re-testing its already-covered behavior. `ForgeSettingsViewModel` and
+`SidebarViewModel` are the two exceptions: they hold `ForgeApplication`/`ProjectCatalogStore`
+directly, because user-scope configuration and the catalog never route through a project's Host (ADR
+0005/0049) and gain nothing from the delegation.
+
+PR #98 review round 1 finding 11 corrected an overstatement here: `MainPageViewModel`'s own generic
+scope/key/value `SetConfigurationAsync` -- the previous monolithic page's one-size-fits-all
+configuration editor -- has no call site left anywhere in `src/` once `ForgeSettingsViewModel`/
+`ProjectSettingsViewModel` call `ForgeApplication`/`IForgeMutations.SetConfigurationAsync` directly
+(as this ADR already documents two paragraphs above). Every one of `ConfigurationRegistry`'s 6
+user-scoped and 4 project-scoped keys is covered by a typed control on the Forge/project settings
+pages, so no user-facing capability was lost; only this one generic internal method became dead code,
+and it was deleted (AGENTS.md: remove stale content) rather than left as an untested, unreachable
+surface.
 
 ### Folder-picker port lives in `Forge.Desktop.Presentation`; the Windows implementation lives in `Forge.Desktop` itself, not a new adapter project
 
@@ -69,6 +80,19 @@ saved edit set. `WorkspaceShellPage` subscribes once: on `Changed` it rebuilds e
 `MainPageViewModel`-backed view-model (they each close over one fixed `SurfaceText`) and re-renders
 the sidebar and content area. This is the minimal change the plan asked for — no second localization
 mechanism, no restart, and no change to `ILocalizationCatalog`/`SurfaceText` themselves.
+
+PR #98 review round 1 finding 1 found that both reactive paths above (`RouteChanged` and `Changed`)
+were silently no-ops: each is always raised synchronously from inside the very click handler whose
+own mutation guard (`WorkspaceShellPage.RunAsync`, "a second click cannot re-enter one while the
+first is in flight") is still held, so the render it triggered found the guard already busy and
+returned immediately — a sidebar navigation click updated `WorkspaceViewModel.Route` but the content
+pane never rebuilt, and a language save never refreshed the sidebar. The fix keeps the guard's
+original purpose (mutation re-entrancy) but extracts it into `Forge.Desktop.Presentation`'s new
+`ShellRenderGate`, which tracks a *pending* sidebar/content render separately from the busy mutation
+and flushes it, once, the moment the guard releases, instead of dropping it. Moving it to neutral code
+(rather than fixing it in-place in `Forge.Desktop`) also makes it directly unit-testable
+(`ShellRenderGateTests`), which the ADR's own "no MAUI control can be instantiated headlessly" limit
+otherwise would have prevented for this exact regression.
 
 ### No XAML data binding; every page keeps the previous page's "build controls, assign `.Text` in code" idiom
 
@@ -129,6 +153,15 @@ genuine partial write is possible only if a value this validation accepted is re
 by a concurrent external edit — treated as an accepted, rare residual risk, not a normal path, and
 consistent with `catalog.json`'s own already-accepted "no cross-process locking" posture (ADR 0049).
 
+Known limitation (PR #98 review round 1, noted but not blocking): when that rare mid-sequence write
+failure does occur, `ForgeSettingsViewModel.SaveAsync`/`ProjectSettingsViewModel.SaveAsync` both
+report `MessageKeys.SettingsValidationFailed` ("some values are invalid; nothing was saved"), even
+though one or more earlier keys in the write set may already have landed durably. The wording
+overstates the rollback the atomicity model above does not actually provide for this residual case.
+Left uncorrected for now because the case requires a concurrent external edit to trigger (accepted
+above as exceptionally rare) and a more accurate message needs its own reviewed copy; a future change
+should either add a distinct partial-failure message or make the write set genuinely atomic.
+
 ### `workspace.summary`/`workspace.available_actions` stay reserved capabilities even though Desktop now renders them
 
 `SidebarViewModel`/`ProjectOverviewViewModel` call `ForgeApplication.GetWorkspaceSummaryAsync`/
@@ -166,7 +199,9 @@ functional correctness, since the reserved status never blocked local, in-proces
 - `Forge.Desktop.Presentation` gains `SurfaceTextProvider`, `WorkspaceRoute`/`WorkspacePage`,
   `IFolderPickerPort`, `SprintOrderingRank`, `ProjectDisplayName`, `SidebarViewModel`,
   `WorkspaceViewModel`, `ProjectOverviewViewModel`, `ForgeSettingsViewModel`,
-  `ProjectSettingsViewModel`, and `SprintWorkspaceViewModel`. `MainPageViewModel` is unchanged.
+  `ProjectSettingsViewModel`, `SprintWorkspaceViewModel`, and `ShellRenderGate` (PR #98 review finding
+  1). `MainPageViewModel` loses its now-dead generic `SetConfigurationAsync` (finding 11); otherwise
+  unchanged.
 - `Forge.Desktop` replaces `MainPage.xaml`/`.xaml.cs` with `WorkspaceShellPage.xaml` and five
   partial-class code-behind files, and gains `WindowsFolderPicker.cs`. `App.xaml.cs` constructs the
   new page instead of `MainPage`.
