@@ -2,6 +2,30 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.67.0
+
+### Added
+
+- Replaced the single scrolling Desktop form with a two-panel workspace shell: a sidebar listing
+  every cataloged project, its non-terminal sprints (ordered by attention, then running, paused,
+  blocked/failed, and other active sprints, newest first), a completed/cancelled history entry, an
+  add-project action, a global Forge settings entry, and a bottom status row for provider readiness
+  and quota (reported as not yet available until a later release adds real quota data).
+- Added a project overview page showing startup/repository readiness, active sprint cards with
+  attention reasons, recent completed/cancelled sprints, the highest-ranked suggested actions, and
+  initialize/recover/create-sprint actions.
+- Added a Forge settings page with typed controls for interface language, interaction language,
+  provider language (each with an inherit option and its effective source), confirm-destructive,
+  enabled providers with health, and notifications — every value shows where it came from, and an
+  interface-language change applies immediately without restarting Desktop.
+- Added a project settings page with typed controls for artifact languages, context token budget,
+  and allowed models (each with its own source), plus a read-only project root/id, a local display
+  alias, folder relinking, removing the project from the local catalog, provider integration
+  inspection/install/removal, startup recovery, and diagnostic bundle generation.
+- Added a folder picker for adding or relinking a project from the sidebar/project settings, backed
+  by the real Windows folder-picker dialog.
+- The last selected project, sprint, and page now survive a Desktop restart.
+
 ## v0.66.0
 
 ### Added
