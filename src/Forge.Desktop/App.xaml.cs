@@ -1,6 +1,8 @@
 using Forge.Application;
 using Forge.Configuration;
+using Forge.Desktop.Presentation;
 using Forge.Localization;
+using Forge.Providers;
 using Forge.Updater;
 
 namespace Forge.Desktop;
@@ -9,6 +11,8 @@ public partial class App : Microsoft.Maui.Controls.Application
 {
     private readonly ILocalizationCatalog catalog;
     private readonly ForgeApplication application;
+    private readonly ProjectCatalogStore projectCatalog;
+    private readonly ProviderCatalog providerCatalog;
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations;
     private readonly IRestartTokenService restartTokens;
     private readonly IUpdateTargetDetector targetDetector;
@@ -20,12 +24,16 @@ public partial class App : Microsoft.Maui.Controls.Application
         ProjectRootResolver rootResolver,
         IConfigurationRegistry registry,
         IEnvironmentPaths paths,
+        ProjectCatalogStore projectCatalog,
+        ProviderCatalog providerCatalog,
         IRestartTokenService restartTokens,
         IUpdateTargetDetector targetDetector)
     {
         InitializeComponent();
         this.catalog = catalog;
         this.application = application;
+        this.projectCatalog = projectCatalog;
+        this.providerCatalog = providerCatalog;
         resolveMutations = HostMutationsFactory.CreateResolver(
             rootResolver,
             registry,
@@ -50,11 +58,14 @@ public partial class App : Microsoft.Maui.Controls.Application
             .GetStartupStatusAsync(null, CancellationToken.None)
             .GetAwaiter()
             .GetResult();
-        SurfaceText text = SurfaceText.For(catalog, startup.Language.Ui);
-        Window window = new(new MainPage(text, application, resolveMutations))
-        {
-            Title = text.Resolve(MessageKeys.AppTitle),
-        };
+        SurfaceTextProvider text = new(catalog, startup.Language.Ui);
+        // WindowsFolderPicker needs the native HWND of the window it pops over, which does not
+        // exist until the Window below is constructed -- the closure resolves it lazily, by which
+        // time PickFolderAsync's own (always later, always async) call sees the real window.
+        Window? window = null;
+        WindowsFolderPicker folderPicker = new(() => window);
+        WorkspaceShellPage page = new(text, application, projectCatalog, providerCatalog, resolveMutations, folderPicker);
+        window = new(page) { Title = text.Resolve(MessageKeys.AppTitle) };
 
         if (restartToken is not null)
         {
