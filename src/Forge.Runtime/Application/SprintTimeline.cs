@@ -23,8 +23,16 @@ public enum TimelineActor
 /// before rendering"). <see cref="ArtifactReferences"/> is always empty: <c>IArtifactStore</c> remains
 /// an empty marker (ADR 0048) -- nothing in this codebase produces a real artifact yet.
 /// </summary>
+/// <summary><see cref="Sequence"/> is the underlying <see cref="WorkflowEvent.Sequence"/> this item
+/// was projected from -- a dense, strictly increasing per-sprint counter, unlike
+/// <see cref="OccurredAt"/> (<see cref="IClock.UtcNow"/> is not guaranteed to advance between two
+/// events appended moments apart, so ties are reachable in practice; see
+/// <c>SprintTimelineViewModel</c>'s own remarks). Consumers that need a genuine ordering or
+/// watermark comparison must use <see cref="Sequence"/>, never <see cref="OccurredAt"/> alone.
+/// </summary>
 public sealed record SprintTimelineItem(
     Guid Id,
+    long Sequence,
     DateTimeOffset OccurredAt,
     string Type,
     TimelineActor Actor,
@@ -114,7 +122,9 @@ public sealed record SprintTimelinePage(
     string Cursor,
     string DiagnosticCode)
 {
-    public const string ContractVersion = "1.0.0";
+    // 1.1.0: SprintTimelineItem gained Sequence (PR #99 review finding 4) -- additive, so a
+    // pre-1.1.0 consumer that ignores unknown fields still round-trips every other field unchanged.
+    public const string ContractVersion = "1.1.0";
 
     public static SprintTimelinePage Empty(Guid sprintId, string? requestedCursor, string diagnosticCode)
     {
@@ -236,6 +246,7 @@ public sealed class SprintTimelineProjector(ISprintStore store)
             entry => entry.Key, entry => entry.Value?.ToString(), StringComparer.Ordinal);
         return new(
             item.EventId,
+            item.Sequence,
             item.OccurredAt,
             item.Type,
             OperatorTriggeredTypes.Contains(item.Type) ? TimelineActor.Operator : TimelineActor.System,

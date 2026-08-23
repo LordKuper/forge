@@ -1,4 +1,5 @@
 using Forge.Domain;
+using Forge.Localization;
 
 namespace Forge.Application;
 
@@ -123,7 +124,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         if (state.Sprint.State is SprintState.Paused or SprintState.Blocked or SprintState.Failed)
         {
             actions.Add(BuildSprintAction(
-                ResumeSprintActionId, "workspace_action.resume_sprint", sprintTarget, sprintId,
+                ResumeSprintActionId, MessageKeys.WorkspaceActionResumeSprintRationale, sprintTarget, sprintId,
                 state.Sprint.Version, SprintOrchestrator.ResumeSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: false));
         }
@@ -131,7 +132,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         if (state.Sprint.State is SprintState.Draft or SprintState.Ready)
         {
             actions.Add(BuildSprintAction(
-                RunSprintActionId, "workspace_action.run_sprint", sprintTarget, sprintId,
+                RunSprintActionId, MessageKeys.WorkspaceActionRunSprintRationale, sprintTarget, sprintId,
                 state.Sprint.Version, SprintOrchestrator.RunSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: false));
         }
@@ -139,7 +140,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         if (!WorkflowStateMachines.IsTerminal(state.Sprint.State))
         {
             actions.Add(BuildSprintAction(
-                CancelSprintActionId, "workspace_action.cancel_sprint", sprintTarget, sprintId,
+                CancelSprintActionId, MessageKeys.WorkspaceActionCancelSprintRationale, sprintTarget, sprintId,
                 state.Sprint.Version, SprintOrchestrator.CancelSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: true));
         }
@@ -151,7 +152,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
             actions.Add(new(
                 AvailableAction.ContractVersion,
                 StopCurrentOperationActionId,
-                "workspace_action.stop_current_operation",
+                MessageKeys.WorkspaceActionStopCurrentOperationRationale,
                 new Dictionary<string, string>(StringComparer.Ordinal) { ["attempt_id"] = active.Id.Value.ToString("D") },
                 stopTarget,
                 expectedVersion,
@@ -223,10 +224,16 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         List<AvailableActionInputField> inputFields = assessment.Direction == StageTransitionDirection.Rewind
             ? [new(RewindReasonField, "string", true, SprintScheduler.MaxSupersessionInstructionLength)]
             : [];
+        string rationaleKey = assessment.Direction switch
+        {
+            StageTransitionDirection.Advance => MessageKeys.WorkspaceActionMoveToStageAdvanceRationale,
+            StageTransitionDirection.Rewind => MessageKeys.WorkspaceActionMoveToStageRewindRationale,
+            _ => MessageKeys.WorkspaceActionMoveToStageSameRationale,
+        };
         return new(
             AvailableAction.ContractVersion,
             actionId,
-            $"workspace_action.move_to_stage.{WorkflowStateNames.ToSnakeCase(assessment.Direction)}",
+            rationaleKey,
             new Dictionary<string, string>(StringComparer.Ordinal)
             {
                 ["sprint_id"] = sprintId.ToString("D"),

@@ -39,13 +39,15 @@ public sealed record TimelineState(
 /// is newly appended since the last call -- there is no separate "live" code path to keep in sync.
 /// </summary>
 /// <remarks>
-/// Unread tracking persists the maximum <see cref="SprintTimelineItem.OccurredAt"/> (UTC ticks) the
-/// user has acknowledged, not the underlying journal sequence number: <see cref="SprintTimelineItem"/>
-/// does not expose its own sequence (only <see cref="SprintTimelineCursor"/> does, and that is an
-/// opaque per-page token, not a per-item one), and every event for one sprint is appended -- and its
-/// <see cref="SprintTimelineItem.OccurredAt"/> assigned -- in strictly increasing order. Comparing
-/// timestamps is therefore an accurate proxy without widening a versioned wire contract for this
-/// feature alone.
+/// Unread tracking persists the maximum <see cref="SprintTimelineItem.Sequence"/> the user has
+/// acknowledged -- the underlying journal's own dense, strictly increasing per-sprint counter (PR
+/// #99 review finding 4). An earlier revision compared <see cref="SprintTimelineItem.OccurredAt"/>
+/// (UTC ticks) instead, on the premise that every event's timestamp is itself strictly increasing;
+/// that premise does not hold (<see cref="IClock.UtcNow"/> is not guaranteed to advance between two
+/// events appended moments apart -- ties are already documented as reachable in this codebase,
+/// <c>SprintScheduler.cs</c>'s own remarks on <c>RecordedAt</c>), so a tie could leave a genuinely new
+/// item born already-read. <see cref="SprintTimelineItem.Sequence"/> has no such gap: it is the exact
+/// per-item value <see cref="SprintTimelineCursor"/>'s own opaque watermark already advances by.
 /// </remarks>
 public sealed class SprintTimelineViewModel(ForgeApplication application, ProjectCatalogStore catalog)
 {
@@ -56,7 +58,7 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
     private Guid sprintId;
     private string? cursor;
     private bool hasMore;
-    private long readWatermarkTicks;
+    private long readWatermarkSequence;
     private string? filterType;
 
     /// <summary>Resets all paging/unread state for a newly opened sprint and loads the first page.
@@ -71,7 +73,7 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
         cursor = null;
         hasMore = false;
         filterType = null;
-        readWatermarkTicks = await LoadWatermarkAsync(cancellationToken).ConfigureAwait(false);
+        readWatermarkSequence = await LoadWatermarkAsync(cancellationToken).ConfigureAwait(false);
         return await LoadMoreAsync(projectRoot, cancellationToken).ConfigureAwait(false);
     }
 
@@ -107,14 +109,14 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
             return;
         }
 
-        long maxTicks = loaded.Max(item => item.OccurredAt.UtcTicks);
-        if (maxTicks <= readWatermarkTicks)
+        long maxSequence = loaded.Max(item => item.Sequence);
+        if (maxSequence <= readWatermarkSequence)
         {
             return;
         }
 
-        readWatermarkTicks = maxTicks;
-        await catalog.SetTimelineWatermarkAsync(projectId, sprintId, maxTicks, cancellationToken).ConfigureAwait(false);
+        readWatermarkSequence = maxSequence;
+        await catalog.SetTimelineWatermarkAsync(projectId, sprintId, maxSequence, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>Plan section 11 Slice 6 item 4's rewind-reason draft, restored on
@@ -127,14 +129,26 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
         return entry?.SprintDrafts?.GetValueOrDefault(sprintId.ToString("D"));
     }
 
-    public Task SaveDraftAsync(string? draft, CancellationToken cancellationToken) =>
+    /// <summary>Returns the full <see cref="ProjectCatalogResult"/> (not just a discarded
+    /// <see cref="Task"/>) so a caller can actually surface a save failure -- notably
+    /// <see cref="DiagnosticCodes.ProjectCatalogDraftTooLong"/>, which was otherwise unreachable by a
+    /// user (PR #99 review finding 10).</summary>
+    public Task<ProjectCatalogResult> SaveDraftAsync(string? draft, CancellationToken cancellationToken) =>
         catalog.SetSprintDraftAsync(projectId, sprintId, draft, cancellationToken);
 
+    /// <summary>Reads the persisted watermark, an opaque <see langword="long"/> compared against
+    /// <see cref="SprintTimelineItem.Sequence"/>. This field (<c>ProjectCatalogEntry.
+    /// TimelineReadWatermarks</c>) was introduced in this same PR and never shipped storing
+    /// <see cref="SprintTimelineItem.OccurredAt"/> ticks (PR #99 review finding 4 corrected the
+    /// scheme before release) -- no migration or dual-format handling is needed. The "never read
+    /// anything" default is <c>-1</c>, matching <see cref="SprintTimelineCursor.Empty"/>'s own
+    /// "start from scratch" sentinel -- <c>Sequence</c> starts at <c>0</c> for a sprint's very first
+    /// event, so a default of <c>0</c> would wrongly treat that item as already read.</summary>
     private async Task<long> LoadWatermarkAsync(CancellationToken cancellationToken)
     {
         ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
         ProjectCatalogEntry? entry = listing.Entries.FirstOrDefault(candidate => candidate.ProjectId == projectId);
-        return entry?.TimelineReadWatermarks?.GetValueOrDefault(sprintId.ToString("D")) ?? 0;
+        return entry?.TimelineReadWatermarks?.GetValueOrDefault(sprintId.ToString("D"), -1) ?? -1;
     }
 
     private TimelineState BuildState()
@@ -146,10 +160,10 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
         List<TimelineItemView> items =
         [
             .. filtered
-                .OrderBy(item => item.OccurredAt)
+                .OrderBy(item => item.Sequence)
                 .Select(item => ToView(item)),
         ];
-        int unread = loaded.Count(item => item.OccurredAt.UtcTicks > readWatermarkTicks);
+        int unread = loaded.Count(item => item.Sequence > readWatermarkSequence);
         return new(items, hasMore, unread, filterType, availableTypes);
     }
 
@@ -164,7 +178,7 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
         // type is a separable content task (see this slice's ADR), not something Desktop can silently
         // diverge from the CLI to work around.
         string messageText = item.MessageKey;
-        bool unread = item.OccurredAt.UtcTicks > readWatermarkTicks;
+        bool unread = item.Sequence > readWatermarkSequence;
         string copyText = string.Create(
             CultureInfo.InvariantCulture,
             $"{item.OccurredAt:O} [{item.Type}/{actorText}] {messageText} " +

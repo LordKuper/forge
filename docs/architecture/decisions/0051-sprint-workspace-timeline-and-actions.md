@@ -18,20 +18,28 @@ make.
 
 ## Decisions
 
-### Unread tracking keys on occurrence time, not the journal's own sequence number
+### Unread tracking keys on the journal's own sequence number, not occurrence time
 
-Plan section 4.3 requires "unread position tracking" for the timeline. `SprintTimelineItem` (ADR
-0049) exposes `OccurredAt` but not its own underlying `WorkflowEvent.Sequence` — only
-`SprintTimelineCursor` carries a sequence-based watermark, and that is an opaque per-page token, not
-a per-item value a renderer can compare against. Widening `SprintTimelineItem` to add a sequence
-field, purely for this slice's own convenience, would be a versioned wire-contract change for a
-UI-only feature. `SprintTimelineViewModel` instead persists the maximum `OccurredAt` (UTC ticks) the
-user has acknowledged: every event for one sprint is appended, and its `OccurredAt` assigned, in
-strictly increasing order (the same durable, single-writer append gate ADR 0044/0047/0048 already
-rely on for every other ordering guarantee in this codebase), so comparing timestamps is an accurate
-proxy without touching `docs/contracts/v1` at all. The watermark only ever advances forward
-(`ProjectCatalogStore.SetTimelineWatermarkAsync` ignores a lower value than the one already
-recorded), so a stale render racing a fresher one can never mark newer items unread again.
+Plan section 4.3 requires "unread position tracking" for the timeline. This ADR originally keyed the
+watermark on `SprintTimelineItem.OccurredAt` (UTC ticks) instead of widening `SprintTimelineItem`
+with `WorkflowEvent.Sequence`, on the premise that every event for one sprint is appended — and its
+`OccurredAt` assigned — in strictly increasing order. Round 1 review of PR #99 (finding 4) disproved
+that premise: `OccurredAt` comes from `IClock.UtcNow`, whose resolution is not guaranteed finer than
+two calls made moments apart (already documented as reachable in this codebase,
+`SprintScheduler.cs`'s own remarks on `RecordedAt`), so a tie could leave a genuinely new item born
+already-read — silently, with no way for the user to notice.
+
+`SprintTimelineItem` now carries `Sequence` (the underlying `WorkflowEvent.Sequence` it was projected
+from — a dense, strictly increasing per-sprint counter with no such gap), and
+`SprintTimelineViewModel` persists the maximum `Sequence` the user has acknowledged instead of a
+timestamp. This does widen the wire contract (`SprintTimelinePage.ContractVersion` moves to `1.1.0`,
+additively — every existing field is unchanged), which the original decision explicitly wanted to
+avoid; ties silently breaking the feature's own core guarantee is judged the worse outcome, and
+before `1.0.0` a contract replacement needs no aliasing or deprecation period. The watermark still
+only ever advances forward (`ProjectCatalogStore.SetTimelineWatermarkAsync` ignores a lower value
+than the one already recorded), so a stale render racing a fresher one can never mark newer items
+unread again. `ProjectCatalogEntry.TimelineReadWatermarks` needs no migration: it was introduced in
+this same PR and never shipped storing the old ticks-based value.
 
 ### The read watermark and the rewind-reason draft live on `ProjectCatalogEntry`, keyed by the sprint id's string form
 
@@ -190,6 +198,9 @@ the Host offered, and typed free text for the reason, never a raw id.
   `SprintDrafts` (additive, optional) and `ProjectCatalogStore.SetTimelineWatermarkAsync`/
   `SetSprintDraftAsync`/`MaxDraftLength`, plus `DiagnosticCodes.ProjectCatalogDraftTooLong`. No schema
   file changed (ADR 0049's own "no new JSON Schema files" precedent); no migration needed.
+- `SprintTimelineItem` (`SprintTimeline.cs`) gains `Sequence`; `SprintTimelinePage.ContractVersion`
+  moves to `1.1.0` (additive). Round 1 review of PR #99 (finding 4) — see the corrected "Unread
+  tracking" decision above.
 - `Forge.Desktop.Presentation` gains `SprintStatusHeaderData`/`SprintStatusHeaderProjector`,
   `TimelineItemView`/`TimelineState`/`SprintTimelineViewModel`, and `SprintActionsViewModel`;
   `SprintWorkspaceViewModel` gains `Timeline`/`Actions` properties, `RefreshHeaderAsync`, and the
@@ -199,9 +210,13 @@ the Host offered, and typed free text for the reason, never a raw id.
   contextual actions) and adds a `StickyHeaderHost` row to `WorkspaceShellPage.xaml` (a genuinely
   non-scrolling region above the timeline, not merely styling); every raw node/attempt-id `Entry` the
   previous stub page had is deleted.
-- `Forge.Localization` gains the new Slice-6 message keys (English and Russian), including the
-  `workspace_action.*` rationale keys `AvailableActionProjector` has referenced since Slice 4 but no
-  surface had rendered until now.
+- `Forge.Localization` gains the new Slice-6 message keys (English and Russian). This includes the
+  `workspace_action.*` rationale keys `AvailableActionProjector` has computed since Slice 4 — Round 1
+  review of PR #99 (finding 9) found the first version of this slice declared and translated them,
+  and `ActionStaleRefreshed`/`TimelineFilterLabel`, without any surface actually rendering any of the
+  nine; the contextual-action renderer, the stale-move-target refresh path, and the timeline filter's
+  accessible name were fixed to resolve all of them, so this slice is genuinely the first surface to
+  render the rationale keys.
 - `tests/Forge.Tests` gains `SprintStatusHeaderProjectorTests`, `SprintTimelineViewModelTests`,
   `SprintActionsViewModelTests`, extends `SprintWorkspaceViewModelTests` and
   `ProjectCatalogStoreTests`, and updates `SurfaceParityTests` for the new file shape (a raw-id-entry

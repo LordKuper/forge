@@ -251,6 +251,12 @@ public partial class WorkspaceShellPage : ContentPage
     {
         WorkspaceRoute route = workspace.Route;
         StopTimelinePoll();
+        // PR #99 review finding 11: scrollTrackedSprintId is only ever set to a real sprint id by
+        // RenderSprintWorkspaceAsync itself (see WorkspaceShellPage.SprintWorkspace.cs) -- resetting
+        // it here for every render means a scroll on any other route is never attributed to the
+        // last-open sprint's saved position, since ContentHost's shared ScrollView.Scrolled handler
+        // ignores Guid.Empty.
+        scrollTrackedSprintId = Guid.Empty;
         ContentHost.Children.Clear();
         ContextualActionHost.Children.Clear();
         StickyHeaderHost.Children.Clear();
@@ -259,7 +265,7 @@ public partial class WorkspaceShellPage : ContentPage
             WorkspacePage.ForgeSettings => text.Resolve(MessageKeys.ForgeSettingsTitle),
             WorkspacePage.ProjectOverview => text.Resolve(MessageKeys.ProjectOverviewTitle),
             WorkspacePage.ProjectSettings => text.Resolve(MessageKeys.ProjectSettingsTitle),
-            WorkspacePage.SprintWorkspace => text.Resolve(MessageKeys.SprintWorkspacePlaceholderTitle),
+            WorkspacePage.SprintWorkspace => text.Resolve(MessageKeys.SprintWorkspaceTitle),
             _ => text.Resolve(MessageKeys.WorkspaceEmptyStateTitle),
         };
 

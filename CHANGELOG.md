@@ -6,11 +6,6 @@ User-facing Forge changes are listed by release, newest first.
 
 ### Added
 
-- Replaced the sprint workspace's placeholder controls with a real sticky status header showing
-  project name, sprint sequence, lifecycle state (including `paused`), current stage, stage
-  progress, last activity, open finding count, retry budget, and `resume_not_before`; UUIDs, the
-  project root, base commit, and workflow id now live behind an expandable "details" toggle instead
-  of crowding the main row.
 - Added a chronological sprint timeline: incremental "load more" paging backed by the real cursor,
   automatic polling for new items while the page is open, filtering by item type, per-item
   copy-to-clipboard, collapsed-by-default technical detail (correlation/causation ids, structured
@@ -28,6 +23,17 @@ User-facing Forge changes are listed by release, newest first.
   a rewind, exactly what would be superseded) before confirming, and re-validates immediately
   before committing — a target is never shown as available from a locally cached or computed
   guess. Rewinding requires a reason, which is preserved as a draft across an app restart.
+
+### Changed
+
+- Replaced the sprint workspace's placeholder controls with a real sticky status header showing
+  project name, sprint sequence, lifecycle state (including `paused`), current stage, stage
+  progress, last activity, open finding count, retry budget, and `resume_not_before`; UUIDs, the
+  project root, base commit, and workflow id now live behind an expandable "details" toggle instead
+  of crowding the main row.
+
+### Removed
+
 - Removed every remaining manual project/sprint/node/attempt-id entry field from the sprint
   workspace: gate, confirm, test-work, finalize, and attempt supersession now resolve their target
   from the already-selected sprint's own current state.

@@ -157,6 +157,7 @@
   <data name="SprintRunAction" xml:space="preserve"><value>Запустить спринт</value></data>
   <data name="SprintResumeAction" xml:space="preserve"><value>Возобновить спринт</value></data>
   <data name="SprintCancelAction" xml:space="preserve"><value>Отменить спринт</value></data>
+  <data name="SprintCancelConfirmationRequired" xml:space="preserve"><value>Подтвердите отмену спринта перед выполнением.</value></data>
   <data name="SprintManageFailed" xml:space="preserve"><value>Действие со спринтом не выполнено.</value></data>
   <data name="SprintManageSprintAmbiguous" xml:space="preserve"><value>Одновременно выполняется несколько спринтов; укажите идентификатор спринта, чтобы выполнить действие.</value></data>
   <data name="SprintStatePaused" xml:space="preserve"><value>Приостановлено</value></data>
@@ -221,7 +222,7 @@
   <data name="ProjectSettingsRelinkAction" xml:space="preserve"><value>Перепривязать папку проекта</value></data>
   <data name="ProjectSettingsRemoveFromCatalogAction" xml:space="preserve"><value>Удалить из каталога</value></data>
   <data name="ProjectSettingsDiagnosticBundleAction" xml:space="preserve"><value>Сформировать диагностический пакет</value></data>
-  <data name="SprintWorkspacePlaceholderTitle" xml:space="preserve"><value>Рабочая область спринта (базовый вид; расширенный вид появится позже)</value></data>
+  <data name="SprintWorkspaceTitle" xml:space="preserve"><value>Рабочая область спринта</value></data>
   <data name="ProjectAddFailed" xml:space="preserve"><value>Не удалось добавить проект.</value></data>
   <data name="ProjectRemoveFailed" xml:space="preserve"><value>Не удалось удалить проект.</value></data>
   <data name="ProjectRelinkFailed" xml:space="preserve"><value>Не удалось перепривязать проект.</value></data>
@@ -271,6 +272,7 @@
   <data name="ActionRewindReasonLabel" xml:space="preserve"><value>Причина возврата назад (обязательно)</value></data>
   <data name="ActionRewindReasonRequired" xml:space="preserve"><value>Для возврата на более раннюю стадию требуется указать причину.</value></data>
   <data name="ActionStaleRefreshed" xml:space="preserve"><value>Это действие устарело; экран обновлён.</value></data>
+  <data name="ActionRewindReasonDraftSaveFailed" xml:space="preserve"><value>Не удалось сохранить черновик причины.</value></data>
   <data name="workspace_action.resume_sprint" xml:space="preserve"><value>Возобновить приостановленный, заблокированный или неудавшийся спринт.</value></data>
   <data name="workspace_action.run_sprint" xml:space="preserve"><value>Продвинуть спринт из черновика или готовности.</value></data>
   <data name="workspace_action.cancel_sprint" xml:space="preserve"><value>Отменить спринт.</value></data>

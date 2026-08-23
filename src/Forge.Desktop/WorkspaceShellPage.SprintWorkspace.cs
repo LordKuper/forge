@@ -50,6 +50,7 @@ public partial class WorkspaceShellPage
         VerticalStackLayout timelineItemsHost = new();
         Label timelineStatusLabel = new();
         Picker filterPicker = new();
+        SemanticProperties.SetDescription(filterPicker, text.Resolve(MessageKeys.TimelineFilterLabel));
         Label copyNoticeLabel = new();
         Button loadMoreButton = new() { Text = text.Resolve(MessageKeys.TimelineLoadMoreAction) };
         Label gateResult = new();
@@ -61,8 +62,23 @@ public partial class WorkspaceShellPage
         Label stopResult = new();
         Label moveResult = new();
         Entry rewindReasonEntry = Describe(new Entry(), text.Resolve(MessageKeys.ActionRewindReasonLabel));
+        // PR #99 review finding 7: hoisted out of RefreshActionsAsync (like rewindReasonEntry already
+        // was) so a re-render triggered by a FAILED mutation -- every mutation handler calls
+        // RefreshAllAsync unconditionally on completion -- reuses the same Entry instance instead of
+        // replacing it with a blank one. Only a genuinely successful, completed action clears the
+        // corresponding field's text (matching this codebase's one-shot-state convention).
+        Entry instructionEntry = Describe(new Entry(), text.Resolve(MessageKeys.AttemptInstructionLabel));
+        Entry definitionOfDoneEntry = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmDefinitionOfDoneLabel));
+        Entry evidenceEntry = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmEvidenceLabel));
+        Entry justificationEntry = Describe(new Entry(), text.Resolve(MessageKeys.TestWorkJustificationLabel));
         SprintDetails? currentDetails = null;
-        bool timelineInitialized = false;
+        // PR #99 review finding 3: RenderTimelineItems below re-assigns filterPicker.ItemsSource/
+        // SelectedItem, either of which can raise the picker's own SelectedIndexChanged event
+        // synchronously (a fresh ItemsSource resets SelectedIndex first) -- re-entering
+        // RenderTimelineItems from inside itself on every poll tick / load-more / mark-all-read.
+        // This flag is the real suppression: set around exactly those two assignments, not a stale
+        // one-shot "not initialized yet" check that could never be false once the handler existed.
+        bool suppressFilterChanged = false;
 
         async Task RefreshHeaderAsync()
         {
@@ -164,8 +180,16 @@ public partial class WorkspaceShellPage
                 ? string.Format(CultureInfo.InvariantCulture, text.Resolve(MessageKeys.TimelineUnreadLabel), state.UnreadCount)
                 : string.Empty;
             List<string> options = [text.Resolve(MessageKeys.TimelineFilterAllOption), .. state.AvailableFilterTypes];
-            filterPicker.ItemsSource = options;
-            filterPicker.SelectedItem = state.ActiveFilterType ?? options[0];
+            suppressFilterChanged = true;
+            try
+            {
+                filterPicker.ItemsSource = options;
+                filterPicker.SelectedItem = state.ActiveFilterType ?? options[0];
+            }
+            finally
+            {
+                suppressFilterChanged = false;
+            }
         }
 
         async Task InitializeTimelineAsync()
@@ -175,7 +199,6 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
             rewindReasonEntry.Text = await sprintWorkspace.Timeline.LoadDraftAsync(CancellationToken.None).ConfigureAwait(true);
             RenderTimelineItems(state);
-            timelineInitialized = true;
         }
 
         async Task RefreshActionsAsync()
@@ -217,6 +240,15 @@ public partial class WorkspaceShellPage
                     bool dialogConfirmed = await DisplayAlertAsync(
                             action, sprintWorkspace.SprintCancelPrompt(sprintId), action, text.Resolve(MessageKeys.CancelAction))
                         .ConfigureAwait(true);
+                    if (!dialogConfirmed)
+                    {
+                        // PR #99 review finding 5: every other gated action in this file aborts on a
+                        // declined confirmation before touching the Host -- this was the only one
+                        // that fell through to the mutation call regardless of the dialog's answer.
+                        lifecycleResult.Text = text.Resolve(MessageKeys.SprintCancelConfirmationRequired);
+                        return;
+                    }
+
                     string message = await sprintWorkspace
                         .CancelSprintAsync(root, sprintId, dialogConfirmed, CancellationToken.None)
                         .ConfigureAwait(true);
@@ -261,6 +293,7 @@ public partial class WorkspaceShellPage
                     stopResult.Text = message;
                 });
                 ContextualActionHost.Children.Add(stopButton);
+                ContextualActionHost.Children.Add(BuildRationale(stop));
             }
 
             ContextualActionHost.Children.Add(stopResult);
@@ -269,6 +302,18 @@ public partial class WorkspaceShellPage
                 [.. actions.Where(action => action.ActionId.StartsWith(AvailableActionProjector.MoveToStageActionPrefix, StringComparison.Ordinal))];
             if (moveActions.Count > 0)
             {
+                // PR #99 review finding 10: the Host already declares this field's own bound
+                // (AvailableActionProjector.BuildMoveToStage) -- apply it client-side so the input
+                // itself prevents composing a reason the commit would reject anyway, rather than only
+                // reporting the rejection after the fact.
+                AvailableActionInputField? reasonField = moveActions
+                    .SelectMany(action => action.InputFields)
+                    .FirstOrDefault(field => field.Name == AvailableActionProjector.RewindReasonField);
+                if (reasonField?.MaxLength is { } maxReasonLength)
+                {
+                    rewindReasonEntry.MaxLength = maxReasonLength;
+                }
+
                 ContextualActionHost.Children.Add(rewindReasonEntry);
                 foreach (AvailableAction moveAction in moveActions)
                 {
@@ -282,6 +327,7 @@ public partial class WorkspaceShellPage
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
                     ContextualActionHost.Children.Add(moveButton);
+                    ContextualActionHost.Children.Add(BuildRationale(moveAction));
                     if (!moveAction.Enabled && moveAction.Blockers.Count > 0)
                     {
                         ContextualActionHost.Children.Add(Describe(new Label
@@ -311,11 +357,10 @@ public partial class WorkspaceShellPage
             Guid? activeAttemptId = SprintWorkspaceViewModel.FindActiveAttemptId(currentDetails);
             if (activeAttemptId is { } attemptId)
             {
-                Entry instruction = Describe(new Entry(), text.Resolve(MessageKeys.AttemptInstructionLabel));
                 Button supersede = new() { Text = text.Resolve(MessageKeys.AttemptSupersedeAction) };
                 supersede.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
-                    if (string.IsNullOrWhiteSpace(instruction.Text))
+                    if (string.IsNullOrWhiteSpace(instructionEntry.Text))
                     {
                         supersedeResult.Text = text.Resolve(MessageKeys.AttemptInstructionRequired);
                         return;
@@ -334,12 +379,22 @@ public partial class WorkspaceShellPage
 
                     string message = await sprintWorkspace
                         .SupersedeAttemptAsync(
-                            root, sprintId, attemptId.ToString("D"), instruction.Text, confirmed, CancellationToken.None)
+                            root, sprintId, attemptId.ToString("D"), instructionEntry.Text, confirmed, CancellationToken.None)
                         .ConfigureAwait(true);
+                    // A genuinely successful, completed action -- clear the typed input only now,
+                    // never on a failed attempt (PR #99 review finding 7). Every result here is a
+                    // human-readable message, not a typed outcome, but a Host success always resolves
+                    // to exactly this fixed text with no diagnostic-code suffix (MainPageViewModel's
+                    // own Message helper), so an exact match is a reliable success signal.
+                    if (string.Equals(message, text.Resolve(MessageKeys.AttemptSuperseded), StringComparison.Ordinal))
+                    {
+                        instructionEntry.Text = null;
+                    }
+
                     await RefreshAllAsync().ConfigureAwait(true);
                     supersedeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(instruction);
+                ContextualActionHost.Children.Add(instructionEntry);
                 ContextualActionHost.Children.Add(supersede);
             }
 
@@ -347,8 +402,6 @@ public partial class WorkspaceShellPage
 
             if (NodeIsReady(ImplementationCriticalGraphBuilder.ConfirmationNodeId))
             {
-                Entry definitionOfDone = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmDefinitionOfDoneLabel));
-                Entry evidence = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmEvidenceLabel));
                 Picker evidenceKind = new() { ItemsSource = new List<string> { "inspection", "execution", "existing-check" } };
                 evidenceKind.SelectedIndex = 0;
                 SemanticProperties.SetDescription(evidenceKind, text.Resolve(MessageKeys.ConfirmEvidenceKindLabel));
@@ -356,7 +409,7 @@ public partial class WorkspaceShellPage
                 Button notConfirmed = new() { Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction) };
                 async Task ConfirmAsync(ConfirmationOutcome outcome)
                 {
-                    if (string.IsNullOrWhiteSpace(definitionOfDone.Text) || string.IsNullOrWhiteSpace(evidence.Text))
+                    if (string.IsNullOrWhiteSpace(definitionOfDoneEntry.Text) || string.IsNullOrWhiteSpace(evidenceEntry.Text))
                     {
                         confirmResult.Text = text.Resolve(MessageKeys.ConfirmDefinitionOfDoneRequired);
                         return;
@@ -366,7 +419,7 @@ public partial class WorkspaceShellPage
                         ? MessageKeys.ConfirmConfirmedAction
                         : MessageKeys.ConfirmNotConfirmedAction);
                     bool dialogConfirmed = await DisplayAlertAsync(
-                            action, sprintWorkspace.ConfirmPrompt(sprintId, null, definitionOfDone.Text, evidence.Text),
+                            action, sprintWorkspace.ConfirmPrompt(sprintId, null, definitionOfDoneEntry.Text, evidenceEntry.Text),
                             action, text.Resolve(MessageKeys.CancelAction))
                         .ConfigureAwait(true);
                     if (!dialogConfirmed)
@@ -377,17 +430,25 @@ public partial class WorkspaceShellPage
 
                     string message = await sprintWorkspace
                         .ConfirmNodeAsync(
-                            root, sprintId, null, outcome, definitionOfDone.Text, evidenceKind.SelectedItem as string,
-                            evidence.Text, dialogConfirmed, CancellationToken.None)
+                            root, sprintId, null, outcome, definitionOfDoneEntry.Text, evidenceKind.SelectedItem as string,
+                            evidenceEntry.Text, dialogConfirmed, CancellationToken.None)
                         .ConfigureAwait(true);
+                    // Genuinely successful and completed only -- see the supersede handler's own
+                    // remarks (PR #99 review finding 7).
+                    if (string.Equals(message, text.Resolve(MessageKeys.ConfirmRecorded), StringComparison.Ordinal))
+                    {
+                        definitionOfDoneEntry.Text = null;
+                        evidenceEntry.Text = null;
+                    }
+
                     await RefreshAllAsync().ConfigureAwait(true);
                     confirmResult.Text = message;
                 }
 
                 confirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.Confirmed));
                 notConfirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.NotConfirmed));
-                ContextualActionHost.Children.Add(definitionOfDone);
-                ContextualActionHost.Children.Add(evidence);
+                ContextualActionHost.Children.Add(definitionOfDoneEntry);
+                ContextualActionHost.Children.Add(evidenceEntry);
                 ContextualActionHost.Children.Add(evidenceKind);
                 ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { confirmed, notConfirmed } });
             }
@@ -396,12 +457,11 @@ public partial class WorkspaceShellPage
 
             if (NodeIsReady(ImplementationCriticalGraphBuilder.TestWorkNodeId))
             {
-                Entry justification = Describe(new Entry(), text.Resolve(MessageKeys.TestWorkJustificationLabel));
                 Button added = new() { Text = text.Resolve(MessageKeys.TestWorkAddedAction) };
                 Button noNewTests = new() { Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction) };
                 async Task TestWorkAsync(TestWorkOutcome outcome)
                 {
-                    if (string.IsNullOrWhiteSpace(justification.Text))
+                    if (string.IsNullOrWhiteSpace(justificationEntry.Text))
                     {
                         testWorkResult.Text = text.Resolve(MessageKeys.TestWorkJustificationRequired);
                         return;
@@ -411,7 +471,7 @@ public partial class WorkspaceShellPage
                         ? MessageKeys.TestWorkAddedAction
                         : MessageKeys.TestWorkNoNewTestsAction);
                     bool dialogConfirmed = await DisplayAlertAsync(
-                            action, sprintWorkspace.TestWorkPrompt(sprintId, null, justification.Text), action,
+                            action, sprintWorkspace.TestWorkPrompt(sprintId, null, justificationEntry.Text), action,
                             text.Resolve(MessageKeys.CancelAction))
                         .ConfigureAwait(true);
                     if (!dialogConfirmed)
@@ -421,15 +481,22 @@ public partial class WorkspaceShellPage
                     }
 
                     string message = await sprintWorkspace
-                        .RecordTestWorkAsync(root, sprintId, null, outcome, justification.Text, dialogConfirmed, CancellationToken.None)
+                        .RecordTestWorkAsync(root, sprintId, null, outcome, justificationEntry.Text, dialogConfirmed, CancellationToken.None)
                         .ConfigureAwait(true);
+                    // Genuinely successful and completed only -- see the supersede handler's own
+                    // remarks (PR #99 review finding 7).
+                    if (string.Equals(message, text.Resolve(MessageKeys.TestWorkRecorded), StringComparison.Ordinal))
+                    {
+                        justificationEntry.Text = null;
+                    }
+
                     await RefreshAllAsync().ConfigureAwait(true);
                     testWorkResult.Text = message;
                 }
 
                 added.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.TestsAdded));
                 noNewTests.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.NoNewTestsJustified));
-                ContextualActionHost.Children.Add(justification);
+                ContextualActionHost.Children.Add(justificationEntry);
                 ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { added, noNewTests } });
             }
 
@@ -474,7 +541,15 @@ public partial class WorkspaceShellPage
             Button button = new() { Text = label, IsEnabled = action.Enabled };
             button.Clicked += (_, _) => _ = RunAsync(execute);
             ContextualActionHost.Children.Add(button);
+            ContextualActionHost.Children.Add(BuildRationale(action));
         }
+
+        // PR #99 review finding 9: AvailableActionProjector has computed a RationaleKey for every
+        // AvailableAction since Slice 4, but no surface ever rendered it -- the Host's own stated
+        // reason for offering an action (plan 4.3: "renders typed controls described by the Host")
+        // was silently dropped. Every lifecycle/stop/move-to-stage row now shows it alongside its
+        // button/verb label.
+        Label BuildRationale(AvailableAction action) => Describe(new Label { Text = text.Resolve(action.RationaleKey) });
 
         bool NodeIsReady(string nodeId) =>
             currentDetails?.Nodes.Any(node => node.Id == nodeId && node.State == "ready") ?? false;
@@ -505,7 +580,11 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
             if (!assessment.Found)
             {
-                moveResult.Text = assessment.DiagnosticCode;
+                // PR #99 review finding 9: this is exactly the "stale-assessment-rejected" case
+                // ActionStaleRefreshed was authored for -- the fresh re-assessment no longer finds the
+                // target the on-screen row was built from, so the view is refreshed and the user is
+                // told plainly why, with the machine diagnostic still available parenthetically.
+                moveResult.Text = Message(text.Resolve(MessageKeys.ActionStaleRefreshed), assessment.DiagnosticCode);
                 await RefreshAllAsync().ConfigureAwait(true);
                 return;
             }
@@ -545,6 +624,12 @@ public partial class WorkspaceShellPage
         async Task RefreshAllAsync()
         {
             await RefreshHeaderAsync().ConfigureAwait(true);
+            // Plan section 10: the selected sprint refreshes immediately after a mutation -- the
+            // timeline pane is not exempt just because it also has its own bounded poll (PR #99
+            // review finding 2). Reuses the same LoadMoreAsync path the poll and "load more" already
+            // call, so the event the user's own action just caused is visible right away instead of
+            // waiting up to TimelinePollInterval.
+            RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true));
             await RefreshActionsAsync().ConfigureAwait(true);
         }
 
@@ -560,7 +645,7 @@ public partial class WorkspaceShellPage
 
         filterPicker.SelectedIndexChanged += (_, _) =>
         {
-            if (!timelineInitialized)
+            if (suppressFilterChanged)
             {
                 return;
             }
@@ -575,8 +660,19 @@ public partial class WorkspaceShellPage
             await sprintWorkspace.Timeline.MarkAllReadAsync(CancellationToken.None).ConfigureAwait(true);
             RenderTimelineItems(sprintWorkspace.Timeline.SetFilter(SelectedFilterOrNull()));
         });
-        rewindReasonEntry.Unfocused += (_, _) => _ =
-            sprintWorkspace.Timeline.SaveDraftAsync(rewindReasonEntry.Text, CancellationToken.None);
+        rewindReasonEntry.Unfocused += (_, _) => _ = RunAsync(async () =>
+        {
+            // PR #99 review finding 10: previously fire-and-forget with the result discarded, which
+            // made ProjectCatalogDraftTooLong unreachable by a user -- the draft would silently fail
+            // to save past the length limit with no feedback at all.
+            ProjectCatalogResult saveResult = await sprintWorkspace.Timeline
+                .SaveDraftAsync(rewindReasonEntry.Text, CancellationToken.None)
+                .ConfigureAwait(true);
+            if (!saveResult.Succeeded)
+            {
+                moveResult.Text = Message(text.Resolve(MessageKeys.ActionRewindReasonDraftSaveFailed), saveResult.DiagnosticCode);
+            }
+        });
 
         ContentHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineTitle), FontAttributes = FontAttributes.Bold }));
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { filterPicker, markAllReadButton } });
@@ -606,7 +702,19 @@ public partial class WorkspaceShellPage
             if (!scrollHandlerAttached)
             {
                 scrollHandlerAttached = true;
-                scrollView.Scrolled += (_, args) => sprintScrollPositions[scrollTrackedSprintId] = args.ScrollY;
+                // PR #99 review finding 11: scrollTrackedSprintId is reset to Guid.Empty by
+                // RenderContentAsync whenever a non-sprint-workspace route renders (see
+                // WorkspaceShellPage.xaml.cs), so scrolling the project overview/settings/Forge
+                // settings pages -- which share this same ScrollView -- can never overwrite a
+                // sprint's saved position; only a scroll genuinely occurring while a sprint workspace
+                // is the active route is ever recorded.
+                scrollView.Scrolled += (_, args) =>
+                {
+                    if (scrollTrackedSprintId != Guid.Empty)
+                    {
+                        sprintScrollPositions[scrollTrackedSprintId] = args.ScrollY;
+                    }
+                };
             }
 
             if (sprintScrollPositions.TryGetValue(sprintId, out double previousScrollY) && previousScrollY > 0)
@@ -619,10 +727,44 @@ public partial class WorkspaceShellPage
             }
         }
 
+        bool timelinePollInFlight = false;
+
+        async Task PollTimelineAsync()
+        {
+            try
+            {
+                // Deliberately NOT routed through RunAsync/renderGate (PR #99 review finding 1): this
+                // is an unattended background tick, never a user gesture, so it must not contend for
+                // the same guard a user click's mutation takes -- doing so previously let a click
+                // landing during this Host round-trip be silently dropped before it even started.
+                // Only the fast, synchronous render step below goes through the gate, so it still
+                // never races a concurrent mutation's own render.
+                TimelineState state = await sprintWorkspace.Timeline
+                    .LoadMoreAsync(root, CancellationToken.None)
+                    .ConfigureAwait(true);
+                renderGate.RequestRender(() => RenderTimelineItems(state));
+            }
+            finally
+            {
+                timelinePollInFlight = false;
+            }
+        }
+
         timelinePollTimer = Dispatcher.CreateTimer();
         timelinePollTimer.Interval = TimelinePollInterval;
-        timelinePollTimer.Tick += (_, _) => _ = RunAsync(async () =>
-            RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true)));
+        timelinePollTimer.Tick += (_, _) =>
+        {
+            if (timelinePollInFlight)
+            {
+                // The previous tick's Host round-trip has not returned yet -- skip this tick rather
+                // than stacking overlapping fetches; the next tick will pick up wherever the cursor
+                // is once the in-flight one completes.
+                return;
+            }
+
+            timelinePollInFlight = true;
+            _ = PollTimelineAsync();
+        };
         timelinePollTimer.Start();
     }
 }

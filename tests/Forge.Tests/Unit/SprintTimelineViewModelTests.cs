@@ -106,6 +106,55 @@ public sealed class SprintTimelineViewModelTests
         Assert.True(polled.UnreadCount > 0);
     }
 
+    /// <summary>
+    /// PR #99 review finding 4: ADR 0051 originally claimed every timeline item's
+    /// <c>OccurredAt</c> is strictly increasing, and keyed the unread watermark on it. That premise
+    /// does not hold -- <c>IClock.UtcNow</c> is not guaranteed to advance between two events appended
+    /// moments apart (already documented as reachable, <c>SprintScheduler.cs</c>'s own remarks on
+    /// <c>RecordedAt</c>) -- so a tie could leave a genuinely new item born already-read.
+    /// <see cref="TiedTimestampSprintStore"/> forces every event this test reads back to report the
+    /// exact same <c>OccurredAt</c>, reproducing a tie deterministically: after marking everything
+    /// read at that tied instant, a brand-new event appended afterwards (and read back with the same
+    /// tied timestamp) must still surface as unread, because the watermark now compares
+    /// <see cref="SprintTimelineItem.Sequence"/> -- the journal's own dense, strictly increasing
+    /// counter -- never the colliding timestamp.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATiedOccurredAtNeverHidesAGenuinelyNewItemBehindTheReadWatermark()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        DateTimeOffset tiedInstant = DateTimeOffset.UtcNow;
+        ForgeApplication tiedApplication =
+            environment.ResolveApplicationWithSprintStore(store => new TiedTimestampSprintStore(store, tiedInstant));
+        SprintTimelineViewModel timeline = new(tiedApplication, catalog);
+
+        TimelineState initial = await timeline.InitializeAsync(
+            projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+        Assert.True(initial.Items.Count >= 2, "The seeded sprint must produce at least two events to prove a tie.");
+        Assert.All(initial.Items, item => Assert.Equal(tiedInstant, item.OccurredAt));
+
+        await timeline.MarkAllReadAsync(cancellationToken);
+        Assert.Equal(0, timeline.SetFilter(null).UnreadCount);
+
+        // A brand-new event, appended after the watermark was recorded, whose OccurredAt still ties
+        // with every already-read item once read back through the same tied clock.
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintSnapshot running = (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        await orchestrator.CancelSprintAsync(
+            new(environment.ProjectRoot, sprintId, running.Version, SprintOrchestrator.CancelSprintKey(running)),
+            cancellationToken);
+
+        TimelineState polled = await timeline.LoadMoreAsync(environment.ProjectRoot, cancellationToken);
+
+        Assert.True(
+            polled.UnreadCount > 0,
+            "A new event tied in OccurredAt with the read watermark must still surface as unread.");
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task DraftIsRestoredByAFreshViewModelInstanceAfterASimulatedRestart()

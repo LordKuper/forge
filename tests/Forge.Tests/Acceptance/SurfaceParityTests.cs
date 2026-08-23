@@ -425,8 +425,8 @@ public sealed class SurfaceParityTests
     {
         string method = SprintWorkspaceBody("async Task ConfirmAsync(ConfirmationOutcome outcome)");
 
-        int definitionGuardIndex = method.IndexOf("definitionOfDone.Text", StringComparison.Ordinal);
-        int evidenceGuardIndex = method.IndexOf("evidence.Text", StringComparison.Ordinal);
+        int definitionGuardIndex = method.IndexOf("definitionOfDoneEntry.Text", StringComparison.Ordinal);
+        int evidenceGuardIndex = method.IndexOf("evidenceEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(definitionGuardIndex >= 0, "ConfirmAsync no longer refuses a blank definition of done.");
         Assert.True(evidenceGuardIndex >= 0, "ConfirmAsync no longer refuses blank evidence.");
@@ -446,7 +446,7 @@ public sealed class SurfaceParityTests
     {
         string method = SprintWorkspaceBody("async Task TestWorkAsync(TestWorkOutcome outcome)");
 
-        int guardIndex = method.IndexOf("justification.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("justificationEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "TestWorkAsync no longer refuses a blank justification.");
         Assert.True(dialogIndex >= 0, "TestWorkAsync no longer shows a confirmation dialog.");
@@ -515,13 +515,13 @@ public sealed class SurfaceParityTests
             ".ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "attemptId.ToString(\"D\"), instruction.Text, confirmed, CancellationToken.None)",
+            "attemptId.ToString(\"D\"), instructionEntry.Text, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "evidence.Text, dialogConfirmed, CancellationToken.None)",
+            "evidenceEntry.Text, dialogConfirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
-            "outcome, justification.Text, dialogConfirmed,",
+            "outcome, justificationEntry.Text, dialogConfirmed,",
             source, StringComparison.Ordinal);
         Assert.Contains(
             ".FinalizeSprintAsync(root, sprintId, null, dialogConfirmed, CancellationToken.None)",
@@ -537,6 +537,30 @@ public sealed class SurfaceParityTests
         // argument -- every occurrence of `true` immediately before `CancellationToken.None)` in
         // this file must instead be one of the dialog-answer variable names.
         Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR #99 review finding 5: every gated action above (gate/supersede/confirm/test-work/finalize/
+    /// stop/stage-move) aborts before touching the Host when its own confirmation dialog is declined
+    /// -- except "cancel sprint," which used to call <c>CancelSprintAsync</c> unconditionally
+    /// regardless of the dialog's answer. No MAUI control can be instantiated headlessly in this
+    /// suite (see this file's other dialog checks), so this pins the fix the same way
+    /// <see cref="ConfirmNodeRefusesBlankRequiredFieldsBeforeShowingTheConfirmationDialog"/> and
+    /// <see cref="SupersedeAttemptRefusesABlankInstructionBeforeShowingTheConfirmationDialog"/> pin
+    /// their own guards: the decline branch must appear, and it must run before the mutation call.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void CancelSprintAbortsBeforeMutatingWhenTheConfirmationDialogIsDeclined()
+    {
+        string method = SprintWorkspaceBody(
+            "actions, AvailableActionProjector.CancelSprintActionId, text.Resolve(MessageKeys.SprintCancelAction),");
+
+        int guardIndex = method.IndexOf("if (!dialogConfirmed)", StringComparison.Ordinal);
+        int mutationIndex = method.IndexOf(".CancelSprintAsync(", StringComparison.Ordinal);
+        Assert.True(guardIndex >= 0, "The cancel-sprint handler no longer aborts on a declined confirmation.");
+        Assert.True(mutationIndex >= 0, "The cancel-sprint handler no longer calls CancelSprintAsync.");
+        Assert.True(guardIndex < mutationIndex, "The decline guard must run before the mutation call.");
     }
 
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
@@ -615,7 +639,7 @@ public sealed class SurfaceParityTests
     {
         string method = SupersedeAttemptClickHandlerBody();
 
-        int guardIndex = method.IndexOf("instruction.Text", StringComparison.Ordinal);
+        int guardIndex = method.IndexOf("instructionEntry.Text", StringComparison.Ordinal);
         int dialogIndex = method.IndexOf("DisplayAlertAsync(", StringComparison.Ordinal);
         Assert.True(guardIndex >= 0, "The supersede handler no longer refuses a blank instruction.");
         Assert.True(

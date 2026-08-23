@@ -191,6 +191,7 @@ public static class MessageKeys
     public const string SprintRunAction = "SprintRunAction";
     public const string SprintResumeAction = "SprintResumeAction";
     public const string SprintCancelAction = "SprintCancelAction";
+    public const string SprintCancelConfirmationRequired = "SprintCancelConfirmationRequired";
     public const string SprintManageFailed = "SprintManageFailed";
     public const string SprintManageSprintAmbiguous = "SprintManageSprintAmbiguous";
 
@@ -276,7 +277,7 @@ public static class MessageKeys
     public const string ProjectSettingsRelinkAction = "ProjectSettingsRelinkAction";
     public const string ProjectSettingsRemoveFromCatalogAction = "ProjectSettingsRemoveFromCatalogAction";
     public const string ProjectSettingsDiagnosticBundleAction = "ProjectSettingsDiagnosticBundleAction";
-    public const string SprintWorkspacePlaceholderTitle = "SprintWorkspacePlaceholderTitle";
+    public const string SprintWorkspaceTitle = "SprintWorkspaceTitle";
 
     // PR #98 review round 1: findings 3/4 (catalog-operation outcomes were silent or unconditionally
     // "saved"), 7 (project overview's providers section), and 8 (hardcoded English in
@@ -339,6 +340,7 @@ public static class MessageKeys
     public const string MoveToStageBlockedCannotProceed = "MoveToStageBlockedCannotProceed";
     public const string ActionRewindReasonLabel = "ActionRewindReasonLabel";
     public const string ActionRewindReasonRequired = "ActionRewindReasonRequired";
+    public const string ActionRewindReasonDraftSaveFailed = "ActionRewindReasonDraftSaveFailed";
     public const string ActionStaleRefreshed = "ActionStaleRefreshed";
 
     /// <summary><c>AvailableActionProjector</c>'s sprint-lifecycle rationale keys, resolved as
