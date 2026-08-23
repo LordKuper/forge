@@ -123,21 +123,24 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         if (state.Sprint.State is SprintState.Paused or SprintState.Blocked or SprintState.Failed)
         {
             actions.Add(BuildSprintAction(
-                ResumeSprintActionId, "workspace_action.resume_sprint", sprintTarget, sprintId, expectedVersion,
+                ResumeSprintActionId, "workspace_action.resume_sprint", sprintTarget, sprintId,
+                state.Sprint.Version, SprintOrchestrator.ResumeSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: false));
         }
 
         if (state.Sprint.State is SprintState.Draft or SprintState.Ready)
         {
             actions.Add(BuildSprintAction(
-                RunSprintActionId, "workspace_action.run_sprint", sprintTarget, sprintId, expectedVersion,
+                RunSprintActionId, "workspace_action.run_sprint", sprintTarget, sprintId,
+                state.Sprint.Version, SprintOrchestrator.RunSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: false));
         }
 
         if (!WorkflowStateMachines.IsTerminal(state.Sprint.State))
         {
             actions.Add(BuildSprintAction(
-                CancelSprintActionId, "workspace_action.cancel_sprint", sprintTarget, sprintId, expectedVersion,
+                CancelSprintActionId, "workspace_action.cancel_sprint", sprintTarget, sprintId,
+                state.Sprint.Version, SprintOrchestrator.CancelSprintKey(state.Sprint),
                 SafetyClass.ConfirmMutation, confirmationRequired: true));
         }
 
@@ -194,6 +197,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
         AvailableActionTarget target,
         Guid sprintId,
         long expectedVersion,
+        Guid idempotencyKey,
         SafetyClass safetyClass,
         bool confirmationRequired) =>
         new(
@@ -208,7 +212,7 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
             [],
             true,
             [],
-            StatusAdvisor.IdempotencyKey(actionId, new("sprint", sprintId.ToString("D")), expectedVersion),
+            idempotencyKey,
             StaleBehavior.RejectWithoutSideEffect);
 
     private static AvailableAction BuildMoveToStage(
