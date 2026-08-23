@@ -248,6 +248,89 @@ public sealed class SurfaceParityTests
             });
     }
 
+    /// <summary>Slice 4 (ADR 0043/0049): `workspace.summary` stays reserved (no Desktop control) but
+    /// ships a real CLI command, closing the same gap
+    /// <see cref="StopOperationDocumentedCliOptionsMatchTheirActualRequiredness"/> already closes for
+    /// its own capability.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void WorkspaceSummaryDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("workspace.summary");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command workspace = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command summary = Assert.Single(workspace.Subcommands, subcommand => subcommand.Name == "summary");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(summary, entry.Option);
+                Assert.True(actual is not null, $"'summary' does not expose documented option '{entry.Option}'.");
+                Assert.True(actual!.Required == entry.Required);
+            });
+    }
+
+    /// <summary>Same gap-closing purpose as <see cref="WorkspaceSummaryDocumentedCliOptionsMatchTheirActualRequiredness"/>,
+    /// for `sprint.timeline` (Slice 4).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SprintTimelineDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("sprint.timeline");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command sprint = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command timeline = Assert.Single(sprint.Subcommands, subcommand => subcommand.Name == "timeline");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(timeline, entry.Option);
+                Assert.True(actual is not null, $"'timeline' does not expose documented option '{entry.Option}'.");
+                Assert.True(actual!.Required == entry.Required);
+            });
+    }
+
+    /// <summary>Same gap-closing purpose as <see cref="WorkspaceSummaryDocumentedCliOptionsMatchTheirActualRequiredness"/>,
+    /// for `workspace.available_actions` (Slice 4).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void WorkspaceAvailableActionsDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("workspace.available_actions");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command workspace = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command actions = Assert.Single(workspace.Subcommands, subcommand => subcommand.Name == "actions");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(actions, entry.Option);
+                Assert.True(actual is not null, $"'actions' does not expose documented option '{entry.Option}'.");
+                Assert.True(actual!.Required == entry.Required);
+            });
+    }
+
     /// <summary>Every `--option` token a documented `cli` string mentions, paired with whether it is
     /// wrapped in a `[...]` bracket group there -- scanned on the raw, unsplit string since a bracket
     /// group can span multiple space-separated tokens (e.g. `[--sprint &lt;id&gt;]`), unlike
