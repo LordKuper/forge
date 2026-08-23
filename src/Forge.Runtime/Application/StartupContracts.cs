@@ -257,6 +257,12 @@ public static class DiagnosticCodes
     /// <summary>`forge project select --route` given a route string longer than
     /// <see cref="ProjectCatalogStore.MaxRouteLength"/>.</summary>
     public const string ProjectCatalogRouteTooLong = "project_catalog_route_too_long";
+
+    /// <summary>The local `catalog.json` (and its `.previous` recovery copy, if one exists) are both
+    /// unreadable -- a corrupt or malformed file that neither parses nor recovers. Reported instead
+    /// of letting the underlying parse failure propagate as an unhandled exception out of every
+    /// `forge project *`/`forge workspace summary` command (round 1 review of PR #97).</summary>
+    public const string ProjectCatalogUnreadable = "project_catalog_unreadable";
 }
 
 public enum StartupState

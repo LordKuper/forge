@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using Forge.Configuration;
 
@@ -21,6 +22,14 @@ public sealed record ProjectCatalogResult(bool Succeeded, ProjectCatalogEntry? E
 {
     public static ProjectCatalogResult Fail(string diagnosticCode) => new(false, null, diagnosticCode);
 }
+
+/// <summary>Plan section 6.1's catalog listing. Carries a diagnostic alongside the entries (round 1
+/// review of PR #97) so a corrupt or unreadable `catalog.json` reports
+/// <see cref="DiagnosticCodes.ProjectCatalogUnreadable"/> cleanly through `forge project list`/
+/// `forge workspace summary` instead of throwing an unhandled exception out of either command.
+/// <see cref="Entries"/> is always empty when <see cref="DiagnosticCode"/> is not
+/// <see cref="DiagnosticCodes.None"/>.</summary>
+public sealed record ProjectCatalogListing(IReadOnlyList<ProjectCatalogEntry> Entries, string DiagnosticCode);
 
 /// <summary>
 /// User-scoped, Desktop-installation-local persistence for <see cref="ProjectCatalogEntry"/> rows.
@@ -46,6 +55,16 @@ public sealed class ProjectCatalogStore(
         WriteIndented = true,
     };
 
+    /// <summary>One lock per catalog path, matching <see cref="FileSprintEventLog"/>'s own per-path
+    /// critical-section idiom (its static <c>Locks</c> dictionary). <see cref="ProjectCatalogStore"/>
+    /// is registered as a DI singleton and every mutating method here does a plain
+    /// read-modify-write with nothing else serializing the pair, so two overlapping calls (e.g. a
+    /// `SelectAsync` on every navigation racing an `AddAsync`/`SetAliasAsync`/`RemoveAsync`) could
+    /// otherwise interleave into a lost update (round 1 review of PR #97). Keyed by path rather than
+    /// a single static gate so unrelated <see cref="IEnvironmentPaths"/> instances (distinct test
+    /// environments in the same process) never contend with each other.</summary>
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> Locks = new(StringComparer.Ordinal);
+
     public static string CatalogPath(IEnvironmentPaths environmentPaths)
     {
         ArgumentNullException.ThrowIfNull(environmentPaths);
@@ -53,8 +72,11 @@ public sealed class ProjectCatalogStore(
             environmentPaths.LocalApplicationData, "Forge", environmentPaths.InstanceId, "catalog.json");
     }
 
-    public async Task<IReadOnlyList<ProjectCatalogEntry>> ListAsync(CancellationToken cancellationToken) =>
-        (await ReadAsync(cancellationToken).ConfigureAwait(false)).Entries;
+    public async Task<ProjectCatalogListing> ListAsync(CancellationToken cancellationToken)
+    {
+        CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+        return new(read.Persisted.Entries, read.DiagnosticCode);
+    }
 
     /// <summary>Adds a catalog row for an already-initialized project, anchored on its manifest's
     /// own <c>project_id</c> (plan section 6.1: "stable project ID when initialized"). Never
@@ -73,32 +95,64 @@ public sealed class ProjectCatalogStore(
 
         Guid projectId = await ProjectIdentity.ReadProjectIdAsync(status.Root, registry, cancellationToken)
             .ConfigureAwait(false);
-        Persisted persisted = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        if (persisted.Entries.Any(entry => entry.ProjectId == projectId))
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryExists);
-        }
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
 
-        ProjectCatalogEntry created = new(projectId, status.Root, null, clock.UtcNow, null, null);
-        persisted.Entries.Add(created);
-        await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
-        return new(true, created, DiagnosticCodes.None);
+            Persisted persisted = read.Persisted;
+            if (persisted.Entries.Any(entry => entry.ProjectId == projectId))
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryExists);
+            }
+
+            ProjectCatalogEntry created = new(projectId, status.Root, null, clock.UtcNow, null, null);
+            persisted.Entries.Add(created);
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, created, DiagnosticCodes.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>Removes the catalog row only. Never deletes the repository or its `.forge/`
     /// directory (plan section 6.1/12.1).</summary>
     public async Task<ProjectCatalogResult> RemoveAsync(Guid projectId, CancellationToken cancellationToken)
     {
-        Persisted persisted = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        ProjectCatalogEntry? existing = persisted.Entries.FirstOrDefault(entry => entry.ProjectId == projectId);
-        if (existing is null)
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
-        }
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
 
-        persisted.Entries.Remove(existing);
-        await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
-        return new(true, existing, DiagnosticCodes.None);
+            Persisted persisted = read.Persisted;
+            ProjectCatalogEntry? existing = persisted.Entries.FirstOrDefault(entry => entry.ProjectId == projectId);
+            if (existing is null)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            persisted.Entries.Remove(existing);
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, existing, DiagnosticCodes.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
     }
 
     /// <summary>Relinks a moved project: verifies the manifest's own `project_id` at
@@ -108,33 +162,51 @@ public sealed class ProjectCatalogStore(
     public async Task<ProjectCatalogResult> RelinkAsync(
         Guid projectId, string? newRoot, CancellationToken cancellationToken)
     {
-        Persisted persisted = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
-        if (index < 0)
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
-        }
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
 
-        ProjectRootStatus status = await rootResolver.ResolveAsync(newRoot, cancellationToken).ConfigureAwait(false);
-        if (!status.Initialized)
+            Persisted persisted = read.Persisted;
+            int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
+            if (index < 0)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectRootStatus status =
+                await rootResolver.ResolveAsync(newRoot, cancellationToken).ConfigureAwait(false);
+            if (!status.Initialized)
+            {
+                return ProjectCatalogResult.Fail(
+                    status.DiagnosticCode == DiagnosticCodes.None
+                        ? DiagnosticCodes.ProjectNotInitialized
+                        : status.DiagnosticCode);
+            }
+
+            Guid actualProjectId = await ProjectIdentity.ReadProjectIdAsync(status.Root, registry, cancellationToken)
+                .ConfigureAwait(false);
+            if (actualProjectId != projectId)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogRelinkMismatch);
+            }
+
+            ProjectCatalogEntry updated =
+                persisted.Entries[index] with { Root = status.Root, LastOpenedAt = clock.UtcNow };
+            persisted.Entries[index] = updated;
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
         {
-            return ProjectCatalogResult.Fail(
-                status.DiagnosticCode == DiagnosticCodes.None
-                    ? DiagnosticCodes.ProjectNotInitialized
-                    : status.DiagnosticCode);
+            gate.Release();
         }
-
-        Guid actualProjectId = await ProjectIdentity.ReadProjectIdAsync(status.Root, registry, cancellationToken)
-            .ConfigureAwait(false);
-        if (actualProjectId != projectId)
-        {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogRelinkMismatch);
-        }
-
-        ProjectCatalogEntry updated = persisted.Entries[index] with { Root = status.Root, LastOpenedAt = clock.UtcNow };
-        persisted.Entries[index] = updated;
-        await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
-        return new(true, updated, DiagnosticCodes.None);
     }
 
     /// <summary>Sets or clears (empty/whitespace input) the local display alias. Never touches the
@@ -148,20 +220,36 @@ public sealed class ProjectCatalogStore(
             return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogAliasTooLong);
         }
 
-        Persisted persisted = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
-        if (index < 0)
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
-        }
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
 
-        ProjectCatalogEntry updated = persisted.Entries[index] with
+            Persisted persisted = read.Persisted;
+            int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
+            if (index < 0)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogEntry updated = persisted.Entries[index] with
+            {
+                Alias = string.IsNullOrWhiteSpace(alias) ? null : alias,
+            };
+            persisted.Entries[index] = updated;
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
         {
-            Alias = string.IsNullOrWhiteSpace(alias) ? null : alias,
-        };
-        persisted.Entries[index] = updated;
-        await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
-        return new(true, updated, DiagnosticCodes.None);
+            gate.Release();
+        }
     }
 
     /// <summary>Records the last selected sprint/route for a catalog entry and bumps
@@ -177,47 +265,125 @@ public sealed class ProjectCatalogStore(
             return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogRouteTooLong);
         }
 
-        Persisted persisted = await ReadAsync(cancellationToken).ConfigureAwait(false);
-        int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
-        if (index < 0)
+        string path = CatalogPath(paths);
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
-        }
+            CatalogReadResult read = await ReadCatalogAsync(cancellationToken).ConfigureAwait(false);
+            if (read.DiagnosticCode != DiagnosticCodes.None)
+            {
+                return ProjectCatalogResult.Fail(read.DiagnosticCode);
+            }
 
-        ProjectCatalogEntry updated = persisted.Entries[index] with
+            Persisted persisted = read.Persisted;
+            int index = persisted.Entries.FindIndex(entry => entry.ProjectId == projectId);
+            if (index < 0)
+            {
+                return ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogEntryNotFound);
+            }
+
+            ProjectCatalogEntry updated = persisted.Entries[index] with
+            {
+                LastOpenedAt = clock.UtcNow,
+                LastSelectedSprintId = sprintId,
+                LastRoute = string.IsNullOrWhiteSpace(route) ? null : route,
+            };
+            persisted.Entries[index] = updated;
+            await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
         {
-            LastOpenedAt = clock.UtcNow,
-            LastSelectedSprintId = sprintId,
-            LastRoute = string.IsNullOrWhiteSpace(route) ? null : route,
-        };
-        persisted.Entries[index] = updated;
-        await WriteAsync(persisted, cancellationToken).ConfigureAwait(false);
-        return new(true, updated, DiagnosticCodes.None);
+            gate.Release();
+        }
     }
 
-    private async Task<Persisted> ReadAsync(CancellationToken cancellationToken)
+    private readonly record struct CatalogReadResult(Persisted Persisted, string DiagnosticCode);
+
+    /// <summary>Reads `catalog.json`, recovering from its `.previous` sibling (the same convention
+    /// <see cref="Forge.Configuration.JsonConfigurationStore"/> already establishes for user
+    /// configuration) when the primary file is corrupt, malformed, or carries a `schema_version`
+    /// this build does not recognize -- never silently downgrading a newer catalog by dropping the
+    /// fields it does not know about (round 1 review of PR #97: matches
+    /// <see cref="SprintTimelineCursorCodec.TryDecode"/>'s own "a foreign or future-versioned token
+    /// is rejected, never misread" contract). Recovering also rewrites the primary file from the
+    /// recovered bytes so the next read no longer needs to fall back. When neither the primary file
+    /// nor its `.previous` sibling is usable, reports <see cref="DiagnosticCodes.ProjectCatalogUnreadable"/>
+    /// with an empty catalog instead of throwing the underlying parse failure out to a caller.
+    /// </summary>
+    private async Task<CatalogReadResult> ReadCatalogAsync(CancellationToken cancellationToken)
     {
         string path = CatalogPath(paths);
         if (!File.Exists(path))
         {
-            return new();
+            return new(new Persisted(), DiagnosticCodes.None);
         }
 
+        try
+        {
+            return new(await ReadFileAsync(path, cancellationToken).ConfigureAwait(false), DiagnosticCodes.None);
+        }
+        catch (Exception error) when (IsRecoverable(error))
+        {
+            string previousPath = $"{path}.previous";
+            if (!File.Exists(previousPath))
+            {
+                return new(new Persisted(), DiagnosticCodes.ProjectCatalogUnreadable);
+            }
+
+            try
+            {
+                Persisted recovered =
+                    await ReadFileAsync(previousPath, cancellationToken).ConfigureAwait(false);
+                byte[] contents =
+                    await File.ReadAllBytesAsync(previousPath, cancellationToken).ConfigureAwait(false);
+                await AtomicConfigurationFile
+                    .WriteAsync(path, contents, cancellationToken, retainPrevious: false)
+                    .ConfigureAwait(false);
+                return new(recovered, DiagnosticCodes.None);
+            }
+            catch (Exception recoveryError) when (IsRecoverable(recoveryError))
+            {
+                return new(new Persisted(), DiagnosticCodes.ProjectCatalogUnreadable);
+            }
+        }
+    }
+
+    private static async Task<Persisted> ReadFileAsync(string path, CancellationToken cancellationToken)
+    {
         await using FileStream stream = new(
             path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, FileOptions.Asynchronous);
         Persisted? persisted = await JsonSerializer
             .DeserializeAsync<Persisted>(stream, JsonOptions, cancellationToken)
             .ConfigureAwait(false);
-        return persisted ?? new();
+        persisted ??= new();
+        if (persisted.SchemaVersion != ContractVersion)
+        {
+            // Treated exactly like a parse failure -- caught by ReadCatalogAsync's own recovery
+            // path -- rather than silently accepted: System.Text.Json drops any property it does
+            // not recognize, so reading a newer catalog as this version and later rewriting it
+            // would permanently discard whatever the newer schema added.
+            throw new InvalidDataException(
+                $"catalog.json schema_version '{persisted.SchemaVersion}' is not the recognized " +
+                    $"'{ContractVersion}'.");
+        }
+
+        return persisted;
     }
+
+    private static bool IsRecoverable(Exception error) => error is JsonException or IOException or InvalidDataException;
 
     private async Task WriteAsync(Persisted persisted, CancellationToken cancellationToken)
     {
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(persisted, JsonOptions);
         // Reuses the same atomic temp-file-then-replace primitive user configuration already relies
         // on (Forge.Configuration.AtomicConfigurationFile) rather than a second durability mechanism
-        // for what is, functionally, another piece of user-scoped local state.
-        await AtomicConfigurationFile.WriteAsync(CatalogPath(paths), bytes, cancellationToken, retainPrevious: false)
+        // for what is, functionally, another piece of user-scoped local state. retainPrevious keeps
+        // the file this write replaces around as `.previous` -- the same recovery convention
+        // JsonConfigurationStore relies on -- so ReadCatalogAsync has something to fall back to if a
+        // later write is ever left corrupt by a crash mid-write.
+        await AtomicConfigurationFile.WriteAsync(CatalogPath(paths), bytes, cancellationToken, retainPrevious: true)
             .ConfigureAwait(false);
     }
 

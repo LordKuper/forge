@@ -30,7 +30,7 @@ public sealed class ProjectCatalogCliTests
             .InvokeAsync(new InvocationConfiguration(), cancellationToken);
         Assert.Equal(0, addExitCode);
         Assert.Contains(text.Resolve(MessageKeys.ProjectAdded), output.ToString(), StringComparison.Ordinal);
-        ProjectCatalogEntry entry = Assert.Single(await catalog.ListAsync(cancellationToken));
+        ProjectCatalogEntry entry = Assert.Single((await catalog.ListAsync(cancellationToken)).Entries);
 
         output.GetStringBuilder().Clear();
         int listExitCode = await root.Parse(["project", "list", "--json"])
@@ -43,13 +43,13 @@ public sealed class ProjectCatalogCliTests
             .Parse(["project", "alias", entry.ProjectId.ToString(), "My Project"])
             .InvokeAsync(new InvocationConfiguration(), cancellationToken);
         Assert.Equal(0, aliasExitCode);
-        Assert.Equal("My Project", (await catalog.ListAsync(cancellationToken))[0].Alias);
+        Assert.Equal("My Project", (await catalog.ListAsync(cancellationToken)).Entries[0].Alias);
 
         output.GetStringBuilder().Clear();
         int removeExitCode = await root.Parse(["project", "remove", entry.ProjectId.ToString()])
             .InvokeAsync(new InvocationConfiguration(), cancellationToken);
         Assert.Equal(0, removeExitCode);
-        Assert.Empty(await catalog.ListAsync(cancellationToken));
+        Assert.Empty((await catalog.ListAsync(cancellationToken)).Entries);
         // The repository itself was never touched by any of the catalog commands above.
         Assert.True(Directory.Exists(Path.Combine(environment.ProjectRoot, ".forge")));
     }
@@ -106,7 +106,7 @@ public sealed class ProjectCatalogCliTests
             .InvokeAsync(new InvocationConfiguration(), cancellationToken);
 
         Assert.Equal(0, exitCode);
-        ProjectCatalogEntry entry = Assert.Single(await catalog.ListAsync(cancellationToken));
+        ProjectCatalogEntry entry = Assert.Single((await catalog.ListAsync(cancellationToken)).Entries);
         Assert.Equal(sprintId, entry.LastSelectedSprintId);
         Assert.Equal("sprint_workspace", entry.LastRoute);
     }
