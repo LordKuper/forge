@@ -68,6 +68,7 @@ gate on workstations and CI.
 | 11 | workflow | `model_policy_violation` | A frozen provider's default model is not listed in the project's configured model policy |
 | 11 | workflow | `no_active_operation` | `StopCurrentOperation` targets a sprint with no active operation |
 | 11 | workflow | `active_operation_changed` | `StopCurrentOperation` targets an attempt that is not (or no longer) the node's current active one |
+| 11 | workflow | `stage_transition_rewind_in_progress` | Sprint has an unconverged `MoveSprintToStage` rewind; further moves and finalization are blocked until it resumes |
 | 12 | dependency | `dependency_unavailable` | Required immutable input is unavailable |
 | 13 | internal | `internal_error` | Sanitized unexpected failure |
 | 14 | compatibility | `host_protocol_incompatible` | Client and Host protocol majors cannot communicate |

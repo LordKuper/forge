@@ -186,6 +186,68 @@ public sealed class SurfaceParityTests
             });
     }
 
+    /// <summary>Same gap-closing purpose as <see cref="StopOperationDocumentedCliOptionsMatchTheirActualRequiredness"/>,
+    /// for `workflow.assess_stage_transition` (Slice 3): reserved-but-CLI-shipped, so
+    /// <see cref="CliExposesEveryDocumentedCapabilityCommand"/> never walks it either.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void AssessStageTransitionDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("workflow.assess_stage_transition");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command sprint = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command assessStage = Assert.Single(sprint.Subcommands, subcommand => subcommand.Name == "assess-stage");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(assessStage, entry.Option);
+                Assert.True(actual is not null, $"'assess-stage' does not expose documented option '{entry.Option}'.");
+                Assert.True(
+                    actual!.Required == entry.Required,
+                    $"'{entry.Option}' is documented as {(entry.Required ? "required" : "optional")} " +
+                        $"but the CLI defines it as {(actual.Required ? "required" : "optional")}.");
+            });
+    }
+
+    /// <summary>Same gap-closing purpose as <see cref="StopOperationDocumentedCliOptionsMatchTheirActualRequiredness"/>,
+    /// for `sprint.move_stage` (Slice 3): reserved-but-CLI-shipped, so
+    /// <see cref="CliExposesEveryDocumentedCapabilityCommand"/> never walks it either.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void MoveSprintToStageDocumentedCliOptionsMatchTheirActualRequiredness()
+    {
+        using TestEnvironment environment = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture),
+            new StringWriter(CultureInfo.InvariantCulture),
+            environment.Application);
+
+        string cli = ReadCli("sprint.move_stage");
+        string[] tokens = cli.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        Command sprint = Assert.Single(root.Subcommands, subcommand => subcommand.Name == tokens[1]);
+        Command moveStage = Assert.Single(sprint.Subcommands, subcommand => subcommand.Name == "move-stage");
+
+        Assert.All(
+            ParseDocumentedOptionRequiredness(cli),
+            entry =>
+            {
+                Option? actual = FindOptionRecursively(moveStage, entry.Option);
+                Assert.True(actual is not null, $"'move-stage' does not expose documented option '{entry.Option}'.");
+                Assert.True(
+                    actual!.Required == entry.Required,
+                    $"'{entry.Option}' is documented as {(entry.Required ? "required" : "optional")} " +
+                        $"but the CLI defines it as {(actual.Required ? "required" : "optional")}.");
+            });
+    }
+
     /// <summary>Every `--option` token a documented `cli` string mentions, paired with whether it is
     /// wrapped in a `[...]` bracket group there -- scanned on the raw, unsplit string since a bracket
     /// group can span multiple space-separated tokens (e.g. `[--sprint &lt;id&gt;]`), unlike
@@ -584,6 +646,7 @@ public sealed class SurfaceParityTests
             "finding.example",
             new Dictionary<string, string?>(),
             ["src/Foo.cs:1"],
+            null,
             null,
             cancellationToken)).Succeeded);
         SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);

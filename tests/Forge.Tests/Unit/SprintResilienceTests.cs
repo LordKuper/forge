@@ -478,7 +478,7 @@ public sealed class SprintResilienceTests
 
         await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, null, cancellationToken);
 
         SprintSnapshot? sprint = await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken);
         Assert.Equal(SprintState.Blocked, sprint!.State);
@@ -543,7 +543,7 @@ public sealed class SprintResilienceTests
             cancellationToken);
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, null, cancellationToken);
         int baseline = store.AppendCount;
         store.FailAt[baseline + failedAppend] = AppendOutcome.Conflict;
 

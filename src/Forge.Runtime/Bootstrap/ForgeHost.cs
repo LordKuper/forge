@@ -60,6 +60,8 @@ public static class ForgeHost
         services.AddSingleton<SprintGitIsolation>();
         services.AddSingleton<ActiveOperationRegistry>();
         services.AddSingleton<StopOperationCoordinator>();
+        services.AddSingleton<StageTransitionAssessor>();
+        services.AddSingleton<StageTransitionCoordinator>();
         services.AddSingleton<RoutingLedger>();
         services.AddSingleton<ControlEventsReader>();
         // ADR 0024: overridden by a platform composition root the same way IPlatformPreflight is —

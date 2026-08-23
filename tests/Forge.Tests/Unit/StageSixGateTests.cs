@@ -64,7 +64,7 @@ public sealed class StageSixGateTests
 
         await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Medium, "finding.example",
-            new Dictionary<string, string?>(), ["evidence"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["evidence"], null, null, cancellationToken);
         await scheduler.RecordHandoffAsync(
             environment.ProjectRoot, sprintId, "b", new string('a', 40), "free text is fine here",
             [], [], null, cancellationToken);

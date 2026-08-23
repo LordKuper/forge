@@ -245,6 +245,29 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, null, DiagnosticCodes.HostUnavailable);
     }
 
+    public async Task<MoveStageResult> MoveSprintToStageAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string targetStageId,
+        long expectedStateVersion,
+        string? assessmentToken,
+        string? reason,
+        bool confirmed,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new MoveSprintToStageRequest(
+                sprintId, targetStageId, expectedStateVersion, assessmentToken, reason, confirmed, idempotencyKey),
+            ControlProtocol.JsonOptions);
+        ControlResponse response = await SendAsync(ControlProtocol.MoveSprintToStageKind, payload, cancellationToken)
+            .ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<MoveStageResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, null, DiagnosticCodes.HostUnavailable);
+    }
+
     private async Task<SprintTransitionResult> SendSprintIdRequestAsync(
         string kind, Guid sprintId, CancellationToken cancellationToken)
     {

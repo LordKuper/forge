@@ -21,14 +21,12 @@ public readonly record struct StageRevision(int Value)
 }
 
 /// <summary>
-/// Marks one piece of stage evidence (a node result, finding, handoff, or other stage-scoped
-/// artifact produced in a later slice) as excluded from prerequisite evaluation because a rewind
-/// opened a later revision (plan section 8.4: "excludes superseded evidence from all future
-/// prerequisite checks"). Evidence carrying this marker is never deleted or rewritten -- it
-/// remains readable history, just no longer eligible to satisfy a prerequisite.
-///
-/// This is a plain contract type; no artifact or result record is wired to carry it yet, and no
-/// code assigns it. Attaching it to the relevant persisted shapes (and their wire schemas) is
-/// Slice 3's job (plan section 11: "Add stage revision to node state and relevant artifacts").
+/// Marks one piece of stage evidence (a <c>Forge.Domain.NodeResult</c>, <c>Finding</c>,
+/// <c>Handoff</c>, <c>ConfirmationArtifact</c>, or <c>TestWorkArtifact</c>) as excluded from
+/// prerequisite evaluation because a rewind opened a later revision (plan section 8.4: "excludes
+/// superseded evidence from all future prerequisite checks"). Evidence carrying this marker is
+/// never deleted or rewritten beyond adding the marker itself -- it remains readable history, just
+/// no longer eligible to satisfy a prerequisite. Attached by
+/// <c>Forge.Application.StageTransitionCoordinator</c> (plan section 11, Slice 3).
 /// </summary>
 public sealed record SupersededBy(StageRevision AtRevision, DateTimeOffset RecordedAt);

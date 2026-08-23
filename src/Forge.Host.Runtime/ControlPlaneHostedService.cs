@@ -354,6 +354,10 @@ public sealed class ControlPlaneHostedService(
                     await DispatchResumeSprintAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.CancelSprintKind =>
                     await DispatchCancelSprintAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.AssessStageTransitionKind =>
+                    await DispatchAssessStageTransitionAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.MoveSprintToStageKind =>
+                    await DispatchMoveSprintToStageAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -760,6 +764,46 @@ public sealed class ControlPlaneHostedService(
 
         SprintTransitionResult result = await application
             .CancelSprintAsync(options.ProjectRoot, payload.SprintId, payload.Confirmed, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchAssessStageTransitionAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        AssessStageTransitionRequest? payload = request.Payload is { } value
+            ? value.Deserialize<AssessStageTransitionRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The assess_stage_transition payload is required.");
+        }
+
+        StageTransitionAssessment result = await application
+            .AssessStageTransitionAsync(options.ProjectRoot, payload.SprintId, payload.TargetStageId, cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchMoveSprintToStageAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        MoveSprintToStageRequest? payload = request.Payload is { } value
+            ? value.Deserialize<MoveSprintToStageRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null)
+        {
+            throw new InvalidDataException("The move_sprint_to_stage payload is required.");
+        }
+
+        MoveStageResult result = await application
+            .MoveSprintToStageAsync(
+                options.ProjectRoot, payload.SprintId, payload.TargetStageId, payload.ExpectedStateVersion,
+                payload.AssessmentToken, payload.Reason, payload.Confirmed, payload.IdempotencyKey, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

@@ -175,6 +175,9 @@ public static class MessageKeys
     public const string AttemptInstructionRequired = "AttemptInstructionRequired";
     public const string AttemptStopDescription = "AttemptStopDescription";
     public const string AttemptStopped = "AttemptStopped";
+    public const string SprintAssessStageDescription = "SprintAssessStageDescription";
+    public const string SprintMoveStageDescription = "SprintMoveStageDescription";
+    public const string SprintStageMoved = "SprintStageMoved";
     public const string NotificationAwaitingHumanTitle = "NotificationAwaitingHumanTitle";
     public const string NotificationBlockedTitle = "NotificationBlockedTitle";
     public const string NotificationFailedTitle = "NotificationFailedTitle";

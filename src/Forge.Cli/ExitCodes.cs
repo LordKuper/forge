@@ -29,7 +29,7 @@ public static class ExitCodes
             DiagnosticCodes.SupersessionInstructionUnreadable or
             DiagnosticCodes.SupersessionInstructionRequired or
             DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired or
-            DiagnosticCodes.TestWorkJustificationRequired => Usage,
+            DiagnosticCodes.TestWorkJustificationRequired or DiagnosticCodes.StageTransitionReasonRequired => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
@@ -43,7 +43,7 @@ public static class ExitCodes
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
         DiagnosticCodes.ModelPolicyViolation or DiagnosticCodes.NoActiveOperation or
-            DiagnosticCodes.ActiveOperationChanged => Workflow,
+            DiagnosticCodes.ActiveOperationChanged or DiagnosticCodes.StageTransitionRewindInProgress => Workflow,
         _ => Internal,
     };
 }

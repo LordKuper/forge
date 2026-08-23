@@ -64,7 +64,7 @@ public sealed class WorkflowCultureInvarianceTests
             sprintId = created.SprintId!;
             await scheduler.RecordFindingAsync(
                 environment.ProjectRoot, sprintId, FindingSeverity.Info, "finding.example",
-                new Dictionary<string, string?>(), ["evidence"], null, TestContext.Current.CancellationToken);
+                new Dictionary<string, string?>(), ["evidence"], null, null, TestContext.Current.CancellationToken);
         }
         finally
         {

@@ -189,6 +189,27 @@ public interface IForgeMutations
     /// are.</summary>
     Task<SprintTransitionResult> CancelSprintAsync(
         string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken);
+
+    /// <summary>Plan section 8.5's `sprint.move_stage` capability, permission
+    /// `human_stage_transition_confirm`: commits an already-assessed advance or rewind. The Host
+    /// recomputes <see cref="ForgeApplication.AssessStageTransitionAsync"/> immediately before
+    /// mutating and rejects a
+    /// stale <paramref name="expectedStateVersion"/>/<paramref name="assessmentToken"/> without any
+    /// side effect -- a caller-held assessment is never trusted (ADR 0046). <paramref name="reason"/>
+    /// is mandatory (and bounded) for a rewind, ignored for an advance (plan section 8.3 requires no
+    /// reason to move into normal, unstarted territory); <paramref name="confirmed"/> must be
+    /// <see langword="true"/> — the same no-config-bypass rule as <see cref="SupersedeAttemptAsync"/>.
+    /// </summary>
+    Task<MoveStageResult> MoveSprintToStageAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string targetStageId,
+        long expectedStateVersion,
+        string? assessmentToken,
+        string? reason,
+        bool confirmed,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -218,7 +239,9 @@ public sealed class ForgeApplication(
     IFileSystem fileSystem,
     IClock clock,
     StopOperationCoordinator stopCoordinator,
-    ActiveOperationRegistry activeOperations) : IForgeMutations
+    ActiveOperationRegistry activeOperations,
+    StageTransitionAssessor stageAssessor,
+    StageTransitionCoordinator stageCoordinator) : IForgeMutations
 {
     public const string InitializeProjectAction = "initialize_project";
 
@@ -1281,6 +1304,53 @@ public sealed class ForgeApplication(
         return await stopCoordinator
             .RequestStopAsync(status.Root, new(sprintId), new(attemptId), activeOperations, cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    /// <summary>Plan section 8.1's read-only `workflow.assess_stage_transition` query. Not on
+    /// <see cref="IForgeMutations"/> (it mutates nothing) -- mirrors <see cref="GetOverviewAsync(string?,CancellationToken)"/>'s
+    /// own "resolve root, delegate to a pure computation, return" shape rather than the confirmable
+    /// mutation pattern above.</summary>
+    public async Task<StageTransitionAssessment> AssessStageTransitionAsync(
+        string? projectRoot, Guid sprintId, string targetStageId, CancellationToken cancellationToken)
+    {
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        return status.Initialized
+            ? await stageAssessor.AssessAsync(status.Root, new(sprintId), targetStageId, cancellationToken)
+                .ConfigureAwait(false)
+            : StageTransitionAssessment.NotFound(new(sprintId), status.DiagnosticCode);
+    }
+
+    /// <summary>ADR 0046's `sprint.move_stage` capability. Same no-config-bypass confirmation rule
+    /// as <see cref="SupersedeAttemptAsync"/>; every other rejection reason (stale assessment,
+    /// unmet prerequisite, missing rewind reason, terminal sprint) is
+    /// <see cref="StageTransitionCoordinator.MoveAsync"/>'s own responsibility.</summary>
+    public async Task<MoveStageResult> MoveSprintToStageAsync(
+        string? projectRoot,
+        Guid sprintId,
+        string targetStageId,
+        long expectedStateVersion,
+        string? assessmentToken,
+        string? reason,
+        bool confirmed,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        if (!confirmed)
+        {
+            return new(false, null, null, DiagnosticCodes.ConfirmationRequired);
+        }
+
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, null, status.DiagnosticCode);
+        }
+
+        return await stageCoordinator.MoveAsync(
+            status.Root, new(sprintId), targetStageId, expectedStateVersion, assessmentToken, reason, confirmed,
+            idempotencyKey, cancellationToken).ConfigureAwait(false);
     }
 
     public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)

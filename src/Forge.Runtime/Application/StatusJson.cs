@@ -46,6 +46,9 @@ public static class StatusJson
     public static string Serialize(ContextResultBundle bundle) =>
         JsonSerializer.Serialize(bundle, Options);
 
+    public static string Serialize(StageTransitionAssessment assessment) =>
+        JsonSerializer.Serialize(assessment, Options);
+
     private static JsonSerializerOptions Create()
     {
         JsonSerializerOptions options = new()

@@ -120,6 +120,74 @@ public sealed record WorkflowEvent(
     /// independent of the node's own current state -- see that field's own remarks for why a check
     /// gated only on <see cref="AttemptStopRequestedType"/> having landed is not enough on its own.</summary>
     public const string AttemptStopConvergedType = "AttemptStopConverged";
+
+    /// <summary>Plan section 8.4's committed-rewind marker (Slice 3): recorded once per committed
+    /// <c>MoveSprintToStage</c> rewind, on the sprint's own aggregate. Never a transition itself (no
+    /// <see cref="ToStateArgument"/>) -- a rewind's sprint-level effect is a revision bump, not
+    /// necessarily a sprint-state change, matching <see cref="AttemptSupersededType"/>'s own
+    /// non-transition shape. Folded into <see cref="SprintSnapshot.Revision"/> (never decremented,
+    /// never skipped): every node-role executor and prerequisite check reads a sprint's *current*
+    /// revision directly from this projection, the same way <see cref="AttemptStopRequestedType"/>
+    /// is folded rather than left as audit-only. Round 2 review of PR #96 (critical): also folded
+    /// into <see cref="SprintSnapshot.PendingRewindTargetStageId"/>/
+    /// <see cref="SprintSnapshot.PendingRewindReason"/>/<see cref="SprintSnapshot.PendingRewindIdempotencyKey"/>
+    /// -- this event alone durably means "a rewind targeting this stage, for this reason, under this
+    /// key has started and not yet converged," independent of whatever node/sprint state this saga's
+    /// own later steps produce. Now also carries <see cref="IdempotencyKeyArgument"/>, so a resumed
+    /// retry can recover the *original* caller's key (never mint a new one) and re-enter step 2's own
+    /// ledger-keyed replay branch rather than risk a version conflict against a sprint aggregate
+    /// version that has since moved on.</summary>
+    public const string StageRevisionRecordedType = "StageRevisionRecorded";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the new revision value
+    /// (<see cref="StageRevision.Value"/>, as a base-10 integer) this rewind commits to. Also carried
+    /// on a node's own `succeeded -> ready`/`succeeded -> pending`/`failed -> pending`/
+    /// `awaiting_human -> pending` transitions (plan section 8.4's reopen/invalidate edges) so
+    /// <see cref="NodeSnapshot.Revision"/> tracks which revision that node's own execution state now
+    /// belongs to -- node identity stays stable; only this argument's value changes.</summary>
+    public const string RevisionArgument = "revision";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the stage the rewind
+    /// targeted, for the timeline's own actor-visible rendering.</summary>
+    public const string TargetStageIdArgument = "target_stage_id";
+
+    /// <summary>Carried on a <see cref="StageRevisionRecordedType"/> event: the operator's bounded,
+    /// mandatory reason for the rewind (plan section 8.4 point 1) -- augments the durable record, the
+    /// same "never hides the original input" discipline <see cref="SupersessionInstructionArgument"/>
+    /// already follows for attempt supersession.</summary>
+    public const string RewindReasonArgument = "rewind_reason";
+
+    /// <summary>Round 1 review of PR #96 (finding 1): the whole `MoveSprintToStage` saga's own durable
+    /// "fully converged" marker, appended once by
+    /// <see cref="Forge.Application.StageTransitionCoordinator.MoveAsync"/> as the very last,
+    /// unconditional step of a successful advance or rewind commit -- mirrors
+    /// <see cref="AttemptStopConvergedType"/>'s own role for the stop saga. Recorded on the sprint's
+    /// own aggregate, never a transition itself (no <see cref="ToStateArgument"/>). Unlike
+    /// <see cref="StageRevisionRecordedType"/> (written mid-saga, at step 2, before evidence
+    /// supersession/node invalidation/graph re-advance have run), this event exists only once the
+    /// *entire* saga has actually finished -- the outer idempotent-replay check
+    /// (<see cref="Forge.Application.ISprintStore.TryGetConvergedStageTransitionAsync"/>) keys on
+    /// this marker instead of the raw idempotency-key ledger precisely so a crash between step 2 and
+    /// the last step can never make a future replay report success on a still-unfinished commit.
+    /// Round 2 review of PR #96 (critical): also projected -- clears
+    /// <see cref="SprintSnapshot.PendingRewindTargetStageId"/>/<see cref="SprintSnapshot.PendingRewindReason"/>/
+    /// <see cref="SprintSnapshot.PendingRewindIdempotencyKey"/>, the durable "unconverged rewind in
+    /// progress" marker <see cref="StageRevisionRecordedType"/> below sets. This is what lets
+    /// <c>StageTransitionCoordinator.MoveAsync</c> resume a crashed rewind from any of its own steps:
+    /// the marker stays set for as long as (and only as long as) the saga has not actually finished.
+    /// </summary>
+    public const string StageTransitionConvergedType = "StageTransitionConverged";
+
+    /// <summary>Carried on a <see cref="StageTransitionConvergedType"/> event: the caller's own
+    /// `MoveSprintToStage` idempotency key this saga just finished converging for -- looked up
+    /// directly by <see cref="Forge.Application.ISprintStore.TryGetConvergedStageTransitionAsync"/>
+    /// scanning the raw journal, since a sprint can legitimately be moved many times over its life
+    /// and each commit's own key must be distinguished. Round 2 review of PR #96 (critical): also
+    /// carried on a <see cref="StageRevisionRecordedType"/> event -- there, unlike here, it IS folded
+    /// (into <see cref="SprintSnapshot.PendingRewindIdempotencyKey"/>), so a resumed retry can recover
+    /// the exact key the original, still-unconverged commit used, rather than only ever seeing it
+    /// once the saga has already finished.</summary>
+    public const string IdempotencyKeyArgument = "idempotency_key";
 }
 
 public sealed record SprintWorkflowState(
@@ -229,6 +297,55 @@ public static class WorkflowFold
                 continue;
             }
 
+            if (current.Type == WorkflowEvent.StageRevisionRecordedType)
+            {
+                // Never a transition (no ToStateArgument) -- but projected, like
+                // AttemptStopRequestedType: every prerequisite check and node-role executor must be
+                // able to read a sprint's current stage revision directly from its snapshot, not by
+                // re-scanning the raw journal. Round 2 review of PR #96 (critical): also projects the
+                // durable "unconverged rewind in progress" marker (target/reason/idempotency key) --
+                // cleared only by StageTransitionConvergedType below, independent of whatever this
+                // saga's own later steps do to node/sprint state.
+                _ = IsTransitionRecord(current);
+                if (sprint is not null)
+                {
+                    int revisionValue = int.Parse(
+                        current.Arguments[WorkflowEvent.RevisionArgument]!, NumberStyles.Integer, CultureInfo.InvariantCulture);
+                    sprint = sprint with
+                    {
+                        Revision = new(revisionValue),
+                        PendingRewindTargetStageId = current.Arguments[WorkflowEvent.TargetStageIdArgument],
+                        PendingRewindReason = current.Arguments[WorkflowEvent.RewindReasonArgument],
+                        PendingRewindIdempotencyKey = Guid.Parse(current.Arguments[WorkflowEvent.IdempotencyKeyArgument]!),
+                    };
+                }
+
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.StageTransitionConvergedType)
+            {
+                // Validated (throws loudly on corruption); the caller's own idempotency key itself is
+                // never folded (looked up by scanning the raw journal --
+                // FileSprintEventLog.TryGetConvergedStageTransitionAsync -- for the caller's own key,
+                // since this is audit/replay-detection content, not workflow state). Round 2 review of
+                // PR #96 (critical): this event's mere landing IS projected, though -- it clears
+                // whatever unconverged-rewind marker StageRevisionRecordedType set above, since its
+                // whole meaning is "the saga this marker described has now fully finished."
+                _ = IsTransitionRecord(current);
+                if (sprint is not null)
+                {
+                    sprint = sprint with
+                    {
+                        PendingRewindTargetStageId = null,
+                        PendingRewindReason = null,
+                        PendingRewindIdempotencyKey = null,
+                    };
+                }
+
+                continue;
+            }
+
             if (!IsTransitionRecord(current))
             {
                 continue;
@@ -246,12 +363,20 @@ public static class WorkflowFold
                         out string? blockedReasonValue)
                         ? blockedReasonValue
                         : null;
+                    // Carried forward from whatever StageRevisionRecordedType/StageTransitionConvergedType
+                    // last set (never produced by an ordinary sprint transition) -- an ordinary
+                    // transition must never reset a sprint's own revision counter back to Initial, nor
+                    // silently clear or fabricate an in-flight rewind marker.
                     sprint = new(
                         sprintId,
                         WorkflowStateNames.Parse<SprintState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
-                        blockedReason);
+                        blockedReason,
+                        sprint?.Revision ?? default,
+                        sprint?.PendingRewindTargetStageId,
+                        sprint?.PendingRewindReason,
+                        sprint?.PendingRewindIdempotencyKey);
                     break;
                 case AggregateKind.Node:
                     nodes.TryGetValue(current.Aggregate.Id, out NodeSnapshot? previousNode);
@@ -265,13 +390,23 @@ public static class WorkflowFold
                         out string? currentAttemptIdValue) && currentAttemptIdValue is not null
                         ? currentAttemptIdValue
                         : previousNode?.CurrentAttemptId;
+                    // Carried only on the rewind coordinator's own reopen/invalidate transitions
+                    // (`succeeded -> ready`/`succeeded -> pending`/`failed -> pending`/
+                    // `awaiting_human -> pending`); every ordinary transition omits it and this node
+                    // simply keeps whatever revision it already belonged to.
+                    StageRevision nodeRevision = current.Arguments.TryGetValue(
+                        WorkflowEvent.RevisionArgument,
+                        out string? revisionText) && revisionText is not null
+                        ? new(int.Parse(revisionText, NumberStyles.Integer, CultureInfo.InvariantCulture))
+                        : previousNode?.Revision ?? default;
                     nodes[current.Aggregate.Id] = new(
                         new(current.Aggregate.Id),
                         WorkflowStateNames.Parse<NodeState>(toState),
                         current.Aggregate.Version,
                         current.OccurredAt,
                         attemptCount,
-                        currentAttemptId);
+                        currentAttemptId,
+                        nodeRevision);
                     break;
                 case AggregateKind.Attempt:
                     attempts.TryGetValue(current.Aggregate.Id, out AttemptSnapshot? previousAttempt);
@@ -353,6 +488,35 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Stop-converged event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.StageRevisionRecordedType)
+        {
+            bool hasRevision = current.Arguments.TryGetValue(
+                WorkflowEvent.RevisionArgument, out string? revision) && revision is not null;
+            bool hasTarget = current.Arguments.TryGetValue(
+                WorkflowEvent.TargetStageIdArgument, out string? target) && target is not null;
+            bool hasReason = current.Arguments.TryGetValue(
+                WorkflowEvent.RewindReasonArgument, out string? reason) && reason is not null;
+            // Round 2 review of PR #96 (critical): the caller's own idempotency key must be durable
+            // on this event too (not only on StageTransitionConvergedType), so a resumed retry can
+            // recover the exact key the original, still-unconverged commit used.
+            bool hasKey = current.Arguments.TryGetValue(
+                WorkflowEvent.IdempotencyKeyArgument, out string? key) && key is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint ||
+                !hasRevision || !hasTarget || !hasReason || !hasKey
+                ? throw new InvalidDataException($"Stage-revision event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.StageTransitionConvergedType)
+        {
+            bool hasKey = current.Arguments.TryGetValue(
+                WorkflowEvent.IdempotencyKeyArgument, out string? key) && key is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint || !hasKey
+                ? throw new InvalidDataException(
+                    $"Stage-transition-converged event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

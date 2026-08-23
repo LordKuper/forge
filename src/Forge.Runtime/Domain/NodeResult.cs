@@ -17,7 +17,10 @@ public sealed record NodeDiagnostic(
 /// <summary>
 /// The durable, content-addressed record of one attempt's conclusion. Digests, not raw content,
 /// are what gets persisted here — the actual bytes live wherever the (not-yet-built) artifact
-/// store puts them.
+/// store puts them. <paramref name="Revision"/> is the stage revision this result was recorded
+/// under (plan section 8.4); <paramref name="Superseded"/> is set once a rewind whose target is at
+/// or upstream of <see cref="NodeId"/> invalidates it -- excluded from every prerequisite check
+/// from that point on, but never deleted or rewritten otherwise (ADR 0045).
 /// </summary>
 public sealed record NodeResult(
     SprintId SprintId,
@@ -28,4 +31,6 @@ public sealed record NodeResult(
     DateTimeOffset CompletedAt,
     string InputDigest,
     IReadOnlyList<string> Outputs,
-    IReadOnlyList<NodeDiagnostic> Diagnostics);
+    IReadOnlyList<NodeDiagnostic> Diagnostics,
+    StageRevision Revision = default,
+    SupersededBy? Superseded = null);

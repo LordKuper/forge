@@ -26,4 +26,6 @@ public sealed record TestWorkArtifact(
     NodeId NodeId,
     TestWorkOutcome Outcome,
     string Justification,
-    DateTimeOffset RecordedAt);
+    DateTimeOffset RecordedAt,
+    StageRevision Revision = default,
+    SupersededBy? Superseded = null);

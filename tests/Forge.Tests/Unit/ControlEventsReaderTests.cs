@@ -300,6 +300,44 @@ public sealed class ControlEventsReaderTests
         public Task AppendAttemptStopConvergedAsync(
             string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
+
+        public Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
+            string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task AppendStageTransitionConvergedAsync(
+            string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task<AppendOutcome> AppendStageRevisionRecordedAsync(
+            string projectRoot, SprintId sprintId, string targetStageId, string reason, StageRevision newRevision,
+            long expectedSprintVersion, Guid idempotencyKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkNodeResultSupersededAsync(
+            string projectRoot, SprintId sprintId, AttemptId attemptId, SupersededBy marker,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkHandoffSupersededAsync(
+            string projectRoot, SprintId sprintId, Guid handoffId, SupersededBy marker,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkConfirmationSupersededAsync(
+            string projectRoot, SprintId sprintId, Guid confirmationId, SupersededBy marker,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkTestWorkSupersededAsync(
+            string projectRoot, SprintId sprintId, Guid testWorkId, SupersededBy marker,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task MarkFindingSupersededAsync(
+            string projectRoot, SprintId sprintId, Guid findingId, SupersededBy marker,
+            CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
     }
 
     private static WorkflowEvent FakeEvent(Guid sprintId, long sequence, DateTimeOffset occurredAt) =>

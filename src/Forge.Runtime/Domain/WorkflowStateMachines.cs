@@ -51,10 +51,27 @@ public static class WorkflowStateMachines
                 NodeState.Failed,
                 NodeState.Cancelled,
             ],
+            // No direct `awaiting_human -> pending` edge: `StageTransitionCoordinator.
+            // ReopenOrInvalidateNodeAsync` always walks an `AwaitingHuman` downstream node through
+            // `awaiting_human -> failed -> pending` instead (round 1 review of PR #96, finding 6) --
+            // this table must never carry an edge no production caller reaches.
             [NodeState.AwaitingHuman] =
                 [NodeState.Running, NodeState.Failed, NodeState.Cancelled],
-            [NodeState.Succeeded] = [],
-            [NodeState.Failed] = [NodeState.Ready],
+            // `Succeeded -> Ready`/`Succeeded -> Pending` (plan section 8.4, Slice 3) are reached
+            // only through the rewind coordinator (`Forge.Application.StageTransitionCoordinator`),
+            // never by pretending the node never completed -- the same "dedicated event/revision
+            // rule, not a fabricated failure" discipline ADR 0044/0047 established for the stop
+            // coordinator's own `Failed -> Ready` re-arm. `-> Ready` reopens the exact stage a rewind
+            // targets (its own upstream is untouched, so it is immediately eligible again); `->
+            // Pending` invalidates a stage strictly downstream of the target, whose real eligibility
+            // must be recomputed by `SprintScheduler.AdvanceGraphAsync` once the target actually
+            // re-succeeds, not assumed still satisfied from a now-superseded result.
+            [NodeState.Succeeded] = [NodeState.Ready, NodeState.Pending],
+            // `Failed -> Ready` is the ordinary bounded-auto-retry re-arm (`CompleteAttemptAsync`) and
+            // the stop coordinator's own re-arm (`StopOperationCoordinator.FinishStopAsync`); `Failed
+            // -> Pending` is the rewind coordinator's downstream-invalidation edge, same reasoning as
+            // `Succeeded -> Pending` above.
+            [NodeState.Failed] = [NodeState.Ready, NodeState.Pending],
             [NodeState.Skipped] = [],
             [NodeState.Cancelled] = [],
         };

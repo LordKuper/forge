@@ -225,6 +225,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             InputDigest = result.InputDigest,
             Outputs = [.. result.Outputs],
             Diagnostics = [.. result.Diagnostics.Select(ToPersisted)],
+            Revision = result.Revision.Value,
+            SupersededAtRevision = result.Superseded?.AtRevision.Value,
+            SupersededRecordedAt = result.Superseded?.RecordedAt,
         };
         byte[] bytes = JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions);
 
@@ -288,7 +291,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     persisted.CompletedAt,
                     persisted.InputDigest,
                     persisted.Outputs ?? [],
-                    [.. (persisted.Diagnostics ?? []).Select(FromPersisted)]));
+                    [.. (persisted.Diagnostics ?? []).Select(FromPersisted)],
+                    new(persisted.Revision),
+                    ToSupersededBy(persisted.SupersededAtRevision, persisted.SupersededRecordedAt)));
             }
             catch (Exception error) when (error is JsonException or FormatException or OverflowException
                 or ArgumentNullException or NullReferenceException)
@@ -396,6 +401,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Artifacts = [.. handoff.Artifacts.Select(ToPersisted)],
             OpenRisks = [.. handoff.OpenRisks],
             NextNodeIds = handoff.NextNodeIds is null ? null : [.. handoff.NextNodeIds],
+            Revision = handoff.Revision.Value,
+            SupersededAtRevision = handoff.Superseded?.AtRevision.Value,
+            SupersededRecordedAt = handoff.Superseded?.RecordedAt,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{handoff.HandoffId:N}.json"),
@@ -444,6 +452,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             DefinitionOfDone = confirmation.DefinitionOfDone,
             Evidence = [.. confirmation.Evidence.Select(ToPersisted)],
             RecordedAt = confirmation.RecordedAt,
+            Revision = confirmation.Revision.Value,
+            SupersededAtRevision = confirmation.Superseded?.AtRevision.Value,
+            SupersededRecordedAt = confirmation.Superseded?.RecordedAt,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{confirmation.ConfirmationId:N}.json"),
@@ -510,6 +521,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Outcome = WorkflowStateNames.ToSnakeCase(testWork.Outcome),
             Justification = testWork.Justification,
             RecordedAt = testWork.RecordedAt,
+            Revision = testWork.Revision.Value,
+            SupersededAtRevision = testWork.Superseded?.AtRevision.Value,
+            SupersededRecordedAt = testWork.Superseded?.RecordedAt,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{testWork.TestWorkId:N}.json"),
@@ -879,6 +893,349 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            string key = idempotencyKey.ToString("D");
+            bool converged = events.Any(item =>
+                item.Type == WorkflowEvent.StageTransitionConvergedType &&
+                item.Arguments.GetValueOrDefault(WorkflowEvent.IdempotencyKeyArgument) == key);
+            return converged
+                ? await LoadCoreAsync(projectRoot, sprintId, cancellationToken, callerHoldsLock: true)
+                    .ConfigureAwait(false)
+                : null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendStageTransitionConvergedAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string key = idempotencyKey.ToString("D");
+
+            // Recorded at most once per idempotency key, mirroring AppendAttemptStopConvergedAsync --
+            // a second call for the same key is always a replay of MoveAsync's own last,
+            // unconditional step.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.StageTransitionConvergedType &&
+                item.Arguments.GetValueOrDefault(WorkflowEvent.IdempotencyKeyArgument) == key))
+            {
+                return;
+            }
+
+            string sprintKey = sprintId.Value.ToString("D");
+            long sprintVersion = CurrentVersion(events, AggregateKind.Sprint, sprintKey);
+            WorkflowEvent converged = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.StageTransitionConvergedType,
+                new(AggregateKind.Sprint, sprintKey, sprintVersion),
+                "workflow.stage_transition_converged",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.IdempotencyKeyArgument] = key,
+                });
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(converged), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<AppendOutcome> AppendStageRevisionRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string targetStageId,
+        string reason,
+        StageRevision newRevision,
+        long expectedSprintVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        string idempotencyPath = IdempotencyPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            // Reuses AppendTransitionAsync's own durable idempotency-key ledger rather than a
+            // second mechanism: a sprint can be legitimately rewound more than once over its life,
+            // so "has this event type ever landed" (AppendAttemptStopRequestedAsync's own dedup
+            // shape) would wrongly block a second, later rewind. Keying on the caller's own
+            // idempotency key is what lets a genuine replay short-circuit while a distinct later
+            // rewind still lands.
+            Dictionary<Guid, DateTimeOffset> applied =
+                await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
+            if (applied.ContainsKey(idempotencyKey))
+            {
+                SprintWorkflowState? replayed = await LoadCoreAsync(
+                    projectRoot, sprintId, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+                return new(true, replayed, DiagnosticCodes.None, true);
+            }
+
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string sprintKey = sprintId.Value.ToString("D");
+            long sprintVersion = CurrentVersion(events, AggregateKind.Sprint, sprintKey);
+            if (sprintVersion != expectedSprintVersion)
+            {
+                return AppendOutcome.Conflict;
+            }
+
+            WorkflowEvent recorded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.StageRevisionRecordedType,
+                new(AggregateKind.Sprint, sprintKey, sprintVersion),
+                "workflow.stage_revision_recorded",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.RevisionArgument] = newRevision.Value.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.TargetStageIdArgument] = targetStageId,
+                    [WorkflowEvent.RewindReasonArgument] = reason,
+                    // Round 2 review of PR #96 (critical): durable so a resumed retry can recover the
+                    // *original* caller's key and re-enter this method's own ledger-keyed replay branch
+                    // (checked above, first) rather than mint a new key that would never match it.
+                    [WorkflowEvent.IdempotencyKeyArgument] = idempotencyKey.ToString("D"),
+                });
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
+                .ConfigureAwait(false);
+
+            applied[idempotencyKey] = clock.UtcNow;
+            await WriteIdempotencyAsync(idempotencyPath, applied, cancellationToken).ConfigureAwait(false);
+
+            SprintWorkflowState? updated = await LoadCoreAsync(
+                projectRoot, sprintId, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            return new(true, updated, DiagnosticCodes.None);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task MarkNodeResultSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        SupersededBy marker,
+        CancellationToken cancellationToken)
+    {
+        string directory = ResultsDirectory(SprintDirectory(projectRoot, sprintId));
+        string path = Path.Combine(directory, $"{attemptId.Value:N}.json");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedNodeResult persisted =
+                JsonSerializer.Deserialize<PersistedNodeResult>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The node result at '{path}' is empty.");
+            if (persisted.SupersededAtRevision is not null)
+            {
+                return;
+            }
+
+            persisted.SupersededAtRevision = marker.AtRevision.Value;
+            persisted.SupersededRecordedAt = marker.RecordedAt;
+            await AtomicConfigurationFile.WriteAsync(
+                path, JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task MarkHandoffSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid handoffId,
+        SupersededBy marker,
+        CancellationToken cancellationToken)
+    {
+        string path = Path.Combine(HandoffsDirectory(SprintDirectory(projectRoot, sprintId)), $"{handoffId:N}.json");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedHandoff persisted =
+                JsonSerializer.Deserialize<PersistedHandoff>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The handoff at '{path}' is empty.");
+            if (persisted.SupersededAtRevision is not null)
+            {
+                return;
+            }
+
+            persisted.SupersededAtRevision = marker.AtRevision.Value;
+            persisted.SupersededRecordedAt = marker.RecordedAt;
+            await AtomicConfigurationFile.WriteAsync(
+                path, JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task MarkConfirmationSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid confirmationId,
+        SupersededBy marker,
+        CancellationToken cancellationToken)
+    {
+        string path = Path.Combine(
+            ConfirmationsDirectory(SprintDirectory(projectRoot, sprintId)), $"{confirmationId:N}.json");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedConfirmation persisted =
+                JsonSerializer.Deserialize<PersistedConfirmation>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The confirmation at '{path}' is empty.");
+            if (persisted.SupersededAtRevision is not null)
+            {
+                return;
+            }
+
+            persisted.SupersededAtRevision = marker.AtRevision.Value;
+            persisted.SupersededRecordedAt = marker.RecordedAt;
+            await AtomicConfigurationFile.WriteAsync(
+                path, JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task MarkTestWorkSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid testWorkId,
+        SupersededBy marker,
+        CancellationToken cancellationToken)
+    {
+        string path = Path.Combine(TestWorkDirectory(SprintDirectory(projectRoot, sprintId)), $"{testWorkId:N}.json");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedTestWork persisted =
+                JsonSerializer.Deserialize<PersistedTestWork>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The test-work record at '{path}' is empty.");
+            if (persisted.SupersededAtRevision is not null)
+            {
+                return;
+            }
+
+            persisted.SupersededAtRevision = marker.AtRevision.Value;
+            persisted.SupersededRecordedAt = marker.RecordedAt;
+            await AtomicConfigurationFile.WriteAsync(
+                path, JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task MarkFindingSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid findingId,
+        SupersededBy marker,
+        CancellationToken cancellationToken)
+    {
+        string sprintDirectory = SprintDirectory(projectRoot, sprintId);
+        await MigrateLegacyFindingsAsync(sprintDirectory, cancellationToken).ConfigureAwait(false);
+        string path = Path.Combine(FindingsDirectory(sprintDirectory), $"{findingId:N}.json");
+        if (!File.Exists(path))
+        {
+            return;
+        }
+
+        SemaphoreSlim gate = Locks.GetOrAdd(path, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            byte[] bytes = await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
+            PersistedFinding persisted =
+                JsonSerializer.Deserialize<PersistedFinding>(bytes, DefinitionJsonOptions) ??
+                throw new InvalidDataException($"The finding at '{path}' is empty.");
+            if (persisted.SupersededAtRevision is not null)
+            {
+                return;
+            }
+
+            persisted.SupersededAtRevision = marker.AtRevision.Value;
+            persisted.SupersededRecordedAt = marker.RecordedAt;
+            await AtomicConfigurationFile.WriteAsync(
+                path, JsonSerializer.SerializeToUtf8Bytes(persisted, DefinitionJsonOptions), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<IReadOnlyList<RouteDecision>> GetRouteDecisionsAsync(
         string projectRoot,
         SprintId sprintId,
@@ -1163,6 +1520,15 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    /// <summary>Shared by every evidence kind's own <c>FromPersisted</c>: a persisted record carries
+    /// the marker's two fields separately (nullable primitives round-trip through JSON more
+    /// defensively than a nested object would), reassembled into one <see cref="SupersededBy"/>
+    /// only when both are present -- an evidence record is never superseded with only one of the two
+    /// set, since <see cref="FileSprintEventLog"/>'s own <c>Mark*SupersededAsync</c> methods always
+    /// write both together.</summary>
+    private static SupersededBy? ToSupersededBy(int? atRevision, DateTimeOffset? recordedAt) =>
+        atRevision is { } revision && recordedAt is { } recorded ? new(new(revision), recorded) : null;
+
     private static PersistedDiagnostic ToPersisted(NodeDiagnostic diagnostic) =>
         new()
         {
@@ -1187,6 +1553,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Evidence = [.. finding.Evidence],
             LocationPath = finding.Location?.Path,
             LocationLine = finding.Location?.Line,
+            NodeId = finding.NodeId?.Value,
+            Revision = finding.Revision.Value,
+            SupersededAtRevision = finding.Superseded?.AtRevision.Value,
+            SupersededRecordedAt = finding.Superseded?.RecordedAt,
         };
 
     private static Finding FromPersisted(SprintId sprintId, PersistedFinding finding) =>
@@ -1199,7 +1569,10 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             finding.MessageKey,
             finding.Arguments,
             finding.Evidence,
-            finding.LocationPath is { } path ? new(path, finding.LocationLine) : null);
+            finding.LocationPath is { } path ? new(path, finding.LocationLine) : null,
+            finding.NodeId is { } nodeId ? new(nodeId) : null,
+            new(finding.Revision),
+            ToSupersededBy(finding.SupersededAtRevision, finding.SupersededRecordedAt));
 
     private static PersistedArtifact ToPersisted(HandoffArtifact artifact) =>
         new()
@@ -1231,7 +1604,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             handoff.Decisions,
             [.. handoff.Artifacts.Select(FromPersisted)],
             handoff.OpenRisks,
-            handoff.NextNodeIds);
+            handoff.NextNodeIds,
+            new(handoff.Revision),
+            ToSupersededBy(handoff.SupersededAtRevision, handoff.SupersededRecordedAt));
 
     private static PersistedEvidence ToPersisted(ConfirmationEvidence evidence) =>
         new() { Kind = WorkflowStateNames.ToSnakeCase(evidence.Kind), Description = evidence.Description };
@@ -1247,7 +1622,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             WorkflowStateNames.Parse<ConfirmationOutcome>(confirmation.Outcome),
             confirmation.DefinitionOfDone,
             [.. (confirmation.Evidence ?? []).Select(FromPersisted)],
-            confirmation.RecordedAt);
+            confirmation.RecordedAt,
+            new(confirmation.Revision),
+            ToSupersededBy(confirmation.SupersededAtRevision, confirmation.SupersededRecordedAt));
 
     private static TestWorkArtifact FromPersisted(SprintId sprintId, PersistedTestWork testWork) =>
         new(
@@ -1256,7 +1633,9 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             new(testWork.NodeId),
             WorkflowStateNames.Parse<TestWorkOutcome>(testWork.Outcome),
             testWork.Justification,
-            testWork.RecordedAt);
+            testWork.RecordedAt,
+            new(testWork.Revision),
+            ToSupersededBy(testWork.SupersededAtRevision, testWork.SupersededRecordedAt));
 
     private static PersistedNormalizedFindingKey ToPersisted(NormalizedFindingKey key) =>
         new() { File = key.File, Line = key.Line, Rule = key.Rule, MessageFingerprint = key.MessageFingerprint };
@@ -1310,17 +1689,21 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Kind = WorkflowStateNames.ToSnakeCase(node.Kind),
             DependsOn = [.. node.DependsOn],
             Role = WorkflowStateNames.ToSnakeCase(node.Role),
+            Optional = node.Optional,
         };
 
     // A sprint frozen before this field existed has no `Role` in its durable definition.json;
     // treated as `Generic` rather than a corrupt-definition failure, since `Generic` was every
-    // node's implicit role before Stage 11 introduced the enum.
+    // node's implicit role before Stage 11 introduced the enum. Likewise `Optional` defaults to
+    // `false` (mandatory) for a sprint frozen before Slice 3 introduced it -- every node the
+    // built-in graph ever produced before this slice was implicitly mandatory.
     private static NodeDefinition FromPersisted(PersistedNode node) =>
         new(
             node.Id,
             WorkflowStateNames.Parse<NodeKind>(node.Kind),
             node.DependsOn ?? [],
-            string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role));
+            string.IsNullOrEmpty(node.Role) ? NodeRole.Generic : WorkflowStateNames.Parse<NodeRole>(node.Role),
+            node.Optional);
 
     private static PersistedExecutionProfile ToPersisted(ExecutionProfile profile) =>
         new()
@@ -2005,6 +2388,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<string>? DependsOn { get; set; } = [];
 
         public string? Role { get; set; }
+
+        public bool Optional { get; set; }
     }
 
     private sealed class PersistedNodeResult
@@ -2028,6 +2413,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<string>? Outputs { get; set; } = [];
 
         public List<PersistedDiagnostic>? Diagnostics { get; set; } = [];
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededRecordedAt { get; set; }
     }
 
     private sealed class PersistedDiagnostic
@@ -2060,6 +2451,14 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string? LocationPath { get; set; }
 
         public int? LocationLine { get; set; }
+
+        public string? NodeId { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededRecordedAt { get; set; }
     }
 
     private sealed class PersistedHandoff
@@ -2079,6 +2478,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<string> OpenRisks { get; set; } = [];
 
         public List<string>? NextNodeIds { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededRecordedAt { get; set; }
     }
 
     private sealed class PersistedArtifact
@@ -2112,6 +2517,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<PersistedEvidence>? Evidence { get; set; } = [];
 
         public DateTimeOffset RecordedAt { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededRecordedAt { get; set; }
     }
 
     private sealed class PersistedTestWork
@@ -2125,6 +2536,12 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public string Justification { get; set; } = string.Empty;
 
         public DateTimeOffset RecordedAt { get; set; }
+
+        public int Revision { get; set; }
+
+        public int? SupersededAtRevision { get; set; }
+
+        public DateTimeOffset? SupersededRecordedAt { get; set; }
     }
 
     private sealed class PersistedEvidence

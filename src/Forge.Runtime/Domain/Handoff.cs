@@ -28,6 +28,8 @@ public sealed record HandoffArtifact(
 /// `Decisions`, and `OpenRisks` are free text by contract — a handoff is written for the next
 /// node's model to read, not rendered as localized UI.
 /// </summary>
+/// <summary><paramref name="Revision"/>/<paramref name="Superseded"/> follow the same rewind
+/// supersession rule as <see cref="NodeResult"/> (plan section 8.4, ADR 0045).</summary>
 public sealed record Handoff(
     Guid HandoffId,
     SprintId SprintId,
@@ -37,4 +39,6 @@ public sealed record Handoff(
     IReadOnlyList<string> Decisions,
     IReadOnlyList<HandoffArtifact> Artifacts,
     IReadOnlyList<string> OpenRisks,
-    IReadOnlyList<string>? NextNodeIds = null);
+    IReadOnlyList<string>? NextNodeIds = null,
+    StageRevision Revision = default,
+    SupersededBy? Superseded = null);

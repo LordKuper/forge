@@ -26,4 +26,13 @@ public sealed class ExitCodesTests
     [Trait("Category", "Unit")]
     public void ModelPolicyProviderUnknownIsNeverReportedSoItFallsBackToInternal() =>
         Assert.Equal(ExitCodes.Internal, ExitCodes.For(DiagnosticCodes.ModelPolicyProviderUnknown));
+
+    /// <summary>Round 2 review of PR #96: the diagnostic a caller sees while a sprint's in-flight
+    /// rewind has not yet converged (blocking further moves and finalization) is a workflow-state
+    /// condition, the same category as <see cref="DiagnosticCodes.NoActiveOperation"/>/
+    /// <see cref="DiagnosticCodes.ActiveOperationChanged"/>, not a generic internal error.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void StageTransitionRewindInProgressMapsToTheWorkflowExitCode() =>
+        Assert.Equal(ExitCodes.Workflow, ExitCodes.For(DiagnosticCodes.StageTransitionRewindInProgress));
 }

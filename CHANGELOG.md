@@ -2,6 +2,38 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.65.0
+
+### Added
+
+- Added `forge sprint assess-stage <id> --target-stage <stage-id> [--json]`, a read-only check that
+  reports whether a sprint can move to another workflow stage: the direction (advance or rewind),
+  which prerequisites are satisfied or still blocking, what an active operation or a rewind would
+  affect, and whether a bounded reason and confirmation are required.
+- Added `forge sprint move-stage <id> --target-stage <stage-id> [--reason <text>] [--yes]`, which
+  commits an already-assessed move. Advancing to a later stage only ever activates a target whose
+  prerequisites already hold — it never fabricates a result or skips a mandatory stage. Rewinding to
+  an earlier stage requires a bounded reason (4000 characters) and confirmation, stops every active
+  operation in the affected downstream stages first (including a parallel workflow's concurrently
+  running branches), starts a new stage revision, and marks every downstream result, decision,
+  finding, and artifact as superseded — prior history is never deleted or rewritten, and superseded
+  evidence can no longer satisfy a later prerequisite check.
+- The Host always re-checks a stage move's prerequisites and expected state immediately before
+  committing it; a stale or mismatched request is rejected without any partial change, and repeating
+  the same move (advance or rewind) is safe and never records a second stage revision. A Host crash
+  at any point during a rewind is safe: the sprint durably remembers an unconverged rewind
+  independently of its ordinary node/sprint state, so the very next stage-move or assess-stage
+  request against that sprint automatically finishes converging it — regardless of which step the
+  crash interrupted, and regardless of whether that request carries the original (now-stale) tokens,
+  fresh ones, or an unrelated target. The sprint also refuses to finalize while a rewind has not yet
+  converged, so a crash can never let a half-finished rewind reach `completed`, and `assess-stage`
+  reports the in-progress rewind directly rather than misreporting a stage's direction while one is
+  pending.
+- A blocked prerequisite (an open finding, a dirty integration worktree, an exhausted retry budget,
+  or a disallowed model policy) never blocks rewinding to an earlier stage — rewinding past the
+  affected work is the intended way to resolve it. These prerequisites still gate advancing to a
+  later stage.
+
 ## v0.64.0
 
 ### Added

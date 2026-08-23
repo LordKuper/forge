@@ -491,6 +491,114 @@ public interface ISprintStore
         CancellationToken cancellationToken);
 
     /// <summary>
+    /// A pure, side-effect-free check for whether <paramref name="idempotencyKey"/>'s whole
+    /// `MoveSprintToStage` saga has already *fully converged* (<see cref="AppendStageTransitionConvergedAsync"/>
+    /// already landed for it) -- returns the current folded state when it has, or <see langword="null"/>
+    /// otherwise. Round 1 review of PR #96 (finding 1): this deliberately does NOT check the raw
+    /// <see cref="AppendTransitionAsync"/>/<see cref="AppendStageRevisionRecordedAsync"/> idempotency
+    /// ledger the way the original (defective) design did -- that ledger entry lands at step 2 of the
+    /// six-step rewind saga, before evidence supersession, node reopen/invalidate, graph re-advance,
+    /// and the sprint-ready walk (steps 3-6) have run, so a crash in that window made every future
+    /// replay of the same key report success on a permanently half-finished rewind. Checked first,
+    /// unconditionally, before any fresh assessment: by the time a rewind has already committed once,
+    /// current state has moved on (the target is no longer at the terminal outcome that made it a
+    /// rewind in the first place), so re-deriving direction from scratch on a replay would no longer
+    /// even classify the call as the same operation. See <c>StageTransitionCoordinator.MoveAsync</c>.
+    /// </summary>
+    Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Appends one <see cref="WorkflowEvent.StageTransitionConvergedType"/> event carrying
+    /// <paramref name="idempotencyKey"/> -- <c>StageTransitionCoordinator.MoveAsync</c>'s own last,
+    /// unconditional step on a successful advance or rewind commit, marking the whole saga durably
+    /// done (round 1 review of PR #96, findings 1 and 4). Recorded once per key, deduplicated by
+    /// scanning the journal like <see cref="AppendAttemptStopConvergedAsync"/>; not gated by
+    /// <see cref="AppendTransitionAsync"/>'s optimistic concurrency, since it is only ever appended
+    /// after the commit's own steps already landed (or were already a no-op because an earlier call
+    /// landed them). Use <see cref="TryGetConvergedStageTransitionAsync"/> to check for a replay
+    /// without appending anything.
+    /// </summary>
+    Task AppendStageTransitionConvergedAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Plan section 8.4/8.5's committed-rewind marker (Slice 3): appends one
+    /// <see cref="WorkflowEvent.StageRevisionRecordedType"/> event on the sprint's own aggregate,
+    /// gated on <paramref name="expectedSprintVersion"/> matching the sprint's current version
+    /// (exactly like <see cref="AppendTransitionAsync"/>'s own optimistic concurrency) and
+    /// deduplicated through the *same* durable idempotency-key ledger
+    /// <see cref="AppendTransitionAsync"/> already maintains -- reused deliberately, not a second
+    /// mechanism, so replaying <paramref name="idempotencyKey"/> returns the original result and
+    /// never records a second revision, the same "durable marker checked before acting" discipline
+    /// <see cref="AppendAttemptStopRequestedAsync"/> uses for its own (differently-scoped) replay
+    /// detection. Unlike that method, a sprint can be legitimately rewound more than once over its
+    /// life, so deduplication here cannot be "has this event type ever landed for this aggregate" --
+    /// it must be keyed by the caller's own idempotency key, exactly like an ordinary
+    /// <see cref="AppendTransitionAsync"/> call. This ledger entry alone is NOT a safe outer
+    /// replay-succeeded signal (round 1 review of PR #96, finding 1) -- see
+    /// <see cref="TryGetConvergedStageTransitionAsync"/>/<see cref="AppendStageTransitionConvergedAsync"/>
+    /// for the dedicated saga-completion marker that is.
+    /// </summary>
+    Task<AppendOutcome> AppendStageRevisionRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string targetStageId,
+        string reason,
+        StageRevision newRevision,
+        long expectedSprintVersion,
+        Guid idempotencyKey,
+        CancellationToken cancellationToken);
+
+    /// <summary>Marks one already-recorded <see cref="NodeResult"/> (identified by its owning
+    /// attempt) as superseded, if it is not already -- idempotent and safe to call repeatedly, the
+    /// same discipline every other rewind-coordinator step uses so a Host crash mid-supersession
+    /// converges on retry instead of duplicating or skipping a marker. A no-op if no result is
+    /// recorded for <paramref name="attemptId"/> at all.</summary>
+    Task MarkNodeResultSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        SupersededBy marker,
+        CancellationToken cancellationToken);
+
+    /// <summary>Same idempotent-mark discipline as <see cref="MarkNodeResultSupersededAsync"/>, for
+    /// one recorded <see cref="Handoff"/>.</summary>
+    Task MarkHandoffSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid handoffId,
+        SupersededBy marker,
+        CancellationToken cancellationToken);
+
+    /// <summary>Same idempotent-mark discipline as <see cref="MarkNodeResultSupersededAsync"/>, for
+    /// one recorded <see cref="ConfirmationArtifact"/>.</summary>
+    Task MarkConfirmationSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid confirmationId,
+        SupersededBy marker,
+        CancellationToken cancellationToken);
+
+    /// <summary>Same idempotent-mark discipline as <see cref="MarkNodeResultSupersededAsync"/>, for
+    /// one recorded <see cref="TestWorkArtifact"/>.</summary>
+    Task MarkTestWorkSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid testWorkId,
+        SupersededBy marker,
+        CancellationToken cancellationToken);
+
+    /// <summary>Same idempotent-mark discipline as <see cref="MarkNodeResultSupersededAsync"/>, for
+    /// one recorded <see cref="Finding"/>.</summary>
+    Task MarkFindingSupersededAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid findingId,
+        SupersededBy marker,
+        CancellationToken cancellationToken);
+
+    /// <summary>
     /// Every durable transition and routing record for one sprint, in append order, including the
     /// records <see cref="LoadAsync"/> folds away — the raw stream a read model needs to derive
     /// creation order (its first record's <see cref="WorkflowEvent.OccurredAt"/>) and incremental
