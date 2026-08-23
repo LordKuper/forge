@@ -153,10 +153,10 @@ public sealed class SprintTimelineTests
     // entirely and proves nothing about it. This test bypasses pass 1's actual coverage instead of
     // its output: TamperingSprintStore injects a raw secret into WorkflowEvent.MessageKey, a field
     // pass 1 copies straight through with no redaction at all (only Arguments is ever redacted by
-    // pass 1). The raw page below (pass 1 only) is asserted to still contain the secret -- proving
-    // pass 1 alone cannot catch it -- and only SprintTimelineRedaction.Apply (pass 2, wired into
-    // ForgeApplication.GetSprintTimelineAsync, the one method every surface calls) removes it before
-    // the page is serialized. Deleting pass 2 fails this test immediately.
+    // pass 1). The raw page below (pass 1 only, taken directly from a projector built on the same
+    // tampering store) is asserted to still contain the secret -- proving pass 1 alone cannot catch
+    // it -- and only SprintTimelineRedaction.Apply (pass 2) removes it before the page is
+    // serialized.
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RedactionPass2CatchesASecretInAFieldPass1NeverTouches()
@@ -179,6 +179,42 @@ public sealed class SprintTimelineTests
 
         Assert.DoesNotContain(renderedPage.Items, item => item.MessageKey.Contains(secret, StringComparison.Ordinal));
         string serialized = StatusJson.Serialize(renderedPage);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    // Regression (PR #97 review round 2, finding 1): the test above proves the Apply *method*
+    // redacts MessageKey, but calls it directly on a locally-built page -- it never exercises
+    // ForgeApplication.GetSprintTimelineAsync, so it cannot observe whether that method still calls
+    // Apply at all. That is precisely the defect this fix (db485d7) closed: the call was missing
+    // from the shared read path every surface (CLI text, CLI --json, Host wire response) actually
+    // uses. This test instead resolves a real ForgeApplication (via
+    // TestEnvironment.ResolveApplicationWithSprintStore, sharing every other real dependency from
+    // the container) whose SprintTimelineProjector is backed by the same TamperingSprintStore, and
+    // asserts the secret is gone from GetSprintTimelineAsync's own returned page -- and from its
+    // StatusJson.Serialize form, covering the --json/Host wire surfaces too. Verified by targeted
+    // mutation: changing ForgeApplication.cs's `return SprintTimelineRedaction.Apply(page);` (line
+    // ~1385) to `return page;` fails this test (the secret survives), while the test above and every
+    // other existing test stay green -- confirming this is the only test that actually pins pass 2
+    // being wired into the shared read path, not merely that the Apply method itself redacts.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task GetSprintTimelineAsyncRedactsASecretInAFieldPass1NeverTouches()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        const string secret = "password=Sup3rSecretValue!!";
+        ForgeApplication application =
+            environment.ResolveApplicationWithSprintStore(store => new TamperingSprintStore(store, secret));
+
+        SprintTimelinePage page = await application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        Assert.DoesNotContain(page.Items, item => item.MessageKey.Contains(secret, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(page);
         Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
     }
 
