@@ -2,6 +2,25 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.65.0
+
+### Added
+
+- Added `forge sprint assess-stage <id> --target-stage <stage-id> [--json]`, a read-only check that
+  reports whether a sprint can move to another workflow stage: the direction (advance or rewind),
+  which prerequisites are satisfied or still blocking, what an active operation or a rewind would
+  affect, and whether a bounded reason and confirmation are required.
+- Added `forge sprint move-stage <id> --target-stage <stage-id> [--reason <text>] [--yes]`, which
+  commits an already-assessed move. Advancing to a later stage only ever activates a target whose
+  prerequisites already hold — it never fabricates a result or skips a mandatory stage. Rewinding to
+  an earlier stage requires a reason and confirmation, stops the sprint's active operation first when
+  one exists, starts a new stage revision, and marks every downstream result, decision, finding, and
+  artifact as superseded — prior history is never deleted or rewritten, and superseded evidence can
+  no longer satisfy a later prerequisite check.
+- The Host always re-checks a stage move's prerequisites and expected state immediately before
+  committing it; a stale or mismatched request is rejected without any partial change, and repeating
+  the same move is safe and never records a second stage revision.
+
 ## v0.64.0
 
 ### Added
