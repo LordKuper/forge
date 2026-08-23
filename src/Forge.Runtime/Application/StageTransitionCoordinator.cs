@@ -61,9 +61,14 @@ public sealed class StageTransitionCoordinator(
         // creates a second revision"): a rewind's target is, by definition, a node already at a
         // terminal outcome before the rewind commits and no longer at one afterward, so re-deriving
         // direction from current state on a replay would no longer even see the same operation.
-        // Checked first, unconditionally, for both directions -- an advance replay converges to a
-        // safe no-op through its own state-gated steps regardless, so this adds no risk there either.
-        if (await store.TryGetIdempotentReplayAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
+        // Checked first, unconditionally, for both directions. Round 1 review of PR #96 (finding 1):
+        // this must key on the whole saga's own completion marker
+        // (ISprintStore.TryGetConvergedStageTransitionAsync), not the raw AppendTransitionAsync/
+        // AppendStageRevisionRecordedAsync idempotency ledger -- that ledger entry lands at step 2 of
+        // CommitRewindAsync's six steps, before evidence supersession, node reopen/invalidate, graph
+        // re-advance, and the sprint-ready walk have run, so a crash in that window would otherwise
+        // make every future replay report success on a permanently half-finished rewind.
+        if (await store.TryGetConvergedStageTransitionAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
             .ConfigureAwait(false) is { } replayed)
         {
             return new(true, replayed.Sprint, replayed.Nodes.GetValueOrDefault(targetStageId), DiagnosticCodes.None);
@@ -104,6 +109,15 @@ public sealed class StageTransitionCoordinator(
             return new(false, null, null, DiagnosticCodes.StageTransitionReasonRequired);
         }
 
+        // Plan section 8.4 point 1 calls the rewind reason "bounded" -- round 1 review of PR #96
+        // (finding 5): reuses the exact limit and diagnostic ADR 0006 already established for the
+        // equivalent human-authored bounded artifact (SprintScheduler.SupersedeAttemptAsync's own
+        // supersession instruction), rather than a second, drifting rule.
+        if (isRewind && reason!.Length > SprintScheduler.MaxSupersessionInstructionLength)
+        {
+            return new(false, null, null, DiagnosticCodes.SupersessionInstructionTooLong);
+        }
+
         if (!assessment.Allowed)
         {
             return new(false, null, null, DiagnosticCodes.WorkflowBlocked);
@@ -112,11 +126,13 @@ public sealed class StageTransitionCoordinator(
         return isRewind
             ? await CommitRewindAsync(projectRoot, sprintId, targetStageId, reason!, idempotencyKey, cancellationToken)
                 .ConfigureAwait(false)
-            : await CommitAdvanceAsync(projectRoot, sprintId, targetStageId, cancellationToken).ConfigureAwait(false);
+            : await CommitAdvanceAsync(projectRoot, sprintId, targetStageId, idempotencyKey, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     private async Task<MoveStageResult> CommitAdvanceAsync(
-        string projectRoot, SprintId sprintId, string targetStageId, CancellationToken cancellationToken)
+        string projectRoot, SprintId sprintId, string targetStageId, Guid idempotencyKey,
+        CancellationToken cancellationToken)
     {
         SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
@@ -160,6 +176,12 @@ public sealed class StageTransitionCoordinator(
             return new(false, null, null, DiagnosticCodes.WorkflowBlocked);
         }
 
+        // Round 1 review of PR #96 (finding 4): appended last and unconditionally on a successful
+        // commit, exactly like CommitRewindAsync's own last step below -- without it, a replayed
+        // advance had nothing to recognize it by and fell through to a fresh (now-stale) assessment,
+        // returning `suggestion_stale` for an operation that had in fact already succeeded.
+        await store.AppendStageTransitionConvergedAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
         return new(true, advanced.Sprint, targetNode, DiagnosticCodes.None);
     }
 
@@ -174,28 +196,33 @@ public sealed class StageTransitionCoordinator(
         Guid projectId = await ProjectIdentity.ReadProjectIdAsync(projectRoot, registry, cancellationToken)
             .ConfigureAwait(false);
 
-        // Step 1: stop the active operation first (plan section 8.4 point 2), converging it fully
-        // here rather than leaving it for a live executor tick that this CLI-only surface cannot
-        // guarantee will ever run.
+        // Downstream closure computed once, up front: the frozen definition never changes for this
+        // sprint, and both step 1 (round 1 review of PR #96, finding 2) and step 3/4 below need the
+        // exact same set.
+        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        HashSet<string> downstream = StageTransitionAssessor.CollectDownstreamClosure(targetStageId, definition.Graph);
+
+        // Step 1: stop every active operation within the downstream closure first (plan section 8.4
+        // point 2), converging each fully here rather than leaving it for a live executor tick this
+        // CLI-only surface cannot guarantee will ever run. A parallel DAG can have more than one node
+        // `Running` at once (round 1 review of PR #96, finding 2) -- every one of them in scope for
+        // this rewind must be stopped, not only the first found.
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        NodeSnapshot? activeNode = state.Nodes.Values.FirstOrDefault(node =>
-            node.State == NodeState.Running && node.CurrentAttemptId is { } id &&
-            state.Attempts.TryGetValue(id, out AttemptSnapshot? attempt) && !WorkflowStateMachines.IsTerminal(attempt.State));
-        if (activeNode is not null)
+        foreach (string nodeId in downstream)
         {
-            AttemptId attemptId = new(Guid.Parse(activeNode.CurrentAttemptId!));
-            StopOperationResult stopResult = await stopCoordinator
-                .RequestStopAsync(projectRoot, sprintId, attemptId, activeOperations, cancellationToken)
-                .ConfigureAwait(false);
+            if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node) || node.State != NodeState.Running)
+            {
+                continue;
+            }
+
+            StopOperationResult stopResult = await StopAndFailRunningNodeAsync(
+                projectRoot, sprintId, projectId, nodeId, cancellationToken).ConfigureAwait(false);
             if (!stopResult.Succeeded)
             {
                 return new(false, null, null, stopResult.DiagnosticCode);
             }
-
-            await stopCoordinator
-                .FinishStopAsync(projectRoot, sprintId, projectId, activeNode.Id.Value, attemptId, cancellationToken)
-                .ConfigureAwait(false);
         }
 
         // Step 2: exactly one durable revision increment per idempotency key -- a replay of the same
@@ -217,9 +244,6 @@ public sealed class StageTransitionCoordinator(
         // Step 3: mark every downstream result/handoff/decision/finding as superseded -- gated on
         // each record's own `Superseded is null` check inside the Mark*SupersededAsync methods
         // themselves, so a retry after a crash mid walk only marks what is not already marked.
-        SprintDefinition definition = await RequireDefinitionAsync(projectRoot, sprintId, cancellationToken)
-            .ConfigureAwait(false);
-        HashSet<string> downstream = StageTransitionAssessor.CollectDownstreamClosure(targetStageId, definition.Graph);
         await SupersedeDownstreamEvidenceAsync(projectRoot, sprintId, downstream, currentRevision, cancellationToken)
             .ConfigureAwait(false);
 
@@ -229,8 +253,8 @@ public sealed class StageTransitionCoordinator(
         foreach (string nodeId in downstream)
         {
             await ReopenOrInvalidateNodeAsync(
-                projectRoot, sprintId, nodeId, isTarget: nodeId == targetStageId, currentRevision, cancellationToken)
-                .ConfigureAwait(false);
+                projectRoot, sprintId, projectId, nodeId, isTarget: nodeId == targetStageId, currentRevision,
+                cancellationToken).ConfigureAwait(false);
         }
 
         // Step 5: recompute eligible stages from the frozen DAG -- the existing graph-advance
@@ -243,9 +267,76 @@ public sealed class StageTransitionCoordinator(
         // reaches running" contract the paused-sprint resume path already established.
         await DriveSprintTowardReadyAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
 
+        // Round 1 review of PR #96 (finding 1): appended last and unconditionally, regardless of
+        // which steps above this exact call did or did not need to (re-)run -- the durable "this
+        // whole saga is fully done" marker MoveAsync's own outer replay check relies on, mirroring
+        // StopOperationCoordinator.FinishStopAsync's own AppendAttemptStopConvergedAsync step.
+        await store.AppendStageTransitionConvergedAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
+
         SprintWorkflowState final = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
         return new(true, final.Sprint, final.Nodes.GetValueOrDefault(targetStageId), DiagnosticCodes.None);
+    }
+
+    /// <summary>Stops a downstream node's live attempt and lands the node on `Failed` -- deliberately
+    /// narrower than <see cref="StopOperationCoordinator.FinishStopAsync"/>: that method's own
+    /// unconditional re-arm to `Ready` and sprint-pause are correct for an ad-hoc manual stop, but
+    /// wrong here, since `Ready` has no legal edge back to `Pending` in the frozen node machine (round
+    /// 1 review of PR #96, finding 2) -- a rewound downstream node must land on `Pending`, and
+    /// `Failed -> Pending` already exists for exactly that. Reuses `workflow.node_rewind_interrupted`,
+    /// the same message key <see cref="ReopenOrInvalidateNodeAsync"/>'s own `AwaitingHuman` branch
+    /// already uses for the identical "this node's in-flight work was interrupted by the rewind, not
+    /// a real provider failure" reason. Idempotent: every step re-checks current durable state, so
+    /// calling this twice for the same node (step 1's own upfront pass, then
+    /// <see cref="ReopenOrInvalidateNodeAsync"/>'s defensive re-check) is a safe no-op the second
+    /// time. A no-op (reported as success) once the node is no longer `Running` at all.</summary>
+    private async Task<StopOperationResult> StopAndFailRunningNodeAsync(
+        string projectRoot, SprintId sprintId, Guid projectId, string nodeId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node) || node.State != NodeState.Running ||
+            node.CurrentAttemptId is not { } attemptIdText)
+        {
+            return new(true, DiagnosticCodes.None);
+        }
+
+        AttemptId attemptId = new(Guid.Parse(attemptIdText));
+        if (state.Attempts.TryGetValue(attemptIdText, out AttemptSnapshot? attempt) &&
+            !WorkflowStateMachines.IsTerminal(attempt.State))
+        {
+            StopOperationResult stopResult = await stopCoordinator
+                .RequestStopAsync(projectRoot, sprintId, attemptId, activeOperations, cancellationToken)
+                .ConfigureAwait(false);
+            if (!stopResult.Succeeded)
+            {
+                return stopResult;
+            }
+
+            state = await RequireStateAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+            if (state.Attempts.TryGetValue(attemptIdText, out AttemptSnapshot? stopping) &&
+                !WorkflowStateMachines.IsTerminal(stopping.State))
+            {
+                await store.AppendTransitionAsync(
+                    projectRoot, sprintId, AggregateKind.Attempt, attemptIdText, "AttemptChanged",
+                    "workflow.attempt_stopped", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled),
+                    stopping.Version, Guid.NewGuid(), cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        state = await RequireStateAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        if (state.Nodes.TryGetValue(nodeId, out NodeSnapshot? runningNode) && runningNode.State == NodeState.Running)
+        {
+            await store.AppendTransitionAsync(
+                projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", "workflow.node_rewind_interrupted",
+                WorkflowStateNames.ToSnakeCase(NodeState.Failed), runningNode.Version, Guid.NewGuid(),
+                cancellationToken).ConfigureAwait(false);
+        }
+
+        await store.AppendAttemptStopConvergedAsync(projectRoot, sprintId, attemptId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, DiagnosticCodes.None);
     }
 
     /// <summary>Marks every non-superseded result/handoff/decision belonging to a node in
@@ -330,6 +421,7 @@ public sealed class StageTransitionCoordinator(
     private async Task ReopenOrInvalidateNodeAsync(
         string projectRoot,
         SprintId sprintId,
+        Guid projectId,
         string nodeId,
         bool isTarget,
         StageRevision currentRevision,
@@ -340,6 +432,29 @@ public sealed class StageTransitionCoordinator(
         if (!state.Nodes.TryGetValue(nodeId, out NodeSnapshot? node))
         {
             return;
+        }
+
+        if (node.State == NodeState.Running)
+        {
+            // Defensive: step 1 already stops every downstream `Running` node in the closure before
+            // this step runs, but a resumed retry after a crash between step 1 and step 4 (round 1
+            // review of PR #96, finding 2) must never leave one stranded here. `Running` has no legal
+            // edge straight to `Ready`/`Pending` in the node machine, so this routes through the same
+            // attempt-stop convergence step 1 uses (landing on `Failed`) rather than inventing a new
+            // direct edge; the `Succeeded`/`Failed` branch just below then continues it the rest of
+            // the way.
+            StopOperationResult stopResult = await StopAndFailRunningNodeAsync(
+                projectRoot, sprintId, projectId, nodeId, cancellationToken).ConfigureAwait(false);
+            if (!stopResult.Succeeded)
+            {
+                return;
+            }
+
+            state = await RequireStateAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+            if (!state.Nodes.TryGetValue(nodeId, out node))
+            {
+                return;
+            }
         }
 
         NodeState toState = isTarget ? NodeState.Ready : NodeState.Pending;
@@ -361,9 +476,9 @@ public sealed class StageTransitionCoordinator(
 
         if (node.State == NodeState.AwaitingHuman)
         {
-            // No direct `awaiting_human -> pending`/`awaiting_human -> ready` edge -- walked through
-            // the already-legal `awaiting_human -> failed` hop first, matching the stop
-            // coordinator's own two-hop re-arm for the identical reason (no single edge exists).
+            // No direct `awaiting_human -> pending` edge -- walked through the already-legal
+            // `awaiting_human -> failed` hop first, matching the stop coordinator's own two-hop
+            // re-arm for the identical reason (no single edge exists).
             AppendOutcome toFailed = await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Node, nodeId, "NodeChanged", "workflow.node_rewind_interrupted",
                 WorkflowStateNames.ToSnakeCase(NodeState.Failed), node.Version, Guid.NewGuid(), cancellationToken)
@@ -383,6 +498,7 @@ public sealed class StageTransitionCoordinator(
         // Pending/Ready/Skipped/Cancelled: nothing to reopen or invalidate -- a node that never ran
         // has no evidence to supersede, and an explicitly skipped/cancelled node is left as the
         // operator's own deliberate prior decision (out of scope for an automatic rewind reset).
+        // `Running` is handled above, before this switch, never falls through to here.
     }
 
     private async Task DriveSprintTowardReadyAsync(

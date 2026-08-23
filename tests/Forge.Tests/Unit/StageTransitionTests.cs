@@ -426,7 +426,7 @@ public sealed class StageTransitionTests
 
         RecordFindingResult finding = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["evidence"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["evidence"], null, null, cancellationToken);
         Assert.True(finding.Succeeded);
 
         StageTransitionAssessment blocked =
@@ -441,6 +441,272 @@ public sealed class StageTransitionTests
         StageTransitionAssessment recovered =
             await assessor.AssessAsync(environment.ProjectRoot, sprintId, "b", cancellationToken);
         Assert.True(recovered.Allowed);
+    }
+
+    /// <summary>Round 1 review of PR #96 (finding 3): `NoBlockingFindings`/`ProviderModelPolicy`/
+    /// `GitIsolation`/`RetryBudget` were originally applied to both directions, which made a rewind
+    /// impossible in exactly the state it exists to recover from. An open finding still correctly
+    /// blocks an advance, but must never block the rewind whose own supersession is what actually
+    /// resolves it.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RewindSucceedsDespiteAnOpenFindingThatWouldStillBlockAnAdvance()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId =
+            await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b", "c");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+
+        RecordFindingResult finding = await scheduler.RecordFindingAsync(
+            environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
+            new Dictionary<string, string?>(), ["evidence"], null, null, cancellationToken);
+        Assert.True(finding.Succeeded);
+
+        StageTransitionAssessment advanceBlocked =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "c", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Advance, advanceBlocked.Direction);
+        Assert.False(advanceBlocked.Allowed);
+        Assert.Contains(
+            advanceBlocked.UnsatisfiedPrerequisites,
+            prerequisite => prerequisite.Id == StagePrerequisiteIds.NoBlockingFindings);
+
+        StageTransitionAssessment rewindAssessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Rewind, rewindAssessment.Direction);
+        Assert.True(rewindAssessment.Allowed);
+        Assert.DoesNotContain(
+            rewindAssessment.UnsatisfiedPrerequisites,
+            prerequisite => prerequisite.Id == StagePrerequisiteIds.NoBlockingFindings);
+
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", rewindAssessment.ExpectedStateVersion,
+            rewindAssessment.AssessmentToken, "redo despite the open finding", true, Guid.NewGuid(),
+            cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, result.TargetNode!.State);
+    }
+
+    /// <summary>Round 1 review of PR #96 (finding 5): plan section 8.4 calls the rewind reason
+    /// "bounded", but only non-empty was ever enforced. Reuses
+    /// <see cref="SprintScheduler.MaxSupersessionInstructionLength"/>, the same limit ADR 0006
+    /// already established for the equivalent human-authored bounded artifact.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RewindReasonExceedingTheBoundIsRejectedWithoutSideEffects()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+
+        string tooLong = new('x', SprintScheduler.MaxSupersessionInstructionLength + 1);
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            tooLong, true, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SupersessionInstructionTooLong, result.DiagnosticCode);
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(StageRevision.Initial, final.Sprint.Revision);
+    }
+
+    /// <summary>Round 1 review of PR #96 (finding 4): <c>CommitAdvanceAsync</c> never recorded the
+    /// caller's idempotency key, so a replayed advance fell through to a fresh (now-stale) assessment
+    /// and was rejected as `suggestion_stale` instead of returning the original result -- contradicting
+    /// plan section 8.5's "repeating the same move is safe" for the one direction this test covers.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReplayingTheSameIdempotencyKeyForAnAdvanceReturnsTheOriginalResult()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "b", cancellationToken);
+        Guid idempotencyKey = Guid.NewGuid();
+
+        MoveStageResult first = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "b", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            null, true, idempotencyKey, cancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(NodeState.Ready, first.TargetNode!.State);
+
+        MoveStageResult replay = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "b", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            null, true, idempotencyKey, cancellationToken);
+
+        Assert.True(replay.Succeeded, $"diag={replay.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, replay.TargetNode!.State);
+    }
+
+    /// <summary>Round 1 review of PR #96 (finding 2): a parallel DAG can have more than one node
+    /// `Running` at once, but step 1 originally stopped only the first one found anywhere in the
+    /// sprint, leaving every other running branch's node completely untouched by the rewind. Both
+    /// branches here must be stopped and invalidated by a single rewind to their common ancestor.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RewindStopsEveryRunningNodeInAParallelDownstreamClosureNotOnlyTheFirst()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph:
+                [
+                    new("a", NodeKind.Work, []),
+                    new("b1", NodeKind.Work, ["a"]),
+                    new("b2", NodeKind.Work, ["a"]),
+                ]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+
+        SprintWorkflowState beforeStart =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        StartAttemptResult startedB1 = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "b1", beforeStart.Nodes["b1"].Version, cancellationToken);
+        Assert.True(startedB1.Succeeded);
+        StartAttemptResult startedB2 = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "b2", beforeStart.Nodes["b2"].Version, cancellationToken);
+        Assert.True(startedB2.Succeeded);
+
+        SprintWorkflowState runningBoth =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Running, runningBoth.Nodes["b1"].State);
+        Assert.Equal(NodeState.Running, runningBoth.Nodes["b2"].State);
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Rewind, assessment.Direction);
+
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            "rewind past both branches", true, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(AttemptState.Cancelled, final.Attempts[startedB1.AttemptId!.Value.ToString("D")].State);
+        Assert.Equal(AttemptState.Cancelled, final.Attempts[startedB2.AttemptId!.Value.ToString("D")].State);
+        Assert.Equal(NodeState.Ready, final.Nodes["a"].State);
+        Assert.Equal(NodeState.Pending, final.Nodes["b1"].State);
+        Assert.Equal(NodeState.Pending, final.Nodes["b2"].State);
+        Assert.Equal(0, final.Nodes["b1"].AttemptCount);
+        Assert.Equal(0, final.Nodes["b2"].AttemptCount);
+    }
+
+    /// <summary>Round 1 review of PR #96 (finding 1), reproducing the reviewer's own repro: manually
+    /// appends exactly <c>CommitRewindAsync</c>'s own step-2 event (the durable revision increment)
+    /// for a given idempotency key and stops there -- simulating a Host crash after step 2 but before
+    /// steps 3-6 (evidence supersession, node reopen/invalidate, graph re-advance, sprint-ready walk)
+    /// ever ran. Before the fix, the outer replay check keyed on the same raw ledger entry step 2
+    /// writes, so a blind replay of that key reported a clean success for a rewind that had only
+    /// bumped the revision counter -- the target still showed its pre-rewind terminal outcome and
+    /// nothing downstream was touched. The fix must never silently report that false success: a
+    /// replay with the caller's now-stale tokens is safely refused, and a genuine retry (a fresh
+    /// assessment, same idempotency key) converges the rewind fully.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACrashAfterTheRevisionEventButBeforeTheRestOfTheRewindConvergesOnRetryInsteadOfFalseSuccess()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId =
+            await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b", "c");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "c", cancellationToken);
+
+        StageTransitionAssessment originalAssessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+        Guid idempotencyKey = Guid.NewGuid();
+
+        // Simulates the crash: exactly CommitRewindAsync's own step 2, nothing else.
+        SprintWorkflowState beforeCrash = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AppendOutcome midSaga = await store.AppendStageRevisionRecordedAsync(
+            environment.ProjectRoot, sprintId, "a", "redo from the start", beforeCrash.Sprint.Revision.Next(),
+            beforeCrash.Sprint.Version, idempotencyKey, cancellationToken);
+        Assert.True(midSaga.Succeeded);
+
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(new StageRevision(1), wedged.Sprint.Revision);
+        // The exact half-finished state the bug used to report as a clean success.
+        Assert.Equal(NodeState.Succeeded, wedged.Nodes["a"].State);
+
+        // A blind replay carrying the caller's original (now-stale) tokens must be refused, never
+        // told the rewind already succeeded.
+        MoveStageResult blindReplay = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", originalAssessment.ExpectedStateVersion,
+            originalAssessment.AssessmentToken, "redo from the start", true, idempotencyKey, cancellationToken);
+        Assert.False(blindReplay.Succeeded);
+        Assert.Equal(DiagnosticCodes.SuggestionStale, blindReplay.DiagnosticCode);
+
+        // A genuine retry -- a fresh assessment, the same idempotency key -- must converge the
+        // rewind fully rather than short-circuiting on the half-finished ledger entry step 2 left
+        // behind.
+        StageTransitionAssessment retryAssessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "a", cancellationToken);
+        MoveStageResult converged = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", retryAssessment.ExpectedStateVersion,
+            retryAssessment.AssessmentToken, "redo from the start", true, idempotencyKey, cancellationToken);
+
+        Assert.True(converged.Succeeded, $"diag={converged.DiagnosticCode}");
+        Assert.Equal(new StageRevision(1), converged.Sprint!.Revision);
+        Assert.Equal(NodeState.Ready, converged.TargetNode!.State);
+
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(new StageRevision(1), final.Sprint.Revision);
+        Assert.Equal(NodeState.Ready, final.Nodes["a"].State);
+        Assert.Equal(NodeState.Pending, final.Nodes["b"].State);
+        Assert.Equal(NodeState.Pending, final.Nodes["c"].State);
+        IReadOnlyList<NodeResult> results =
+            await store.GetNodeResultsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.All(results, result => Assert.NotNull(result.Superseded));
+
+        // A further replay of the same key, now that the saga has actually converged, safely returns
+        // the same result again without incrementing the revision a second time.
+        MoveStageResult replayAfterConvergence = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", retryAssessment.ExpectedStateVersion,
+            retryAssessment.AssessmentToken, "redo from the start", true, idempotencyKey, cancellationToken);
+        Assert.True(replayAfterConvergence.Succeeded);
+        Assert.Equal(new StageRevision(1), replayAfterConvergence.Sprint!.Revision);
     }
 
     private static (SprintOrchestrator, SprintScheduler, StageTransitionCoordinator, StageTransitionAssessor) Resolve(

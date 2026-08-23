@@ -223,26 +223,36 @@ public sealed class StageTransitionAssessor(
             }
         }
 
-        IReadOnlyList<Finding> findings =
-            await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
-        bool noBlockingFindings = findings.All(finding =>
-            finding.Status != FindingStatus.Open || finding.Superseded is not null);
-        Add(StagePrerequisiteIds.NoBlockingFindings, noBlockingFindings, "stage_transition.no_blocking_findings");
-
-        bool policyOk = await IsProviderModelPolicySatisfiedAsync(projectRoot, definition, target, cancellationToken)
-            .ConfigureAwait(false);
-        Add(StagePrerequisiteIds.ProviderModelPolicy, policyOk, "stage_transition.provider_model_policy");
-
-        bool gitOk = await IsGitIsolationSatisfiedAsync(projectRoot, projectId, sprintId, cancellationToken)
-            .ConfigureAwait(false);
-        Add(StagePrerequisiteIds.GitIsolation, gitOk, "stage_transition.git_isolation");
-
-        bool retryOk = await IsRetryBudgetSatisfiedAsync(projectRoot, definition, target, cancellationToken)
-            .ConfigureAwait(false);
-        Add(StagePrerequisiteIds.RetryBudget, retryOk, "stage_transition.retry_budget");
-
+        // Round 1 review of PR #96 (finding 3): these four prerequisites -- like `NoActiveOperation`
+        // just below, already direction-scoped -- gate whether an advance target may become active;
+        // none of them belongs on a rewind. A rewind is deliberately the escape hatch for exactly
+        // these conditions (an open finding, a dirty integration worktree, an exhausted retry budget,
+        // or a since-tightened model policy are all reasons to go *back*, not reasons to refuse doing
+        // so), and a rewind's own supersession is what actually resolves the finding one of them
+        // checks -- gating the rewind on it first would be circular. Plan section 8.2's prerequisite
+        // list is written for activating an advance target; section 8.4's rewind list names only a
+        // bounded reason, mandatory confirmation, and the mechanical stop/revision/supersession
+        // machinery (see ADR 0048).
         if (direction == StageTransitionDirection.Advance)
         {
+            IReadOnlyList<Finding> findings =
+                await store.GetFindingsAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+            bool noBlockingFindings = findings.All(finding =>
+                finding.Status != FindingStatus.Open || finding.Superseded is not null);
+            Add(StagePrerequisiteIds.NoBlockingFindings, noBlockingFindings, "stage_transition.no_blocking_findings");
+
+            bool policyOk = await IsProviderModelPolicySatisfiedAsync(projectRoot, definition, target, cancellationToken)
+                .ConfigureAwait(false);
+            Add(StagePrerequisiteIds.ProviderModelPolicy, policyOk, "stage_transition.provider_model_policy");
+
+            bool gitOk = await IsGitIsolationSatisfiedAsync(projectRoot, projectId, sprintId, cancellationToken)
+                .ConfigureAwait(false);
+            Add(StagePrerequisiteIds.GitIsolation, gitOk, "stage_transition.git_isolation");
+
+            bool retryOk = await IsRetryBudgetSatisfiedAsync(projectRoot, definition, target, cancellationToken)
+                .ConfigureAwait(false);
+            Add(StagePrerequisiteIds.RetryBudget, retryOk, "stage_transition.retry_budget");
+
             Add(
                 StagePrerequisiteIds.NoActiveOperation,
                 !activeOperation.HasActiveOperation,

@@ -89,16 +89,17 @@ public sealed class WorkflowContractTests
     [InlineData(NodeState.Running, NodeState.Succeeded, true)]
     [InlineData(NodeState.Failed, NodeState.Ready, true)]
     // `state-machines.json` 1.3.0 (plan section 8.4, Slice 3) added `succeeded -> ready`/
-    // `succeeded -> pending` and `failed -> pending`/`awaiting_human -> pending` for the rewind
-    // coordinator's own reopen/invalidate edges (see `WorkflowStateMachines.Node`'s remarks) --
-    // reached only through `Forge.Application.StageTransitionCoordinator`, never a generic public
-    // API. `Succeeded` is no longer a terminal node state; nothing in production ever called
-    // `WorkflowStateMachines.IsTerminal(NodeState)`.
+    // `succeeded -> pending` and `failed -> pending` for the rewind coordinator's own
+    // reopen/invalidate edges (see `WorkflowStateMachines.Node`'s remarks) -- reached only through
+    // `Forge.Application.StageTransitionCoordinator`, never a generic public API. `Succeeded` is no
+    // longer a terminal node state.
     [InlineData(NodeState.Succeeded, NodeState.Ready, true)]
     [InlineData(NodeState.Succeeded, NodeState.Pending, true)]
     [InlineData(NodeState.Succeeded, NodeState.Failed, false)]
     [InlineData(NodeState.Failed, NodeState.Pending, true)]
-    [InlineData(NodeState.AwaitingHuman, NodeState.Pending, true)]
+    // Round 1 review of PR #96 (finding 6): no direct `awaiting_human -> pending` edge exists --
+    // the rewind coordinator always walks `awaiting_human -> failed -> pending` instead.
+    [InlineData(NodeState.AwaitingHuman, NodeState.Pending, false)]
     [InlineData(NodeState.Skipped, NodeState.Ready, false)]
     [InlineData(NodeState.Cancelled, NodeState.Ready, false)]
     public void NodeTransitionsMatchFrozenV1Contract(NodeState from, NodeState to, bool expected) =>

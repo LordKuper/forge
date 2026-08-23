@@ -52,7 +52,7 @@
         "pending": ["ready", "skipped", "cancelled"],
         "ready": ["running", "skipped", "cancelled"],
         "running": ["awaiting_human", "succeeded", "failed", "cancelled"],
-        "awaiting_human": ["running", "failed", "cancelled", "pending"],
+        "awaiting_human": ["running", "failed", "cancelled"],
         "succeeded": ["ready", "pending"],
         "failed": ["ready", "pending"],
         "skipped": [],

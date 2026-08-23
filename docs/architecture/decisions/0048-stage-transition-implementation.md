@@ -19,11 +19,16 @@ implementation actually had to make.
 `Succeeded` had no outgoing edges in the frozen `node` machine — the JSON contract's own `terminal`
 list named it explicitly. Reopening it for a rewind therefore required extending
 `WorkflowStateMachines.Node` and `state-machines.json` (1.2.0 → 1.3.0) with `succeeded -> ready`,
-`succeeded -> pending`, `failed -> pending`, and `awaiting_human -> pending`, mirroring ADR 0044's
-own precedent for `Paused`/`Validating -> Cancelled`: new edges reached only through
-`StageTransitionCoordinator`, never a generic public API. `Succeeded` is no longer contract-terminal;
-`WorkflowStateMachines.IsTerminal(NodeState)` is derived and had no production caller, so this changed
-nothing else. The alternative — versioning node identity itself, or cloning the sprint — was
+`succeeded -> pending`, and `failed -> pending`, mirroring ADR 0044's own precedent for
+`Paused`/`Validating -> Cancelled`: new edges reached only through `StageTransitionCoordinator`,
+never a generic public API. (An `awaiting_human -> pending` edge was considered for the same reason
+but dropped — round 1 review of PR #96 found no caller ever needed it, since a rewound
+`AwaitingHuman` downstream node is always walked through the already-legal `awaiting_human -> failed
+-> pending` two-hop instead.) `Succeeded` is no longer contract-terminal; nothing in this codebase
+derives node terminality from this table at all — `WorkflowStateMachines` exposes `IsTerminal` only
+for the sprint and attempt machines, and `state-machines.json`'s own `node.terminal` list (unaffected
+by this change: it never named `Succeeded`) is the only place node terminality is ever consulted. The
+alternative — versioning node identity itself, or cloning the sprint — was
 rejected exactly as ADR 0045 anticipated: node identity stays stable, only its `NodeSnapshot.Revision`
 changes, tracked as a new folded argument (`WorkflowEvent.RevisionArgument`) on these same
 transitions, with `AttemptCount` reset to 0 (a genuinely fresh retry budget for a reopened stage).
@@ -47,23 +52,40 @@ its *current* version (never incrementing it), and folded directly into `SprintS
 (not audit-only) since every prerequisite check and node-role executor must read a sprint's current
 revision without re-scanning the raw journal.
 
-### Idempotent replay reuses `AppendTransitionAsync`'s own ledger, not the stop coordinator's scan
+### Idempotent replay is reported only once the whole saga converges, not once step 2 lands
 
-The stop coordinator (ADR 0047) deduplicates by scanning the journal for "has this event type ever
-landed for this aggregate" — correct there because a given attempt can be stopped at most once ever.
-A sprint can be legitimately rewound many times over its life, so the same scan would permanently
-block every rewind after the first. `ISprintStore.AppendStageRevisionRecordedAsync` instead checks
-the *caller's own idempotency key* against the exact durable dictionary `AppendTransitionAsync`
-already maintains (`idempotency.json`) before appending — reused deliberately, not a second
-mechanism.
+`ISprintStore.AppendStageRevisionRecordedAsync` deduplicates its own append against the caller's
+idempotency key, reusing the exact durable dictionary `AppendTransitionAsync` already maintains
+(`idempotency.json`) — a sprint can be legitimately rewound many times over its life, so the stop
+coordinator's own "has this event type ever landed for this aggregate" scan (ADR 0047) would
+wrongly block every rewind after the first; keying on the caller's own key instead lets a genuine
+replay short-circuit while a distinct later rewind still lands.
 
-This alone was not sufficient. `StageTransitionCoordinator.MoveAsync` always recomputes a fresh
-assessment before acting; by the time a rewind has already committed once, the target node is no
-longer at the terminal outcome that made it a rewind, so a naive replay would be reclassified as
-`advance` or `same` against current state rather than recognized as a repeat. A dedicated read-only
-check, `ISprintStore.TryGetIdempotentReplayAsync`, runs first, unconditionally, before any fresh
-assessment — the same "durable marker checked before acting" discipline ADR 0047 established, just
-checked earlier in the call than that ADR's own stop request needed to.
+Round 1 review of PR #96 (finding 1) found that this ledger entry alone is not a safe *outer* replay
+signal: `AppendStageRevisionRecordedAsync` is only step 2 of the six-step rewind saga (evidence
+supersession, node reopen/invalidate, graph re-advance, and the sprint-ready walk are steps 3-6), so
+a crash in that window left `MoveAsync`'s original outer check — keyed on the same raw ledger —
+reporting success for a rewind that had only bumped the revision counter and touched nothing else.
+The fix adds a dedicated completion marker, `WorkflowEvent.StageTransitionConvergedType`
+(`ISprintStore.AppendStageTransitionConvergedAsync`), appended once as the *last*, unconditional step
+of a successful `CommitAdvanceAsync`/`CommitRewindAsync`, mirroring `AttemptStopConvergedType`'s own
+role for the stop saga. `MoveAsync`'s outer replay check
+(`ISprintStore.TryGetConvergedStageTransitionAsync`) now keys on this marker instead of the raw
+ledger, so it reports success only once the entire saga has actually finished. A retry that lands
+between step 2 and the last step is not lost: because every one of `CommitRewindAsync`'s own steps
+was already designed to be independently idempotent (`AppendStageRevisionRecordedAsync`'s own inner
+replay branch resumes into steps 3-6 rather than re-incrementing the revision), a caller that
+re-assesses (getting a fresh, non-stale token) and calls `MoveSprintToStage` again with the *same*
+idempotency key re-enters the commit and converges correctly; a caller that instead resubmits its
+original, now-stale token is safely rejected as stale rather than told the half-finished commit
+already succeeded. This also fixed a companion defect (finding 4): `CommitAdvanceAsync` never
+recorded the caller's key at all, so a replayed advance returned `suggestion_stale` instead of the
+original result — it now appends the same completion marker on success.
+
+`StageTransitionCoordinator.MoveAsync` still checks for this marker first, unconditionally, before
+any fresh assessment: by the time a rewind has already committed once, the target node is no longer
+at the terminal outcome that made it a rewind, so re-deriving direction from current state on a
+replay would no longer even classify the call as the same operation.
 
 ### "Current stage" and transition direction are derived from node state, not a topological rank
 
@@ -87,6 +109,46 @@ superseded findings), rather than inventing a new per-target-stage severity-thre
 slice would then own alone with no other caller. Introducing a real per-severity gate belongs to
 whatever future work first needs one, not to a prerequisite evaluator whose job is to reuse existing
 policy, not author new policy.
+
+### Only advance is gated by the advance-shaped prerequisites; rewind is its own escape hatch
+
+Round 1 review of PR #96 (finding 3): `NoBlockingFindings`/`ProviderModelPolicy`/`GitIsolation`/
+`RetryBudget` were originally evaluated for both directions, which made a rewind impossible in
+exactly the states it exists to recover from — an open finding, a dirty integration worktree, an
+exhausted retry budget, or a since-tightened model policy are all conditions a rewind is the remedy
+for, not a reason to refuse one. Plan section 8.2's prerequisite list is written for activating an
+advance target; section 8.4's rewind list names only a bounded reason, mandatory confirmation, and
+the mechanical stop/revision/supersession machinery. `StageTransitionAssessor.AssessAsync` now scopes
+all four (joining the already direction-scoped `NoActiveOperation`) to `direction == Advance`; a
+rewind's own supersession is what actually resolves a blocking finding, so gating the rewind on it
+first would be circular.
+
+### The rewind reason is length-bounded like every other operator-authored artifact
+
+Round 1 review of PR #96 (finding 5): plan section 8.4 calls the rewind reason "bounded", but only
+non-empty was enforced. Reuses `SprintScheduler.MaxSupersessionInstructionLength` (4000) and
+`DiagnosticCodes.SupersessionInstructionTooLong` — the same limit and diagnostic ADR 0006 already
+established for the equivalent human-authored bounded artifact (an attempt-supersession
+instruction) — rather than a second, drifting rule.
+
+### Step 1 stops every live downstream operation, not only the first one found
+
+Round 1 review of PR #96 (finding 2): a parallel DAG can have more than one node `Running` at once
+(ADR 0048's own "generalizes correctly to a parallel DAG" claim above), but step 1 originally stopped
+only `state.Nodes.Values.FirstOrDefault(...)` — anywhere in the sprint, not even scoped to the
+rewind's own downstream closure — leaving every other running branch untouched and its node
+`ReopenOrInvalidateNodeAsync` never visits (`Running` fell through that method's state walk
+silently). Step 1 now computes the downstream closure first and stops every node in it that is still
+`Running`. The stop itself is deliberately narrower than
+`StopOperationCoordinator.FinishStopAsync`: that method's unconditional re-arm to `Ready` and
+sprint-pause are correct for an ad-hoc manual stop, but `Ready` has no legal edge back to `Pending`
+in the frozen node machine, so a stopped downstream node instead lands on `Failed` (via the same
+`workflow.node_rewind_interrupted` message key the `AwaitingHuman` branch already uses) and falls
+through into the existing `Succeeded`/`Failed` reopen/invalidate branch, which already knows how to
+reach `Pending` with a fresh revision stamp and reset retry budget. `ReopenOrInvalidateNodeAsync`
+also gained its own defensive `Running` branch performing the identical stop-and-fail sequence, so a
+node step 1 could not converge before a crash (or a resumed retry) is never left stranded when step
+4 reaches it.
 
 ### Advance's skip-ahead reuses `SprintScheduler.SkipNodeAsync`, gated on the frozen `Optional` flag
 
@@ -186,15 +248,19 @@ assessment depends on a Host's own in-memory state.
   `node_id`. Every schema stays additive (`additionalProperties: false` unchanged for required
   fields) — no migration needed for existing `.forge/` directories, which simply read `revision: 0`
   and no superseded marker.
-- `state-machines.json` moved from 1.2.0 to 1.3.0 (four new node edges, `succeeded` no longer
+- `state-machines.json` moved from 1.2.0 to 1.3.0 (three new node edges, `succeeded` no longer
   terminal); `WorkflowContractTests.NodeTransitionsMatchFrozenV1Contract` was extended, not weakened
   — the one previously-`false` case (`succeeded -> ready`) is now `true`, an intentional contract
-  change this ADR records.
+  change this ADR records. (An `awaiting_human -> pending` edge was added and then removed within
+  this same slice, round 1 review of PR #96 — see above.)
 - `capabilities.json` moved from 1.7.0 to 1.8.0 (both reserved entries' notes updated to
   "implemented, Desktop deferred").
-- `ISprintStore` gains six members (`TryGetIdempotentReplayAsync`, `AppendStageRevisionRecordedAsync`,
-  five `Mark*SupersededAsync` methods); `FileSprintEventLog`, `FlakySprintStore`, and every test fake
-  implementing the interface directly were updated to match.
+- `ISprintStore` gains eight members (`TryGetConvergedStageTransitionAsync`,
+  `AppendStageTransitionConvergedAsync`, `AppendStageRevisionRecordedAsync`, five
+  `Mark*SupersededAsync` methods); `FileSprintEventLog`, `FlakySprintStore`, and every test fake
+  implementing the interface directly were updated to match. (The originally-shipped
+  `TryGetIdempotentReplayAsync` was replaced by `TryGetConvergedStageTransitionAsync` in round 1
+  review — see "Idempotent replay is reported only once the whole saga converges" above.)
 - `IForgeMutations` gains `MoveSprintToStageAsync`; `RemoteForgeMutations` and both
   `TestEnvironment.cs` fakes implement it. `AssessStageTransitionAsync` is a plain `ForgeApplication`
   method, not part of `IForgeMutations`, matching every other query in this codebase.

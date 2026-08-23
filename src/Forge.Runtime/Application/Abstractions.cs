@@ -491,18 +491,35 @@ public interface ISprintStore
         CancellationToken cancellationToken);
 
     /// <summary>
-    /// A pure, side-effect-free check against the exact same durable idempotency-key ledger
-    /// <see cref="AppendTransitionAsync"/>/<see cref="AppendStageRevisionRecordedAsync"/> already
-    /// share: returns the already-folded state when <paramref name="idempotencyKey"/> was already
-    /// applied by some earlier call, or <see langword="null"/> otherwise. Needed because a rewind
-    /// commit must recognize a replay of its own already-completed idempotency key *before*
-    /// recomputing a fresh stage-transition assessment against current state -- by the time a
-    /// rewind has already committed once, current state has moved on (the target is no longer at
-    /// the terminal outcome that made it a rewind in the first place), so re-deriving direction from
-    /// scratch on a replay would no longer even classify the call as the same operation. See
-    /// <c>StageTransitionCoordinator.MoveAsync</c>.
+    /// A pure, side-effect-free check for whether <paramref name="idempotencyKey"/>'s whole
+    /// `MoveSprintToStage` saga has already *fully converged* (<see cref="AppendStageTransitionConvergedAsync"/>
+    /// already landed for it) -- returns the current folded state when it has, or <see langword="null"/>
+    /// otherwise. Round 1 review of PR #96 (finding 1): this deliberately does NOT check the raw
+    /// <see cref="AppendTransitionAsync"/>/<see cref="AppendStageRevisionRecordedAsync"/> idempotency
+    /// ledger the way the original (defective) design did -- that ledger entry lands at step 2 of the
+    /// six-step rewind saga, before evidence supersession, node reopen/invalidate, graph re-advance,
+    /// and the sprint-ready walk (steps 3-6) have run, so a crash in that window made every future
+    /// replay of the same key report success on a permanently half-finished rewind. Checked first,
+    /// unconditionally, before any fresh assessment: by the time a rewind has already committed once,
+    /// current state has moved on (the target is no longer at the terminal outcome that made it a
+    /// rewind in the first place), so re-deriving direction from scratch on a replay would no longer
+    /// even classify the call as the same operation. See <c>StageTransitionCoordinator.MoveAsync</c>.
     /// </summary>
-    Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+    Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Appends one <see cref="WorkflowEvent.StageTransitionConvergedType"/> event carrying
+    /// <paramref name="idempotencyKey"/> -- <c>StageTransitionCoordinator.MoveAsync</c>'s own last,
+    /// unconditional step on a successful advance or rewind commit, marking the whole saga durably
+    /// done (round 1 review of PR #96, findings 1 and 4). Recorded once per key, deduplicated by
+    /// scanning the journal like <see cref="AppendAttemptStopConvergedAsync"/>; not gated by
+    /// <see cref="AppendTransitionAsync"/>'s optimistic concurrency, since it is only ever appended
+    /// after the commit's own steps already landed (or were already a no-op because an earlier call
+    /// landed them). Use <see cref="TryGetConvergedStageTransitionAsync"/> to check for a replay
+    /// without appending anything.
+    /// </summary>
+    Task AppendStageTransitionConvergedAsync(
         string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken);
 
     /// <summary>
@@ -518,8 +535,10 @@ public interface ISprintStore
     /// detection. Unlike that method, a sprint can be legitimately rewound more than once over its
     /// life, so deduplication here cannot be "has this event type ever landed for this aggregate" --
     /// it must be keyed by the caller's own idempotency key, exactly like an ordinary
-    /// <see cref="AppendTransitionAsync"/> call. Use <see cref="TryGetIdempotentReplayAsync"/> to
-    /// check for a replay without appending anything.
+    /// <see cref="AppendTransitionAsync"/> call. This ledger entry alone is NOT a safe outer
+    /// replay-succeeded signal (round 1 review of PR #96, finding 1) -- see
+    /// <see cref="TryGetConvergedStageTransitionAsync"/>/<see cref="AppendStageTransitionConvergedAsync"/>
+    /// for the dedicated saga-completion marker that is.
     /// </summary>
     Task<AppendOutcome> AppendStageRevisionRecordedAsync(
         string projectRoot,

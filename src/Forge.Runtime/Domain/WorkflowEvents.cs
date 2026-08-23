@@ -148,6 +148,27 @@ public sealed record WorkflowEvent(
     /// same "never hides the original input" discipline <see cref="SupersessionInstructionArgument"/>
     /// already follows for attempt supersession.</summary>
     public const string RewindReasonArgument = "rewind_reason";
+
+    /// <summary>Round 1 review of PR #96 (finding 1): the whole `MoveSprintToStage` saga's own durable
+    /// "fully converged" marker, appended once by
+    /// <see cref="Forge.Application.StageTransitionCoordinator.MoveAsync"/> as the very last,
+    /// unconditional step of a successful advance or rewind commit -- mirrors
+    /// <see cref="AttemptStopConvergedType"/>'s own role for the stop saga. Recorded on the sprint's
+    /// own aggregate, never a transition itself (no <see cref="ToStateArgument"/>). Unlike
+    /// <see cref="StageRevisionRecordedType"/> (written mid-saga, at step 2, before evidence
+    /// supersession/node invalidation/graph re-advance have run), this event exists only once the
+    /// *entire* saga has actually finished -- the outer idempotent-replay check
+    /// (<see cref="Forge.Application.ISprintStore.TryGetConvergedStageTransitionAsync"/>) keys on
+    /// this marker instead of the raw idempotency-key ledger precisely so a crash between step 2 and
+    /// the last step can never make a future replay report success on a still-unfinished commit.</summary>
+    public const string StageTransitionConvergedType = "StageTransitionConverged";
+
+    /// <summary>Carried on a <see cref="StageTransitionConvergedType"/> event: the caller's own
+    /// `MoveSprintToStage` idempotency key this saga just finished converging for -- looked up
+    /// directly (this event is never folded into <see cref="SprintWorkflowState"/> itself, matching
+    /// <see cref="AttemptSupersededType"/>'s own audit-only, non-projected shape), since a sprint can
+    /// legitimately be moved many times over its life and each commit's own key must be distinguished.</summary>
+    public const string IdempotencyKeyArgument = "idempotency_key";
 }
 
 public sealed record SprintWorkflowState(
@@ -271,6 +292,16 @@ public static class WorkflowFold
                     sprint = sprint with { Revision = new(revisionValue) };
                 }
 
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.StageTransitionConvergedType)
+            {
+                // Validated (throws loudly on corruption) but, like AttemptSupersededType, never
+                // projected into the folded snapshot itself -- looked up by scanning the raw journal
+                // (FileSprintEventLog.TryGetConvergedStageTransitionAsync) for the caller's own
+                // idempotency key, since this is audit/replay-detection content, not workflow state.
+                _ = IsTransitionRecord(current);
                 continue;
             }
 
@@ -426,6 +457,16 @@ public static class WorkflowFold
             return hasState || current.Aggregate.Kind != AggregateKind.Sprint ||
                 !hasRevision || !hasTarget || !hasReason
                 ? throw new InvalidDataException($"Stage-revision event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.StageTransitionConvergedType)
+        {
+            bool hasKey = current.Arguments.TryGetValue(
+                WorkflowEvent.IdempotencyKeyArgument, out string? key) && key is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint || !hasKey
+                ? throw new InvalidDataException(
+                    $"Stage-transition-converged event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

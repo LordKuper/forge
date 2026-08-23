@@ -51,8 +51,12 @@ public static class WorkflowStateMachines
                 NodeState.Failed,
                 NodeState.Cancelled,
             ],
+            // No direct `awaiting_human -> pending` edge: `StageTransitionCoordinator.
+            // ReopenOrInvalidateNodeAsync` always walks an `AwaitingHuman` downstream node through
+            // `awaiting_human -> failed -> pending` instead (round 1 review of PR #96, finding 6) --
+            // this table must never carry an edge no production caller reaches.
             [NodeState.AwaitingHuman] =
-                [NodeState.Running, NodeState.Failed, NodeState.Cancelled, NodeState.Pending],
+                [NodeState.Running, NodeState.Failed, NodeState.Cancelled],
             // `Succeeded -> Ready`/`Succeeded -> Pending` (plan section 8.4, Slice 3) are reached
             // only through the rewind coordinator (`Forge.Application.StageTransitionCoordinator`),
             // never by pretending the node never completed -- the same "dedicated event/revision

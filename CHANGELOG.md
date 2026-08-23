@@ -13,13 +13,20 @@ User-facing Forge changes are listed by release, newest first.
 - Added `forge sprint move-stage <id> --target-stage <stage-id> [--reason <text>] [--yes]`, which
   commits an already-assessed move. Advancing to a later stage only ever activates a target whose
   prerequisites already hold — it never fabricates a result or skips a mandatory stage. Rewinding to
-  an earlier stage requires a reason and confirmation, stops the sprint's active operation first when
-  one exists, starts a new stage revision, and marks every downstream result, decision, finding, and
-  artifact as superseded — prior history is never deleted or rewritten, and superseded evidence can
-  no longer satisfy a later prerequisite check.
+  an earlier stage requires a bounded reason (4000 characters) and confirmation, stops every active
+  operation in the affected downstream stages first (including a parallel workflow's concurrently
+  running branches), starts a new stage revision, and marks every downstream result, decision,
+  finding, and artifact as superseded — prior history is never deleted or rewritten, and superseded
+  evidence can no longer satisfy a later prerequisite check.
 - The Host always re-checks a stage move's prerequisites and expected state immediately before
   committing it; a stale or mismatched request is rejected without any partial change, and repeating
-  the same move is safe and never records a second stage revision.
+  the same move (advance or rewind) is safe and never records a second stage revision. A Host crash
+  at any point during a rewind is safe: on restart, a repeated request either finishes converging the
+  rewind or is rejected as stale — it never reports a half-finished rewind as a success.
+- A blocked prerequisite (an open finding, a dirty integration worktree, an exhausted retry budget,
+  or a disallowed model policy) never blocks rewinding to an earlier stage — rewinding past the
+  affected work is the intended way to resolve it. These prerequisites still gate advancing to a
+  later stage.
 
 ## v0.64.0
 

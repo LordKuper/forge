@@ -1492,8 +1492,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         IReadOnlyDictionary<string, string?> arguments,
         IReadOnlyList<string> evidence,
         FindingLocation? location,
-        CancellationToken cancellationToken,
-        NodeId? nodeId = null)
+        NodeId? nodeId,
+        CancellationToken cancellationToken)
     {
         // Only RecordReviewIterationAsync currently has a node in scope when it raises a finding;
         // every other caller passes none. Stamped with the sprint's *current* stage revision (plan
@@ -2096,7 +2096,7 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 {
                     RecordFindingResult recorded = await RecordFindingAsync(
                         projectRoot, sprintId, finding.Severity, finding.MessageKey, finding.Arguments,
-                        finding.Evidence, finding.Location, cancellationToken, new(nodeId)).ConfigureAwait(false);
+                        finding.Evidence, finding.Location, new(nodeId), cancellationToken).ConfigureAwait(false);
                     if (!recorded.Succeeded)
                     {
                         // The iteration record is already durable (it governs eligibility/counting
@@ -2193,11 +2193,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// that instant to be `Confirmed`, rather than picking one arbitrarily, is what keeps a tie
     /// failing closed instead of depending on an unspecified ordering. A node with no
     /// confirmation-role dependency (not the built-in graph's shape, but nothing stops a
-    /// caller-supplied one) is vacuously eligible: there is nothing to gate on.
+    /// caller-supplied one) is vacuously eligible: there is nothing to gate on. Internal, not
+    /// private, so <see cref="StageTransitionAssessor"/> can reuse the exact eligibility rule
+    /// (including its tie-breaking discipline) rather than recomputing a second, possibly-drifting
+    /// copy of it.
     /// </summary>
-    /// <summary>Internal, not private, so <see cref="StageTransitionAssessor"/> can reuse the exact
-    /// eligibility rule (including its tie-breaking discipline) rather than recomputing a
-    /// second, possibly-drifting copy of it.</summary>
     internal async Task<bool> IsTestWorkEligibleAsync(
         string projectRoot,
         SprintId sprintId,

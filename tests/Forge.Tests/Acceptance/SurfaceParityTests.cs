@@ -647,6 +647,7 @@ public sealed class SurfaceParityTests
             new Dictionary<string, string?>(),
             ["src/Foo.cs:1"],
             null,
+            null,
             cancellationToken)).Succeeded);
         SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
         StringWriter tree = new(CultureInfo.InvariantCulture);

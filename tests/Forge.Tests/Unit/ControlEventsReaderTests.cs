@@ -301,7 +301,11 @@ public sealed class ControlEventsReaderTests
             string projectRoot, SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
-        public Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+        public Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
+            string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
+        public Task AppendStageTransitionConvergedAsync(
             string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

@@ -893,21 +893,72 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
-    public async Task<SprintWorkflowState?> TryGetIdempotentReplayAsync(
+    public async Task<SprintWorkflowState?> TryGetConvergedStageTransitionAsync(
         string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
     {
         string directory = SprintDirectory(projectRoot, sprintId);
-        string idempotencyPath = IdempotencyPath(directory);
+        string eventsPath = EventsPath(directory);
         SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            Dictionary<Guid, DateTimeOffset> applied =
-                await ReadIdempotencyAsync(idempotencyPath, cancellationToken).ConfigureAwait(false);
-            return applied.ContainsKey(idempotencyKey)
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            string key = idempotencyKey.ToString("D");
+            bool converged = events.Any(item =>
+                item.Type == WorkflowEvent.StageTransitionConvergedType &&
+                item.Arguments.GetValueOrDefault(WorkflowEvent.IdempotencyKeyArgument) == key);
+            return converged
                 ? await LoadCoreAsync(projectRoot, sprintId, cancellationToken, callerHoldsLock: true)
                     .ConfigureAwait(false)
                 : null;
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendStageTransitionConvergedAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string key = idempotencyKey.ToString("D");
+
+            // Recorded at most once per idempotency key, mirroring AppendAttemptStopConvergedAsync --
+            // a second call for the same key is always a replay of MoveAsync's own last,
+            // unconditional step.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.StageTransitionConvergedType &&
+                item.Arguments.GetValueOrDefault(WorkflowEvent.IdempotencyKeyArgument) == key))
+            {
+                return;
+            }
+
+            string sprintKey = sprintId.Value.ToString("D");
+            long sprintVersion = CurrentVersion(events, AggregateKind.Sprint, sprintKey);
+            WorkflowEvent converged = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.StageTransitionConvergedType,
+                new(AggregateKind.Sprint, sprintKey, sprintVersion),
+                "workflow.stage_transition_converged",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.IdempotencyKeyArgument] = key,
+                });
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(converged), cancellationToken)
+                .ConfigureAwait(false);
         }
         finally
         {

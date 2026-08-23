@@ -689,7 +689,7 @@ public sealed class SprintSchedulerTests
 
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:12"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:12"], null, null, cancellationToken);
         Assert.True(recorded.Succeeded);
 
         RecordFindingResult resolved = await scheduler.ResolveFindingAsync(
@@ -739,7 +739,7 @@ public sealed class SprintSchedulerTests
         // finding.schema.json requires at least one piece of evidence.
         RecordFindingResult result = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.example",
-            new Dictionary<string, string?>(), [], null, cancellationToken);
+            new Dictionary<string, string?>(), [], null, null, cancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.WorkflowRecordInvalid, result.DiagnosticCode);
@@ -839,7 +839,7 @@ public sealed class SprintSchedulerTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, severity, "finding.example", new Dictionary<string, string?>(),
-            ["src/Foo.cs:1"], null, cancellationToken);
+            ["src/Foo.cs:1"], null, null, cancellationToken);
 
         StartAttemptResult started =
             await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
@@ -867,7 +867,7 @@ public sealed class SprintSchedulerTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, null, cancellationToken);
         await scheduler.ResolveFindingAsync(
             environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, status, cancellationToken);
 
@@ -894,7 +894,7 @@ public sealed class SprintSchedulerTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Critical, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, null, cancellationToken);
         StartAttemptResult started =
             await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
         await scheduler.CompleteAttemptAsync(
@@ -1066,7 +1066,7 @@ public sealed class SprintSchedulerTests
             (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.High, "finding.example",
-            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Foo.cs:1"], null, null, cancellationToken);
         Assert.Equal(
             SprintState.Blocked,
             (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!.State);
@@ -1121,7 +1121,7 @@ public sealed class SprintSchedulerTests
         // looks right now.
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.unrelated",
-            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, null, cancellationToken);
         await scheduler.ResolveFindingAsync(
             environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved, cancellationToken);
 
@@ -1164,7 +1164,7 @@ public sealed class SprintSchedulerTests
 
         RecordFindingResult recorded = await scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.unrelated",
-            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, cancellationToken);
+            new Dictionary<string, string?>(), ["src/Unrelated.cs:1"], null, null, cancellationToken);
         await scheduler.ResolveFindingAsync(
             environment.ProjectRoot, sprintId, recorded.Finding!.FindingId, FindingStatus.Resolved, cancellationToken);
 
@@ -1186,7 +1186,7 @@ public sealed class SprintSchedulerTests
         const int count = 20;
         await Task.WhenAll(Enumerable.Range(0, count).Select(index => scheduler.RecordFindingAsync(
             environment.ProjectRoot, sprintId, FindingSeverity.Low, "finding.example",
-            new Dictionary<string, string?>(), [$"src/Foo.cs:{index}"], null, cancellationToken)));
+            new Dictionary<string, string?>(), [$"src/Foo.cs:{index}"], null, null, cancellationToken)));
 
         IReadOnlyList<Finding> findings =
             await scheduler.GetFindingsAsync(environment.ProjectRoot, sprintId, cancellationToken);
