@@ -33,6 +33,25 @@ User-facing Forge changes are listed by release, newest first.
 - `workspace.summary`, `sprint.timeline`, and `workspace.available_actions` move from reserved to
   implemented on the Host and CLI; Desktop support for all three is deferred to a later release.
 
+### Fixed
+
+- `workspace.available_actions`' `resume_sprint`/`run_sprint`/`cancel_sprint` rows now report the
+  expected version and idempotency key the sprint lifecycle mutation itself actually validates
+  against, instead of the sprint's whole journal position — submitting a reported action back
+  unmodified was previously rejected as stale as soon as any node/attempt event had ever been
+  appended.
+- `forge sprint timeline`'s redaction now applies uniformly to plain-text output, `--json` output,
+  and the Host's wire response alike, and covers every free-text event field, not only its
+  arguments — closing a gap where `--json`/Host consumers received no second redaction pass at all.
+- A `forge sprint timeline` cursor is now bound to the sprint it was issued for; reusing one against
+  a different sprint is rejected instead of silently skipping that sprint's own early items.
+- `forge project list`/`forge workspace summary` now report "No projects in the catalog yet." for an
+  empty catalog instead of the unrelated "No sprints yet." message.
+- The local project catalog (`catalog.json`) now serializes concurrent reads/writes within one
+  process, recovers from its `.previous` backup instead of throwing when corrupted, and rejects a
+  catalog written by an unrecognized schema version instead of silently discarding its unknown
+  fields on the next write.
+
 ## v0.65.0
 
 ### Added
