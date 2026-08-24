@@ -285,6 +285,18 @@ public sealed class ImplementationExecutionHostedService(
             return;
         }
 
+        if (outcome.Disposition == ImplementationAttemptDisposition.StopRequested)
+        {
+            // Round 3 audit: a stop landed durably right as the provider returned success, after the
+            // ActiveOperationRegistry unregister but before the commit/integrate this method already
+            // performed internally -- RunImplementationAttemptAsync already discarded the worktree
+            // and skipped commit/integrate before returning this disposition (see its own remarks).
+            // This attempt must not be completed here: the node stays `running`, converged by
+            // StopOperationCoordinator.FinishStopAsync's own top-of-tick check on this or the next
+            // tick, exactly like the stop-landed-before-the-provider-started case.
+            return;
+        }
+
         CompleteAttemptResult completed = outcome.Disposition == ImplementationAttemptDisposition.RateLimited
             ? await scheduler.DeferAttemptAsync(
                 options.ProjectRoot, sprintId, implementation.Id, attemptId, manifest.ManifestDigest,
@@ -330,6 +342,14 @@ public sealed class ImplementationExecutionHostedService(
         Failed,
         RateLimited,
         HostShuttingDown,
+
+        /// <summary>Round 3 audit: a stop was durably requested for this attempt after the provider
+        /// already returned success, discovered by the fresh re-check
+        /// <see cref="RunImplementationAttemptAsync"/> performs right before its own commit step --
+        /// the narrowest point that still fully prevents the provider's work from reaching the
+        /// integration branch. The worktree is already discarded by the time this is returned.
+        /// </summary>
+        StopRequested,
     }
 
     private readonly record struct ImplementationAttemptOutcome(
@@ -340,6 +360,9 @@ public sealed class ImplementationExecutionHostedService(
     {
         public static readonly ImplementationAttemptOutcome Cancelled =
             new(ImplementationAttemptDisposition.HostShuttingDown, [], [], null);
+
+        public static readonly ImplementationAttemptOutcome Stopped =
+            new(ImplementationAttemptDisposition.StopRequested, [], [], null);
 
         public static ImplementationAttemptOutcome Failed(NodeDiagnostic diagnostic) =>
             new(ImplementationAttemptDisposition.Failed, [], [diagnostic], null);
@@ -456,6 +479,22 @@ public sealed class ImplementationExecutionHostedService(
                 NodeExecutionDiagnostics.Diagnostic("git", DiagnosticCodes.ImplementationNoChanges));
         }
 
+        // Round 3 audit: the narrowest point at which a stop request racing against a provider that
+        // is about to succeed can still be honored -- the durable stop intent's own per-tick check
+        // (top of ExecuteImplementationAsync) only runs once, before the provider starts, and is
+        // never re-checked between the provider returning and this method's own commit/integrate
+        // below. A fresh read here (never the value captured before the provider ran) catches a stop
+        // that landed anywhere in between: the ActiveOperationRegistry unregister above already ran,
+        // so this attempt's own cancellation token cannot observe it, but the durable intent still
+        // can. Discarding here (unlike the live-cancelled branch above) is safe: this attempt's own
+        // registered CancellationTokenSource is already disposed, so `cancellationToken` here is the
+        // tick's own token, unaffected by the stop's best-effort TryCancel.
+        if (await StopHasBeenRequestedAsync(sprintId, attemptId, cancellationToken).ConfigureAwait(false))
+        {
+            await DiscardAsync(sprintId, projectId, attemptId, cancellationToken).ConfigureAwait(false);
+            return ImplementationAttemptOutcome.Stopped;
+        }
+
         string? summary = result.TerminalResult?.Summary;
         string effectiveSummary = string.IsNullOrWhiteSpace(summary) ? FallbackSummary : summary;
         GitOperationResult committed = await gitIsolation.CommitAttemptAsync(
@@ -502,6 +541,19 @@ public sealed class ImplementationExecutionHostedService(
         {
             LogWorktreeDiscardFailed(logger, sprintId.Value, null);
         }
+    }
+
+    /// <summary>Reuses the exact same durable-state check every executor's own top-of-tick stop
+    /// convergence gate already uses (see the remarks at that check, above) -- a fresh read, never a
+    /// value captured before the provider ran.</summary>
+    private async Task<bool> StopHasBeenRequestedAsync(
+        SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState? state = await store
+            .LoadAsync(options.ProjectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return state is not null &&
+            state.Attempts.TryGetValue(attemptId.Value.ToString("D"), out AttemptSnapshot? attempt) &&
+            attempt.StopRequestedAt is not null && attempt.StopConvergedAt is null;
     }
 
     /// <summary>The commit's own subject line: the summary's first line, bounded well under any

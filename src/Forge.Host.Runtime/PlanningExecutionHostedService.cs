@@ -266,6 +266,19 @@ public sealed class PlanningExecutionHostedService(
             return;
         }
 
+        // Round 3 audit: a stop can be durably requested for this attempt after the provider already
+        // returned (any disposition), before this method's own CompleteAttemptAsync call below —
+        // planning's structural analog of ImplementationExecutionHostedService's commit/integrate
+        // race, since CompleteAttemptAsync is the point of no return here (a Succeeded completion
+        // unblocks AdvanceGraphAsync to start the next node; FinishStopAsync never re-arms an
+        // already-Succeeded node). A fresh read here (never a value captured before the provider ran)
+        // catches it; the node stays `running`, converged by FinishStopAsync's own top-of-tick check
+        // on this or the next tick instead of racing ahead through a normal completion.
+        if (await StopHasBeenRequestedAsync(sprintId, attemptId, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         // ADR 0006's durable rate-limit wait (ADR 0018): a RateLimited failure is a retryable
         // condition the shared provider/model/surface routing key should back off from for
         // DefaultRateLimitBackoff, not an ordinary failed attempt — DeferAttemptAsync abandons the
@@ -509,5 +522,18 @@ public sealed class PlanningExecutionHostedService(
 
             builder.Append("### ").Append(item.RelativePath).Append('\n').Append(body).Append('\n');
         }
+    }
+
+    /// <summary>Reuses the exact same durable-state check every executor's own top-of-tick stop
+    /// convergence gate already uses (see that check's own remarks, above) -- a fresh read, never a
+    /// value captured before the provider ran.</summary>
+    private async Task<bool> StopHasBeenRequestedAsync(
+        SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState? state = await store
+            .LoadAsync(options.ProjectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return state is not null &&
+            state.Attempts.TryGetValue(attemptId.Value.ToString("D"), out AttemptSnapshot? attempt) &&
+            attempt.StopRequestedAt is not null && attempt.StopConvergedAt is null;
     }
 }

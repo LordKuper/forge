@@ -1,5 +1,6 @@
 using System.Globalization;
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Tests.Support;
 
@@ -994,6 +995,100 @@ public sealed class StageTransitionTests
         SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(SprintState.Ready, final.Sprint.State);
         Assert.Null(final.Sprint.PendingRewindTargetStageId);
+    }
+
+    /// <summary>Round 3 audit: a genuinely concurrent conflict during step 6's own append (not a Host
+    /// crash) must not let <c>CommitRewindAsync</c> mark the saga durably converged. Before the fix,
+    /// <c>DriveSprintTowardReadyAsync</c> silently swallowed a version conflict and
+    /// <c>CommitRewindAsync</c> appended <see cref="ISprintStore.AppendStageTransitionConvergedAsync"/>
+    /// unconditionally right after -- sealing a rewind that never actually finished walking the sprint
+    /// back to `ready`, with nothing left to ever resume it (the converged marker is what clears
+    /// <c>PendingRewindTargetStageId</c>, the only signal the resume path checks). Reaches the exact
+    /// same "right before step 6" state as <see cref="ACrashAfterStepFiveButBeforeStepSixConvergesTheSprintReadyWalkOnResume"/>,
+    /// then injects the conflict deterministically via a <see cref="FlakySprintStore"/> that fails the
+    /// very first <c>AppendTransitionAsync</c> call the resumed saga makes -- step 6's own first hop
+    /// (`ready_to_finalize -&gt; blocked`), since steps 1-5 make none of their own in this already-settled
+    /// state.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AConcurrentConflictDuringStepSixsOwnAppendDoesNotConvergeTheSagaAndResumesCleanlyOnRetry()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator, _) =
+            Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId =
+            await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b", "c");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "c", cancellationToken);
+
+        Guid idempotencyKey = Guid.NewGuid();
+        StageRevision revision = new(1);
+        SprintWorkflowState beforeRewind = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+
+        AppendOutcome step2 = await store.AppendStageRevisionRecordedAsync(
+            environment.ProjectRoot, sprintId, "a", "redo from the start", revision, beforeRewind.Sprint.Version,
+            idempotencyKey, cancellationToken);
+        Assert.True(step2.Succeeded);
+
+        foreach (string nodeId in new[] { "a", "b", "c" })
+        {
+            await SupersedeNodeResultDirectlyAsync(store, environment.ProjectRoot, sprintId, nodeId, revision, cancellationToken);
+        }
+
+        await ReopenNodeDirectlyAsync(store, environment.ProjectRoot, sprintId, "a", isTarget: true, revision, cancellationToken);
+        await ReopenNodeDirectlyAsync(store, environment.ProjectRoot, sprintId, "b", isTarget: false, revision, cancellationToken);
+        await ReopenNodeDirectlyAsync(store, environment.ProjectRoot, sprintId, "c", isTarget: false, revision, cancellationToken);
+        await scheduler.AdvanceGraphAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.ReadyToFinalize, wedged.Sprint.State);
+        Assert.Equal("a", wedged.Sprint.PendingRewindTargetStageId);
+
+        // Injects the conflict deterministically: the very next AppendTransitionAsync call this
+        // FlakySprintStore-backed coordinator makes fails with a conflict, standing in for a real
+        // concurrent mutation landing in step 6's own unlocked window between its read and its append
+        // -- no real concurrency needed, so no flakiness.
+        FlakySprintStore flakyStore = new(store);
+        flakyStore.FailAt[flakyStore.AppendCount + 1] = AppendOutcome.Conflict;
+        StageTransitionCoordinator flakyCoordinator = new(
+            flakyStore,
+            environment.Resolve<SprintScheduler>(),
+            environment.Resolve<StageTransitionAssessor>(),
+            environment.Resolve<StopOperationCoordinator>(),
+            environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<IClock>());
+
+        MoveStageResult conflicted = await flakyCoordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", 0, null, null, false, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(conflicted.Succeeded);
+        Assert.Equal(DiagnosticCodes.StageTransitionRewindInProgress, conflicted.DiagnosticCode);
+        SprintWorkflowState afterConflict =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        // The saga must not be sealed as converged: the resume marker stays set, and the sprint is
+        // still mid-walk (not yet `ready`), never silently advanced past the conflict.
+        Assert.Equal("a", afterConflict.Sprint.PendingRewindTargetStageId);
+        Assert.NotEqual(SprintState.Ready, afterConflict.Sprint.State);
+        Assert.Null(await store.TryGetConvergedStageTransitionAsync(
+            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+
+        // The very next MoveAsync call (through the normal, unconflicted resume path) must finish
+        // the ready-walk the conflict interrupted and only then mark the saga converged.
+        MoveStageResult resumed = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "a", 0, null, null, false, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(SprintState.Ready, final.Sprint.State);
+        Assert.Null(final.Sprint.PendingRewindTargetStageId);
+        Assert.NotNull(await store.TryGetConvergedStageTransitionAsync(
+            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
     }
 
     /// <summary>Round 2 review of PR #96: <c>AssessStageTransition</c> must surface an in-flight,

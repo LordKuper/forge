@@ -297,7 +297,22 @@ public sealed class StageTransitionCoordinator(
         // `SprintScheduler.TryAdvanceFindingsOnlyBlockedSprintAsync`'s own two/three-hop idiom) --
         // never all the way to `running` on its own, the same "resume reaches ready, a separate run
         // reaches running" contract the paused-sprint resume path already established.
-        await DriveSprintTowardReadyAsync(projectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        bool readyWalkConverged = await DriveSprintTowardReadyAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        SprintWorkflowState afterReadyWalk = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (!readyWalkConverged)
+        {
+            // Round 3 audit: a genuine concurrent conflict (a version mismatch against a mutation
+            // this saga did not itself make) made step 6 bail before reaching a stable end state --
+            // never mark the saga durably converged in that case. PendingRewindTargetStageId stays
+            // set (only AppendStageTransitionConvergedAsync clears it), so the very next
+            // MoveAsync/AssessStageTransition call resumes this exact rewind from the top and
+            // finishes the ready-walk, instead of silently sealing a half-finished commit.
+            return new(
+                false, afterReadyWalk.Sprint, afterReadyWalk.Nodes.GetValueOrDefault(targetStageId),
+                DiagnosticCodes.StageTransitionRewindInProgress);
+        }
 
         // Round 1 review of PR #96 (finding 1): appended last and unconditionally, regardless of
         // which steps above this exact call did or did not need to (re-)run -- the durable "this
@@ -533,7 +548,16 @@ public sealed class StageTransitionCoordinator(
         // `Running` is handled above, before this switch, never falls through to here.
     }
 
-    private async Task DriveSprintTowardReadyAsync(
+    /// <summary>Walks the sprint toward `ready` through already-legal edges. Returns
+    /// <see langword="true"/> once a stable end state is reached -- either nothing to do (the sprint
+    /// was not in one of the states this walk starts from) or every hop it needed landed -- and
+    /// <see langword="false"/> when a hop's own <see cref="ISprintStore.AppendTransitionAsync"/> call
+    /// reports <see cref="AppendOutcome.Conflict"/> against a genuinely concurrent mutation this saga did not
+    /// itself make. Round 3 audit: the caller (<see cref="CommitRewindAsync"/>) must never mark the
+    /// whole saga durably converged on a <see langword="false"/> result -- this return value is the
+    /// only thing that previously got silently dropped, letting a real conflict here get sealed as a
+    /// completed rewind with the sprint still stuck mid-walk.</summary>
+    private async Task<bool> DriveSprintTowardReadyAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken)
     {
         for (int attempt = 0; attempt < 5; attempt++)
@@ -550,7 +574,7 @@ public sealed class StageTransitionCoordinator(
             };
             if (next is not { } target)
             {
-                return;
+                return true;
             }
 
             Dictionary<string, string?>? extra = target == SprintState.Blocked
@@ -562,9 +586,14 @@ public sealed class StageTransitionCoordinator(
                 cancellationToken, extra).ConfigureAwait(false);
             if (!outcome.Succeeded)
             {
-                return;
+                return false;
             }
         }
+
+        // Exhausted the defensive bound without reaching a stable state -- never observed in
+        // practice (the walk is at most two hops), but treated as not-converged for the same reason
+        // a conflict is: never mark the saga done on an uncertain outcome.
+        return false;
     }
 
     private async Task<SprintWorkflowState> RequireStateAsync(

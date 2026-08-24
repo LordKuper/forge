@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.69.1
+
+### Fixed
+
+- A stop request could still lose its race against an implementation/planning/review attempt that
+  was about to succeed: the durable stop intent was only checked once, before the provider ran, so
+  an attempt that finished right as the stop landed could still commit and integrate its changes
+  (implementation), or complete the node and let the sprint advance (planning/review), instead of
+  being cancelled. Each executor now re-checks the durable stop intent right before its own point of
+  no return and honors a stop that landed in between.
+- Rewinding a sprint to an earlier stage could, under a genuinely concurrent conflicting change, mark
+  the rewind as durably converged before it had actually finished walking the sprint back to
+  `ready`/`blocked`, leaving it stuck with no way to resume. The rewind now only marks itself
+  converged once that final walk actually completes; a conflict now correctly resumes on the next
+  attempt instead of being silently sealed as done.
+
 ## v0.69.0
 
 ### Added
