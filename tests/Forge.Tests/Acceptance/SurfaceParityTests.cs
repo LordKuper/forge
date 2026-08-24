@@ -572,6 +572,46 @@ public sealed class SurfaceParityTests
         Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
     }
 
+    /// <summary>PR #105 review finding 3: a 4.0 device-independent-unit DISTANCE gate was not a
+    /// throttle -- a single mouse-wheel notch exceeds it, so essentially every scroll event issued a
+    /// full <c>catalog.json</c> read-modify-write with no rest detection at all. The fix replaces it
+    /// with a TIME-based debounce: a single-shot <c>IDispatcherTimer</c> (<c>IsRepeating = false</c>)
+    /// restarted (<c>Stop</c> then <c>Start</c>) on every <c>ScrollView.Scrolled</c> event, so only
+    /// the position at rest -- once the timer is finally left alone long enough to fire -- is ever
+    /// written. No MAUI control can be instantiated headlessly in this suite, so this pins the
+    /// mechanism directly in the source: the old distance-gate constant must be gone, and the
+    /// debounce restart must appear inside the <c>Scrolled</c> handler itself.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ScrollPositionPersistenceDebouncesByElapsedTimeNotScrollDistance()
+    {
+        string source = DesktopSourceText();
+
+        Assert.DoesNotContain("ScrollPositionPersistThreshold", source, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.IsRepeating = false;", source, StringComparison.Ordinal);
+
+        string scrolledHandler = BracedBlockAfter(source, "scrollView.Scrolled += (_, args) =>");
+        Assert.Contains("scrollPersistCoordinator.RecordScroll(", scrolledHandler, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.Stop();", scrolledHandler, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.Start();", scrolledHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 review finding 4(c): the debounced scroll-position write used to be
+    /// fire-and-forget with its <c>ProjectCatalogResult</c> silently discarded -- the only catalog/
+    /// config write in this shell with no failure notice at all, unlike every sibling write (e.g.
+    /// <c>SidebarProjectSprintsSaveFailed</c>). No MAUI control can be instantiated headlessly in this
+    /// suite, so this pins the fix directly in the source: a failed write must resolve
+    /// <c>MessageKeys.SprintScrollPositionSaveFailed</c> somewhere in this file.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void AFailedScrollPositionWriteSurfacesANoticeInsteadOfBeingDiscarded()
+    {
+        string source = File.ReadAllText(
+            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
+
+        Assert.Contains("MessageKeys.SprintScrollPositionSaveFailed", source, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// PR #99 review finding 5: every gated action above (gate/supersede/confirm/test-work/finalize/
     /// stop/stage-move) aborts before touching the Host when its own confirmation dialog is declined
@@ -691,6 +731,46 @@ public sealed class SurfaceParityTests
         Assert.Contains("bool nowCollapsed = !collapsed;", toggleHandler, StringComparison.Ordinal);
         Assert.DoesNotContain("nowCollapsed = collapsed;", toggleHandler, StringComparison.Ordinal);
         Assert.DoesNotContain("if (result.Succeeded)", toggleHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 review finding 2: the per-project chevron's own accessible name promises
+    /// "Collapse sprints" (the whole per-project block), but the fix that shipped in that PR gated
+    /// only the active-sprint loop on <c>project.SprintListExpanded</c> -- the history label and its
+    /// (up to 10) navigable buttons rendered unconditionally underneath, so a collapsed project could
+    /// still show more sprint rows than it hid. No MAUI control can be instantiated headlessly in
+    /// this suite, so this pins the fix directly in the source: both the active-sprint loop AND the
+    /// history block must sit inside the SAME <c>if (project.SprintListExpanded)</c> braced block,
+    /// proven by brace-matching (<see cref="BracedBlockAfter"/>) rather than a line-position guess
+    /// that formatting could invalidate.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void CollapsingAProjectsSprintListHidesBothActiveSprintsAndHistory()
+    {
+        string expandedBlock = BracedBlockAfter(DesktopSourceText(), "if (project.SprintListExpanded)");
+
+        Assert.Contains(
+            "foreach (SidebarSprintItem sprint in project.ActiveSprints)", expandedBlock, StringComparison.Ordinal);
+        Assert.Contains(
+            "foreach (SidebarHistoryItem historyItem in project.History)", expandedBlock, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 review finding 1: the sidebar's "History (n)" label used to read
+    /// <c>project.History.Count</c> -- capped at <see cref="SidebarViewModel.MaxSidebarHistory"/> --
+    /// instead of the uncapped total, silently under-reporting for any project with more than 10
+    /// terminal sprints. <see cref="SidebarViewModelTests.LoadAsyncCapsHistoryAtTheDocumentedBoundOrderedNewestFirst"/>
+    /// proves <c>SidebarProjectItem.HistoryTotalCount</c> itself carries the true total; this pins the
+    /// desktop label actually reading that field instead of the capped list length (no MAUI control
+    /// can be instantiated headlessly in this suite).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarHistoryLabelReadsTheUncappedTotalNotTheCappedListLength()
+    {
+        string source = DesktopSourceText();
+
+        Assert.Contains(
+            "$\"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})\"",
+            source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SidebarHistoryLabel)} ({project.History.Count})", source, StringComparison.Ordinal);
     }
 
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label

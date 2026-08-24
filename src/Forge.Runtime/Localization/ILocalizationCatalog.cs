@@ -271,6 +271,12 @@ public static class MessageKeys
     /// <see cref="ProjectRemoveFailed"/> -- resolved through <c>WorkspaceShellPage.Message</c> with
     /// the write's <c>DiagnosticCode</c> appended.</summary>
     public const string SidebarCollapseSaveFailed = "SidebarCollapseSaveFailed";
+
+    /// <summary>PR #105 review finding 4c: the sprint workspace's debounced scroll-position write
+    /// used to be fire-and-forget with its <c>ProjectCatalogResult</c> silently discarded -- the only
+    /// catalog/config write in this shell with no failure notice at all. Same shape as
+    /// <see cref="SidebarProjectSprintsSaveFailed"/>/<see cref="SidebarCollapseSaveFailed"/>.</summary>
+    public const string SprintScrollPositionSaveFailed = "SprintScrollPositionSaveFailed";
     public const string WorkspaceEmptyStateTitle = "WorkspaceEmptyStateTitle";
     public const string ProjectOverviewTitle = "ProjectOverviewTitle";
     public const string ProjectOverviewActiveSprintsTitle = "ProjectOverviewActiveSprintsTitle";

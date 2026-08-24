@@ -410,4 +410,47 @@ public sealed class ProjectCatalogStoreTests
         Assert.False(rejected.Succeeded);
         Assert.Equal(DiagnosticCodes.ProjectCatalogScrollPositionInvalid, rejected.DiagnosticCode);
     }
+
+    /// <summary>PR #105 review finding 5: <see cref="ProjectCatalogStore.AddAsync"/> always writes both
+    /// <c>sprint_list_collapsed</c> and <c>sprint_scroll_positions</c> (the additive-field pattern's
+    /// own convention), so every existing test up to this one only ever exercises a catalog where
+    /// those keys are present -- never a real pre-0.73 <c>catalog.json</c> where they are simply
+    /// absent. <see cref="ProjectCatalogStore.ContractVersion"/> deliberately stays <c>"1.0.0"</c> for
+    /// exactly this reason (AGENTS.md: "keep migrations and persisted formats backward-compatible"),
+    /// so a catalog hand-written in the pre-0.73 shape -- schema_version "1.0.0", no trace of either
+    /// new key -- must still load without throwing, default both new fields sensibly, and accept a
+    /// subsequent write of the new fields normally.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyCatalogMissingTheTwoNewSprintListFieldsLoadsWithSensibleDefaults()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string path = ProjectCatalogStore.CatalogPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            """
+            {"schema_version":"1.0.0","entries":[{"project_id":"22222222-2222-2222-2222-222222222222",
+            "root":"C:\\legacy","alias":null,"last_opened_at":"2026-01-01T00:00:00+00:00",
+            "last_selected_sprint_id":null,"last_route":null}]}
+            """,
+            cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        Guid projectId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, listing.DiagnosticCode);
+        ProjectCatalogEntry entry = Assert.Single(listing.Entries);
+        Assert.Equal(projectId, entry.ProjectId);
+        Assert.False(entry.SprintListCollapsed);
+        Assert.Null(entry.SprintScrollPositions);
+
+        Guid sprintId = Guid.NewGuid();
+        ProjectCatalogResult scrollResult =
+            await catalog.SetSprintScrollPositionAsync(projectId, sprintId, 42, cancellationToken);
+        Assert.True(scrollResult.Succeeded);
+        Assert.Equal(42, scrollResult.Entry!.SprintScrollPositions![sprintId.ToString("D")]);
+    }
 }

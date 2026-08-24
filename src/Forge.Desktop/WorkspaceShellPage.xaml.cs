@@ -68,6 +68,12 @@ public partial class WorkspaceShellPage : ContentPage
         sidebar = new(catalog, application, folderPicker, text);
         forgeSettings = new(application, providerCatalog, text);
         (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
+        // Always calls through the *current* sprintWorkspace field (never captured once as a fixed
+        // reference) so a language-change rebuild of that field above never leaves this coordinator
+        // pointing at a stale instance -- see its own field remarks in
+        // WorkspaceShellPage.SprintWorkspace.cs.
+        scrollPersistCoordinator = new((projectId, sprintId, position, cancellationToken) =>
+            sprintWorkspace.SaveScrollPositionAsync(projectId, sprintId, position, cancellationToken));
         renderGate = new(RenderSidebarAsync, RenderContentAsync);
         // PR #98 review finding 1: NavigateAsync raises RouteChanged synchronously from inside the
         // very click handler whose own mutation guard is still held, so the render this triggers
@@ -118,6 +124,11 @@ public partial class WorkspaceShellPage : ContentPage
     {
         base.OnDisappearing();
         StopTimelinePoll();
+        // PR #105 review finding 3's flush-on-navigate-away, for the whole page closing (not just an
+        // in-app route change, which RenderContentAsync already covers) -- best-effort: OnDisappearing
+        // is not async-capable, so a page closing mid-write cannot itself be awaited, but this still
+        // issues the flush instead of leaving a pending debounced value unwritten.
+        _ = FlushPendingScrollPositionAsync();
     }
 
     /// <summary>Serializes shell-driven mutations so a second click cannot re-enter one while the
@@ -288,11 +299,14 @@ public partial class WorkspaceShellPage : ContentPage
         return new VerticalStackLayout { Children = { pathEntry, addButton } };
     }
 
-    /// <summary>Plan 12.1 final-sweep gap 1's per-project chevron: hides/shows only
-    /// <see cref="SidebarProjectItem.ActiveSprints"/>, mirroring the whole-sidebar rail toggle's own
-    /// "render straight from the snapshot already in hand" optimization (PR #103 review finding 3) --
-    /// flipping one row's disclosure changes no domain data, so it never re-fetches
-    /// <see cref="SidebarViewModel.LoadAsync"/>'s full per-project workspace summary.</summary>
+    /// <summary>Plan 12.1 final-sweep gap 1's per-project chevron: hides/shows the WHOLE per-project
+    /// sprint block -- both <see cref="SidebarProjectItem.ActiveSprints"/> and
+    /// <see cref="SidebarProjectItem.History"/> (PR #105 review finding 2; the toggle's own
+    /// "Collapse sprints" accessible name promised the whole block, not only the active list) --
+    /// mirroring the whole-sidebar rail toggle's own "render straight from the snapshot already in
+    /// hand" optimization (PR #103 review finding 3) -- flipping one row's disclosure changes no
+    /// domain data, so it never re-fetches <see cref="SidebarViewModel.LoadAsync"/>'s full per-project
+    /// workspace summary.</summary>
     private Button BuildProjectSprintsToggleButton(SidebarProjectItem project)
     {
         Button toggle = new()
@@ -346,6 +360,10 @@ public partial class WorkspaceShellPage : ContentPage
         header.Children.Add(projectButton);
         column.Children.Add(header);
 
+        // PR #105 review finding 2: both loops below live inside this single gate now -- collapsing a
+        // project must hide its whole sprint block (active AND history), matching the toggle's own
+        // "Collapse sprints" accessible name and the changelog's "tucked away without hiding the
+        // others" claim (see SidebarProjectItem's own remarks).
         if (project.SprintListExpanded)
         {
             foreach (SidebarSprintItem sprint in project.ActiveSprints)
@@ -364,36 +382,39 @@ public partial class WorkspaceShellPage : ContentPage
                         .ConfigureAwait(true));
                 column.Children.Add(sprintButton);
             }
-        }
 
-        if (project.History.Count > 0)
-        {
-            column.Children.Add(new Label
+            if (project.History.Count > 0)
             {
-                Text = string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.History.Count})"),
-            });
-            // Plan 12.1 final-sweep gap 3: every history entry is now navigable, the same "open"
-            // affordance active sprints get above -- reusing the same sprint-workspace route, which
-            // already renders a terminal sprint read-only (no lifecycle/stage-transition action is
-            // ever offered for one; plan 13 excludes editing raw sprint state).
-            foreach (SidebarHistoryItem historyItem in project.History)
-            {
-                Button historyButton = new()
+                column.Children.Add(new Label
                 {
                     Text = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        $"  {historyItem.CreationSequence}. {historyItem.StateText}"),
-                };
-                SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
-                historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
-                    await workspace
-                        .NavigateAsync(
-                            WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
-                            CancellationToken.None)
-                        .ConfigureAwait(true));
-                column.Children.Add(historyButton);
+                        // PR #105 review finding 1: HistoryTotalCount is the true, uncapped count of
+                        // terminal sprints -- History.Count is capped at MaxSidebarHistory and would
+                        // silently under-report once a project passes that bound.
+                        $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})"),
+                });
+                // Plan 12.1 final-sweep gap 3: every history entry is now navigable, the same "open"
+                // affordance active sprints get above -- reusing the same sprint-workspace route, which
+                // already renders a terminal sprint read-only (no lifecycle/stage-transition action is
+                // ever offered for one; plan 13 excludes editing raw sprint state).
+                foreach (SidebarHistoryItem historyItem in project.History)
+                {
+                    Button historyButton = new()
+                    {
+                        Text = string.Create(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            $"  {historyItem.CreationSequence}. {historyItem.StateText}"),
+                    };
+                    SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
+                    historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
+                        await workspace
+                            .NavigateAsync(
+                                WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
+                                CancellationToken.None)
+                            .ConfigureAwait(true));
+                    column.Children.Add(historyButton);
+                }
             }
         }
 
@@ -433,6 +454,13 @@ public partial class WorkspaceShellPage : ContentPage
     {
         WorkspaceRoute route = workspace.Route;
         StopTimelinePoll();
+        // PR #105 review finding 3's flush-on-navigate-away: persists whatever is pending for the
+        // sprint workspace being left -- BEFORE scrollTrackedSprintId is reset below -- so a route
+        // change away from a sprint workspace never leaves a debounced scroll position unwritten.
+        // FlushPendingScrollPositionAsync reads workspace.Route.ProjectId's OLD value captured at
+        // render time (scrollTrackedProjectId), not this method's own now-current `route`, which
+        // already reflects the destination the user is navigating TO.
+        await FlushPendingScrollPositionAsync().ConfigureAwait(true);
         // PR #99 review finding 11: scrollTrackedSprintId is only ever set to a real sprint id by
         // RenderSprintWorkspaceAsync itself (see WorkspaceShellPage.SprintWorkspace.cs) -- resetting
         // it here for every render means a scroll on any other route is never attributed to the

@@ -421,8 +421,13 @@ public sealed class ProjectCatalogStore(
 
     /// <summary>Plan 12.1 final-sweep gap 2: persists the sprint workspace's last scroll offset for
     /// one sprint so it survives an app restart -- previously held only in an in-memory field on the
-    /// page instance (<c>WorkspaceShellPage.SprintWorkspace.cs</c>'s own <c>sprintScrollPositions</c>).
-    /// A non-positive <paramref name="position"/> clears the entry, matching every other per-sprint
+    /// page instance (<c>WorkspaceShellPage.SprintWorkspace.cs</c>'s
+    /// <c>Forge.Desktop.Presentation.ScrollPositionPersistCoordinator</c>). PR #105 review findings
+    /// 3/4: this method itself is a plain unordered write, same as every sibling mutation here -- the
+    /// caller now debounces by elapsed time rather than scroll distance, and sequence-stamps each call
+    /// so a stale, late-completing call can never be allowed to overwrite a fresher one that already
+    /// landed (see that coordinator's own remarks for where that guarantee actually lives). A
+    /// non-positive <paramref name="position"/> clears the entry, matching every other per-sprint
     /// dictionary's own empty-clears convention (there is nothing to restore below the top). NaN/
     /// infinite values are rejected outright -- <see cref="System.Text.Json.JsonSerializer"/> cannot
     /// round-trip either, and no legitimate scroll offset is ever one.</summary>

@@ -27,14 +27,18 @@ public sealed record SidebarSprintItem(
 /// </summary>
 public sealed record SidebarHistoryItem(Guid SprintId, int CreationSequence, string StateText, string AccessibleName);
 
-/// <summary>One sidebar project row. <see cref="ActiveSprints"/> is already ordered by
-/// <see cref="SprintOrderingRank"/> and shown only while <see cref="SprintListExpanded"/> (plan 12.1
-/// final-sweep gap 1; default <see langword="true"/> so an upgrading user sees exactly what every
-/// prior release always rendered). <see cref="History"/> is every terminal sprint, newest first,
-/// capped at <see cref="SidebarViewModel.MaxSidebarHistory"/> -- reachable through this always-visible
-/// separate list rather than crowding <see cref="ActiveSprints"/> (plan 12.1 final-sweep gap 3), and
-/// never hidden by <see cref="SprintListExpanded"/> since it is not part of the active list that
-/// toggle governs.</summary>
+/// <summary>One sidebar project row. <see cref="ActiveSprints"/> and <see cref="History"/> are both
+/// shown only while <see cref="SprintListExpanded"/> (plan 12.1 final-sweep gap 1; default
+/// <see langword="true"/> so an upgrading user sees exactly what every prior release always
+/// rendered) -- PR #105 review finding 2: the chevron governs the whole per-project sprint block, not
+/// only the active list, matching its own "Collapse sprints" accessible name and the changelog's
+/// "tucked away without hiding the others" claim (the "others" being other projects' rows, not the
+/// same project's own history). <see cref="ActiveSprints"/> is already ordered by
+/// <see cref="SprintOrderingRank"/>. <see cref="History"/> is every terminal sprint, newest first,
+/// capped at <see cref="SidebarViewModel.MaxSidebarHistory"/> rows so it never crowds
+/// <see cref="ActiveSprints"/> (plan 12.1 final-sweep gap 3) -- but <see cref="HistoryTotalCount"/> is
+/// the true, uncapped total of terminal sprints (PR #105 review finding 1: the label must report how
+/// many terminal sprints the project actually has, not how many rows are reachable).</summary>
 public sealed record SidebarProjectItem(
     Guid ProjectId,
     string Root,
@@ -44,6 +48,7 @@ public sealed record SidebarProjectItem(
     IReadOnlyList<SidebarSprintItem> ActiveSprints,
     bool SprintListExpanded,
     IReadOnlyList<SidebarHistoryItem> History,
+    int HistoryTotalCount,
     string AccessibleName);
 
 /// <summary>Plan section 4.1's bottom status row. <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
@@ -124,13 +129,15 @@ public sealed class SidebarViewModel(
                     .OrderBySidebarRule(sprint => sprint.State, sprint => sprint.CreationSequence)
                     .Select(sprint => ToSprintItem(displayName, sprint)),
             ];
-            List<SidebarHistoryItem> history =
+            List<SprintStatus> terminalSprints =
             [
                 .. snapshot.Sprints
                     .Where(sprint => WorkflowStateMachines.IsTerminal(sprint.State))
-                    .OrderByDescending(sprint => sprint.CreationSequence)
-                    .Take(MaxSidebarHistory)
-                    .Select(sprint => ToHistoryItem(displayName, sprint)),
+                    .OrderByDescending(sprint => sprint.CreationSequence),
+            ];
+            List<SidebarHistoryItem> history =
+            [
+                .. terminalSprints.Take(MaxSidebarHistory).Select(sprint => ToHistoryItem(displayName, sprint)),
             ];
             projects.Add(new(
                 entry.ProjectId,
@@ -141,6 +148,7 @@ public sealed class SidebarViewModel(
                 sprints,
                 !entry.SprintListCollapsed,
                 history,
+                terminalSprints.Count,
                 AccessibleProjectName(displayName, summary)));
         }
 

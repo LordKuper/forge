@@ -88,7 +88,13 @@ public sealed class SidebarViewModelTests
 
     /// <summary>Plan 12.1 final-sweep gap 3's cap -- matches
     /// <see cref="ProjectOverviewViewModel"/>'s own recent-history bound so more terminal sprints
-    /// than that never crowd the sidebar, while still keeping the newest ones reachable.</summary>
+    /// than that never crowd the sidebar, while still keeping the newest ones reachable.
+    /// PR #105 review finding 1 regression: <see cref="SidebarProjectItem.HistoryTotalCount"/> must
+    /// stay the true, uncapped total (40 terminal sprints here is more than
+    /// <see cref="SidebarViewModel.MaxSidebarHistory"/>) even though the navigable
+    /// <see cref="SidebarProjectItem.History"/> list itself stays capped -- the sidebar's "History
+    /// (n)" label reads <c>HistoryTotalCount</c>, not <c>History.Count</c>, so the two must never be
+    /// conflated again.</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task LoadAsyncCapsHistoryAtTheDocumentedBoundOrderedNewestFirst()
@@ -119,6 +125,7 @@ public sealed class SidebarViewModelTests
 
         SidebarProjectItem project = Assert.Single(snapshot.Projects);
         Assert.Equal(SidebarViewModel.MaxSidebarHistory, project.History.Count);
+        Assert.Equal(creationSequences.Count, project.HistoryTotalCount);
         Assert.Equal(
             [.. creationSequences.OrderByDescending(sequence => sequence).Take(SidebarViewModel.MaxSidebarHistory)],
             [.. project.History.Select(item => item.CreationSequence)]);

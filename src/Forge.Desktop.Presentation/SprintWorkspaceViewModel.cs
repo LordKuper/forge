@@ -143,9 +143,10 @@ public sealed class SprintWorkspaceViewModel(
 
     /// <summary>Plan 12.1 final-sweep gap 2: the sprint workspace's last scroll offset, restored on
     /// route entry when the page's own in-session cache (<c>WorkspaceShellPage.SprintWorkspace.cs</c>'s
-    /// <c>sprintScrollPositions</c>) has nothing cached for this sprint yet -- i.e. the first render
-    /// after an app restart. <see langword="null"/> when nothing was ever persisted, in which case the
-    /// caller scrolls to the top exactly like before this gap was closed.</summary>
+    /// <see cref="Forge.Desktop.Presentation.ScrollPositionPersistCoordinator"/>) has nothing pending
+    /// for this sprint yet -- i.e. the first render after an app restart. <see langword="null"/> when
+    /// nothing was ever persisted, in which case the caller scrolls to the top exactly like before
+    /// this gap was closed.</summary>
     public async Task<double?> LoadScrollPositionAsync(Guid projectId, Guid sprintId, CancellationToken cancellationToken)
     {
         ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
