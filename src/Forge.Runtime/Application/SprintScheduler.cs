@@ -1612,14 +1612,9 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     {
         SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        // ADR 0054: this call always lands immediately after the node's own completing transition
-        // already appended (PlanningExecutionHostedService/ImplementationExecutionHostedService call
-        // CompleteNodeAsync first), so LastSequence here IS that transition's own sequence, not an
-        // approximation -- SprintTimelineProjector uses it to place this handoff's projected summary
-        // in the same dense per-sprint order as every system event.
         Handoff handoff = new(
             Guid.NewGuid(), sprintId, new(nodeId), baseSha, summary, decisions, [], openRisks, nextNodeIds,
-            state.Sprint.Revision, Superseded: null, Sequence: state.LastSequence);
+            state.Sprint.Revision, Superseded: null);
         try
         {
             await store.SaveHandoffAsync(projectRoot, handoff, cancellationToken).ConfigureAwait(false);
@@ -1628,6 +1623,19 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         {
             return new(false, null, DiagnosticCodes.WorkflowRecordInvalid);
         }
+
+        // ADR 0054, redesigned (PR #104 review, finding 1): the summary gets its own real journal
+        // entry, appended here and now, rather than the original design's borrowed
+        // `state.LastSequence` stamped onto the Handoff record itself. That borrowed value was never
+        // guaranteed to be this node's own completing transition -- any append landing in the gap
+        // between that transition and this call (including a concurrent AppendUserMessageAsync from
+        // this same PR's own message feature) would silently anchor the summary to the wrong event,
+        // and a cursor that had already advanced past the borrowed sequence could never see the
+        // handoff once it finally landed, since the two writes are not atomic. A real event has
+        // neither problem: SprintTimelineProjector reads WorkflowEvent.Sequence directly, assigned
+        // atomically by this exact append, the same guarantee every other event type already has.
+        await store.AppendAgentSummaryRecordedAsync(
+            projectRoot, sprintId, nodeId, handoff.HandoffId, summary, cancellationToken).ConfigureAwait(false);
 
         return new(true, handoff, DiagnosticCodes.None);
     }

@@ -404,7 +404,6 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Revision = handoff.Revision.Value,
             SupersededAtRevision = handoff.Superseded?.AtRevision.Value,
             SupersededRecordedAt = handoff.Superseded?.RecordedAt,
-            Sequence = handoff.Sequence,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{handoff.HandoffId:N}.json"),
@@ -826,6 +825,57 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.UserMessageTextArgument] = text,
                 });
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(posted), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendAgentSummaryRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        Guid handoffId,
+        string summaryText,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+
+            // Deduplicated by the owning handoff's own id (carried as this event's CorrelationId),
+            // mirroring AppendUserMessageAsync -- a second call for the same handoff is always a
+            // replay, never a distinct summary. RecordHandoffAsync is not retried in production, but
+            // this keeps the store-level contract safe regardless of caller behavior.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AgentSummaryRecordedType && item.CorrelationId == handoffId))
+            {
+                return;
+            }
+
+            long nodeVersion = CurrentVersion(events, AggregateKind.Node, nodeId);
+            WorkflowEvent recorded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AgentSummaryRecordedType,
+                new(AggregateKind.Node, nodeId, nodeVersion),
+                "workflow.agent_summary_recorded",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.AgentSummaryTextArgument] = summaryText,
+                },
+                CorrelationId: handoffId);
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -1655,8 +1705,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             handoff.OpenRisks,
             handoff.NextNodeIds,
             new(handoff.Revision),
-            ToSupersededBy(handoff.SupersededAtRevision, handoff.SupersededRecordedAt),
-            handoff.Sequence);
+            ToSupersededBy(handoff.SupersededAtRevision, handoff.SupersededRecordedAt));
 
     private static PersistedEvidence ToPersisted(ConfirmationEvidence evidence) =>
         new() { Kind = WorkflowStateNames.ToSnakeCase(evidence.Kind), Description = evidence.Description };
@@ -2534,8 +2583,6 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public int? SupersededAtRevision { get; set; }
 
         public DateTimeOffset? SupersededRecordedAt { get; set; }
-
-        public long Sequence { get; set; }
     }
 
     private sealed class PersistedArtifact

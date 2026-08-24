@@ -18,8 +18,7 @@
     "next_node_ids": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
     "revision": {"type": "integer", "minimum": 0},
     "superseded_at_revision": {"type": "integer", "minimum": 1},
-    "superseded_at": {"type": "string", "format": "date-time"},
-    "sequence": {"type": "integer", "minimum": 0}
+    "superseded_at": {"type": "string", "format": "date-time"}
   },
   "$defs": {
     "artifact": {

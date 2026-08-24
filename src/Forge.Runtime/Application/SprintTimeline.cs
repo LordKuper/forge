@@ -186,25 +186,35 @@ public static class SprintTimelineRedaction
 /// (<see cref="ISprintStore.GetEventsAsync"/>) into a bounded, cursor-paged
 /// <see cref="SprintTimelinePage"/> -- a read projection, never a new source of truth (plan section
 /// 6.3/ADR 0043). ADR 0054 (post-release timeline gap closure) closes the two gaps ADR 0049 left
-/// open: user messages are now their own <see cref="WorkflowEvent.UserMessagePostedType"/> entries in
-/// this SAME journal (so they get a dense <see cref="WorkflowEvent.Sequence"/> for free, no second
-/// cursor to merge), and user-visible agent summaries are projected from the existing
-/// <see cref="Handoff"/> records (<see cref="ISprintStore.GetHandoffsAsync"/>) a node already leaves
-/// behind -- never a new artifact type. A <see cref="Handoff"/> carries no <see cref="WorkflowEvent.Sequence"/>
-/// of its own, so <see cref="Handoff.Sequence"/> (the journal watermark at the moment it was recorded)
-/// anchors it into this same order; see <see cref="MergeAndPage"/> for how a handoff sharing an exact
-/// sequence with a real event is kept on the same page as that event rather than risking a skip.
+/// open: user messages are their own <see cref="WorkflowEvent.UserMessagePostedType"/> entries and
+/// agent summaries are their own <see cref="WorkflowEvent.AgentSummaryRecordedType"/> entries, both in
+/// this SAME journal -- so both get a dense <see cref="WorkflowEvent.Sequence"/> for free, assigned
+/// atomically at append time, with no second cursor to merge and no borrowed/anchored sequence to get
+/// wrong (PR #104 review, finding 1: the original design instead stamped a borrowed sequence onto the
+/// separate <see cref="Handoff"/> record and anchored to "the nearest event at or before" it, which
+/// could not survive a cursor advancing between the transition landing and the handoff write). The
+/// <see cref="Handoff"/> store (<see cref="ISprintStore.GetHandoffsAsync"/>) is still consulted here,
+/// but only for its mutable <see cref="Handoff.Superseded"/> flag -- see <see cref="MergeAndPage"/>.
 /// </summary>
-public sealed class SprintTimelineProjector(ISprintStore store)
+/// <param name="store">The sprint's durable event/handoff storage.</param>
+/// <param name="maxItemsPerPage">The per-page item bound -- defaults to the production
+/// <see cref="MaxItemsPerPage"/>. Overridable so a test can force a real, small page boundary (PR
+/// #104 review, finding 4) without waiting for a sprint to accumulate <see cref="MaxItemsPerPage"/>
+/// items.</param>
+public sealed class SprintTimelineProjector(ISprintStore store, int maxItemsPerPage = SprintTimelineProjector.MaxItemsPerPage)
 {
-    /// <summary>A read-size bound, matching <see cref="ControlEventsReader.MaxEventsPerRead"/>. A
-    /// soft bound in the presence of a same-sequence handoff tie (see <see cref="MergeAndPage"/>) --
-    /// at most one extra item beyond it per page, never a skipped or duplicated one.</summary>
+    /// <summary>A read-size bound, matching <see cref="ControlEventsReader.MaxEventsPerRead"/> --
+    /// the production default for this projector's own page-size constructor parameter. Every event
+    /// (including an agent summary) now carries its own real, dense, globally-unique
+    /// <see cref="WorkflowEvent.Sequence"/>, so unlike the pre-redesign bound, two candidates can
+    /// never tie on it and no page ever needs a tie-break to avoid a skip.</summary>
     public const int MaxItemsPerPage = 500;
 
     /// <summary>ADR 0054: the projected <see cref="SprintTimelineItem.Type"/> for an agent-authored
-    /// summary (<see cref="Handoff.Summary"/>).</summary>
-    public const string AgentSummaryRecordedType = "AgentSummaryRecorded";
+    /// summary (<see cref="Handoff.Summary"/>) -- an alias of <see cref="WorkflowEvent.AgentSummaryRecordedType"/>,
+    /// kept as this projector's own public constant since it was already part of this contract before
+    /// the redesign that made it a real event type.</summary>
+    public const string AgentSummaryRecordedType = WorkflowEvent.AgentSummaryRecordedType;
 
     /// <summary>Event types that only ever land as a direct consequence of a human-only mutation
     /// (attempt supersession, a stop request, a committed rewind, a posted message) -- every other
@@ -237,73 +247,65 @@ public sealed class SprintTimelineProjector(ISprintStore store)
 
         IReadOnlyList<Handoff> handoffs =
             await store.GetHandoffsAsync(projectRoot, id, cancellationToken).ConfigureAwait(false);
-        List<SprintTimelineItem> page = MergeAndPage(events, handoffs, cursor.Watermark);
+        List<SprintTimelineItem> page = MergeAndPage(events, handoffs, cursor.Watermark, maxItemsPerPage);
         long nextWatermark = page.Count > 0 ? page[^1].Sequence : cursor.Watermark;
         string nextCursor =
             SprintTimelineCursorCodec.Encode(new(SprintTimelineCursor.CurrentVersion, sprintId, nextWatermark));
         return new(SprintTimelinePage.ContractVersion, sprintId, page, nextCursor, DiagnosticCodes.None);
     }
 
-    /// <summary>Merges system-event items with handoff-derived agent-summary items into one
-    /// sequence-ordered page. A handoff shares its borrowed <see cref="Handoff.Sequence"/> with the
-    /// real event it was recorded alongside (at most one handoff per sequence value -- each anchors to
-    /// a distinct node completion), so a page never ends mid-tie: once <see cref="MaxItemsPerPage"/> is
-    /// reached, taking continues only while the next candidate's sequence still equals the last one
-    /// taken -- otherwise a tie split across two pages could leave the second half of the pair skipped
-    /// forever (its sequence would never again be greater than the advanced watermark). A superseded
-    /// handoff (<see cref="SupersededBy"/> set, e.g. by a rewind) is never projected -- its summary is
-    /// stale, matching how a superseded artifact is already excluded elsewhere
-    /// (<c>SprintScheduler.IsTestWorkEligibleAsync</c>).</summary>
+    /// <summary>Bounds the candidate set to at most <paramref name="maxItemsPerPage"/> items BEFORE
+    /// the expensive per-item work (<see cref="ToItem"/>'s projection and
+    /// <see cref="SecretRedactor.RedactProperties"/> redaction pass) ever runs -- restores the
+    /// `Where -&gt; OrderBy -&gt; Take -&gt; Select` shape this had before agent summaries existed (PR
+    /// #104 review, finding 3: the interim design projected and redacted every candidate above the
+    /// watermark before applying the page bound, an unbounded-work regression on what is supposed to
+    /// be a bounded read). Restoring that shape is only safe because finding 1's redesign removed the
+    /// separate handoff-merge step entirely: every candidate is now a single <see cref="WorkflowEvent"/>
+    /// from <paramref name="events"/>, each with its own real, dense, globally-unique
+    /// <see cref="WorkflowEvent.Sequence"/> -- there is no second source to merge and no same-sequence
+    /// tie that could ever split across a page boundary, so the old tie-break logic is gone too. The
+    /// <see cref="Handoff"/> store is still read, but only to build <paramref name="handoffs"/>' set of
+    /// superseded ids: a superseded handoff's summary must never appear (a rewind invalidated it,
+    /// matching how a superseded artifact is already excluded from
+    /// <c>SprintScheduler.IsTestWorkEligibleAsync</c>), and <see cref="Handoff.Superseded"/> is mutable
+    /// state the immutable, already-landed <see cref="WorkflowEvent.AgentSummaryRecordedType"/> event
+    /// cannot itself carry.</summary>
     private static List<SprintTimelineItem> MergeAndPage(
-        IReadOnlyList<WorkflowEvent> events, IReadOnlyList<Handoff> handoffs, long watermark)
+        IReadOnlyList<WorkflowEvent> events, IReadOnlyList<Handoff> handoffs, long watermark, int maxItemsPerPage)
     {
-        List<(long Sequence, int Order, SprintTimelineItem Item)> candidates =
+        HashSet<Guid> supersededHandoffIds =
+            [.. handoffs.Where(item => item.Superseded is not null).Select(item => item.HandoffId)];
+
+        return
         [
             .. events
                 .Where(item => item.Sequence > watermark)
-                .Select(item => (item.Sequence, Order: 0, Item: ToItem(item))),
-            .. handoffs
-                .Where(handoff => handoff.Superseded is null && handoff.Sequence > watermark)
-                .Select(handoff => (handoff.Sequence, Order: 1, Item: ToItem(handoff, FindAnchor(events, handoff.Sequence))))
-                .Where(candidate => candidate.Item is not null)
-                .Select(candidate => (candidate.Sequence, candidate.Order, Item: candidate.Item!)),
+                .Where(item => item.Type != WorkflowEvent.AgentSummaryRecordedType ||
+                    !IsSupersededSummary(item, supersededHandoffIds))
+                .OrderBy(item => item.Sequence)
+                .Take(maxItemsPerPage)
+                .Select(ToItem),
         ];
-        candidates.Sort((left, right) =>
-        {
-            int bySequence = left.Sequence.CompareTo(right.Sequence);
-            return bySequence != 0 ? bySequence : left.Order.CompareTo(right.Order);
-        });
-
-        List<SprintTimelineItem> page = [];
-        long? lastTakenSequence = null;
-        foreach ((long sequence, int _, SprintTimelineItem item) in candidates)
-        {
-            if (page.Count >= MaxItemsPerPage && sequence != lastTakenSequence)
-            {
-                break;
-            }
-
-            page.Add(item);
-            lastTakenSequence = sequence;
-        }
-
-        return page;
     }
 
-    /// <summary>The real event a handoff's borrowed <see cref="Handoff.Sequence"/> anchors to -- the
-    /// nearest event at or before it, since <see cref="SprintScheduler.RecordHandoffAsync"/> always
-    /// captures the journal's exact watermark at record time, which normally IS a real event's own
-    /// sequence. Never throws: an unresolvable anchor (only reachable for a corrupt or pre-ADR-0054
-    /// handoff whose sequence predates every event, which cannot happen for a real sprint since
-    /// sequences start at 0) simply drops the item from the timeline rather than fabricate a
-    /// timestamp.</summary>
-    private static WorkflowEvent? FindAnchor(IReadOnlyList<WorkflowEvent> events, long sequence) =>
-        events.Where(item => item.Sequence <= sequence).OrderByDescending(item => item.Sequence).FirstOrDefault();
+    /// <summary>An <see cref="WorkflowEvent.AgentSummaryRecordedType"/> event's own
+    /// <see cref="WorkflowEvent.CorrelationId"/> carries the exact <see cref="Handoff.HandoffId"/> it
+    /// was recorded for (see <see cref="ISprintStore.AppendAgentSummaryRecordedAsync"/>) -- this is
+    /// the only place that correlation is ever read back.</summary>
+    private static bool IsSupersededSummary(WorkflowEvent item, HashSet<Guid> supersededHandoffIds) =>
+        item.CorrelationId is { } handoffId && supersededHandoffIds.Contains(handoffId);
 
     /// <summary>Redaction pass 1 of 2 (plan 12.3): applied once here, before this projected item ever
     /// leaves this method -- so any future cache/persisted view of the timeline never receives
     /// unredacted content in the first place. Reuses <see cref="SecretRedactor"/> (ADR 0039's
-    /// chokepoint) rather than a new rule; pass 2 runs again, independently, at render time.</summary>
+    /// chokepoint) rather than a new rule; pass 2 runs again, independently, at render time. Handles
+    /// every event type generically, including <see cref="WorkflowEvent.AgentSummaryRecordedType"/>
+    /// since finding 1's redesign: its summary text lives in <see cref="WorkflowEvent.Arguments"/>
+    /// like any other bounded free-text argument, and its <see cref="TimelineActor.Agent"/> actor and
+    /// node <see cref="SprintTimelineItem.TargetKind"/>/<see cref="SprintTimelineItem.TargetId"/> come
+    /// straight from the event's own <see cref="WorkflowEvent.Type"/>/<see cref="WorkflowEvent.Aggregate"/>
+    /// -- no second, handoff-specific projection method is needed any more.</summary>
     private static SprintTimelineItem ToItem(WorkflowEvent item)
     {
         Dictionary<string, object?> raw = item.Arguments.ToDictionary(
@@ -311,51 +313,21 @@ public sealed class SprintTimelineProjector(ISprintStore store)
         IReadOnlyDictionary<string, object?> redacted = SecretRedactor.RedactProperties(raw);
         Dictionary<string, string?> arguments = redacted.ToDictionary(
             entry => entry.Key, entry => entry.Value?.ToString(), StringComparer.Ordinal);
+        TimelineActor actor = item.Type == WorkflowEvent.AgentSummaryRecordedType
+            ? TimelineActor.Agent
+            : OperatorTriggeredTypes.Contains(item.Type) ? TimelineActor.Operator : TimelineActor.System;
         return new(
             item.EventId,
             item.Sequence,
             item.OccurredAt,
             item.Type,
-            OperatorTriggeredTypes.Contains(item.Type) ? TimelineActor.Operator : TimelineActor.System,
+            actor,
             WorkflowStateNames.ToSnakeCase(item.Aggregate.Kind),
             item.Aggregate.Id,
             item.MessageKey,
             arguments,
             item.CorrelationId,
             item.CausationId,
-            []);
-    }
-
-    /// <summary>Redaction pass 1 of 2, for an agent summary (ADR 0054) -- same
-    /// <see cref="SecretRedactor"/> chokepoint <see cref="ToItem(WorkflowEvent)"/> already uses, so a
-    /// planted secret in provider-authored free text is caught exactly like one in an event argument.
-    /// Returns <see langword="null"/> when <paramref name="anchor"/> is <see langword="null"/> (see
-    /// <see cref="FindAnchor"/>) -- there is no event to source <see cref="SprintTimelineItem.OccurredAt"/>
-    /// from, so this handoff is dropped from the timeline rather than shown with a fabricated
-    /// timestamp.</summary>
-    private static SprintTimelineItem? ToItem(Handoff handoff, WorkflowEvent? anchor)
-    {
-        if (anchor is null)
-        {
-            return null;
-        }
-
-        Dictionary<string, object?> raw = new(StringComparer.Ordinal) { ["summary"] = handoff.Summary };
-        IReadOnlyDictionary<string, object?> redacted = SecretRedactor.RedactProperties(raw);
-        Dictionary<string, string?> arguments = redacted.ToDictionary(
-            entry => entry.Key, entry => entry.Value?.ToString(), StringComparer.Ordinal);
-        return new(
-            handoff.HandoffId,
-            handoff.Sequence,
-            anchor.OccurredAt,
-            AgentSummaryRecordedType,
-            TimelineActor.Agent,
-            WorkflowStateNames.ToSnakeCase(AggregateKind.Node),
-            handoff.NodeId.Value,
-            "workflow.agent_summary_recorded",
-            arguments,
-            null,
-            null,
             []);
     }
 }

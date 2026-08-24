@@ -366,21 +366,87 @@ public sealed class SprintTimelineTests
         SprintTimelinePage full = await environment.Application.GetSprintTimelineAsync(
             environment.ProjectRoot, sprintId.Value, null, cancellationToken);
         Assert.Equal(3, full.Items.Count(item => item.Type == WorkflowEvent.UserMessagePostedType));
+        Assert.True(full.Items.Count > 3, "the scenario needs at least one system item alongside the messages");
 
-        // Page through one item at a time -- the smallest possible page -- and confirm the union of
-        // every page is exactly the full set, with no id repeated and every sequence in the same
-        // (non-decreasing) order the single-fetch page above reported.
+        // Round of PR #104 review, finding 4: at the projector's real, production 500-item bound this
+        // ~7-item fixture never actually pages -- the do/while below would exit after one fetch and
+        // every assertion would be tautological. A directly-constructed projector with a page size of
+        // 1 (the smallest possible page, mirroring this test's own original intent) forces a genuine
+        // multi-fetch walk over the exact same durable data, so the union-of-pages assertions below
+        // actually exercise MergeAndPage's page-boundary behavior.
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintTimelineProjector pagedProjector = new(store, maxItemsPerPage: 1);
         List<SprintTimelineItem> paged = [];
         string? cursor = null;
+        int fetches = 0;
         do
         {
-            SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            SprintTimelinePage page = await pagedProjector.CreateAsync(
                 environment.ProjectRoot, sprintId.Value, cursor, cancellationToken);
+            Assert.True(page.Items.Count <= 1);
             paged.AddRange(page.Items);
             cursor = page.Cursor;
+            fetches++;
         }
-        while (paged.Count < full.Items.Count);
+        while (paged.Count < full.Items.Count && fetches <= full.Items.Count);
 
+        Assert.Equal(full.Items.Count, fetches);
+        Assert.Equal(full.Items.Select(item => item.Id), paged.Select(item => item.Id));
+        Assert.Equal(paged.Count, paged.Select(item => item.Id).Distinct().Count());
+        Assert.Equal(full.Items.Select(item => item.Sequence), paged.Select(item => item.Sequence));
+    }
+
+    /// <summary>Round of PR #104 review, finding 4: the paging test above proves ordinary system
+    /// events and user messages page correctly, but neither it nor
+    /// <see cref="AHandoffSummaryIsProjectedAsAnAgentTimelineItemNamingItsProducingNode"/> ever forced
+    /// an agent-summary item to actually sit at a real page boundary. This scenario interleaves a
+    /// recorded handoff between two posted messages and pages one item at a time, so the summary lands
+    /// mid-sequence and must survive a page boundary landing immediately before or after it without
+    /// being skipped or duplicated.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PagingNeverSkipsOrDuplicatesAnAgentSummaryAtAPageBoundary()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "before the summary", cancellationToken);
+        RecordHandoffResult handoff = await scheduler.RecordHandoffAsync(
+            environment.ProjectRoot, sprintId, "a", new string('a', 40), "implemented the widget",
+            decisions: [], openRisks: [], nextNodeIds: null, cancellationToken);
+        Assert.True(handoff.Succeeded);
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "after the summary", cancellationToken);
+
+        SprintTimelineProjector fullProjector = new(store);
+        SprintTimelinePage full = await fullProjector.CreateAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Contains(full.Items, item => item.Type == SprintTimelineProjector.AgentSummaryRecordedType);
+
+        SprintTimelineProjector pagedProjector = new(store, maxItemsPerPage: 1);
+        List<SprintTimelineItem> paged = [];
+        string? cursor = null;
+        int fetches = 0;
+        do
+        {
+            SprintTimelinePage page = await pagedProjector.CreateAsync(
+                environment.ProjectRoot, sprintId.Value, cursor, cancellationToken);
+            Assert.True(page.Items.Count <= 1);
+            paged.AddRange(page.Items);
+            cursor = page.Cursor;
+            fetches++;
+        }
+        while (paged.Count < full.Items.Count && fetches <= full.Items.Count);
+
+        Assert.Equal(full.Items.Count, fetches);
         Assert.Equal(full.Items.Select(item => item.Id), paged.Select(item => item.Id));
         Assert.Equal(paged.Count, paged.Select(item => item.Id).Distinct().Count());
         Assert.Equal(full.Items.Select(item => item.Sequence), paged.Select(item => item.Sequence));
@@ -418,9 +484,13 @@ public sealed class SprintTimelineTests
         Assert.Equal("node", summary.TargetKind);
         Assert.Equal("a", summary.TargetId);
         Assert.Equal("implemented the widget", summary.Arguments["summary"]);
-        // Ordered into the same dense sequence space as every system event -- never trailing behind
-        // or duplicated relative to the node's own completion.
-        Assert.Contains(page.Items, item => item.Sequence == summary.Sequence && item != summary);
+        // Round of PR #104 review, finding 1: the summary now gets its own real, dense
+        // WorkflowEvent.Sequence, assigned atomically at append time -- unlike the original
+        // borrowed-sequence design, it never shares a sequence with the event it followed. Every item
+        // in a page has a distinct sequence, and the summary's own sequence is the highest (it was
+        // appended last).
+        Assert.DoesNotContain(page.Items, item => item.Sequence == summary.Sequence && item != summary);
+        Assert.Equal(summary.Sequence, page.Items.Max(item => item.Sequence));
     }
 
     [Fact]

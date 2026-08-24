@@ -30,14 +30,15 @@ public sealed record HandoffArtifact(
 /// </summary>
 /// <summary><paramref name="Revision"/>/<paramref name="Superseded"/> follow the same rewind
 /// supersession rule as <see cref="NodeResult"/> (plan section 8.4, ADR 0045).</summary>
-/// <summary><paramref name="Sequence"/> (ADR 0054, post-release timeline gap closure): the sprint
-/// journal's own <c>WorkflowEvent.Sequence</c> watermark at the moment this handoff was recorded --
-/// <c>SprintScheduler.RecordHandoffAsync</c> is always called immediately after the node's own
-/// completing transition already landed, so this is exactly that transition's sequence, not an
-/// approximation. Lets <c>SprintTimelineProjector</c> place this handoff's projected summary item in
-/// the same dense per-sprint order as every system event, without a second cursor/watermark to merge.
-/// Defaults to <c>0</c> for a handoff recorded before this field existed; the projector treats an
-/// unresolvable anchor defensively (never throws), see its own remarks.</summary>
+/// <remarks>ADR 0054 briefly added a <c>Sequence</c> field here so <c>SprintTimelineProjector</c>
+/// could anchor a projected summary into the journal's own order by borrowing the sprint's current
+/// watermark at record time. Round of PR #104 review (finding 1) found that borrowing unsound (the
+/// borrowed value could belong to an unrelated later event, and a cursor already past it could never
+/// see the handoff once written) and redesigned it: the summary is now its own real
+/// <see cref="Forge.Domain.WorkflowEvent.AgentSummaryRecordedType"/> journal entry with its own real
+/// <see cref="Forge.Domain.WorkflowEvent.Sequence"/>, so <see cref="Handoff"/> needs no sequence of
+/// its own at all -- removed rather than kept as unused debt (finding 2 confirmed nothing else read
+/// it once the redesign lands).</remarks>
 public sealed record Handoff(
     Guid HandoffId,
     SprintId SprintId,
@@ -49,5 +50,4 @@ public sealed record Handoff(
     IReadOnlyList<string> OpenRisks,
     IReadOnlyList<string>? NextNodeIds = null,
     StageRevision Revision = default,
-    SupersededBy? Superseded = null,
-    long Sequence = 0);
+    SupersededBy? Superseded = null);

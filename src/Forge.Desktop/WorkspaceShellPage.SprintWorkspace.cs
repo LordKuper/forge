@@ -639,19 +639,36 @@ public partial class WorkspaceShellPage
                     root, sprintId, assessment, isRewind && !isRewindInProgress ? rewindReasonEntry.Text : null,
                     confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
-            await RefreshAllAsync().ConfigureAwait(true);
+            // PR #104 review finding 5: a committed rewind can supersede an agent summary this
+            // workspace already loaded and rendered -- SprintTimelineViewModel's own `loaded` list
+            // only ever grows via LoadMoreAsync, so an incremental refresh would keep showing the now
+            // -stale summary indefinitely. Only a rewind needs this: every other mutation this page
+            // performs is additive and never retracts an already-served timeline item.
+            await RefreshAllAsync(resetTimeline: isRewind).ConfigureAwait(true);
             moveResult.Text = message;
         }
 
-        async Task RefreshAllAsync()
+        async Task RefreshAllAsync(bool resetTimeline = false)
         {
             await RefreshHeaderAsync().ConfigureAwait(true);
-            // Plan section 10: the selected sprint refreshes immediately after a mutation -- the
-            // timeline pane is not exempt just because it also has its own bounded poll (PR #99
-            // review finding 2). Reuses the same LoadMoreAsync path the poll and "load more" already
-            // call, so the event the user's own action just caused is visible right away instead of
-            // waiting up to TimelinePollInterval.
-            RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true));
+            if (resetTimeline)
+            {
+                // Full re-InitializeAsync clears SprintTimelineViewModel's loaded list and cursor,
+                // rebuilding it from a fresh fetch -- the only way a superseded item stops being
+                // rendered, since LoadMoreAsync only ever appends.
+                await InitializeTimelineAsync().ConfigureAwait(true);
+            }
+            else
+            {
+                // Plan section 10: the selected sprint refreshes immediately after a mutation -- the
+                // timeline pane is not exempt just because it also has its own bounded poll (PR #99
+                // review finding 2). Reuses the same LoadMoreAsync path the poll and "load more"
+                // already call, so the event the user's own action just caused is visible right away
+                // instead of waiting up to TimelinePollInterval.
+                RenderTimelineItems(
+                    await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true));
+            }
+
             await RefreshActionsAsync().ConfigureAwait(true);
         }
 

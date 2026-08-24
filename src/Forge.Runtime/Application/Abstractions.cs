@@ -469,6 +469,24 @@ public interface ISprintStore
         string text,
         CancellationToken cancellationToken);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.AgentSummaryRecordedType"/> event carrying
+    /// <paramref name="summaryText"/> (<see cref="Handoff.Summary"/>) on the producing node's own
+    /// aggregate -- ADR 0054, redesigned (PR #104 review, finding 1): replaces the original design's
+    /// borrowed <c>Handoff.Sequence</c> anchor with a real journal entry of its own, the same "give it
+    /// a real, dense <see cref="WorkflowEvent.Sequence"/>" shape <see cref="AppendUserMessageAsync"/>
+    /// already uses. <paramref name="handoffId"/> becomes the event's own
+    /// <see cref="WorkflowEvent.CorrelationId"/> -- both the dedup key (a second call for the same
+    /// handoff is always a replay, mirroring <see cref="AppendAttemptSupersededAsync"/>'s "recorded
+    /// once" idiom) and how <c>SprintTimelineProjector.MergeAndPage</c> later matches this immutable
+    /// event back to its owning (and possibly since-superseded) <see cref="Handoff"/>.</summary>
+    Task AppendAgentSummaryRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        string nodeId,
+        Guid handoffId,
+        string summaryText,
+        CancellationToken cancellationToken);
+
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for
     /// <paramref name="attemptId"/> (plan section 7.3's durable stop intent) -- recorded once per
     /// attempt, like <see cref="AppendAttemptSupersededAsync"/>: a second call for the same attempt

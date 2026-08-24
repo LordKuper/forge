@@ -110,7 +110,6 @@ internal static class WorkflowRecordCodec
             Revision = handoff.Revision.Value,
             SupersededAtRevision = handoff.Superseded?.AtRevision.Value,
             SupersededAt = handoff.Superseded?.RecordedAt,
-            Sequence = handoff.Sequence,
         };
         SchemaValidation.Validate(JsonSerializer.SerializeToElement(wire, JsonOptions), HandoffSchema, "handoff");
     }
@@ -326,8 +325,6 @@ internal static class WorkflowRecordCodec
         public int? SupersededAtRevision { get; set; }
 
         public DateTimeOffset? SupersededAt { get; set; }
-
-        public long Sequence { get; set; }
     }
 
     private sealed class WireArtifact

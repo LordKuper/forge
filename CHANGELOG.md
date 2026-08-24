@@ -11,7 +11,8 @@ User-facing Forge changes are listed by release, newest first.
   message composer in the Desktop sprint workspace), and it appears in the timeline durably,
   redacted, and ordered alongside every workflow event. A sprint's timeline also now surfaces the
   summary an agent leaves behind when it completes a planning or implementation step, attributed to
-  the node that produced it. The message composer remembers an unsent draft across app restarts,
+  the node that produced it, and never lingers past a stage rewind that invalidates it. The message
+  composer remembers an unsent draft across app restarts,
   independently of the existing move-to-stage reason draft.
 
 ## v0.71.0

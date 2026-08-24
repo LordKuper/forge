@@ -54,42 +54,80 @@ risk an ordinary chat composer's "double click send" already carries, not a data
 rather than a new bound, matching `ProjectCatalogStore.MaxDraftLength`'s own existing precedent for
 "reuse the established bounded-free-text length, don't invent a new one."
 
-### Agent summaries are projected from the existing `Handoff.Summary`, not a new artifact type
+### Agent summaries are projected from a real journal event, not a borrowed sequence
 
 Investigation confirmed user-visible agent summary content already exists and is simply never
 surfaced: `Handoff.Summary` (`docs/contracts/v1/schemas/handoff.schema.json`) is exactly "the
 structured context one node leaves for whatever runs next" -- free text by contract, recorded by
 `SprintScheduler.RecordHandoffAsync` whenever `PlanningExecutionHostedService`/
-`ImplementationExecutionHostedService` completes a node with `outcome.Summary is not null`. No new
-artifact type, storage, capability, or schema kind was needed -- only a new `SprintTimelineProjector`
-branch that reads `ISprintStore.GetHandoffsAsync` and projects each non-superseded `Handoff` as its
-own timeline item (`SprintTimelineProjector.AgentSummaryRecordedType`, `TimelineActor.Agent`).
+`ImplementationExecutionHostedService` completes a node with `outcome.Summary is not null`.
 
-A `Handoff` carries no timestamp or journal sequence of its own, so it cannot be merged into the
-timeline's dense per-sprint order without one. Rather than adding a timestamp (which still would not
-solve ordering relative to system events) or building a second cursor to merge, `Handoff` gains one
-new field, `Sequence` (`docs/contracts/v1/schemas/handoff.schema.json`'s `sequence`, optional --
-matching how `revision`/`superseded_at_revision` were already added post-1.0.0 without a schema
-version bump). `RecordHandoffAsync` always runs immediately after the node's own completing
-transition has already been appended (verified directly in both hosted services: `CompleteNodeAsync`
-is called, checked for success, and only then is `RecordHandoffAsync` called), so the sprint state's
-own `LastSequence` at that exact moment IS that transition's own sequence -- not an approximation.
-`SprintTimelineProjector` anchors each handoff's projected item to the nearest real event at or
-before that borrowed sequence (`FindAnchor`) for its `OccurredAt`, and merges/pages the two sources by
-sequence (`MergeAndPage`). A handoff shares its sequence with exactly the one real event it anchors
-to (each node completion has a unique sequence, and at most one handoff is recorded per completion),
-so a page boundary is never allowed to fall strictly between the two: once the soft
-`MaxItemsPerPage` bound is reached, taking continues only while the next candidate's sequence still
-equals the last one taken, so a same-sequence pair can add at most one extra item to a page but is
-never split across two -- the split would otherwise skip the trailing half forever, since its
-sequence would never again exceed the advanced watermark. A superseded `Handoff` (a rewind
-invalidated it) is never projected, matching how a superseded artifact is already excluded from
-`SprintScheduler.IsTestWorkEligibleAsync`'s own eligibility check.
+**This section originally shipped a different design, replaced end-to-end by the PR #104 review
+(finding 1) before this ADR's first release.** The original design gave `Handoff` a `Sequence` field
+holding the sprint's `LastSequence` watermark at record time, and had `SprintTimelineProjector` anchor
+each handoff to "the nearest real event at or before" that borrowed value (`FindAnchor`), merging the
+two sources by sequence (`MergeAndPage`). That was unsound on two independent counts, both found in
+the same review round:
+
+- **Write-ordering hole (finding 1).** The events journal and the handoff store are two separate,
+  non-atomic writes. A timeline page fetched between the node's completing transition landing and the
+  handoff write landing would set its `nextWatermark` to that transition's own sequence -- correctly,
+  since the handoff did not exist yet. Once the handoff then landed carrying that same borrowed
+  sequence, `handoff.Sequence > watermark` was false for every future page: the summary was
+  permanently, silently unreachable by any cursor already past it. This was not a rare race; it was
+  the ordinary outcome of any poll landing in the (routine) gap between the two writes.
+- **Anchoring-correctness hole (finding 6).** `LastSequence` is the journal's current head at read
+  time, not necessarily the sequence of the specific transition the handoff belongs to. Any other
+  append landing in the gap -- another tick loop's own transition, or this very ADR's own
+  `AppendUserMessageAsync` -- could anchor the handoff to a completely unrelated, later event.
+
+Both holes trace to the same root cause: borrowing an existing sequence number instead of giving the
+summary its own real append. This mirrors a lesson this codebase had already learned once, for the
+same reason, in the user-messages half of this same ADR (an event in the SAME journal, never a
+borrowed value from a different one) and in earlier PRs' stop-intent/stage-revision events -- the
+fix here follows that established pattern precisely rather than patching the borrowed-sequence
+design. `WorkflowEvent.AgentSummaryRecordedType` is now a real journal entry, appended by
+`ISprintStore.AppendAgentSummaryRecordedAsync` at the exact moment `RecordHandoffAsync` runs, on the
+producing node's own aggregate, carrying the summary text (`AgentSummaryTextArgument`) and the owning
+`Handoff.HandoffId` as the event's own `CorrelationId`. Its `Sequence` is assigned atomically by the
+same append this store already guarantees for every other event type -- there is nothing left to
+borrow, and nothing left to anchor: `SprintTimelineProjector.ToItem` builds the timeline item directly
+from the event, the same generic path every other event type already uses. `Handoff.Sequence` itself
+is removed (along with `docs/contracts/v1/schemas/handoff.schema.json`'s `sequence` and
+`WorkflowRecordCodec`'s corresponding wire field) -- nothing needs it once summaries are real events;
+keeping it would have been unused debt.
+
+`MergeAndPage` still reads `ISprintStore.GetHandoffsAsync`, but now only to build a superseded-id set:
+a rewind invalidates a `Handoff` by setting its mutable `Superseded` field, something the immutable,
+already-landed `AgentSummaryRecordedType` event cannot itself carry. An event whose `CorrelationId`
+names a superseded handoff is filtered out before projection, matching how a superseded artifact is
+already excluded from `SprintScheduler.IsTestWorkEligibleAsync`'s own eligibility check. Because every
+candidate is now a single `WorkflowEvent` with its own real, dense, globally-unique `Sequence`, two
+candidates can never tie -- the original `FindAnchor`/tie-break logic (round 1's `MaxItemsPerPage`
+soft-bound special case) is gone entirely, and `MergeAndPage` collapses back to the simple
+`Where -> OrderBy -> Take -> Select` shape system-only projection used before agent summaries existed
+(PR #104 review, finding 3: the interim two-source design projected and redacted every candidate above
+the watermark before applying the page bound at all, an unbounded-work regression this redesign also
+undoes for free).
 
 The specific provider/model identity is not recorded on `Handoff` today, so `TimelineActor.Agent`
 carries no finer attribution than "not System, not Operator" -- the item's `TargetKind`/`TargetId`
 name the producing node instead, the same granularity `AvailableActionProjector` already uses
 elsewhere for a node-scoped fact.
+
+### A loaded summary can be superseded; Desktop must refresh, not just append
+
+`MergeAndPage`'s filter guarantees "absent from any future page fetched after supersession" -- it
+does not retract an item a client already rendered from an earlier page. Agent summaries are this
+timeline's first retractable item (a rewind can supersede one after it was already served), and
+`SprintTimelineViewModel`'s `loaded` list only ever grows (`LoadMoreAsync`'s `AddRange`). Desktop
+closes this gap at the one place a supersession is actually caused client-side:
+`WorkspaceShellPage.SprintWorkspace.cs`'s `MoveToStageAsync` now asks `RefreshAllAsync` for a full
+timeline `InitializeAsync` (which clears `loaded` and restarts from a fresh cursor) rather than an
+incremental `LoadMoreAsync`, whenever the move it just committed was a rewind. This does not close the
+gap for every conceivable path to a superseded summary (a rewind driven from the CLI or another
+Desktop session, observed only through the poll, still leaves the stale item in place until the next
+navigation) -- named as remaining, accepted debt below, not solved by this ADR.
 
 ### `sprint.post_message` stays a reserved capability, matching this codebase's own dominant pattern
 
@@ -145,19 +183,26 @@ the timeline is "one chronological list" the existing generic path already rende
   today; adding one is a separate, larger contract change this ADR does not need.
 - True at-most-once delivery for a client-level retry of a failed message send (see "accepted, named
   debt" above).
+- Retracting a superseded summary already rendered in a Desktop session other than the one that
+  triggered the rewind, or on the CLI's own one-shot `forge sprint timeline` render -- the CLI never
+  accumulates a `loaded` list to retract from, and the triggering Desktop session's own
+  `MoveToStageAsync` fix (above) only refreshes the workspace that performed the move.
 
 ## Consequences
 
 - `Forge.Domain` (`WorkflowEvents.cs`): `WorkflowEvent.UserMessagePostedType`/`UserMessageTextArgument`;
-  `WorkflowFold`/`IsTransitionRecord` gain a non-transition branch for it, mirroring
-  `AttemptSupersededType`. `Handoff` gains `Sequence` (default `0`, additive).
-- `Forge.Application`: `ISprintStore.AppendUserMessageAsync` (+ `FileSprintEventLog` implementation and
-  every test double); `SprintScheduler.MaxUserMessageLength`/`PostUserMessageAsync`/
-  `PostSprintMessageResult`; `RecordHandoffAsync` now captures and passes `Sequence`;
-  `WorkflowRecordCodec`'s `WireHandoff`/`ValidateHandoff` carry it through schema validation;
-  `SprintTimelineProjector` gains `TimelineActor.Agent`, `AgentSummaryRecordedType`, the
-  `MergeAndPage`/`FindAnchor`/`ToItem(Handoff, WorkflowEvent?)` merge logic, and reads
-  `GetHandoffsAsync` alongside `GetEventsAsync`; `ProjectCatalogEntry.MessageDrafts`/
+  `WorkflowEvent.AgentSummaryRecordedType`/`AgentSummaryTextArgument`; `WorkflowFold`/`IsTransitionRecord`
+  gain a non-transition branch for each, mirroring `AttemptSupersededType`. `Handoff.Sequence`, added and
+  then removed within this same ADR (see "Agent summaries" above) -- `Handoff` ships unchanged from
+  before this ADR.
+- `Forge.Application`: `ISprintStore.AppendUserMessageAsync`/`AppendAgentSummaryRecordedAsync` (+
+  `FileSprintEventLog` implementation and every test double); `SprintScheduler.MaxUserMessageLength`/
+  `PostUserMessageAsync`/`PostSprintMessageResult`; `RecordHandoffAsync` now appends the summary event
+  right after saving the `Handoff`, instead of stamping a borrowed sequence onto the `Handoff` itself;
+  `SprintTimelineProjector` gains `TimelineActor.Agent`, `AgentSummaryRecordedType`, an injectable
+  `maxItemsPerPage` constructor parameter (default `MaxItemsPerPage`, PR #104 review finding 4 --
+  lets a test force a real page boundary), and reads `GetHandoffsAsync` alongside `GetEventsAsync`
+  only to filter out a superseded summary's event; `ProjectCatalogEntry.MessageDrafts`/
   `ProjectCatalogStore.SetSprintMessageDraftAsync`; `ForgeApplication`/`IForgeMutations`/
   `RemoteForgeMutations` gain `PostSprintMessageAsync`; `DiagnosticCodes.UserMessageTooLong`/
   `UserMessageRequired`.
@@ -169,9 +214,12 @@ the timeline is "one chronological list" the existing generic path already rende
   `SaveMessageDraftAsync`.
 - `Forge.Desktop`: a message composer (`Entry` + send `Button`) in `WorkspaceShellPage.SprintWorkspace.cs`,
   routed through the shared `ShellRenderGate`/`RunAsync` mutation guard exactly like every other
-  contextual action on that page.
-- `docs/contracts/v1/schemas/handoff.schema.json`: optional `sequence` field, schema_version unchanged
-  (1.0.0), matching `revision`'s own earlier precedent.
+  contextual action on that page; `RefreshAllAsync` gains a `resetTimeline` parameter, set by
+  `MoveToStageAsync` whenever the just-committed move was a rewind, so a superseded summary does not
+  linger in that session's already-loaded timeline (PR #104 review, finding 5).
+- `docs/contracts/v1/schemas/handoff.schema.json`: no change from before this ADR -- an optional
+  `sequence` field was added and then removed within this same ADR (see "Agent summaries" above);
+  schema_version stays `1.0.0` throughout.
 - `capabilities.json` moves from 1.10.0 to 1.11.0: a new reserved `sprint.post_message` entry; the
   existing `sprint.timeline` entry's note is corrected to no longer claim user messages/agent
   summaries are unrepresented.
