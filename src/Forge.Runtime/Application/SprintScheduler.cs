@@ -333,6 +333,13 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             attemptId = candidateId;
         }
 
+        // Populated only on the fresh-attempt path below, from the same routed decision -- carried
+        // onto the attempt's own creation event so `AttemptSnapshot.Provider`/`.Model` answer "which
+        // provider/model is this attempt actually running with" from durable state (plan section
+        // 12.3), without a resumed call re-deciding (and potentially re-routing) work a prior,
+        // possibly-crashed call already committed to.
+        string? routedProvider = null;
+        string? routedModel = null;
         if (!nodeAlreadyRunning)
         {
             if (node.Version != expectedNodeVersion || node.State != NodeState.Ready)
@@ -363,6 +370,8 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 }
 
                 routedDecision = decision;
+                routedProvider = profile.Provider;
+                routedModel = profile.Model;
             }
 
             AppendOutcome nodeOutcome = await store.AppendTransitionAsync(
@@ -396,7 +405,12 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             projectRoot, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"), "AttemptChanged",
             "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(WorkflowStateMachines.AttemptInitial), 0,
             Guid.NewGuid(), cancellationToken,
-            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.NodeIdArgument] = nodeId })
+            new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [WorkflowEvent.NodeIdArgument] = nodeId,
+                [WorkflowEvent.ProviderArgument] = routedProvider,
+                [WorkflowEvent.ModelArgument] = routedModel,
+            })
             .ConfigureAwait(false);
         if (!attemptOutcome.Succeeded)
         {

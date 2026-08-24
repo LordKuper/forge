@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.73.0
+
+### Added
+
+- The sprint workspace's sticky status header now shows which provider and model are actually
+  running the sprint's current attempt (e.g. "claude_code / claude-sonnet-4-5") instead of an
+  always-on "not yet available" placeholder. The placeholder still appears when nothing is
+  currently running, the running step never involves a model (intake, confirmation,
+  finalization), or the attempt predates this change.
+
 ## v0.72.0
 
 ### Added

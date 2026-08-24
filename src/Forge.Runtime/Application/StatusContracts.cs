@@ -70,7 +70,10 @@ public enum SnapshotDetail
 /// <summary>Matches `$defs.entity`: a small, uniform shape for the node/attempt/finding/gate/artifact
 /// rows inside <see cref="SprintDetails"/>, so one presentation code path renders every kind.
 /// <see cref="LastActivityAt"/> is only ever set for an attempt row (ADR 0006's throttled
-/// activity heartbeat) — every other kind leaves it <see langword="null"/>.</summary>
+/// activity heartbeat) — every other kind leaves it <see langword="null"/>. <see cref="Provider"/>/
+/// <see cref="Model"/> are likewise only ever set for an attempt row (plan section 12.3's sticky
+/// header), from <see cref="Forge.Domain.AttemptSnapshot.Provider"/>/<c>.Model</c> — every other
+/// kind leaves both <see langword="null"/>.</summary>
 public sealed record EntityStatus(
     string Id,
     string State,
@@ -78,7 +81,9 @@ public sealed record EntityStatus(
     string? Kind = null,
     string? Severity = null,
     DateTimeOffset? UpdatedAt = null,
-    DateTimeOffset? LastActivityAt = null);
+    DateTimeOffset? LastActivityAt = null,
+    string? Provider = null,
+    string? Model = null);
 
 public sealed record RoutingStatus(int RetryRemaining, DateTimeOffset? ResumeNotBefore);
 

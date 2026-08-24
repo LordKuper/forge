@@ -54,6 +54,7 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
         using TestEnvironment environment = await InitializedAsync();
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
         SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         // A Generic-role node has no execution profile to route by, so StartAttemptAsync never
         // consults RoutingLedger for it at all -- there is nothing for DeferAttemptAsync to find.
@@ -68,6 +69,44 @@ public sealed class SprintSchedulerRoutingAndSupersessionTests
 
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.WorkflowEventConflict, result.DiagnosticCode);
+
+        // The same "no routed decision" fact plan section 12.3's sticky header must report
+        // honestly: a non-model-bearing role never had a provider/model to record.
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Null(state.Attempts[started.AttemptId!.Value.ToString("D")].Provider);
+        Assert.Null(state.Attempts[started.AttemptId!.Value.ToString("D")].Model);
+    }
+
+    /// <summary>Plan section 12.3: the sticky header's provider/model gap closes by recording the
+    /// actual routed decision on the attempt itself, at the exact point
+    /// <see cref="SprintScheduler.StartAttemptAsync"/> already learns it (the `RouteDecision` keyed
+    /// on the model-bearing role's frozen <see cref="ExecutionProfile"/>) -- proving the real
+    /// production wiring, not just the fold in isolation.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task StartAttemptAsyncRecordsTheRoutedProviderAndModelOnTheAttempt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ImplementationNodeGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ExecutionProfile expected = definition.ExecutionProfiles[ExecutionPhase.Implementation];
+
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded);
+
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot attempt = state.Attempts[started.AttemptId!.Value.ToString("D")];
+        Assert.Equal(expected.Provider, attempt.Provider);
+        Assert.Equal(expected.Model, attempt.Model);
     }
 
     // ADR 0006: "Repeated deferral cannot spin or bypass the sprint retry budget."

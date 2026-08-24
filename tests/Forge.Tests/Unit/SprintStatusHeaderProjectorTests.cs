@@ -17,6 +17,9 @@ public sealed class SprintStatusHeaderProjectorTests
     private static readonly IReadOnlyList<NodeDefinition> TwoNodeGraph =
         [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])];
 
+    private static readonly IReadOnlyList<NodeDefinition> ImplementationNodeGraph =
+        [new("a", NodeKind.Work, [], NodeRole.Implementation)];
+
     private static SurfaceText Text() =>
         new(new ResourceLocalizationCatalog(), System.Globalization.CultureInfo.GetCultureInfo("en"));
 
@@ -53,6 +56,49 @@ public sealed class SprintStatusHeaderProjectorTests
         Assert.Equal(1, header.OpenFindingsCount);
         Assert.Contains(sprintId.Value.ToString("D"), header.DetailsText, StringComparison.Ordinal);
         Assert.Contains(environment.ProjectRoot, header.DetailsText, StringComparison.Ordinal);
+    }
+
+    /// <summary>Plan section 12.3: once a model-bearing attempt is actually running, the header
+    /// renders its real routed provider/model instead of the "not yet available" placeholder --
+    /// closing the gap <see cref="SprintStatusHeaderProjector"/>'s own doc comment used to describe
+    /// as a structural absence in <see cref="Forge.Domain.AttemptSnapshot"/>.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARunningAttemptsKnownProviderAndModelReplaceThePlaceholder()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ImplementationNodeGraph), cancellationToken))
+            .SprintId!;
+        SprintSnapshot draft = (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, draft.Version, SprintOrchestrator.RunSprintKey(draft)),
+            cancellationToken);
+        Assert.True(toReady.Succeeded);
+        SprintTransitionResult toRunning = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version, SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        Assert.True(toRunning.Succeeded);
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ExecutionProfile expected = definition.ExecutionProfiles[ExecutionPhase.Implementation];
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded);
+
+        ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
+            environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
+        ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
+            environment.ProjectRoot, cancellationToken);
+
+        SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
+
+        Assert.Equal($"{expected.Provider} / {expected.Model}", header.ActiveProviderModelText);
     }
 
     [Fact]
