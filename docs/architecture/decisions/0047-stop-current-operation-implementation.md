@@ -238,6 +238,55 @@ the others reserved alongside it have no CLI command at all yet, and a couple of
 unrelated commands elsewhere in this contract (`init --project-root`, `doctor --bundle`) have their
 own pre-existing, unrelated bracket/`Required` drift that is not this PR's concern to fix.
 
+## Addendum: independent review findings (PR #101, round 1)
+
+An independent review agent found that a durable stop intent could still reach the sprint's
+integration branch despite converging correctly at the top-of-tick gate this ADR describes above.
+Fixing it revises two claims this ADR previously stated as settled.
+
+### Finding 1 (critical): a point-of-no-return check is not the top-of-tick gate, and must not share its clause
+
+The "`AttemptSnapshot.StopRequestedAt` is a folded projection, not audit-only" section above states
+`StopRequestedAt is not null && StopConvergedAt is null` as "the one mechanism" satisfying plan
+section 7.3, correctly, for the top-of-tick gate it describes: `StopConvergedAt is null` exists there
+specifically to stop `FinishStopAsync` from re-firing forever once a stop has already fully
+converged (see the PR #95 addendum above, "Findings 1 and 2"). Stage 11 (Planning/Implementation/
+Review execution) later added a second, structurally different checkpoint — a point of no return
+immediately before each executor's own `CompleteAttemptAsync`/`CommitAttemptAsync` call, added
+specifically because the top-of-tick gate runs once, before the provider starts, and is never
+re-checked between the provider returning and that commit. That second checkpoint copied the
+top-of-tick gate's exact clause, including `StopConvergedAt is null` — which is wrong there: a
+genuinely concurrent second converger (`StageTransitionCoordinator.StopAndFailRunningNodeAsync`, a
+rewind's own step 1, running from a different call path than the executor's own tick — see ADR
+0048's addendum below) can append `StopConvergedAt` for the exact attempt being committed while the
+commit is in flight. The point-of-no-return check then read the combination as "no stop detected"
+and let the attempt commit and integrate anyway, despite the durable stop.
+
+**Fix**: the point-of-no-return check (implemented once per executor as `StopHasBeenRequestedAsync`
+in `PlanningExecutionHostedService`/`ImplementationExecutionHostedService`/
+`ReviewExecutionHostedService`) now gates on `StopRequestedAt is not null` alone. An already-converged
+stop is strictly *more* reason to refuse committing, never less, at this specific checkpoint — the
+opposite of the top-of-tick gate's own reasoning, which this ADR's original text did not
+distinguish. The top-of-tick gate itself is unchanged and keeps `StopConvergedAt is null`.
+
+`ImplementationExecutionHostedService` additionally gained a second point-of-no-return re-check
+immediately before `SprintGitIsolation.IntegrateAsync` (finding 2, non-critical): the first check
+alone guarded only the upcoming `CommitAttemptAsync` call, leaving the commit's own duration —
+unbounded, proportional to the size of the provider's change — unguarded before the actual publish
+to the integration branch. Both checks now use the corrected clause above.
+
+### A new `ImplementationAttemptDisposition.StopRequested` member exists where none was anticipated
+
+This ADR's "`StopOperationCoordinator.FinishStopAsync` never calls `CompleteAttemptAsync`" section
+describes the re-arm sequence but did not anticipate an executor detecting a stop *after* its own
+provider run already returned. `ImplementationExecutionHostedService`/`PlanningExecutionHostedService`/
+`ReviewExecutionHostedService` now each have exactly this path: on detecting
+`StopHasBeenRequestedAsync` at their own point of no return, the attempt is discarded (worktree/branch
+only, never anything already published) and the method returns without calling
+`CompleteAttemptAsync`/`DeferAttemptAsync` at all — the node stays `Running`, converged by the
+top-of-tick gate's own `FinishStopAsync` call on this or the next tick, exactly like the
+stop-landed-before-the-provider-started case this ADR already described.
+
 ## References
 
 - Plan section 7 (stop current operation), section 12.4 (acceptance criteria)

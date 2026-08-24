@@ -321,9 +321,79 @@ assessment depends on a Host's own in-memory state.
   `PendingRewindIdempotencyKey`; `WorkflowEvent.StageRevisionRecordedType` gains
   `IdempotencyKeyArgument` (additive on the open `arguments` map — no `event.schema.json` change).
   `DiagnosticCodes.StageTransitionRewindInProgress` is new (mapped to the `workflow` exit-code
-  category). `StageTransitionCoordinator.MoveAsync` no longer requires `confirmed == true`
-  unconditionally — only when `StageTransitionAssessment.ConfirmationRequired` actually says so
-  (never true for an advance), matching what `AssessStageTransition` already reported.
+  category), originally returned only by `AssessStageTransition` and `CompleteSprintAsync`'s own
+  finalize guard. PR #101's addendum above adds a third source: `CommitRewindAsync` itself now
+  returns it on a genuine step-6 conflict (finding 4), an observable protocol-response change from
+  `MoveSprintToStage` that was not part of this ADR's original scope. `StageTransitionCoordinator.MoveAsync`
+  no longer requires `confirmed == true` unconditionally — only when
+  `StageTransitionAssessment.ConfirmationRequired` actually says so (never true for an advance),
+  matching what `AssessStageTransition` already reported.
+
+## Addendum: independent review findings (PR #101, round 1)
+
+An independent review agent found two further defects in the rewind saga this ADR records above, one
+of them a real usability dead end for Desktop. Fixing them revises two claims this ADR previously
+stated as settled.
+
+### Finding 3 (critical): resuming an unconverged rewind is not automatic, and was unreachable from Desktop at all
+
+The "An unconverged rewind is resumed from a durable marker" section above states that
+`StageTransitionAssessor.AssessAsync` "checks the same marker... surfacing the truth instead of
+misclassifying a resumed retry," which is accurate for what it does, but earlier prose in this same
+ADR and in `SprintScheduler`'s own comments overstated what happens next: `AssessStageTransition`
+*reports* an unconverged rewind; it never *resumes* one. Only `StageTransitionCoordinator.MoveAsync`
+(via `MoveSprintToStage`) does, through its `PendingRewindTargetStageId` short-circuit ahead of any
+fresh assessment. `AssessStageTransition` alone, called any number of times, converges nothing.
+
+Worse, this made the resume genuinely unreachable from Desktop. `AvailableActionProjector.ForSprintAsync`
+offered no stage-move row at all while a rewind was pending (this ADR's own rule, "no stage-move
+candidate is offered while a prior rewind has not yet converged" — correct for an *ordinary* fresh
+move, since every such assessment reports `stage_transition_rewind_in_progress` uniformly regardless
+of target). With zero rows offered, Desktop's `WorkspaceShellPage.SprintWorkspace` rendered no button
+to click at all — and even had one existed, its `MoveToStageAsync` handler returned early on
+`!assessment.Allowed` (unconditionally `false` for this diagnostic) before ever calling
+`MoveSprintToStageAsync`. Only `forge sprint move-stage` recovered, because `CliApplication` ignores
+`Allowed` for that call entirely (it checks only `assessment.Found`). A rewind interrupted by a
+genuine conflict (the scenario this same PR's stage-transition-coordinator fix, below, makes
+correctly detectable rather than silently sealed) left a Desktop-only user with no way to ever
+unstick their own sprint.
+
+**Fix, three parts, all required together**:
+
+- `AvailableActionProjector.ForSprintAsync` now offers exactly one row while a rewind is pending —
+  built from the assessor's own rewind-in-progress assessment (any target string reaches it, since
+  `AssessAsync` reports the recorded target before validating the one a caller passes) — with
+  `Enabled` forced `true` and a distinct rationale key
+  (`workspace_action.move_to_stage.resume_rewind`), never the ordinary blocked-row shape.
+- `WorkspaceShellPage.SprintWorkspace`'s `MoveToStageAsync` now checks specifically for
+  `DiagnosticCodes.StageTransitionRewindInProgress` and, only for that diagnostic, proceeds to call
+  `MoveSprintToStageAsync` despite `Allowed` being `false` — mirroring what the CLI already did by
+  checking `Found` instead of `Allowed`. Every other `!Allowed` reason still blocks exactly as before;
+  only this specific, genuinely-resumable diagnostic is let through. The ordinary mandatory-reason
+  check is skipped for the same call, since the coordinator's own resume path ignores any reason a
+  caller supplies and reuses the one recorded when the rewind first committed.
+- `SprintActionsViewModel.MovePrompt` shows a dedicated "will resume and finish it" message for this
+  diagnostic instead of the ordinary "blocked, cannot proceed" line, so the confirmation dialog does
+  not contradict what confirming actually does.
+
+`StageTransitionAssessor.AssessAsync`'s own comment and `SprintScheduler.CompleteSprintAsync`'s
+identical comment (both previously read "...which the next `MoveSprintToStage`/`AssessStageTransition`
+call against this sprint does automatically") are corrected to name `MoveSprintToStage` only.
+
+### Finding 4: a rejection carried non-null post-commit snapshots, contradicting `MoveStageResult`'s own contract
+
+`MoveStageResult`'s own summary states "on rejection they are `null` and no durable state changed"
+for `Sprint`/`TargetNode`. The "Round 3 audit" fix recorded inline in `CommitRewindAsync` (closing the
+gap where step 6's own conflict was previously silently dropped, letting a real conflict get sealed
+as a completed rewind — see the `readyWalkConverged` handling described inline in the source) returned
+`new(false, afterReadyWalk.Sprint, afterReadyWalk.Nodes.GetValueOrDefault(targetStageId), ...)` on
+that rejection path — the only rejection in this method carrying non-null snapshots, breaking the
+contract every other rejection (and every caller that trusts "non-null ⇒ this committed") relies on.
+
+**Fix**: this rejection now returns `null` for both fields, like every other rejection in this method.
+The state reload this needed only for those two now-dropped fields (`afterReadyWalk`) is no longer
+loaded unconditionally before the check either — it cost every *successful* rewind (the overwhelmingly
+common case) an extra full event-journal replay for a value only the rejection branch ever read.
 
 ## References
 

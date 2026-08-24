@@ -997,7 +997,7 @@ public sealed class StageTransitionTests
         Assert.Null(final.Sprint.PendingRewindTargetStageId);
     }
 
-    /// <summary>Round 3 audit: a genuinely concurrent conflict during step 6's own append (not a Host
+    /// <summary>Post-release audit (PR #101): a genuinely concurrent conflict during step 6's own append (not a Host
     /// crash) must not let <c>CommitRewindAsync</c> mark the saga durably converged. Before the fix,
     /// <c>DriveSprintTowardReadyAsync</c> silently swallowed a version conflict and
     /// <c>CommitRewindAsync</c> appended <see cref="ISprintStore.AppendStageTransitionConvergedAsync"/>
@@ -1069,6 +1069,12 @@ public sealed class StageTransitionTests
 
         Assert.False(conflicted.Succeeded);
         Assert.Equal(DiagnosticCodes.StageTransitionRewindInProgress, conflicted.DiagnosticCode);
+        // PR #101 review finding 4: this rejection must honor MoveStageResult's own documented
+        // contract ("on rejection they are null and no durable state changed -- fail closed, no
+        // partial transition") exactly like every other rejection in this class, not carry non-null
+        // post-commit snapshots alongside `Succeeded: false`.
+        Assert.Null(conflicted.Sprint);
+        Assert.Null(conflicted.TargetNode);
         SprintWorkflowState afterConflict =
             (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         // The saga must not be sealed as converged: the resume marker stays set, and the sprint is
@@ -1086,6 +1092,69 @@ public sealed class StageTransitionTests
         Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
         SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(SprintState.Ready, final.Sprint.State);
+        Assert.Null(final.Sprint.PendingRewindTargetStageId);
+        Assert.NotNull(await store.TryGetConvergedStageTransitionAsync(
+            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+    }
+
+    /// <summary>PR #101 review finding 3 (critical): before this fix, a Desktop user had no way to
+    /// ever resume a rewind a genuine conflict left mid-walk -- <c>AvailableActionProjector</c> offered
+    /// no stage-move row at all while <c>PendingRewindTargetStageId</c> was set, and even if one had
+    /// been offered, <c>WorkspaceShellPage.SprintWorkspace</c>'s own <c>MoveToStageAsync</c> returned
+    /// early on <c>!assessment.Allowed</c> (unconditionally true for this diagnostic) before ever
+    /// calling <c>MoveSprintToStageAsync</c>. Only the CLI recovered, because
+    /// <c>CliApplication</c>'s `move-stage` command ignores <c>Allowed</c> for this call entirely. This
+    /// test proves the fix end to end at the level Desktop's own <c>SprintActionsViewModel.MoveAsync</c>
+    /// exercises: the action list now offers exactly one, ENABLED row while the rewind is pending, and
+    /// invoking the mutation with exactly that row's own reported version/token/idempotency key --
+    /// never a value Desktop invented -- resumes and fully converges the interrupted rewind.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnUnconvergedRewindOffersASingleEnabledResumeActionThatActuallyFinishesIt()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator, _) =
+            Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId =
+            await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "b", cancellationToken);
+
+        // Step 2 only (the durable revision record that sets PendingRewindTargetStageId) -- steps 3-6
+        // deliberately never run, reproducing the exact "interrupted mid-rewind" shape a genuine
+        // conflict (this PR's own bug 2 scenario) or a Host crash leaves behind.
+        Guid idempotencyKey = Guid.NewGuid();
+        SprintWorkflowState beforeRewind =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AppendOutcome step2 = await store.AppendStageRevisionRecordedAsync(
+            environment.ProjectRoot, sprintId, "a", "redo from the start", new StageRevision(1),
+            beforeRewind.Sprint.Version, idempotencyKey, cancellationToken);
+        Assert.True(step2.Succeeded);
+
+        IReadOnlyList<AvailableAction> actions = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        AvailableAction resume = Assert.Single(
+            actions, action => action.ActionId.StartsWith(
+                AvailableActionProjector.MoveToStageActionPrefix, StringComparison.Ordinal));
+        Assert.True(resume.Enabled);
+        Assert.Empty(resume.Blockers);
+        Assert.Equal(
+            Forge.Localization.MessageKeys.WorkspaceActionResumeRewindRationale, resume.RationaleKey);
+
+        // Desktop's own MoveAsync forwards exactly these three fields from the action it rendered --
+        // never a caller-supplied target/version/token of its own (plan 12.5's "re-fetch/re-validate
+        // before committing").
+        MoveStageResult resumed = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, resume.Target.StageId!, resume.ExpectedStateVersion, null, null,
+            confirmed: false, resume.IdempotencyKey, cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Null(final.Sprint.PendingRewindTargetStageId);
         Assert.NotNull(await store.TryGetConvergedStageTransitionAsync(
             environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));

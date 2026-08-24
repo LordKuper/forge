@@ -299,19 +299,24 @@ public sealed class StageTransitionCoordinator(
         // reaches running" contract the paused-sprint resume path already established.
         bool readyWalkConverged = await DriveSprintTowardReadyAsync(projectRoot, sprintId, cancellationToken)
             .ConfigureAwait(false);
-        SprintWorkflowState afterReadyWalk = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
-            .ConfigureAwait(false);
         if (!readyWalkConverged)
         {
-            // Round 3 audit: a genuine concurrent conflict (a version mismatch against a mutation
-            // this saga did not itself make) made step 6 bail before reaching a stable end state --
-            // never mark the saga durably converged in that case. PendingRewindTargetStageId stays
-            // set (only AppendStageTransitionConvergedAsync clears it), so the very next
+            // Post-release audit (PR #101): a genuine concurrent conflict (a version mismatch against
+            // a mutation this saga did not itself make) made step 6 bail before reaching a stable end
+            // state -- never mark the saga durably converged in that case. PendingRewindTargetStageId
+            // stays set (only AppendStageTransitionConvergedAsync clears it), so the very next
             // MoveAsync/AssessStageTransition call resumes this exact rewind from the top and
             // finishes the ready-walk, instead of silently sealing a half-finished commit.
-            return new(
-                false, afterReadyWalk.Sprint, afterReadyWalk.Nodes.GetValueOrDefault(targetStageId),
-                DiagnosticCodes.StageTransitionRewindInProgress);
+            //
+            // PR #101 review finding 4: `Sprint`/`TargetNode` are null here, matching this record's
+            // own documented contract ("on rejection they are null and no durable state changed --
+            // fail closed, no partial transition") -- every other rejection in this method already
+            // does the same; this is a rejection like any other, not an exception to the contract.
+            // The state reload this used to need only for those two now-dropped snapshot fields is
+            // gone too: loading it unconditionally before this check cost every SUCCESSFUL rewind
+            // (the overwhelmingly common case) an extra full event-journal replay for a value only
+            // this rejection branch ever read.
+            return new(false, null, null, DiagnosticCodes.StageTransitionRewindInProgress);
         }
 
         // Round 1 review of PR #96 (finding 1): appended last and unconditionally, regardless of
@@ -552,11 +557,11 @@ public sealed class StageTransitionCoordinator(
     /// <see langword="true"/> once a stable end state is reached -- either nothing to do (the sprint
     /// was not in one of the states this walk starts from) or every hop it needed landed -- and
     /// <see langword="false"/> when a hop's own <see cref="ISprintStore.AppendTransitionAsync"/> call
-    /// reports <see cref="AppendOutcome.Conflict"/> against a genuinely concurrent mutation this saga did not
-    /// itself make. Round 3 audit: the caller (<see cref="CommitRewindAsync"/>) must never mark the
-    /// whole saga durably converged on a <see langword="false"/> result -- this return value is the
-    /// only thing that previously got silently dropped, letting a real conflict here get sealed as a
-    /// completed rewind with the sprint still stuck mid-walk.</summary>
+    /// reports <see cref="AppendOutcome.Conflict"/> against a genuinely concurrent mutation this saga
+    /// did not itself make. Post-release audit (PR #101): the caller (<see cref="CommitRewindAsync"/>)
+    /// must never mark the whole saga durably converged on a <see langword="false"/> result -- this
+    /// return value is the only thing that previously got silently dropped, letting a real conflict
+    /// here get sealed as a completed rewind with the sprint still stuck mid-walk.</summary>
     private async Task<bool> DriveSprintTowardReadyAsync(
         string projectRoot, SprintId sprintId, CancellationToken cancellationToken)
     {
