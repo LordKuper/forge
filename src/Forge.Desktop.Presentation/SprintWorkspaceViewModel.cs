@@ -28,7 +28,7 @@ public sealed class SprintWorkspaceViewModel(
     private readonly MainPageViewModel legacy = legacy ?? throw new ArgumentNullException(nameof(legacy));
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
 
-    public SprintTimelineViewModel Timeline { get; } = new(application, catalog);
+    public SprintTimelineViewModel Timeline { get; } = new(application, catalog, text);
 
     public SprintActionsViewModel Actions { get; } = new(application, resolveMutations, text);
 

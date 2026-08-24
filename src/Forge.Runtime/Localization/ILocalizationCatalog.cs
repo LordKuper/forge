@@ -1,4 +1,5 @@
 using System.Globalization;
+using Forge.Domain;
 
 namespace Forge.Localization;
 
@@ -415,4 +416,87 @@ public static class MessageKeys
     /// Host's handshake-advertised capability set is missing the one the request needed -- ADR
     /// 0053's client-side capability gate rejected it before it ever reached the wire.</summary>
     public const string CapabilityNotSupported = "CapabilityNotSupported";
+
+    // Plan section 12.3/12.6 closure: localized timeline item text. Each constant's value is the
+    // exact durable `workflow.*`/`routing.*` journal message key it resolves (see
+    // WorkflowEvent.MessageKey producing call sites in FileSprintEventLog/SprintScheduler/
+    // SprintOrchestrator/StageTransitionCoordinator/StopOperationCoordinator) -- reused verbatim as
+    // the resx key itself, matching the existing `next.*`/`workspace_action.*` rationale-key
+    // convention above rather than inventing a parallel naming scheme. Resolved through
+    // TimelineMessageFormatter.Format, never text.Resolve directly, since a few of these carry a
+    // durable argument the raw key alone would lose (see that type's own remarks).
+    public const string WorkflowSprintCreated = "workflow.sprint_created";
+    public const string WorkflowSprintAdvanced = "workflow.sprint_advanced";
+    public const string WorkflowSprintCancelled = "workflow.sprint_cancelled";
+    public const string WorkflowSprintResumed = "workflow.sprint_resumed";
+    public const string WorkflowSprintReady = "workflow.sprint_ready";
+    public const string WorkflowSprintReadyToFinalize = "workflow.sprint_ready_to_finalize";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// blocked reason code ("node"/"finding"/"gate"/"confirmation"/"review_convergence"/"rewind" --
+    /// see SprintScheduler/StageTransitionCoordinator's own <c>BlockedBy*</c> constants).</summary>
+    public const string WorkflowSprintBlocked = "workflow.sprint_blocked";
+    public const string WorkflowSprintCompleted = "workflow.sprint_completed";
+    public const string WorkflowSprintRunning = "workflow.sprint_running";
+    public const string WorkflowSprintAwaitingHuman = "workflow.sprint_awaiting_human";
+    public const string WorkflowSprintGateResumed = "workflow.sprint_gate_resumed";
+    public const string WorkflowSprintPaused = "workflow.sprint_paused";
+    public const string WorkflowNodeCreated = "workflow.node_created";
+    public const string WorkflowNodeReady = "workflow.node_ready";
+    public const string WorkflowNodeRunning = "workflow.node_running";
+    public const string WorkflowNodeSucceeded = "workflow.node_succeeded";
+    public const string WorkflowNodeFailed = "workflow.node_failed";
+    public const string WorkflowNodeRejected = "workflow.node_rejected";
+    public const string WorkflowNodeSkipped = "workflow.node_skipped";
+    public const string WorkflowNodeRetrying = "workflow.node_retrying";
+    public const string WorkflowNodeRetried = "workflow.node_retried";
+    public const string WorkflowNodeAwaitingHuman = "workflow.node_awaiting_human";
+    public const string WorkflowNodeSuperseded = "workflow.node_superseded";
+    public const string WorkflowNodeStopped = "workflow.node_stopped";
+    public const string WorkflowNodeRearmed = "workflow.node_rearmed";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// stage revision number (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowNodeReopened = "workflow.node_reopened";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// stage revision number (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowNodeInvalidated = "workflow.node_invalidated";
+    public const string WorkflowNodeRewindInterrupted = "workflow.node_rewind_interrupted";
+    public const string WorkflowAttemptCreated = "workflow.attempt_created";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// attempt's raw snake_case target state (<see cref="WorkflowEvent.ToStateArgument"/>).</summary>
+    public const string WorkflowAttemptTransitioned = "workflow.attempt_transitioned";
+    public const string WorkflowAttemptStopped = "workflow.attempt_stopped";
+    public const string WorkflowAttemptSuperseded = "workflow.attempt_superseded";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// operator's bounded free-text supersession instruction
+    /// (<see cref="WorkflowEvent.SupersessionInstructionArgument"/>).</summary>
+    public const string WorkflowAttemptSupersededInstruction = "workflow.attempt_superseded_instruction";
+    public const string WorkflowAttemptActivity = "workflow.attempt_activity";
+    public const string WorkflowAttemptStopRequested = "workflow.attempt_stop_requested";
+    public const string WorkflowAttemptStopConverged = "workflow.attempt_stop_converged";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the rewind's target stage id
+    /// (<see cref="WorkflowEvent.TargetStageIdArgument"/>), the operator's bounded free-text reason
+    /// (<see cref="WorkflowEvent.RewindReasonArgument"/>), then the new revision number
+    /// (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowStageRevisionRecorded = "workflow.stage_revision_recorded";
+    public const string WorkflowStageTransitionConverged = "workflow.stage_transition_converged";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// user's bounded free-text message (<see cref="WorkflowEvent.UserMessageTextArgument"/>).
+    /// </summary>
+    public const string WorkflowUserMessagePosted = "workflow.user_message_posted";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// agent's summary text (<see cref="WorkflowEvent.AgentSummaryTextArgument"/>).</summary>
+    public const string WorkflowAgentSummaryRecorded = "workflow.agent_summary_recorded";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the routed provider id, model id, then the raw snake_case outcome.</summary>
+    public const string RoutingDecisionRecorded = "routing.decision_recorded";
 }

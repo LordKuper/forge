@@ -556,11 +556,14 @@ prior behavior or an equivalent mutation.
       renders from real data except provider/model, which always shows a "not yet available"
       placeholder — `AttemptSnapshot` has no provider/model field anywhere in the domain model, so
       this is a structural gap, not a wiring bug.)*
-- [ ] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
-      *(Partial: ordering, cursor paging, and restart-survival are all real and tested. Localization
-      is not — an item's rendered message is its raw `workflow.*` journal key verbatim; none of the
-      ~30 such keys are registered in `Messages.resx`, so only the surrounding chrome, not the
-      timeline content itself, is localized.)*
+- [x] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
+      Every `workflow.*`/`routing.*` journal message key (41 total) is registered in
+      `Messages.resx`/`Messages.ru.resx` with real English and Russian text, resolved through the
+      neutral `TimelineMessageFormatter` on both Desktop (`SprintTimelineViewModel.ToView`) and the
+      CLI (`CliApplication.WriteTimeline`) instead of shown as the raw key. Keys carrying a durable,
+      operator- or agent-authored argument (a posted message, a node summary, a supersession
+      instruction, a rewind reason, a routing decision) substitute that exact value into the
+      resolved template.
 - [x] New items appear without manual refresh while the sprint page is visible.
 - [x] Raw provider streams, credentials, full environments, and unredacted sensitive paths never
       enter the timeline contract, persistent store, logs, or rendered details. *(Verified via two
@@ -635,11 +638,13 @@ prior behavior or an equivalent mutation.
       reachability, focus stability after a refresh, or text scaling — these concepts don't appear
       anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
       at all today, not because of an enforced rule.)*
-- [ ] English and Russian surfaces contain no missing or machine-only user-facing strings. *(Partial:
-      key-set parity (291/291) is enforced by an automated test and currently holds — spot-checked
-      manually for translation quality. That test checks key sets only, not that values are actually
-      translated, so a future regression copying an English value into `Messages.ru.resx` would not
-      be caught.)*
+- [x] English and Russian surfaces contain no missing or machine-only user-facing strings. Key-set
+      parity (340/340) and value parity are both enforced by automated tests
+      (`LocalizationCatalogTests`): every key present in both `Messages.resx`/`Messages.ru.resx` must
+      have a byte-different English/Russian value, unless it is on a documented, individually
+      justified allow-list (currently one entry: `AppTitle`, the product's own brand name). A future
+      regression that copies an English value into `Messages.ru.resx` now fails that test instead of
+      passing silently.
 - [ ] CLI and Desktop invoke the same Host commands and render semantically identical results for
       stop, stage assessment, stage move, configuration, and existing workflow operations. *(Partial:
       genuine output-equality parity tests exist for sprint tree/detail, events, startup checks,
@@ -662,9 +667,10 @@ hold under adversarial review). They fall into three groups:
 
 1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
    completed/cancelled sprint navigability are UI-only additions not yet built.
-2. **Missing data/localization** — the sticky header's provider/model field and timeline item content
-   have no real data source or localized rendering yet; the global status row covers only provider
-   health and quota, not authentication/model-availability/Host-connectivity.
+2. **Missing data** — the sticky header's provider/model field still has no real data source
+   (`AttemptSnapshot` has no provider/model field in the domain model; timeline item content is now
+   localized, see 12.3/12.6 above); the global status row covers only provider health and quota, not
+   authentication/model-availability/Host-connectivity.
 3. **Missing test coverage** (not missing behavior) — a handful of crash-recovery and cross-surface
    parity scenarios are plausible-and-unexercised rather than known-broken: the advance-path crash
    saga, the active-operation-blocks-advance prerequisite, a Host-process-kill orphan check, and

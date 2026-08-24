@@ -508,7 +508,7 @@ public static class CliApplication
                 return Report(diagnostics, page.DiagnosticCode);
             }
 
-            WriteTimeline(output, page);
+            WriteTimeline(text, output, page);
             return Report(diagnostics, page.DiagnosticCode);
         });
         return command;
@@ -2029,7 +2029,14 @@ public static class CliApplication
     /// re-runs <see cref="SecretRedactor"/> over the fully formatted line as a third, independent,
     /// belt-and-braces check specific to the exact bytes this surface renders, so a redaction gap in
     /// either upstream pass alone still cannot leak a raw secret to the terminal.</summary>
-    private static void WriteTimeline(TextWriter output, SprintTimelinePage page)
+    /// <remarks>Plan 12.3/12.6: the message text itself is resolved through
+    /// <see cref="TimelineMessageFormatter"/> -- the same neutral formatter Desktop's
+    /// <c>SprintTimelineViewModel.ToView</c> calls -- so both surfaces render identical localized text
+    /// for the same event instead of either one showing the raw `workflow.*`/`routing.*` journal key.
+    /// The raw argument dump is kept alongside it (unlike Desktop, which moved it behind a "Details"
+    /// toggle): this is the CLI's only rendering of an item, so nothing here may drop information a
+    /// script parsing this output could already rely on.</remarks>
+    private static void WriteTimeline(SurfaceText text, TextWriter output, SprintTimelinePage page)
     {
         if (page.Items.Count == 0)
         {
@@ -2038,6 +2045,7 @@ public static class CliApplication
 
         foreach (SprintTimelineItem item in page.Items)
         {
+            string messageText = TimelineMessageFormatter.Format(text, item.MessageKey, item.Arguments);
             string argumentText = string.Join(
                 ' ',
                 item.Arguments
@@ -2046,7 +2054,7 @@ public static class CliApplication
             string line = string.Create(
                 CultureInfo.InvariantCulture,
                 $"{item.OccurredAt:O} {SurfaceFormatting.Machine(item.Actor)} {item.TargetKind}:{item.TargetId} " +
-                    $"{item.MessageKey} {argumentText}");
+                    $"{messageText} {argumentText}");
             output.WriteLine(SecretRedactor.Redact(line));
         }
     }

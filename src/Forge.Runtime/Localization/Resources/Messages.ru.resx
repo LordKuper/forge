@@ -303,4 +303,45 @@
   <data name="QuotaStatusStale" xml:space="preserve"><value>Данные о квоте устарели.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Статус квоты: данные устарели.</value></data>
   <data name="CapabilityNotSupported" xml:space="preserve"><value>Этот Host пока не поддерживает эту операцию. Обновите Forge на Host этого проекта, чтобы использовать её.</value></data>
+  <data name="workflow.sprint_created" xml:space="preserve"><value>Спринт создан.</value></data>
+  <data name="workflow.sprint_advanced" xml:space="preserve"><value>Запуск спринта начат.</value></data>
+  <data name="workflow.sprint_cancelled" xml:space="preserve"><value>Спринт отменён.</value></data>
+  <data name="workflow.sprint_resumed" xml:space="preserve"><value>Спринт возобновлён.</value></data>
+  <data name="workflow.sprint_ready" xml:space="preserve"><value>Спринт готов к запуску.</value></data>
+  <data name="workflow.sprint_ready_to_finalize" xml:space="preserve"><value>Спринт готов к завершению.</value></data>
+  <data name="workflow.sprint_blocked" xml:space="preserve"><value>Спринт заблокирован ({0}).</value></data>
+  <data name="workflow.sprint_completed" xml:space="preserve"><value>Спринт завершён.</value></data>
+  <data name="workflow.sprint_running" xml:space="preserve"><value>Спринт выполняется.</value></data>
+  <data name="workflow.sprint_awaiting_human" xml:space="preserve"><value>Спринт ожидает проверки человеком.</value></data>
+  <data name="workflow.sprint_gate_resumed" xml:space="preserve"><value>Спринт возобновлён после разрешения контрольной точки.</value></data>
+  <data name="workflow.sprint_paused" xml:space="preserve"><value>Спринт приостановлен.</value></data>
+  <data name="workflow.node_created" xml:space="preserve"><value>Узел создан.</value></data>
+  <data name="workflow.node_ready" xml:space="preserve"><value>Узел готов к выполнению.</value></data>
+  <data name="workflow.node_running" xml:space="preserve"><value>Узел начал выполнение.</value></data>
+  <data name="workflow.node_succeeded" xml:space="preserve"><value>Узел успешно выполнен.</value></data>
+  <data name="workflow.node_failed" xml:space="preserve"><value>Узел завершился ошибкой.</value></data>
+  <data name="workflow.node_rejected" xml:space="preserve"><value>Узел был отклонён.</value></data>
+  <data name="workflow.node_skipped" xml:space="preserve"><value>Узел пропущен.</value></data>
+  <data name="workflow.node_retrying" xml:space="preserve"><value>Узел повторяет попытку.</value></data>
+  <data name="workflow.node_retried" xml:space="preserve"><value>Узел был перезапущен.</value></data>
+  <data name="workflow.node_awaiting_human" xml:space="preserve"><value>Узел ожидает проверки человеком.</value></data>
+  <data name="workflow.node_superseded" xml:space="preserve"><value>Попытка узла заменена новой попыткой.</value></data>
+  <data name="workflow.node_stopped" xml:space="preserve"><value>Узел остановлен по запросу оператора.</value></data>
+  <data name="workflow.node_rearmed" xml:space="preserve"><value>Узел подготовлен к новой попытке.</value></data>
+  <data name="workflow.node_reopened" xml:space="preserve"><value>Узел повторно открыт для редакции {0}.</value></data>
+  <data name="workflow.node_invalidated" xml:space="preserve"><value>Узел признан недействительным для редакции {0}.</value></data>
+  <data name="workflow.node_rewind_interrupted" xml:space="preserve"><value>Узел прерван откатом.</value></data>
+  <data name="workflow.attempt_created" xml:space="preserve"><value>Попытка создана.</value></data>
+  <data name="workflow.attempt_transitioned" xml:space="preserve"><value>Попытка перешла в состояние «{0}».</value></data>
+  <data name="workflow.attempt_stopped" xml:space="preserve"><value>Попытка остановлена по запросу оператора.</value></data>
+  <data name="workflow.attempt_superseded" xml:space="preserve"><value>Попытка отменена из-за замены.</value></data>
+  <data name="workflow.attempt_superseded_instruction" xml:space="preserve"><value>Инструкция оператора для новой попытки: {0}</value></data>
+  <data name="workflow.attempt_activity" xml:space="preserve"><value>Зафиксирована активность попытки.</value></data>
+  <data name="workflow.attempt_stop_requested" xml:space="preserve"><value>Запрошена остановка попытки.</value></data>
+  <data name="workflow.attempt_stop_converged" xml:space="preserve"><value>Остановка попытки завершена.</value></data>
+  <data name="workflow.stage_revision_recorded" xml:space="preserve"><value>Зафиксирован откат к этапу «{0}» (редакция {2}): {1}</value></data>
+  <data name="workflow.stage_transition_converged" xml:space="preserve"><value>Переход между этапами завершён.</value></data>
+  <data name="workflow.user_message_posted" xml:space="preserve"><value>Сообщение: {0}</value></data>
+  <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Итог: {0}</value></data>
+  <data name="routing.decision_recorded" xml:space="preserve"><value>Маршрутизировано на {0}/{1}: {2}.</value></data>
 </root>

@@ -2,6 +2,22 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.73.0
+
+### Added
+
+- Sprint timeline entries are now shown in the user's own language on both Desktop and the CLI,
+  instead of the raw internal event key (e.g. "Sprint completed." / "Спринт завершён." instead of
+  `workflow.sprint_completed`). Entries that carry an operator- or agent-authored value -- a posted
+  message, a node's summary, a supersession instruction, a rewind's reason, or a routing decision --
+  still show that exact text inside the localized sentence.
+
+### Fixed
+
+- Added an automated check that catches an English string accidentally left untranslated in the
+  Russian surface (previously only the presence of every key was verified, not that its value was
+  actually translated).
+
 ## v0.72.0
 
 ### Added
