@@ -77,7 +77,8 @@ public sealed class ArchitectureTests
             }
 
             Assert.True(
-                project.Name.Contains("Windows", StringComparison.Ordinal),
+                RecognizedOsAdapterMonikers.Any(
+                    moniker => project.Name.Contains(moniker, StringComparison.Ordinal)),
                 $"{project.Name} is marked ForgeOsAdapter but its name does not identify an operating system.");
         }
     }
@@ -199,6 +200,12 @@ public sealed class ArchitectureTests
 
         Assert.Equal(expected, actual);
     }
+
+    // "Windows" names a single OS directly; "Posix" names the recognized POSIX family (Linux and
+    // macOS share one adapter, e.g. Forge.Runtime.Posix, when their real implementations are
+    // identical -- see that project's own doc comment) rather than requiring two near-duplicate
+    // per-OS adapters for behavior that does not actually differ per OS within that family.
+    private static readonly string[] RecognizedOsAdapterMonikers = ["Windows", "Linux", "macOS", "Posix"];
 
     // The source tree does not change within a test run, and every [Fact] above needs the full project list, so
     // it is parsed once and shared instead of re-walking/re-parsing src/*.csproj per assertion.
