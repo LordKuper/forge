@@ -285,6 +285,19 @@ public sealed class ImplementationExecutionHostedService(
             return;
         }
 
+        if (outcome.Disposition == ImplementationAttemptDisposition.StopRequested)
+        {
+            // Post-release audit (PR #101): a stop landed durably right as
+            // the provider returned success, after the ActiveOperationRegistry unregister but before
+            // the commit/integrate this method already performed internally --
+            // RunImplementationAttemptAsync already discarded the worktree and skipped commit/
+            // integrate before returning this disposition (see its own remarks). This attempt must
+            // not be completed here: the node stays `running`, converged by
+            // StopOperationCoordinator.FinishStopAsync's own top-of-tick check on this or the next
+            // tick, exactly like the stop-landed-before-the-provider-started case.
+            return;
+        }
+
         CompleteAttemptResult completed = outcome.Disposition == ImplementationAttemptDisposition.RateLimited
             ? await scheduler.DeferAttemptAsync(
                 options.ProjectRoot, sprintId, implementation.Id, attemptId, manifest.ManifestDigest,
@@ -330,6 +343,20 @@ public sealed class ImplementationExecutionHostedService(
         Failed,
         RateLimited,
         HostShuttingDown,
+
+        /// <summary>Post-release audit (PR #101): a stop was durably requested
+        /// for this attempt after the provider already returned success, discovered by a fresh
+        /// re-check <see cref="RunImplementationAttemptAsync"/> performs twice: once right before its
+        /// own commit step, and again right before <see cref="SprintGitIsolation.IntegrateAsync"/> --
+        /// the actual publish to the sprint's integration branch (PR #101 review finding 2: the first
+        /// check alone left the entire commit-duration window unguarded, since
+        /// <see cref="SprintGitIsolation.CommitAttemptAsync"/> only writes the attempt's own worktree/
+        /// branch, which a discard throws away wholesale). Together the two checks fully prevent the
+        /// provider's work from reaching the integration branch; the residual window is only the
+        /// ordinary async-scheduling gap between the second check's own read and the
+        /// <c>IntegrateAsync</c> call immediately after it. The worktree is already discarded by the
+        /// time this is returned.</summary>
+        StopRequested,
     }
 
     private readonly record struct ImplementationAttemptOutcome(
@@ -340,6 +367,9 @@ public sealed class ImplementationExecutionHostedService(
     {
         public static readonly ImplementationAttemptOutcome Cancelled =
             new(ImplementationAttemptDisposition.HostShuttingDown, [], [], null);
+
+        public static readonly ImplementationAttemptOutcome Stopped =
+            new(ImplementationAttemptDisposition.StopRequested, [], [], null);
 
         public static ImplementationAttemptOutcome Failed(NodeDiagnostic diagnostic) =>
             new(ImplementationAttemptDisposition.Failed, [], [diagnostic], null);
@@ -456,6 +486,26 @@ public sealed class ImplementationExecutionHostedService(
                 NodeExecutionDiagnostics.Diagnostic("git", DiagnosticCodes.ImplementationNoChanges));
         }
 
+        // Post-release audit (PR #101): the first of two re-checks (see the
+        // second, right before IntegrateAsync below, added by PR #101 review finding 2) at which a
+        // stop request racing against a provider that is about to succeed can still be honored -- the
+        // durable stop intent's own per-tick check (top of ExecuteImplementationAsync) only runs
+        // once, before the provider starts, and is never re-checked between the provider returning
+        // and this method's own commit/integrate below. A fresh read here (never the value captured
+        // before the provider ran) catches a stop that landed anywhere in between: the
+        // ActiveOperationRegistry unregister above already ran, so this attempt's own cancellation
+        // token cannot observe it, but the durable intent still can. Discarding here (unlike the
+        // live-cancelled branch above) is safe: this attempt's own registered CancellationTokenSource
+        // is already disposed, so `cancellationToken` here is the tick's own token, unaffected by the
+        // stop's best-effort TryCancel. This check alone is not sufficient: it only guards the
+        // upcoming CommitAttemptAsync call, not the IntegrateAsync call after it -- see the second
+        // check below for why both are needed.
+        if (await StopHasBeenRequestedAsync(sprintId, attemptId, cancellationToken).ConfigureAwait(false))
+        {
+            await DiscardAsync(sprintId, projectId, attemptId, cancellationToken).ConfigureAwait(false);
+            return ImplementationAttemptOutcome.Stopped;
+        }
+
         string? summary = result.TerminalResult?.Summary;
         string effectiveSummary = string.IsNullOrWhiteSpace(summary) ? FallbackSummary : summary;
         GitOperationResult committed = await gitIsolation.CommitAttemptAsync(
@@ -466,6 +516,20 @@ public sealed class ImplementationExecutionHostedService(
             await DiscardAsync(sprintId, projectId, attemptId, cancellationToken).ConfigureAwait(false);
             return ImplementationAttemptOutcome.Failed(
                 NodeExecutionDiagnostics.Diagnostic("git", committed.DiagnosticCode, committed.Detail));
+        }
+
+        // PR #101 review finding 2: CommitAttemptAsync only writes into this attempt's own
+        // worktree/branch (which DiscardAsync throws away wholesale); IntegrateAsync immediately
+        // below is the call that actually publishes to the sprint's shared integration branch, and
+        // the check above -- taken before the commit -- left this entire commit duration (unbounded,
+        // proportional to the size of the provider's own change) unguarded. This second, fresh read
+        // is the genuinely narrowest point: discarding here is exactly as safe as discarding above,
+        // since the commit was made to the attempt's own branch and was never published anywhere
+        // else.
+        if (await StopHasBeenRequestedAsync(sprintId, attemptId, cancellationToken).ConfigureAwait(false))
+        {
+            await DiscardAsync(sprintId, projectId, attemptId, cancellationToken).ConfigureAwait(false);
+            return ImplementationAttemptOutcome.Stopped;
         }
 
         GitOperationResult integrated = await gitIsolation.IntegrateAsync(
@@ -502,6 +566,27 @@ public sealed class ImplementationExecutionHostedService(
         {
             LogWorktreeDiscardFailed(logger, sprintId.Value, null);
         }
+    }
+
+    /// <summary>A fresh read, never a value captured before the provider ran -- but deliberately
+    /// NOT the same clause as the top-of-tick stop convergence gate (above): that gate's own
+    /// <c>StopConvergedAt is null</c> half exists only to stop <see cref="StopOperationCoordinator.FinishStopAsync"/>
+    /// from re-firing forever once a stop has already fully converged, which does not apply at a
+    /// point of no return. A genuinely concurrent second converger --
+    /// <c>StageTransitionCoordinator.StopAndFailRunningNodeAsync</c>, a rewind's own step 1,
+    /// running from a different thread/call path than this tick -- can append
+    /// <c>StopConvergedAt</c> for this exact attempt while this method is mid-commit. Gating on
+    /// <c>StopConvergedAt is null</c> here would then see the stop as "already handled" and let the
+    /// attempt commit and integrate anyway (PR #101 review finding 1). A stop request in flight at
+    /// all -- convergence status irrelevant -- means don't commit.</summary>
+    private async Task<bool> StopHasBeenRequestedAsync(
+        SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState? state = await store
+            .LoadAsync(options.ProjectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return state is not null &&
+            state.Attempts.TryGetValue(attemptId.Value.ToString("D"), out AttemptSnapshot? attempt) &&
+            attempt.StopRequestedAt is not null;
     }
 
     /// <summary>The commit's own subject line: the summary's first line, bounded well under any

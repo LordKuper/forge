@@ -466,12 +466,19 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
 
     public string CommitFailureCode { get; set; } = DiagnosticCodes.WorktreeCommitFailed;
 
-    public Task<GitOperationResult> CommitAllAsync(
+    /// <summary>Optional side effect run immediately after a successful commit lands in
+    /// <see cref="Commits"/> but before <see cref="CommitAllAsync"/> returns -- lets a test inject a
+    /// concurrent mutation (PR #101 review finding 2: a stop that converges between
+    /// <c>SprintGitIsolation.CommitAttemptAsync</c> succeeding and the caller's own next re-check)
+    /// into that exact window deterministically, without a real race.</summary>
+    public Func<CancellationToken, Task>? AfterCommitAll { get; set; }
+
+    public async Task<GitOperationResult> CommitAllAsync(
         string projectRoot, string path, string message, CancellationToken cancellationToken)
     {
         if (FailNextCommit)
         {
-            return Task.FromResult(GitOperationResult.Fail(CommitFailureCode));
+            return GitOperationResult.Fail(CommitFailureCode);
         }
 
         Commits.Add((path, message));
@@ -482,7 +489,12 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
         // hex digits, left-padded to fill the remaining 39 characters.
         string commit = "c" + Commits.Count.ToString("x", CultureInfo.InvariantCulture).PadLeft(39, '0');
         heads[path] = commit;
-        return Task.FromResult(GitOperationResult.Ok(commit));
+        if (AfterCommitAll is { } hook)
+        {
+            await hook(cancellationToken).ConfigureAwait(false);
+        }
+
+        return GitOperationResult.Ok(commit);
     }
 
     public Task<GitOperationResult> ResetHardAsync(

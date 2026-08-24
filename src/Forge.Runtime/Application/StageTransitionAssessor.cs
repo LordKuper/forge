@@ -59,9 +59,16 @@ public sealed class StageTransitionAssessor(
             // the graph's only settled node, misclassifying it as a permanent Same. Reporting the
             // durable marker directly here, before any of that derivation runs, tells the caller the
             // truth regardless of the specific target they asked about: this sprint has an unconverged
-            // rewind, and no other stage move is possible until it resumes and converges (which the
-            // next MoveSprintToStage/AssessStageTransition call against this sprint does automatically
-            // -- see StageTransitionCoordinator.MoveAsync).
+            // rewind, and no other stage move is possible until it resumes and converges. PR #101
+            // review finding 3: resuming is NOT automatic on the next call to this method -- only the
+            // next MoveSprintToStage call against this sprint does that (StageTransitionCoordinator.
+            // MoveAsync's own PendingRewindTargetStageId short-circuit, above AssessAsync in the call
+            // chain); AssessStageTransition alone never resumes anything, it only ever reports this
+            // same "still in progress" assessment again. Every caller of this method that wants the
+            // rewind to actually finish must go on to call MoveSprintToStage regardless of this
+            // assessment's own Allowed field (false here) -- see AGENTS.md-required callers doing
+            // that explicitly: `forge sprint move-stage` (CliApplication) and
+            // WorkspaceShellPage.SprintWorkspace's own move-to-stage handler.
             return new(
                 true,
                 DiagnosticCodes.StageTransitionRewindInProgress,

@@ -165,6 +165,41 @@ public sealed class SprintActionsViewModelTests
         Assert.Contains("2", prompt, StringComparison.Ordinal);
     }
 
+    // PR #101 review finding 3: an unconverged rewind's own assessment reports Allowed=false, but --
+    // unlike every other blocked target -- confirming this specific row actually resumes and finishes
+    // it (StageTransitionCoordinator.MoveAsync's own PendingRewindTargetStageId bypass). The prompt
+    // must say so, not claim the move is impossible the way MoveToStageBlockedCannotProceed does.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void MovePromptTellsTheUserAnInProgressRewindWillResumeRatherThanClaimingTheMoveIsBlocked()
+    {
+        using TestEnvironment environment = new();
+        SurfaceText text = Text();
+        SprintActionsViewModel actions = new(
+            environment.Application, (_, _) => throw new InvalidOperationException(), text);
+        StageTransitionAssessment assessment = new(
+            true,
+            DiagnosticCodes.StageTransitionRewindInProgress,
+            new SprintId(Guid.NewGuid()),
+            "implementation",
+            "planning",
+            StageTransitionDirection.Rewind,
+            false,
+            [],
+            [],
+            new(false, null, null, false),
+            null,
+            false,
+            7,
+            default,
+            null);
+
+        string prompt = actions.MovePrompt(assessment);
+
+        Assert.Contains(text.Resolve(MessageKeys.MoveToStageResumeRewindPrompt), prompt, StringComparison.Ordinal);
+        Assert.DoesNotContain(text.Resolve(MessageKeys.MoveToStageBlockedCannotProceed), prompt, StringComparison.Ordinal);
+    }
+
     private static StageTransitionAssessment FakeAssessment(Guid sprintId, bool allowed, bool confirmationRequired) =>
         new(
             true,

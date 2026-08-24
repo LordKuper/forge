@@ -305,6 +305,268 @@ public sealed class ImplementationExecutionHostedServiceTests
         Assert.Empty(await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
     }
 
+    // Post-release audit (PR #101): confirmed correctness gap in the merged Slice 2 (ADR 0047) design -- the
+    // durable stop intent's per-tick check (top of ExecuteImplementationAsync) only runs once,
+    // before the provider starts, and was never re-checked between the provider returning success
+    // and this executor's own commit/integrate. A stop that lands durably in that exact window
+    // (recorded, but too late for ActiveOperationRegistry.TryCancel to matter since the provider is
+    // already on its way out with a success result) previously still reached
+    // SprintGitIsolation.CommitAttemptAsync/IntegrateAsync, letting the change reach the integration
+    // branch despite the durably recorded stop -- violating plan section 7.1's "no partial change
+    // reaches the integration branch". The provider delegate below simulates exactly this race
+    // deterministically (no real concurrency needed): it records the durable stop intent directly
+    // (bypassing StopOperationCoordinator.RequestStopAsync, whose own best-effort
+    // ActiveOperationRegistry.TryCancel would have nothing left to cancel by then anyway) right
+    // before returning success, so the provider's own cancellation token is never observed and
+    // RunAsync returns success normally -- exactly the "the provider already returned success right
+    // around that time" scenario the audit describes.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AStopRequestedRightAsTheProviderSucceedsIsHonoredInsteadOfReachingIntegration()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        ISprintStore? store = null;
+        TestEnvironment? environmentRef = null;
+        SprintId sprintId = default!;
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            async (_, workingDirectory, token, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                SprintWorkflowState state =
+                    (await store!.LoadAsync(environmentRef!.ProjectRoot, sprintId, token))!;
+                string attemptIdText = state.Nodes[ImplementationNodeId].CurrentAttemptId!;
+                AttemptSnapshot attempt = state.Attempts[attemptIdText];
+                await store.AppendAttemptStopRequestedAsync(
+                    environmentRef.ProjectRoot, sprintId, new AttemptId(Guid.Parse(attemptIdText)),
+                    attempt.Version, token);
+                return ProviderRunResult.Success([], new ProviderTerminalResult(summary));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        environmentRef = environment;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        store = environment.Resolve<ISprintStore>();
+        sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            // Polls for the saga's own last, unconditional step (StopConvergedAt) rather than the
+            // node/sprint states it appends on the way there: those two land as separate, earlier
+            // appends inside the same FinishStopAsync call, so polling for either individually is
+            // racy against the remaining steps this test also wants to have already landed.
+            await WaitForAttemptStopConvergedAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        // No partial change reached the integration branch: no commit, no handoff, no recorded node
+        // result for the stopped attempt.
+        Assert.Empty(worktrees.Commits);
+        Assert.DoesNotContain(
+            await store.GetHandoffsAsync(environment.ProjectRoot, sprintId, cancellationToken),
+            item => item.NodeId.Value == ImplementationNodeId);
+        Assert.Empty(await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.NotEmpty(worktrees.RemovedPaths);
+
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, final.Nodes[ImplementationNodeId].State);
+        Assert.Equal(SprintState.Paused, final.Sprint.State);
+        AttemptSnapshot stoppedAttempt = Assert.Single(
+            final.Attempts.Values, attempt => attempt.NodeId == ImplementationNodeId);
+        Assert.Equal(AttemptState.Cancelled, stoppedAttempt.State);
+        Assert.NotNull(stoppedAttempt.StopConvergedAt);
+        // The stop path never consumed automatic-retry budget (ADR 0047): still exactly the one
+        // attempt this test started.
+        Assert.Equal(1, final.Nodes[ImplementationNodeId].AttemptCount);
+    }
+
+    // PR #101 review finding 1 (critical): the point-of-no-return re-check the test above exercises
+    // originally copied the top-of-tick gate's own `StopConvergedAt is null` clause. That clause is
+    // correct at the top-of-tick gate (it stops FinishStopAsync from re-firing forever once a stop
+    // has already fully converged) but wrong here: a genuinely concurrent second converger --
+    // StageTransitionCoordinator.StopAndFailRunningNodeAsync, a rewind's own step 1, running from a
+    // different call path than this executor's tick -- can append BOTH StopRequestedAt AND
+    // StopConvergedAt for this exact attempt (and drive the node itself to `Failed`) before this
+    // executor's own re-check runs. Under the old clause that combination reads as "no stop detected"
+    // (StopConvergedAt is not null), so the attempt would still commit and integrate into the sprint's
+    // integration branch even though a rewind is actively tearing it down -- exactly the bug class the
+    // original fix was supposed to close, one layer deeper. The provider delegate below simulates a
+    // fully converged concurrent stop (every append `StopAndFailRunningNodeAsync` itself makes, not
+    // just the request) landing before RunImplementationAttemptAsync's own re-check, deterministically.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AStopThatHasAlreadyFullyConvergedConcurrentlyStillPreventsCommitAndIntegrate()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        ISprintStore? store = null;
+        TestEnvironment? environmentRef = null;
+        SprintId sprintId = default!;
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            async (_, workingDirectory, token, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                SprintWorkflowState state =
+                    (await store!.LoadAsync(environmentRef!.ProjectRoot, sprintId, token))!;
+                string attemptIdText = state.Nodes[ImplementationNodeId].CurrentAttemptId!;
+                AttemptId attemptId = new(Guid.Parse(attemptIdText));
+                AttemptSnapshot attempt = state.Attempts[attemptIdText];
+
+                // Step 1 of StopAndFailRunningNodeAsync: request the stop.
+                await store.AppendAttemptStopRequestedAsync(
+                    environmentRef.ProjectRoot, sprintId, attemptId, attempt.Version, token);
+
+                // Step 2: land the attempt on `cancelled` -- the same transition
+                // StopAndFailRunningNodeAsync appends once the stop request itself lands.
+                state = (await store.LoadAsync(environmentRef.ProjectRoot, sprintId, token))!;
+                AttemptSnapshot stopping = state.Attempts[attemptIdText];
+                await store.AppendTransitionAsync(
+                    environmentRef.ProjectRoot, sprintId, AggregateKind.Attempt, attemptIdText, "AttemptChanged",
+                    "workflow.attempt_stopped", WorkflowStateNames.ToSnakeCase(AttemptState.Cancelled),
+                    stopping.Version, Guid.NewGuid(), token);
+
+                // Step 3: land the node on `failed` -- the same transition
+                // StopAndFailRunningNodeAsync appends for every downstream node it stops.
+                state = (await store.LoadAsync(environmentRef.ProjectRoot, sprintId, token))!;
+                NodeSnapshot runningNode = state.Nodes[ImplementationNodeId];
+                await store.AppendTransitionAsync(
+                    environmentRef.ProjectRoot, sprintId, AggregateKind.Node, ImplementationNodeId, "NodeChanged",
+                    "workflow.node_rewind_interrupted", WorkflowStateNames.ToSnakeCase(NodeState.Failed),
+                    runningNode.Version, Guid.NewGuid(), token);
+
+                // Step 4: converge the stop -- the exact append the old `StopConvergedAt is null`
+                // clause would treat as "this stop is already handled, nothing to see here".
+                await store.AppendAttemptStopConvergedAsync(environmentRef.ProjectRoot, sprintId, attemptId, token);
+
+                return ProviderRunResult.Success([], new ProviderTerminalResult(summary));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        environmentRef = environment;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        store = environment.Resolve<ISprintStore>();
+        sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForAttemptStopConvergedAsync(store, environment, sprintId, cancellationToken);
+            // The node was driven straight to `failed` by the simulated concurrent converger (never
+            // rearmed to `ready` by this executor's own FinishStopAsync, since StopConvergedAt was
+            // already set before this executor's own top-of-tick gate ever saw the attempt) -- poll
+            // for that terminal state too so this assertion never races the background tick.
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Failed, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        // The bug: under the old `StopConvergedAt is null` clause, StopHasBeenRequestedAsync would
+        // have reported "no stop" here (StopConvergedAt was already set by the simulated concurrent
+        // converger above), so the executor would have committed and integrated the provider's change
+        // into the sprint's integration branch despite the concurrent stop -- worktrees.Commits would
+        // be non-empty and a discarded worktree path would come from a post-hoc integration failure,
+        // not from this executor recognizing the stop up front. The fix (StopRequestedAt alone) must
+        // discard instead, exactly like the request-only race the test above already covers.
+        Assert.Empty(worktrees.Commits);
+        Assert.DoesNotContain(
+            await store.GetHandoffsAsync(environment.ProjectRoot, sprintId, cancellationToken),
+            item => item.NodeId.Value == ImplementationNodeId);
+        Assert.Empty(await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    // PR #101 review finding 2: the point-of-no-return re-check above only guarded the upcoming
+    // CommitAttemptAsync call -- CommitAttemptAsync writes only to the attempt's own worktree/branch
+    // (discarded wholesale on a stop), but IntegrateAsync afterward is the actual publish to the
+    // sprint's shared integration branch, and nothing re-checked the stop intent in between. This test
+    // simulates a stop converging in exactly that window -- right after the real commit lands,
+    // immediately before RunImplementationAttemptAsync's own second re-check -- proving that check
+    // (added alongside this finding) catches it too, discarding the attempt instead of integrating it.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AStopThatConvergesBetweenCommitAndIntegrateIsHonoredInsteadOfReachingIntegration()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        ISprintStore? store = null;
+        TestEnvironment? environmentRef = null;
+        SprintId sprintId = default!;
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success([], new ProviderTerminalResult(summary)));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        environmentRef = environment;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        store = environment.Resolve<ISprintStore>();
+        sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        worktrees.AfterCommitAll = async token =>
+        {
+            // Fires exactly once, after the real commit already landed in worktrees.Commits (proving
+            // the commit itself is not what this finding guards) but before this method's own
+            // production code re-checks the stop intent -- the precise window PR #101 review finding 2
+            // found unguarded.
+            worktrees.AfterCommitAll = null;
+            SprintWorkflowState state = (await store!.LoadAsync(environmentRef!.ProjectRoot, sprintId, token))!;
+            string attemptIdText = state.Nodes[ImplementationNodeId].CurrentAttemptId!;
+            AttemptId attemptId = new(Guid.Parse(attemptIdText));
+            AttemptSnapshot attempt = state.Attempts[attemptIdText];
+            await store.AppendAttemptStopRequestedAsync(
+                environmentRef.ProjectRoot, sprintId, attemptId, attempt.Version, token);
+        };
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            // Not WaitForNodeStateAsync(..., Ready, ...): the node already starts at `Ready` before
+            // the executor's first tick even runs, so polling for that state alone could trivially
+            // match before the attempt (and this test's own race) ever happened. StopConvergedAt is
+            // the saga's own unambiguous last step, exactly like the request-only race test above.
+            await WaitForAttemptStopConvergedAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        // The commit itself did land (proves the race window really was past CommitAttemptAsync), but
+        // the second re-check must stop the actual publish: no handoff, no recorded result for the
+        // stopped attempt, and the attempt worktree/branch is discarded rather than integrated.
+        Assert.Single(worktrees.Commits);
+        Assert.DoesNotContain(
+            await store.GetHandoffsAsync(environment.ProjectRoot, sprintId, cancellationToken),
+            item => item.NodeId.Value == ImplementationNodeId);
+        Assert.Empty(await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.NotEmpty(worktrees.RemovedPaths);
+    }
+
     private static ImplementationExecutionHostedService NewService(
         TestEnvironment environment, ISprintStore store, SprintScheduler scheduler) =>
         new(
@@ -414,6 +676,26 @@ public sealed class ImplementationExecutionHostedServiceTests
 
         Assert.Fail(
             $"The implementation node of sprint {sprintId.Value:D} stayed '{observed}' instead of '{expected}'.");
+    }
+
+    private static async Task WaitForAttemptStopConvergedAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < PollTimeout)
+        {
+            SprintWorkflowState state =
+                (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+            if (state.Attempts.Values.Any(
+                attempt => attempt.NodeId == ImplementationNodeId && attempt.StopConvergedAt is not null))
+            {
+                return;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+
+        Assert.Fail($"Sprint {sprintId.Value:D}'s implementation attempt never converged its stop.");
     }
 
     /// <summary>Same rationale as `PlanningExecutionHostedServiceTests`' own version: `node_failed`

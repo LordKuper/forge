@@ -266,6 +266,19 @@ public sealed class PlanningExecutionHostedService(
             return;
         }
 
+        // Post-release audit (PR #101): a stop can be durably requested for this attempt after the
+        // provider already returned (any disposition), before this method's own CompleteAttemptAsync
+        // call below — planning's structural analog of ImplementationExecutionHostedService's commit/
+        // integrate race, since CompleteAttemptAsync is the point of no return here (a Succeeded
+        // completion unblocks AdvanceGraphAsync to start the next node; FinishStopAsync never re-arms
+        // an already-Succeeded node). A fresh read here (never a value captured before the provider
+        // ran) catches it; the node stays `running`, converged by FinishStopAsync's own top-of-tick
+        // check on this or the next tick instead of racing ahead through a normal completion.
+        if (await StopHasBeenRequestedAsync(sprintId, attemptId, cancellationToken).ConfigureAwait(false))
+        {
+            return;
+        }
+
         // ADR 0006's durable rate-limit wait (ADR 0018): a RateLimited failure is a retryable
         // condition the shared provider/model/surface routing key should back off from for
         // DefaultRateLimitBackoff, not an ordinary failed attempt — DeferAttemptAsync abandons the
@@ -509,5 +522,27 @@ public sealed class PlanningExecutionHostedService(
 
             builder.Append("### ").Append(item.RelativePath).Append('\n').Append(body).Append('\n');
         }
+    }
+
+    /// <summary>A fresh read, never a value captured before the provider ran -- but deliberately
+    /// NOT the same clause as the top-of-tick stop convergence gate (above): that gate's own
+    /// <c>StopConvergedAt is null</c> half exists only to stop <see cref="StopOperationCoordinator.FinishStopAsync"/>
+    /// from re-firing forever once a stop has already fully converged, which does not apply at a
+    /// point of no return. A genuinely concurrent second converger --
+    /// <c>StageTransitionCoordinator.StopAndFailRunningNodeAsync</c>, a rewind's own step 1,
+    /// running from a different thread/call path than this tick -- can append
+    /// <c>StopConvergedAt</c> for this exact attempt while this method is between the provider
+    /// returning and <see cref="SprintScheduler.CompleteAttemptAsync"/>. Gating on
+    /// <c>StopConvergedAt is null</c> here would then see the stop as "already handled" and let the
+    /// attempt complete anyway (PR #101 review finding 1). A stop request in flight at all --
+    /// convergence status irrelevant -- means don't complete.</summary>
+    private async Task<bool> StopHasBeenRequestedAsync(
+        SprintId sprintId, AttemptId attemptId, CancellationToken cancellationToken)
+    {
+        SprintWorkflowState? state = await store
+            .LoadAsync(options.ProjectRoot, sprintId, cancellationToken).ConfigureAwait(false);
+        return state is not null &&
+            state.Attempts.TryGetValue(attemptId.Value.ToString("D"), out AttemptSnapshot? attempt) &&
+            attempt.StopRequestedAt is not null;
     }
 }

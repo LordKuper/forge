@@ -166,25 +166,46 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
                 StaleBehavior.RejectWithoutSideEffect));
         }
 
-        // No stage-move candidate is offered while a prior rewind has not yet converged (round 2
-        // review of PR #96's own rule, reused here rather than re-derived): every assessment for
-        // this sprint already reports stage_transition_rewind_in_progress uniformly.
-        if (!WorkflowStateMachines.IsTerminal(state.Sprint.State) && state.Sprint.PendingRewindTargetStageId is null)
+        if (!WorkflowStateMachines.IsTerminal(state.Sprint.State))
         {
-            string? currentStageId = StageTransitionAssessor.ResolveCurrentStageId(definition, state);
-            foreach (NodeDefinition node in definition.Graph)
+            if (state.Sprint.PendingRewindTargetStageId is { } pendingRewindTarget)
             {
-                if (string.Equals(node.Id, currentStageId, StringComparison.Ordinal))
+                // PR #101 review finding 3 (critical): an ordinary fresh stage-move candidate is not
+                // offered while a prior rewind has not yet converged (round 2 review of PR #96's own
+                // rule, reused here rather than re-derived) -- every such assessment would just report
+                // stage_transition_rewind_in_progress uniformly, which is not actionable as a fresh
+                // move. But that must not mean NO row at all: StageTransitionCoordinator.MoveAsync's
+                // own resume path (its PendingRewindTargetStageId short-circuit) is reachable
+                // regardless of Allowed, the same way `forge sprint move-stage` already reaches it by
+                // ignoring Allowed for this call. Desktop renders exclusively from this list -- with no
+                // row offered here at all, a Desktop user had no way to ever trigger the call that
+                // finishes an interrupted rewind (only the CLI could). The target string passed to
+                // AssessAsync is irrelevant here: StageTransitionAssessor.AssessAsync reports the
+                // pending rewind's own recorded target before ever validating the one this call passes.
+                StageTransitionAssessment resumeAssessment = await stageAssessor
+                    .AssessAsync(projectRoot, id, pendingRewindTarget, cancellationToken).ConfigureAwait(false);
+                if (resumeAssessment.Found)
                 {
-                    continue;
+                    actions.Add(BuildResumeRewind(projectRoot, sprintId, resumeAssessment));
                 }
-
-                StageTransitionAssessment assessment = await stageAssessor
-                    .AssessAsync(projectRoot, id, node.Id, cancellationToken)
-                    .ConfigureAwait(false);
-                if (assessment.Found)
+            }
+            else
+            {
+                string? currentStageId = StageTransitionAssessor.ResolveCurrentStageId(definition, state);
+                foreach (NodeDefinition node in definition.Graph)
                 {
-                    actions.Add(BuildMoveToStage(projectRoot, sprintId, assessment));
+                    if (string.Equals(node.Id, currentStageId, StringComparison.Ordinal))
+                    {
+                        continue;
+                    }
+
+                    StageTransitionAssessment assessment = await stageAssessor
+                        .AssessAsync(projectRoot, id, node.Id, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (assessment.Found)
+                    {
+                        actions.Add(BuildMoveToStage(projectRoot, sprintId, assessment));
+                    }
                 }
             }
         }
@@ -250,4 +271,28 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
                 actionId, new("sprint", sprintId.ToString("D")), assessment.ExpectedStateVersion),
             StaleBehavior.RejectWithoutSideEffect);
     }
+
+    /// <summary>PR #101 review finding 3: the one row offered while a rewind has not yet converged --
+    /// built from <see cref="BuildMoveToStage"/>'s own shape (same target/idempotency/blockers), but
+    /// with two fields corrected for what a resume actually is. <see cref="AvailableAction.Enabled"/>
+    /// is forced <see langword="true"/>: <paramref name="assessment"/>.Allowed is unconditionally
+    /// <see langword="false"/> for a <c>stage_transition_rewind_in_progress</c> assessment (it means
+    /// "not a legal fresh move", never "cannot be resumed"), but
+    /// <see cref="StageTransitionCoordinator.MoveAsync"/>'s own resume path bypasses
+    /// <see cref="StageTransitionAssessment.Allowed"/> entirely for exactly this diagnostic -- a
+    /// disabled row here would recreate the same dead end this finding closes. The rationale key is
+    /// its own distinct <see cref="MessageKeys.WorkspaceActionResumeRewindRationale"/>, not the
+    /// ordinary rewind rationale, so a Desktop reader is told this specific row resumes an already
+    /// in-flight operation rather than starting a fresh one.</summary>
+    private static AvailableAction BuildResumeRewind(
+        string projectRoot, Guid sprintId, StageTransitionAssessment assessment) =>
+        BuildMoveToStage(projectRoot, sprintId, assessment) with
+        {
+            Enabled = true,
+            RationaleKey = MessageKeys.WorkspaceActionResumeRewindRationale,
+            // Unlike a fresh rewind, a resume carries no caller-supplied reason of its own -- the
+            // coordinator's own resume path reuses the reason already recorded when the rewind first
+            // committed, ignoring whatever a caller passes now.
+            InputFields = [],
+        };
 }

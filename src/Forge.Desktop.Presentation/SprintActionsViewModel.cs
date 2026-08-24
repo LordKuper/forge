@@ -129,7 +129,13 @@ public sealed class SprintActionsViewModel(
 
         if (!assessment.Allowed)
         {
-            lines.Add(text.Resolve(MessageKeys.MoveToStageBlockedCannotProceed));
+            // PR #101 review finding 3: an unconverged rewind already in progress is not actually a
+            // dead end -- confirming resumes and finishes it (StageTransitionCoordinator.MoveAsync's
+            // own resume path bypasses Allowed entirely for exactly this diagnostic), so this must not
+            // tell the user the move is impossible the way every other `!Allowed` case is.
+            lines.Add(assessment.DiagnosticCode == DiagnosticCodes.StageTransitionRewindInProgress
+                ? text.Resolve(MessageKeys.MoveToStageResumeRewindPrompt)
+                : text.Resolve(MessageKeys.MoveToStageBlockedCannotProceed));
         }
 
         return string.Join('\n', lines);

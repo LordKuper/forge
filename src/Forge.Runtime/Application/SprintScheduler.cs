@@ -1351,8 +1351,10 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             // (downstream nodes actually invalidated) can leave every node still Succeeded/Ready while
             // the rewind that was supposed to redo them never touched anything. Finalizing that sprint
             // would seal a half-finished rewind as if it were a genuinely completed one. Refused until
-            // the in-flight rewind resumes and converges -- which the next MoveSprintToStage/
-            // AssessStageTransition call against this sprint does automatically.
+            // the in-flight rewind resumes and converges -- which the next MoveSprintToStage call
+            // against this sprint does (PR #101 review finding 3: AssessStageTransition alone never
+            // resumes it; see StageTransitionAssessor's own remarks on its identical rewind-in-progress
+            // branch).
             return new(false, state.Sprint, DiagnosticCodes.StageTransitionRewindInProgress);
         }
 
