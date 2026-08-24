@@ -293,4 +293,5 @@
   <data name="QuotaStatusDepletedAccessible" xml:space="preserve"><value>Quota status: exhausted.</value></data>
   <data name="QuotaStatusStale" xml:space="preserve"><value>Provider quota data is stale.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Quota status: data is stale.</value></data>
+  <data name="CapabilityNotSupported" xml:space="preserve"><value>This Host does not yet support this operation. Upgrade Forge on this project's Host to use it.</value></data>
 </root>

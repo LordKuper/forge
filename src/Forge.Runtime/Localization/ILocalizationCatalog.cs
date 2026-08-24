@@ -387,4 +387,9 @@ public static class MessageKeys
     public const string QuotaStatusDepletedAccessible = "QuotaStatusDepletedAccessible";
     public const string QuotaStatusStale = "QuotaStatusStale";
     public const string QuotaStatusStaleAccessible = "QuotaStatusStaleAccessible";
+
+    /// <summary>ADR 0053: shown instead of a mutation's ordinary failure text when the connected
+    /// Host's handshake-advertised capability set is missing the one the request needed -- ADR
+    /// 0053's client-side capability gate rejected it before it ever reached the wire.</summary>
+    public const string CapabilityNotSupported = "CapabilityNotSupported";
 }

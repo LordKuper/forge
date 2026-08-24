@@ -293,4 +293,5 @@
   <data name="QuotaStatusDepletedAccessible" xml:space="preserve"><value>Статус квоты: исчерпана.</value></data>
   <data name="QuotaStatusStale" xml:space="preserve"><value>Данные о квоте устарели.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Статус квоты: данные устарели.</value></data>
+  <data name="CapabilityNotSupported" xml:space="preserve"><value>Этот Host пока не поддерживает эту операцию. Обновите Forge на Host этого проекта, чтобы использовать её.</value></data>
 </root>

@@ -50,6 +50,12 @@ public sealed class ForgeHostClient : IAsyncDisposable
 
     public bool IsConnected => connection is not null;
 
+    /// <summary>The Host's own handshake-advertised capability set (<c>CapabilityIds.Implemented</c>
+    /// on whichever version answered) — empty until a handshake succeeds, and refreshed by every
+    /// subsequent one. Never the client's own requested set: a caller that wants to know what this
+    /// Host actually supports before dispatching reads this, not <see cref="ForgeHostClientOptions.Capabilities"/>.</summary>
+    public IReadOnlyList<string> HostCapabilities { get; private set; } = [];
+
     public async Task<ControlDiagnostic> EnsureConnectedAsync(
         StartHostAsync? startHost,
         CancellationToken cancellationToken)
@@ -187,6 +193,7 @@ public sealed class ForgeHostClient : IAsyncDisposable
             }
 
             connection = candidate;
+            HostCapabilities = response.Capabilities;
             return ControlDiagnostic.None;
         }
         catch (ControlProtocolException exception)
@@ -227,6 +234,9 @@ public sealed class ForgeHostClient : IAsyncDisposable
 
         ILocalControlConnection dropped = connection;
         connection = null;
+        // A stale capability set from a since-dropped connection must never outlive it -- the next
+        // successful handshake (possibly against a different Host) repopulates this fresh.
+        HostCapabilities = [];
         await dropped.DisposeAsync().ConfigureAwait(false);
     }
 }

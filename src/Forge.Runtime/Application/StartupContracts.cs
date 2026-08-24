@@ -165,6 +165,11 @@ public static class DiagnosticCodes
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";
 
+    /// <summary>ADR 0053: the connected Host's own handshake-advertised capability set does not
+    /// include the one this request needs -- rejected client-side before the request ever reaches
+    /// the wire, distinct from <see cref="HostUnavailable"/> (no Host reachable at all).</summary>
+    public const string CapabilityNotSupported = "capability_not_supported";
+
     /// <summary>`forge confirm`'s <c>--evidence-kind</c> was not one of <c>inspection</c>/
     /// <c>execution</c>/<c>existing-check</c> (matching `confirmation-result.schema.json`'s own
     /// vocabulary).</summary>
