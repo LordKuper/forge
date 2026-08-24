@@ -252,8 +252,23 @@ guard is held only for the write itself. The handler also now checks the write's
 `ConfigurationWriteResult.Succeeded` (PR #103 review finding 1: it used to discard the result and
 always render as if the toggle had succeeded, so a failed write left the sidebar silently inert with
 no diagnostic); on failure it sets `sidebarNotice` via the same `Message(text, diagnosticCode)`
-helper add/remove-project already use (PR #98 review finding 3) and renders with the state left
-unchanged, so the visible rail matches what was actually persisted. The toggle's accessible name
+helper add/remove-project already use (PR #98 review finding 3).
+
+The first release of this fix rendered with the state left unchanged on failure, so the visible rail
+matched what was actually persisted. Iteration 2 of that same review found this unrecoverable for the
+expand direction specifically: the collapsed rail's only control is this toggle, so rolling a failed
+*expand* attempt back to collapsed left the user stuck there with a write that keeps failing for the
+same durable reason (a locked/read-only/full `config.json`) on every retry -- and, because
+`RenderSidebarFromSnapshot` returned at its collapsed early exit before reaching the `sidebarNotice`
+block at all, that notice was not even visible to explain why. Both parts of that are fixed together:
+`RenderSidebarFromSnapshot` now renders `sidebarNotice` right after the toggle button, before the
+collapsed-state early return, so a pending notice is visible in both layouts; and the handler no
+longer rolls the visible state back on failure at all -- it always applies the requested
+collapsed/expanded state and lets the notice alone report whether the write actually persisted,
+matching how `ForgeSettingsViewModel.SaveAsync`/`ProjectSettingsViewModel.SaveAsync`'s own
+save-failure paths elsewhere in this shell already leave the caller's requested state in place and
+only flag the failure, never revert it. Collapse state is a cosmetic view preference, not domain
+data, so failing to persist it need not also refuse to apply it. The toggle's accessible name
 (`MessageKeys.SidebarCollapseAction`/`SidebarExpandAction`, English and Russian) flips with the
 state it describes, so the state change is conveyed by more than a bare column-width change a screen
 reader cannot perceive (plan 12.6).

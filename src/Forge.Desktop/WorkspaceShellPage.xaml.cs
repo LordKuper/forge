@@ -27,9 +27,10 @@ public partial class WorkspaceShellPage : ContentPage
     /// a failed collapse/expand write -- PR #103 review finding 1) has a result worth telling the
     /// user about (PR #98 review finding 3); read once by <see cref="RenderSidebarFromSnapshot"/> and
     /// left in place until the next such action so it survives that render instead of a stale value
-    /// flashing and vanishing. Not shown while the sidebar is collapsed (the icon-only rail has no
-    /// room for it); a notice set while collapsed is retained and surfaces once the sidebar is next
-    /// expanded.</summary>
+    /// flashing and vanishing. Rendered in both the expanded and collapsed layouts (PR #103 review
+    /// finding 1, iteration 2): a notice set by a failed collapse/expand write must stay visible even
+    /// while the rail is collapsed, since a failed *expand* attempt is exactly the case that leaves
+    /// the sidebar in that state with no other control to surface it later.</summary>
     private string? sidebarNotice;
     /// <summary>The most recently loaded sidebar snapshot (PR #103 review finding 3): lets the
     /// collapse/expand toggle re-render from data already in hand instead of paying for
@@ -160,11 +161,25 @@ public partial class WorkspaceShellPage : ContentPage
         ShellGrid.ColumnDefinitions[0].Width =
             snapshot.Collapsed ? GridLength.Auto : new GridLength(SidebarExpandedWidth);
         SidebarHost.Children.Add(BuildSidebarToggleButton(snapshot.Collapsed));
+        // PR #103 review finding 1 (iteration 2): this used to sit after the collapsed early return
+        // below, so a notice set by a failed expand attempt -- the write fails while the rail is
+        // still collapsed -- was built and then immediately discarded by that return, leaving the
+        // click silently inert with no diagnostic and, since the collapsed rail has no other
+        // control, no in-app way back to an expanded sidebar. Rendering it here, before the return,
+        // means both directions of a failed write are always visible (see `sidebarNotice`'s own
+        // remarks and the click handler below, which also stopped rolling the visible state back to
+        // collapsed on a failed write for the same reason).
+        if (!string.IsNullOrEmpty(sidebarNotice))
+        {
+            SidebarHost.Children.Add(Describe(new Label { Text = sidebarNotice }));
+        }
+
         if (snapshot.Collapsed)
         {
             // ADR 0050 addendum: collapsed is an icon-only rail -- only the re-expand affordance
-            // above stays visible, matching plan 12.6 ("state conveyed by an icon/text change, not
-            // merely a width change") since the toggle's own accessible name already flips with it.
+            // and any pending failure notice above stay visible, matching plan 12.6 ("state conveyed
+            // by an icon/text change, not merely a width change") since the toggle's own accessible
+            // name already flips with it.
             return;
         }
 
@@ -190,15 +205,12 @@ public partial class WorkspaceShellPage : ContentPage
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
         SemanticProperties.SetDescription(quota, snapshot.Status.QuotaAccessibleText);
         SidebarHost.Children.Add(quota);
-
         // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an
         // invalid root, an already-cataloged entry, a catalog write failure) completely silent.
         // `sidebarNotice` is set by the add/remove handlers just before they trigger this render, so
-        // it survives the rebuild instead of being wiped by it.
-        if (!string.IsNullOrEmpty(sidebarNotice))
-        {
-            SidebarHost.Children.Add(Describe(new Label { Text = sidebarNotice }));
-        }
+        // it survives the rebuild instead of being wiped by it -- now rendered once, above, right
+        // after the toggle button, so it is also visible in the collapsed layout (see that block's
+        // own remarks, PR #103 review finding 1 iteration 2).
     }
 
     /// <summary>The whole-sidebar collapse/expand toggle (ADR 0050 addendum): always the sidebar's
@@ -220,12 +232,20 @@ public partial class WorkspaceShellPage : ContentPage
             // a scope violation) left the sidebar silently inert -- the click did nothing and no
             // diagnostic appeared anywhere. Same sidebarNotice/Message pattern PR #98 review finding
             // 3 already established in this file for add/remove-project.
-            bool nowCollapsed = collapsed;
-            if (result.Succeeded)
-            {
-                nowCollapsed = !collapsed;
-            }
-            else
+            //
+            // Iteration-2 review on this same finding: rolling the visible state back to `collapsed`
+            // on failure (the original fix here) matched what was actually persisted, but for the
+            // expand direction that rollback re-enters the collapsed rail -- the one layout whose
+            // only control is this same toggle -- with the failure notice now rendered there too
+            // (see RenderSidebarFromSnapshot), but the write keeps failing for the same durable
+            // reason (locked/read-only/full config.json) on every retry. Collapse state is a cosmetic
+            // view preference, not domain data, so -- matching how ForgeSettingsViewModel.SaveAsync
+            // and ProjectSettingsViewModel.SaveAsync already treat a failed settings save elsewhere
+            // in this shell (the caller's requested edits stay visible/applied; only a failure notice
+            // is added, nothing is rolled back for the user) -- the visible state now always follows
+            // the click. Only the notice reports whether the preference actually persisted.
+            bool nowCollapsed = !collapsed;
+            if (!result.Succeeded)
             {
                 sidebarNotice = Message(text.Resolve(MessageKeys.SidebarCollapseSaveFailed), result.DiagnosticCode);
             }
