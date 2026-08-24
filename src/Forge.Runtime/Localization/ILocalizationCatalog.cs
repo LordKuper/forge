@@ -434,8 +434,19 @@ public static class MessageKeys
 
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
     /// blocked reason code ("node"/"finding"/"gate"/"confirmation"/"review_convergence"/"rewind" --
-    /// see SprintScheduler/StageTransitionCoordinator's own <c>BlockedBy*</c> constants).</summary>
+    /// see SprintScheduler/StageTransitionCoordinator's own <c>BlockedBy*</c> constants), resolved to
+    /// a localized label by <see cref="TimelineMessageFormatter.Format"/> before substitution (PR
+    /// #107 review finding 3) rather than interpolated as the raw machine code.</summary>
     public const string WorkflowSprintBlocked = "workflow.sprint_blocked";
+
+    /// <summary>PR #107 review finding 2: not emitted by any producing call site today, but a
+    /// literal `messageKey` argument this test suite already exercises against
+    /// <c>ISprintStore.AppendTransitionAsync</c> (<c>NotificationProjectorTests.cs</c>) -- since that
+    /// parameter accepts an arbitrary string with no closed-set validation (see the finding 1 crash
+    /// this PR fixes), a future producing call site could use it without warning unless it is
+    /// already registered.</summary>
+    public const string WorkflowSprintFailed = "workflow.sprint_failed";
+
     public const string WorkflowSprintCompleted = "workflow.sprint_completed";
     public const string WorkflowSprintRunning = "workflow.sprint_running";
     public const string WorkflowSprintAwaitingHuman = "workflow.sprint_awaiting_human";
@@ -466,8 +477,20 @@ public static class MessageKeys
     public const string WorkflowAttemptCreated = "workflow.attempt_created";
 
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
-    /// attempt's raw snake_case target state (<see cref="WorkflowEvent.ToStateArgument"/>).</summary>
+    /// attempt's target state (<see cref="WorkflowEvent.ToStateArgument"/>), resolved to a localized
+    /// <see cref="Domain.AttemptState"/> label by <see cref="TimelineMessageFormatter.Format"/> before
+    /// substitution (PR #107 review finding 4) rather than interpolated as the raw snake_case
+    /// value.</summary>
     public const string WorkflowAttemptTransitioned = "workflow.attempt_transitioned";
+
+    // PR #107 review finding 2: same "not emitted today, but a literal messageKey argument the test
+    // suite already exercises against ISprintStore.AppendTransitionAsync directly
+    // (SprintEventStoreTests.cs)" reasoning as WorkflowSprintFailed above.
+    public const string WorkflowAttemptCancelled = "workflow.attempt_cancelled";
+
+    public const string WorkflowAttemptPreparing = "workflow.attempt_preparing";
+    public const string WorkflowAttemptRunning = "workflow.attempt_running";
+    public const string WorkflowAttemptValidating = "workflow.attempt_validating";
     public const string WorkflowAttemptStopped = "workflow.attempt_stopped";
     public const string WorkflowAttemptSuperseded = "workflow.attempt_superseded";
 
@@ -497,6 +520,41 @@ public static class MessageKeys
     public const string WorkflowAgentSummaryRecorded = "workflow.agent_summary_recorded";
 
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
-    /// template taking the routed provider id, model id, then the raw snake_case outcome.</summary>
+    /// template taking the routed provider id, model id verbatim (proper identifiers, never
+    /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by
+    /// <see cref="TimelineMessageFormatter.Format"/> before substitution (PR #107 review finding 5)
+    /// rather than the raw snake_case outcome.</summary>
     public const string RoutingDecisionRecorded = "routing.decision_recorded";
+
+    // PR #107 review finding 3: localized labels for workflow.sprint_blocked's blocked_reason
+    // argument (SprintScheduler/StageTransitionCoordinator's own BlockedBy* constants) -- see
+    // TimelineMessageFormatter.BlockedReasonLabel.
+    public const string SprintBlockedReasonNode = "SprintBlockedReasonNode";
+    public const string SprintBlockedReasonFinding = "SprintBlockedReasonFinding";
+    public const string SprintBlockedReasonGate = "SprintBlockedReasonGate";
+    public const string SprintBlockedReasonConfirmation = "SprintBlockedReasonConfirmation";
+    public const string SprintBlockedReasonReviewConvergence = "SprintBlockedReasonReviewConvergence";
+    public const string SprintBlockedReasonRewind = "SprintBlockedReasonRewind";
+
+    // PR #107 review finding 4: localized labels for workflow.attempt_transitioned's to_state
+    // argument (Domain.AttemptState) -- see TimelineMessageFormatter.AttemptStateLabel. Distinct
+    // from the not-yet-used SprintStatePaused-style family above (SprintState and AttemptState are
+    // different enums with different member sets).
+    public const string AttemptStateCreated = "AttemptStateCreated";
+    public const string AttemptStatePreparing = "AttemptStatePreparing";
+    public const string AttemptStateRunning = "AttemptStateRunning";
+    public const string AttemptStateValidating = "AttemptStateValidating";
+    public const string AttemptStateSucceeded = "AttemptStateSucceeded";
+    public const string AttemptStateFailed = "AttemptStateFailed";
+    public const string AttemptStateCancelled = "AttemptStateCancelled";
+
+    // PR #107 review finding 5: localized labels for routing.decision_recorded's outcome argument
+    // (Domain.RouteOutcome) -- see TimelineMessageFormatter.RoutingOutcomeLabel.
+    public const string RoutingOutcomeRouted = "RoutingOutcomeRouted";
+    public const string RoutingOutcomeSucceeded = "RoutingOutcomeSucceeded";
+    public const string RoutingOutcomeFailed = "RoutingOutcomeFailed";
+    public const string RoutingOutcomeCircuitOpen = "RoutingOutcomeCircuitOpen";
+    public const string RoutingOutcomeBudgetExhausted = "RoutingOutcomeBudgetExhausted";
+    public const string RoutingOutcomeExcluded = "RoutingOutcomeExcluded";
+    public const string RoutingOutcomeDeferred = "RoutingOutcomeDeferred";
 }

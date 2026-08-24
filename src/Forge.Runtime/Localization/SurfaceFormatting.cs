@@ -262,7 +262,11 @@ public static class SurfaceFormatting
     }
 
     /// <summary>ADR 0005's bounded event-log projection as one ordered line list, shared by `forge
-    /// events` and the Desktop control-events view so the two can never drift.</summary>
+    /// events` and the Desktop control-events view so the two can never drift. PR #107 review
+    /// finding 6: the message key is resolved through <see cref="TimelineMessageFormatter"/> --
+    /// the same neutral formatter the sprint timeline uses -- instead of rendered as the raw
+    /// `workflow.*`/`routing.*` journal key, so this shared surface is localized too rather than
+    /// leaving a second, un-localized rendering path for the same key space.</summary>
     public static IReadOnlyList<string> EventLines(SurfaceText text, ControlEventsPage page)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -276,10 +280,11 @@ public static class SurfaceFormatting
 
         foreach (ControlEventRecord record in page.Events)
         {
+            string messageText = TimelineMessageFormatter.Format(text, record.Event.MessageKey, record.Event.Arguments);
             lines.Add(string.Create(
                 CultureInfo.InvariantCulture,
                 $"  {record.SprintId} {record.Event.Type} {Machine(record.Event.Aggregate.Kind)}:" +
-                    $"{record.Event.Aggregate.Id} {record.Event.MessageKey}"));
+                    $"{record.Event.Aggregate.Id} {messageText}"));
         }
 
         return lines;

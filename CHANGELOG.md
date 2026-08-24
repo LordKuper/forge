@@ -10,13 +10,22 @@ User-facing Forge changes are listed by release, newest first.
   instead of the raw internal event key (e.g. "Sprint completed." / "Спринт завершён." instead of
   `workflow.sprint_completed`). Entries that carry an operator- or agent-authored value -- a posted
   message, a node's summary, a supersession instruction, a rewind's reason, or a routing decision --
-  still show that exact text inside the localized sentence.
+  still show that exact text inside the localized sentence. A machine-only code embedded in a few
+  entries (why a sprint is blocked, an attempt's new state, a routing outcome) is now shown as a
+  localized phrase too, instead of the raw internal code (e.g. "Sprint blocked (review
+  convergence)." instead of "Sprint blocked (review_convergence)."). `forge events` and Desktop's
+  events view render the same localized text for these keys as the timeline does.
 
 ### Fixed
 
 - Added an automated check that catches an English string accidentally left untranslated in the
   Russian surface (previously only the presence of every key was verified, not that its value was
-  actually translated).
+  actually translated). Added a second automated check that fails if any internal event key used
+  anywhere in the codebase is missing its English/Russian text, catching five keys this release had
+  left unregistered.
+- The sprint timeline no longer crashes if it encounters an internal event key with no registered
+  text (e.g. after an upgrade removes an old key, or a diagnostic redaction rewrites one) -- it now
+  falls back to showing the raw key for that one entry instead of failing the whole timeline.
 
 ## v0.72.0
 

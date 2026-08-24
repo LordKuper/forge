@@ -639,12 +639,19 @@ prior behavior or an equivalent mutation.
       anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
       at all today, not because of an enforced rule.)*
 - [x] English and Russian surfaces contain no missing or machine-only user-facing strings. Key-set
-      parity (340/340) and value parity are both enforced by automated tests
+      parity (365/365) and value parity are both enforced by automated tests
       (`LocalizationCatalogTests`): every key present in both `Messages.resx`/`Messages.ru.resx` must
       have a byte-different English/Russian value, unless it is on a documented, individually
       justified allow-list (currently one entry: `AppTitle`, the product's own brand name). A future
       regression that copies an English value into `Messages.ru.resx` now fails that test instead of
-      passing silently.
+      passing silently. A third automated test scans every `.cs` file in the repository for a
+      `workflow.`/`routing.` journal message key literal and fails if any is missing from either resx
+      file, so the 41-key closure PR #107 first shipped cannot silently regress. `SurfaceFormatting.EventLines`
+      (shared by `forge events` and Desktop's events view) resolves the same keys through
+      `TimelineMessageFormatter`, so no second raw-key rendering path remains for this key space
+      (PR #107 review finding 6). Machine-only argument values embedded in a few templates (the
+      blocked reason, the attempt's to-state, the routing outcome) are likewise mapped to a localized
+      label before substitution rather than interpolated raw (PR #107 review findings 3-5).
 - [ ] CLI and Desktop invoke the same Host commands and render semantically identical results for
       stop, stage assessment, stage move, configuration, and existing workflow operations. *(Partial:
       genuine output-equality parity tests exist for sprint tree/detail, events, startup checks,

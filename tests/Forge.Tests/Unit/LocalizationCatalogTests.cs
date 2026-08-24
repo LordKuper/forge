@@ -1,4 +1,6 @@
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Forge.Domain;
 using Forge.Localization;
 
 namespace Forge.UnitTests;
@@ -64,6 +66,101 @@ public sealed class LocalizationCatalogTests
         Assert.Equal(
             "Сообщение: stale finding, rewinding to replan",
             TimelineMessageFormatter.Format(russian, MessageKeys.WorkflowUserMessagePosted, arguments));
+    }
+
+    /// <summary>PR #107 review finding 1 (regression): <see cref="TimelineMessageFormatter.Format"/>
+    /// used to call <see cref="SurfaceText.Resolve"/> unguarded, so any `workflow.`/`routing.`
+    /// message key without a <c>Messages.resx</c> entry threw <see cref="System.Resources.MissingManifestResourceException"/>
+    /// and crashed the whole timeline render. That is genuinely reachable: <c>ISprintStore.AppendTransitionAsync</c>
+    /// accepts an arbitrary string with no closed-set validation, and <c>SprintTimelineRedaction.Apply</c>
+    /// rewrites <c>MessageKey</c> through <c>SecretRedactor</c> right before it reaches this method,
+    /// guaranteeing it will not resolve. Proves the fix: an unmapped key now renders as the raw key
+    /// itself -- the pre-this-feature behavior -- instead of throwing.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterFallsBackToTheRawKeyForAnUnmappedMessageKeyInsteadOfThrowing()
+    {
+        SurfaceText text = new(new ResourceLocalizationCatalog(), new("en-US"));
+        Dictionary<string, string?> noArguments = new(StringComparer.Ordinal);
+
+        string rendered = TimelineMessageFormatter.Format(text, "workflow.not_a_registered_key", noArguments);
+
+        Assert.Equal("workflow.not_a_registered_key", rendered);
+    }
+
+    /// <summary>PR #107 review finding 3: `workflow.sprint_blocked`'s `{0}` used to be the raw
+    /// snake_case `blocked_reason` code (e.g. "review_convergence"), a machine-only token inside
+    /// otherwise-localized prose. Proves the specific representative value from the review comment
+    /// now renders a real translated phrase in both languages instead of the raw code.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterLocalizesTheSprintBlockedReasonCodeInsteadOfInterpolatingItRaw()
+    {
+        SurfaceText english = new(new ResourceLocalizationCatalog(), new("en-US"));
+        SurfaceText russian = new(new ResourceLocalizationCatalog(), new("ru-RU"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.BlockedReasonArgument] = "review_convergence",
+        };
+
+        string englishText = TimelineMessageFormatter.Format(english, MessageKeys.WorkflowSprintBlocked, arguments);
+        string russianText = TimelineMessageFormatter.Format(russian, MessageKeys.WorkflowSprintBlocked, arguments);
+
+        Assert.Equal("Sprint blocked (review convergence).", englishText);
+        Assert.Equal("Спринт заблокирован (сведение результатов проверки).", russianText);
+        Assert.DoesNotContain("review_convergence", englishText, StringComparison.Ordinal);
+        Assert.DoesNotContain("review_convergence", russianText, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #107 review finding 4: `workflow.attempt_transitioned`'s `{0}` used to be the raw
+    /// snake_case <see cref="AttemptState"/> value -- the timeline's highest-frequency entry. Proves
+    /// the specific representative value from the review comment ("validating") now renders a real
+    /// translated phrase in both languages instead of the raw state name.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterLocalizesTheAttemptToStateInsteadOfInterpolatingItRaw()
+    {
+        SurfaceText english = new(new ResourceLocalizationCatalog(), new("en-US"));
+        SurfaceText russian = new(new ResourceLocalizationCatalog(), new("ru-RU"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.ToStateArgument] = "validating",
+        };
+
+        string englishText = TimelineMessageFormatter.Format(english, MessageKeys.WorkflowAttemptTransitioned, arguments);
+        string russianText = TimelineMessageFormatter.Format(russian, MessageKeys.WorkflowAttemptTransitioned, arguments);
+
+        Assert.Equal("Attempt transitioned to \"Validating\".", englishText);
+        Assert.Equal("Попытка перешла в состояние «Проверяется».", russianText);
+        Assert.DoesNotContain("validating", englishText, StringComparison.Ordinal);
+        Assert.DoesNotContain("validating", russianText, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #107 review finding 5: `routing.decision_recorded`'s `{2}` used to be the raw
+    /// snake_case <see cref="RouteOutcome"/> value, the only part of that sentence carrying actual
+    /// meaning (`{0}`/`{1}`, provider/model ids, correctly stay verbatim). Proves the specific
+    /// representative outcome now renders a real translated phrase in both languages instead of the
+    /// raw outcome code.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterLocalizesTheRoutingOutcomeInsteadOfInterpolatingItRaw()
+    {
+        SurfaceText english = new(new ResourceLocalizationCatalog(), new("en-US"));
+        SurfaceText russian = new(new ResourceLocalizationCatalog(), new("ru-RU"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            ["provider"] = "claude",
+            ["model"] = "sonnet",
+            ["outcome"] = "budget_exhausted",
+        };
+
+        string englishText = TimelineMessageFormatter.Format(english, MessageKeys.RoutingDecisionRecorded, arguments);
+        string russianText = TimelineMessageFormatter.Format(russian, MessageKeys.RoutingDecisionRecorded, arguments);
+
+        Assert.Equal("Routed to claude/sonnet: budget exhausted.", englishText);
+        Assert.Equal("Маршрутизировано на claude/sonnet: бюджет исчерпан.", russianText);
+        Assert.DoesNotContain("budget_exhausted", englishText, StringComparison.Ordinal);
+        Assert.DoesNotContain("budget_exhausted", russianText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -134,6 +231,83 @@ public sealed class LocalizationCatalogTests
             Assert.True(russian.TryGetValue(key, out string? russianValue), $"Allow-listed key '{key}' no longer exists in Messages.ru.resx.");
             Assert.Equal(englishValue, russianValue);
         }
+    }
+
+    /// <summary>PR #107 review finding 2: <see cref="BuiltInCatalogsHaveIdenticalKeys"/> only proves
+    /// the two resx files agree with each other -- nothing guarded the property the whole
+    /// timeline-localization feature rests on, that every `workflow.`/`routing.`
+    /// <see cref="WorkflowEvent.MessageKey"/> literal anywhere in this repository actually has a
+    /// resx entry. Five such literals (`workflow.sprint_failed`, `workflow.attempt_cancelled`,
+    /// `workflow.attempt_preparing`, `workflow.attempt_running`, `workflow.attempt_validating`) were
+    /// found unmapped by grepping the repository for this review -- exercised only by test fixtures
+    /// today (<c>NotificationProjectorTests</c>/<c>SprintEventStoreTests</c>, both calling
+    /// <c>ISprintStore.AppendTransitionAsync</c> directly, which accepts an arbitrary string with no
+    /// closed-set validation), but exactly the shape a future production key would take. Scans every
+    /// <c>.cs</c> file under <c>src/</c> and <c>tests/</c> for a quoted `workflow.`/`routing.` string
+    /// literal and asserts each one (excluding <see cref="NonMessageKeyWorkflowLiterals"/> -- a
+    /// different, deliberately unregistered vocabulary) has an entry in both resx files.</summary>
+    private static readonly HashSet<string> NonMessageKeyWorkflowLiterals = new(StringComparer.Ordinal)
+    {
+        // Forge.Presentation.PresentationContracts.CapabilityIds: capability identifiers, never a
+        // durable WorkflowEvent.MessageKey the journal actually persists.
+        "workflow.review",
+        "workflow.confirm",
+        "workflow.test_work",
+        "workflow.finalize",
+        "workflow.stop_operation",
+        "workflow.assess_stage_transition",
+
+        // TimelineMessageFormatterFallsBackToTheRawKeyForAnUnmappedMessageKeyInsteadOfThrowing's own
+        // deliberately-unregistered fixture key (PR #107 review finding 1's regression test) --
+        // never a real WorkflowEvent.MessageKey, must never gain a resx entry.
+        "workflow.not_a_registered_key",
+    };
+
+    private static readonly Regex MessageKeyLiteralPattern =
+        new("\"((?:workflow|routing)\\.[a-z][a-z0-9_]*)\"", RegexOptions.Compiled);
+
+    [Fact]
+    [Trait("Category", "Architecture")]
+    public void EveryWorkflowAndRoutingMessageKeyLiteralInTheRepositoryIsRegisteredInBothCatalogs()
+    {
+        string root = RepositoryRoot.Find();
+        string resources = Path.Combine(root, "src", "Forge.Runtime", "Localization", "Resources");
+        HashSet<string> english = ReadKeys(Path.Combine(resources, "Messages.resx"));
+        HashSet<string> russian = ReadKeys(Path.Combine(resources, "Messages.ru.resx"));
+
+        List<string> missing =
+        [
+            .. FindMessageKeyLiterals(root)
+                .Where(key => !english.Contains(key) || !russian.Contains(key))
+                .OrderBy(key => key, StringComparer.Ordinal),
+        ];
+
+        Assert.True(
+            missing.Count == 0,
+            "workflow./routing. message key literal(s) found in the repository with no " +
+                $"Messages.resx/Messages.ru.resx entry: {string.Join(", ", missing)}");
+    }
+
+    private static HashSet<string> FindMessageKeyLiterals(string root)
+    {
+        HashSet<string> literals = new(StringComparer.Ordinal);
+        foreach (string relativeDirectory in new[] { "src", "tests" })
+        {
+            string directory = Path.Combine(root, relativeDirectory);
+            foreach (string file in Directory.EnumerateFiles(directory, "*.cs", SearchOption.AllDirectories))
+            {
+                foreach (Match match in MessageKeyLiteralPattern.Matches(File.ReadAllText(file)))
+                {
+                    string key = match.Groups[1].Value;
+                    if (!NonMessageKeyWorkflowLiterals.Contains(key))
+                    {
+                        literals.Add(key);
+                    }
+                }
+            }
+        }
+
+        return literals;
     }
 
     private static HashSet<string> ReadKeys(string path) =>

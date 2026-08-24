@@ -344,4 +344,29 @@
   <data name="workflow.user_message_posted" xml:space="preserve"><value>Message: {0}</value></data>
   <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Summary: {0}</value></data>
   <data name="routing.decision_recorded" xml:space="preserve"><value>Routed to {0}/{1}: {2}.</value></data>
+  <data name="workflow.sprint_failed" xml:space="preserve"><value>Sprint failed.</value></data>
+  <data name="workflow.attempt_preparing" xml:space="preserve"><value>Attempt is preparing to run.</value></data>
+  <data name="workflow.attempt_running" xml:space="preserve"><value>Attempt is running.</value></data>
+  <data name="workflow.attempt_validating" xml:space="preserve"><value>Attempt is being validated.</value></data>
+  <data name="workflow.attempt_cancelled" xml:space="preserve"><value>Attempt cancelled.</value></data>
+  <data name="SprintBlockedReasonNode" xml:space="preserve"><value>a node requires attention</value></data>
+  <data name="SprintBlockedReasonFinding" xml:space="preserve"><value>an open finding</value></data>
+  <data name="SprintBlockedReasonGate" xml:space="preserve"><value>a pending gate</value></data>
+  <data name="SprintBlockedReasonConfirmation" xml:space="preserve"><value>a pending confirmation</value></data>
+  <data name="SprintBlockedReasonReviewConvergence" xml:space="preserve"><value>review convergence</value></data>
+  <data name="SprintBlockedReasonRewind" xml:space="preserve"><value>an unconverged rewind</value></data>
+  <data name="AttemptStateCreated" xml:space="preserve"><value>Created</value></data>
+  <data name="AttemptStatePreparing" xml:space="preserve"><value>Preparing</value></data>
+  <data name="AttemptStateRunning" xml:space="preserve"><value>Running</value></data>
+  <data name="AttemptStateValidating" xml:space="preserve"><value>Validating</value></data>
+  <data name="AttemptStateSucceeded" xml:space="preserve"><value>Succeeded</value></data>
+  <data name="AttemptStateFailed" xml:space="preserve"><value>Failed</value></data>
+  <data name="AttemptStateCancelled" xml:space="preserve"><value>Cancelled</value></data>
+  <data name="RoutingOutcomeRouted" xml:space="preserve"><value>routed</value></data>
+  <data name="RoutingOutcomeSucceeded" xml:space="preserve"><value>succeeded</value></data>
+  <data name="RoutingOutcomeFailed" xml:space="preserve"><value>failed</value></data>
+  <data name="RoutingOutcomeCircuitOpen" xml:space="preserve"><value>circuit open</value></data>
+  <data name="RoutingOutcomeBudgetExhausted" xml:space="preserve"><value>budget exhausted</value></data>
+  <data name="RoutingOutcomeExcluded" xml:space="preserve"><value>excluded</value></data>
+  <data name="RoutingOutcomeDeferred" xml:space="preserve"><value>deferred</value></data>
 </root>

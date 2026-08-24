@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Resources;
 using Forge.Domain;
 
 namespace Forge.Localization;
@@ -24,6 +25,10 @@ namespace Forge.Localization;
 /// <see cref="MessageKeys.TimelineUnreadLabel"/>. Every substituted argument here is durably
 /// guaranteed present by <see cref="WorkflowFold.IsTransitionRecord"/> or by the one producing call
 /// site (see each key's own remark below), so none of these substitutions can hit a missing value.
+/// A machine-only code among those arguments (the blocked reason, the attempt's raw to-state, the
+/// routing outcome) is itself mapped to a localized label before substitution (PR #107 review
+/// findings 3/4/5) rather than interpolated verbatim -- <see cref="BlockedReasonLabel"/>,
+/// <see cref="AttemptStateLabel"/>, <see cref="RoutingOutcomeLabel"/>.
 /// </remarks>
 public static class TimelineMessageFormatter
 {
@@ -38,12 +43,35 @@ public static class TimelineMessageFormatter
 
     private const string RoutingOutcomeArgument = "outcome";
 
+    /// <summary>PR #107 review finding 1: an unmapped/unregistered <paramref name="messageKey"/> is
+    /// genuinely reachable in production -- <c>ISprintStore.AppendTransitionAsync</c> accepts an
+    /// arbitrary string with no closed-set validation, and <c>SprintTimelineRedaction.Apply</c>
+    /// deliberately rewrites <c>MessageKey</c> through <c>SecretRedactor</c>
+    /// right before it reaches this method, which is guaranteed not to resolve. The pre-this-feature
+    /// behavior rendered the raw key verbatim and was crash-proof by construction; this method must
+    /// stay crash-proof too, so a missing catalog entry degrades to the raw key instead of taking
+    /// down the whole timeline page/command.</summary>
     public static string Format(SurfaceText text, string messageKey, IReadOnlyDictionary<string, string?> arguments)
     {
         ArgumentNullException.ThrowIfNull(text);
-        ArgumentException.ThrowIfNullOrWhiteSpace(messageKey);
         ArgumentNullException.ThrowIfNull(arguments);
-        string template = text.Resolve(messageKey);
+        if (string.IsNullOrWhiteSpace(messageKey))
+        {
+            // A malformed journal line's empty/blank key is just as unrenderable as an unregistered
+            // one -- degrade the same way rather than throwing (see this method's own remark above).
+            return messageKey ?? string.Empty;
+        }
+
+        string template;
+        try
+        {
+            template = text.Resolve(messageKey);
+        }
+        catch (MissingManifestResourceException)
+        {
+            return messageKey;
+        }
+
         object?[] values = messageKey switch
         {
             // Fixed, closed-form reason codes (never free text): "node"/"finding"/"gate"/
@@ -51,7 +79,7 @@ public static class TimelineMessageFormatter
             // StageTransitionCoordinator's own BlockedBy* constants. Always present: every
             // `workflow.sprint_blocked` producing call site sets it.
             MessageKeys.WorkflowSprintBlocked =>
-                [Value(arguments, WorkflowEvent.BlockedReasonArgument)],
+                [BlockedReasonLabel(text, Value(arguments, WorkflowEvent.BlockedReasonArgument))],
 
             // Always present: StageTransitionCoordinator.RewindNodeAsync sets it unconditionally on
             // both message keys.
@@ -61,7 +89,7 @@ public static class TimelineMessageFormatter
             // Always present: WorkflowEvent.ToStateArgument is set unconditionally by
             // FileSprintEventLog.AppendTransitionAsync for every transition event.
             MessageKeys.WorkflowAttemptTransitioned =>
-                [Value(arguments, WorkflowEvent.ToStateArgument)],
+                [AttemptStateLabel(text, Value(arguments, WorkflowEvent.ToStateArgument))],
 
             // Always present: required by WorkflowFold.IsTransitionRecord for this event type.
             MessageKeys.WorkflowAttemptSupersededInstruction =>
@@ -90,12 +118,96 @@ public static class TimelineMessageFormatter
                 [
                     Value(arguments, RoutingProviderArgument),
                     Value(arguments, RoutingModelArgument),
-                    Value(arguments, RoutingOutcomeArgument),
+                    RoutingOutcomeLabel(text, Value(arguments, RoutingOutcomeArgument)),
                 ],
 
             _ => [],
         };
         return values.Length == 0 ? template : string.Format(CultureInfo.InvariantCulture, template, values);
+    }
+
+    /// <summary>PR #107 review finding 3: <c>workflow.sprint_blocked</c>'s <c>{0}</c> was the raw
+    /// snake_case <c>blocked_reason</c> code -- a machine-only token inside otherwise-localized
+    /// prose. Maps the closed set of <c>BlockedBy*</c> codes (SprintScheduler/
+    /// StageTransitionCoordinator) to a localized label; an unrecognized code (never expected today,
+    /// but this method must stay crash-proof per finding 1) falls back to the raw code itself rather
+    /// than throwing.</summary>
+    private static string BlockedReasonLabel(SurfaceText text, string rawReason)
+    {
+        string? key = rawReason switch
+        {
+            "node" => MessageKeys.SprintBlockedReasonNode,
+            "finding" => MessageKeys.SprintBlockedReasonFinding,
+            "gate" => MessageKeys.SprintBlockedReasonGate,
+            "confirmation" => MessageKeys.SprintBlockedReasonConfirmation,
+            "review_convergence" => MessageKeys.SprintBlockedReasonReviewConvergence,
+            "rewind" => MessageKeys.SprintBlockedReasonRewind,
+            _ => null,
+        };
+        return key is null ? rawReason : text.Resolve(key);
+    }
+
+    /// <summary>PR #107 review finding 4: <c>workflow.attempt_transitioned</c>'s <c>{0}</c> was the
+    /// raw snake_case <see cref="AttemptState"/> value -- the timeline's highest-frequency entry, so
+    /// the most commonly seen untranslated fragment. Maps every <see cref="AttemptState"/> member to
+    /// a localized label; a value that does not parse as a known member (never expected today, but
+    /// this method must stay crash-proof per finding 1) falls back to the raw value itself.</summary>
+    private static string AttemptStateLabel(SurfaceText text, string rawState)
+    {
+        AttemptState state;
+        try
+        {
+            state = WorkflowStateNames.Parse<AttemptState>(rawState);
+        }
+        catch (FormatException)
+        {
+            return rawState;
+        }
+
+        string key = state switch
+        {
+            AttemptState.Created => MessageKeys.AttemptStateCreated,
+            AttemptState.Preparing => MessageKeys.AttemptStatePreparing,
+            AttemptState.Running => MessageKeys.AttemptStateRunning,
+            AttemptState.Validating => MessageKeys.AttemptStateValidating,
+            AttemptState.Succeeded => MessageKeys.AttemptStateSucceeded,
+            AttemptState.Failed => MessageKeys.AttemptStateFailed,
+            AttemptState.Cancelled => MessageKeys.AttemptStateCancelled,
+            _ => null!,
+        };
+        return key is null ? rawState : text.Resolve(key);
+    }
+
+    /// <summary>PR #107 review finding 5: <c>routing.decision_recorded</c>'s <c>{2}</c> was the raw
+    /// snake_case <see cref="RouteOutcome"/> value -- the only part of that sentence carrying the
+    /// actual meaning for the reader, unlike <c>{0}</c>/<c>{1}</c> (provider/model ids, which must
+    /// stay verbatim). Maps every <see cref="RouteOutcome"/> member to a localized label; a value
+    /// that does not parse as a known member (never expected today, but this method must stay
+    /// crash-proof per finding 1) falls back to the raw value itself.</summary>
+    private static string RoutingOutcomeLabel(SurfaceText text, string rawOutcome)
+    {
+        RouteOutcome outcome;
+        try
+        {
+            outcome = WorkflowStateNames.Parse<RouteOutcome>(rawOutcome);
+        }
+        catch (FormatException)
+        {
+            return rawOutcome;
+        }
+
+        string key = outcome switch
+        {
+            RouteOutcome.Routed => MessageKeys.RoutingOutcomeRouted,
+            RouteOutcome.Succeeded => MessageKeys.RoutingOutcomeSucceeded,
+            RouteOutcome.Failed => MessageKeys.RoutingOutcomeFailed,
+            RouteOutcome.CircuitOpen => MessageKeys.RoutingOutcomeCircuitOpen,
+            RouteOutcome.BudgetExhausted => MessageKeys.RoutingOutcomeBudgetExhausted,
+            RouteOutcome.Excluded => MessageKeys.RoutingOutcomeExcluded,
+            RouteOutcome.Deferred => MessageKeys.RoutingOutcomeDeferred,
+            _ => null!,
+        };
+        return key is null ? rawOutcome : text.Resolve(key);
     }
 
     private static string Value(IReadOnlyDictionary<string, string?> arguments, string key) =>
