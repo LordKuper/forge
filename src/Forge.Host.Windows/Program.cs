@@ -12,5 +12,5 @@ return await ForgeHostApplication.RunAsync(
     // the Host never calls the latter, but there is no smaller registration to reuse — see
     // WindowsPlatformPreflight's own dependency on the updater's target detector/strategy resolver.
     services => services.AddForgeWindowsUpdater().AddCodexProvider().AddClaudeProvider()
-        .AddForgeRuntimeWindowsNotifications(),
+        .AddForgeRuntimeWindowsNotifications().AddForgeRuntimeWindowsProcessContainment(),
     CancellationToken.None);

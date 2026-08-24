@@ -17,6 +17,7 @@ public static class MauiProgram
         MauiAppBuilder builder = MauiApp.CreateBuilder()
             .UseMauiApp<App>();
         builder.Services.AddForgeCore();
+        builder.Services.AddForgeRuntimeWindowsProcessContainment();
         builder.Services.AddForgeWindowsUpdater();
         builder.Services.AddCodexProvider();
         builder.Services.AddClaudeProvider();
