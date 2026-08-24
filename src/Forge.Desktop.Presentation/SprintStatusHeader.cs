@@ -12,8 +12,12 @@ namespace Forge.Desktop.Presentation;
 /// active-operation attempt's <see cref="Forge.Domain.AttemptSnapshot.Provider"/>/<c>.Model</c>
 /// once both are known, and falls back to the "not yet available" placeholder otherwise -- no
 /// active operation (nothing currently running), a non-model-bearing role (intake, confirmation,
-/// finalization; nothing was ever routed), or a legacy attempt recorded before this field existed,
-/// the same honest-omission posture Slice 5/7 already apply to account quota.
+/// finalization; nothing was ever routed), a legacy attempt recorded before this field existed, or
+/// an attempt between a stop request and its convergence (<c>Forge.Application.ActiveOperationLookup.FindActive</c>
+/// deliberately treats a stop-requested attempt as not "active", mirroring
+/// <c>StopOperationCoordinator.RequestStopAsync</c>'s own live-operation check, so the placeholder
+/// shows during that window even though the provider/model is still genuinely running) -- the same
+/// honest-omission posture Slice 5/7 already apply to account quota.
 /// </summary>
 public sealed record SprintStatusHeaderData(
     string ProjectDisplayName,
@@ -94,7 +98,12 @@ public static class SprintStatusHeaderProjector
         // up by id rather than "the most recently active attempt" so a settled-but-not-yet-cleaned-up
         // attempt row never masquerades as what is currently running. No active operation (terminal
         // sprint, nothing running right now), a non-model-bearing role, or a legacy attempt with
-        // neither field recorded all fall back to the same placeholder as before.
+        // neither field recorded all fall back to the same placeholder as before. This is also true,
+        // intentionally, from the moment a stop is requested until it converges: `active` itself
+        // comes from `ActiveOperationLookup.FindActive`, which deliberately excludes any attempt
+        // with `StopRequestedAt` set (the same "is this exactly what's live right now" semantics
+        // `StopOperationCoordinator.RequestStopAsync` applies), so the header blanks the still-live
+        // provider/model for that window rather than showing a value that may already be stopping.
         EntityStatus? activeAttempt = active?.ActiveOperationAttemptId is { } activeAttemptId
             ? details?.Attempts.FirstOrDefault(
                 attempt => attempt.Id == activeAttemptId.ToString("D", CultureInfo.InvariantCulture))

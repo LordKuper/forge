@@ -865,6 +865,25 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 creationArguments[WorkflowEvent.BaseCommitArgument] = baseCommit;
             }
 
+            // Carried forward here, not left for `StartAttemptAsync` to record when it later picks
+            // this replacement up: this node's role — and therefore the frozen `ExecutionProfile`
+            // `StartAttemptAsync` would route it to — never changes across a supersession, so the
+            // superseded attempt's own recorded provider/model already equals whatever a later
+            // routing decision would (re)compute. That later append matters for its own reasons
+            // (refreshing `LastActivityAt`/state) but always lands as a version conflict against
+            // the aggregate this call just created and is swallowed as the benign-resume case — so
+            // if provider/model are not captured on this event, the one the aggregate actually
+            // keeps, they are lost permanently rather than merely delayed.
+            if (attempt.Provider is { } supersededProvider)
+            {
+                creationArguments[WorkflowEvent.ProviderArgument] = supersededProvider;
+            }
+
+            if (attempt.Model is { } supersededModel)
+            {
+                creationArguments[WorkflowEvent.ModelArgument] = supersededModel;
+            }
+
             AppendOutcome creationOutcome = await store.AppendTransitionAsync(
                 projectRoot, sprintId, AggregateKind.Attempt, freshAttemptId.Value.ToString("D"), "AttemptChanged",
                 "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(WorkflowStateMachines.AttemptInitial),
