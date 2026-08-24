@@ -2,7 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.72.0
+## v0.73.0
+
+### Security
+
+- On Windows, a provider process (and every process it started) is now contained so that an abrupt
+  crash or forced kill of the Forge Host cannot leave it running forever as an orphan: every process
+  Forge spawns is placed in a Windows Job Object that the OS itself tears down the instant the Host's
+  own handle to it closes, whether that is a graceful shutdown or an unexpected termination. On Linux
+  and macOS, spawned processes are placed in their own isolated process group as a first step toward
+  the same protection, but an abrupt Host crash there does not yet automatically clean up the group —
+  this is a partial mitigation, not the same guarantee Windows now has.
 
 ### Added
 

@@ -588,9 +588,17 @@ prior behavior or an equivalent mutation.
 - [ ] A Host crash at every durable boundary recovers without resurrecting the stopped attempt or
       leaking its process/worktree. *(Partial: strong crash-simulation coverage exists for most
       boundaries, but no test covers a crash between the sprint-paused append and the final
-      convergence marker, and no test simulates an abrupt Host process kill to verify no orphaned
-      provider process — this codebase has no process-group/job-object containment, so that risk is
-      real but unverified rather than known-fixed.)*
+      convergence marker. Process containment against an abrupt Host kill is now real on Windows —
+      `IProcessRunner` assigns every spawned process to a Windows Job Object configured with
+      `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`WindowsJobObjectProcessContainment`), and a
+      crash-simulation test (`ProcessContainmentCrashTests`) forcibly kills a real spawning process
+      and confirms its contained child does not survive as an orphan. Linux/macOS get only a
+      best-effort process-group primitive (`Forge.Runtime.Posix.PosixProcessGroupContainment`) with
+      no reaper installed, so an abrupt Host crash there still leaves a live provider child running
+      until something else reaps it — honest infrastructure for a future reaper, not a guarantee, and
+      not exercised by an equivalent crash test on this Windows-only CI matrix. In practice this gap
+      was Windows-only anyway: provider adapters (Codex, Claude) are Windows-only in this codebase, so
+      Linux/macOS never ran a real long-lived provider child before this change either.)*
 - [x] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
       explanation, confirmation, and result.
 
@@ -667,8 +675,10 @@ hold under adversarial review). They fall into three groups:
    health and quota, not authentication/model-availability/Host-connectivity.
 3. **Missing test coverage** (not missing behavior) — a handful of crash-recovery and cross-surface
    parity scenarios are plausible-and-unexercised rather than known-broken: the advance-path crash
-   saga, the active-operation-blocks-advance prerequisite, a Host-process-kill orphan check, and
-   Desktop-vs-CLI result parity for stop/assess-stage/move-stage.
+   saga, the active-operation-blocks-advance prerequisite, and Desktop-vs-CLI result parity for
+   stop/assess-stage/move-stage. (A Host-process-kill orphan check is no longer in this bucket on
+   Windows — see 12.4 above for the real Job Object containment and crash-simulation test that closed
+   it there; Linux/macOS remain a genuine, honestly-documented behavior gap, not merely a test gap.)
 
 These are tracked as follow-up work rather than blocking this final slice's merge.
 
