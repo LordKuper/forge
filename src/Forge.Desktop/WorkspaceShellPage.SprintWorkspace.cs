@@ -85,6 +85,33 @@ public partial class WorkspaceShellPage
         // one-shot "not initialized yet" check that could never be false once the handler existed.
         bool suppressFilterChanged = false;
 
+        // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
+        // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
+        // confirm/test-work/finalize mutation -- the highest-frequency re-render in this page, since
+        // every one of those actions calls it. TrackContentFocus/RestoreContentFocus are this render's
+        // own local instance of the same mechanism RenderSidebarFromSnapshot uses (see
+        // WorkspaceShellPage.xaml.cs's TrackSidebarFocus/RestoreSidebarFocus and FocusKeyTracker's own
+        // remarks) -- scoped here rather than promoted to a field because these two hosts are rebuilt
+        // together only within this method's own closures.
+        FocusKeyTracker contentFocusTracker = new();
+        Dictionary<string, VisualElement> contentFocusRegistry = [];
+
+        T TrackContentFocus<T>(string key, T control) where T : VisualElement
+        {
+            contentFocusRegistry[key] = control;
+            control.Focused += (_, _) => contentFocusTracker.Capture(key);
+            return control;
+        }
+
+        void RestoreContentFocus()
+        {
+            if (contentFocusTracker.Consume() is { } key &&
+                contentFocusRegistry.TryGetValue(key, out VisualElement? control))
+            {
+                control.Focus();
+            }
+        }
+
         async Task RefreshHeaderAsync()
         {
             (SprintStatusHeaderData header, ProjectSnapshot snapshot) = await sprintWorkspace
@@ -134,7 +161,7 @@ public partial class WorkspaceShellPage
                 Describe(detailsLabel);
                 detailsLabel.IsVisible = !detailsLabel.IsVisible;
             };
-            StickyHeaderHost.Children.Add(detailsToggle);
+            StickyHeaderHost.Children.Add(TrackContentFocus("header:details-toggle", detailsToggle));
             StickyHeaderHost.Children.Add(detailsLabel);
         }
 
@@ -299,7 +326,8 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     stopResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(stopButton);
+                ContextualActionHost.Children.Add(
+                    TrackContentFocus($"action:{AvailableActionProjector.StopCurrentOperationActionId}", stopButton));
                 ContextualActionHost.Children.Add(BuildRationale(stop));
             }
 
@@ -333,7 +361,8 @@ public partial class WorkspaceShellPage
                     };
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
-                    ContextualActionHost.Children.Add(moveButton);
+                    ContextualActionHost.Children.Add(TrackContentFocus(
+                        string.Create(CultureInfo.InvariantCulture, $"action:move:{targetStageId}"), moveButton));
                     ContextualActionHost.Children.Add(BuildRationale(moveAction));
                     if (!moveAction.Enabled && moveAction.Blockers.Count > 0)
                     {
@@ -356,7 +385,14 @@ public partial class WorkspaceShellPage
                 Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction) };
                 approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
                 reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false));
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { approve, reject } });
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:gate:approve", approve),
+                        TrackContentFocus("action:gate:reject", reject),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(gateResult);
@@ -402,7 +438,7 @@ public partial class WorkspaceShellPage
                     supersedeResult.Text = message;
                 });
                 ContextualActionHost.Children.Add(instructionEntry);
-                ContextualActionHost.Children.Add(supersede);
+                ContextualActionHost.Children.Add(TrackContentFocus("action:attempt:supersede", supersede));
             }
 
             ContextualActionHost.Children.Add(supersedeResult);
@@ -457,7 +493,14 @@ public partial class WorkspaceShellPage
                 ContextualActionHost.Children.Add(definitionOfDoneEntry);
                 ContextualActionHost.Children.Add(evidenceEntry);
                 ContextualActionHost.Children.Add(evidenceKind);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { confirmed, notConfirmed } });
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:confirm:confirmed", confirmed),
+                        TrackContentFocus("action:confirm:not-confirmed", notConfirmed),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(confirmResult);
@@ -504,7 +547,14 @@ public partial class WorkspaceShellPage
                 added.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.TestsAdded));
                 noNewTests.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.NoNewTestsJustified));
                 ContextualActionHost.Children.Add(justificationEntry);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { added, noNewTests } });
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:test-work:added", added),
+                        TrackContentFocus("action:test-work:no-new-tests", noNewTests),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(testWorkResult);
@@ -530,7 +580,7 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     finalizeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(finalize);
+                ContextualActionHost.Children.Add(TrackContentFocus("action:finalize", finalize));
             }
 
             ContextualActionHost.Children.Add(finalizeResult);
@@ -547,7 +597,8 @@ public partial class WorkspaceShellPage
 
             Button button = new() { Text = label, IsEnabled = action.Enabled };
             button.Clicked += (_, _) => _ = RunAsync(execute);
-            ContextualActionHost.Children.Add(button);
+            ContextualActionHost.Children.Add(
+                TrackContentFocus(string.Create(CultureInfo.InvariantCulture, $"action:{actionId}"), button));
             ContextualActionHost.Children.Add(BuildRationale(action));
         }
 
@@ -670,6 +721,11 @@ public partial class WorkspaceShellPage
             }
 
             await RefreshActionsAsync().ConfigureAwait(true);
+            // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
+            // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
+            // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
+            // own remarks).
+            RestoreContentFocus();
         }
 
         await RefreshHeaderAsync().ConfigureAwait(true);

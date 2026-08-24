@@ -38,6 +38,12 @@ public partial class WorkspaceShellPage : ContentPage
     /// flip a column width. Refreshed by every <see cref="RenderSidebarAsync"/> call and by the
     /// toggle itself; never read for anything that needs current data.</summary>
     private SidebarSnapshot? lastSidebarSnapshot;
+    /// <summary>Plan 12.6 ("focus-stable after refresh"): the neutral half of the sidebar's focus-
+    /// preservation mechanism -- see <see cref="FocusKeyTracker"/>'s own remarks. Paired with
+    /// <see cref="sidebarFocusRegistry"/>, which is the MAUI-specific half (a live control needs a
+    /// live visual tree, so it cannot move to Forge.Desktop.Presentation).</summary>
+    private readonly FocusKeyTracker sidebarFocusTracker = new();
+    private readonly Dictionary<string, VisualElement> sidebarFocusRegistry = [];
     private MainPageViewModel legacy;
     private ProjectOverviewViewModel projectOverview;
     private ProjectSettingsViewModel projectSettings;
@@ -157,10 +163,15 @@ public partial class WorkspaceShellPage : ContentPage
     private void RenderSidebarFromSnapshot(SidebarSnapshot snapshot)
     {
         lastSidebarSnapshot = snapshot;
+        // Plan 12.6: every control this render creates below is re-registered under its own stable key
+        // (see TrackSidebarFocus's own remarks) -- clearing first means a project/sprint removed since
+        // the last render leaves no stale entry behind for RestoreSidebarFocus to (harmlessly, but
+        // pointlessly) try to focus.
+        sidebarFocusRegistry.Clear();
         SidebarHost.Children.Clear();
         ShellGrid.ColumnDefinitions[0].Width =
             snapshot.Collapsed ? GridLength.Auto : new GridLength(SidebarExpandedWidth);
-        SidebarHost.Children.Add(BuildSidebarToggleButton(snapshot.Collapsed));
+        SidebarHost.Children.Add(TrackSidebarFocus("sidebar-toggle", BuildSidebarToggleButton(snapshot.Collapsed)));
         // PR #103 review finding 1 (iteration 2): this used to sit after the collapsed early return
         // below, so a notice set by a failed expand attempt -- the write fails while the rail is
         // still collapsed -- was built and then immediately discarded by that return, leaving the
@@ -180,6 +191,7 @@ public partial class WorkspaceShellPage : ContentPage
             // and any pending failure notice above stay visible, matching plan 12.6 ("state conveyed
             // by an icon/text change, not merely a width change") since the toggle's own accessible
             // name already flips with it.
+            RestoreSidebarFocus();
             return;
         }
 
@@ -197,7 +209,7 @@ public partial class WorkspaceShellPage : ContentPage
         Button forgeSettingsButton = new() { Text = text.Resolve(MessageKeys.SidebarForgeSettingsAction) };
         forgeSettingsButton.Clicked += (_, _) => _ = RunAsync(async () =>
             await workspace.NavigateAsync(WorkspaceRoute.ToForgeSettings(), CancellationToken.None).ConfigureAwait(true));
-        SidebarHost.Children.Add(forgeSettingsButton);
+        SidebarHost.Children.Add(TrackSidebarFocus("forge-settings", forgeSettingsButton));
 
         Label status = new() { Text = snapshot.Status.ProviderSummaryText };
         SemanticProperties.SetDescription(status, snapshot.Status.ProviderAccessibleText);
@@ -211,6 +223,33 @@ public partial class WorkspaceShellPage : ContentPage
         // it survives the rebuild instead of being wiped by it -- now rendered once, above, right
         // after the toggle button, so it is also visible in the collapsed layout (see that block's
         // own remarks, PR #103 review finding 1 iteration 2).
+        RestoreSidebarFocus();
+    }
+
+    /// <summary>Registers <paramref name="control"/>'s stable <paramref name="key"/> in
+    /// <see cref="sidebarFocusRegistry"/> and wires its <c>Focused</c> event into
+    /// <see cref="sidebarFocusTracker"/>, so a later <see cref="RestoreSidebarFocus"/> call -- once this
+    /// render's replacement subtree is fully built -- can find and refocus whichever new control now
+    /// occupies the same logical slot as the one that had focus before the rebuild (plan 12.6:
+    /// "focus-stable after refresh"). <paramref name="key"/> is always derived from a domain identifier
+    /// (a project id, a sprint id) or a fixed name for a singleton control, never a raw instance
+    /// reference, which cannot survive the rebuild.</summary>
+    private T TrackSidebarFocus<T>(string key, T control) where T : VisualElement
+    {
+        sidebarFocusRegistry[key] = control;
+        control.Focused += (_, _) => sidebarFocusTracker.Capture(key);
+        return control;
+    }
+
+    /// <summary>Restores focus to whichever freshly built sidebar control has the same stable key the
+    /// previously focused control had, if any -- a no-op when nothing in the sidebar was focused, or
+    /// when that key no longer exists in this snapshot (e.g. its project was just removed).</summary>
+    private void RestoreSidebarFocus()
+    {
+        if (sidebarFocusTracker.Consume() is { } key && sidebarFocusRegistry.TryGetValue(key, out VisualElement? control))
+        {
+            control.Focus();
+        }
     }
 
     /// <summary>The whole-sidebar collapse/expand toggle (ADR 0050 addendum): always the sidebar's
@@ -285,7 +324,14 @@ public partial class WorkspaceShellPage : ContentPage
 
             await RenderSidebarAsync().ConfigureAwait(true);
         });
-        return new VerticalStackLayout { Children = { pathEntry, addButton } };
+        return new VerticalStackLayout
+        {
+            Children =
+            {
+                TrackSidebarFocus("add-project-path", pathEntry),
+                TrackSidebarFocus("add-project-button", addButton),
+            },
+        };
     }
 
     private VerticalStackLayout BuildProjectRow(SidebarProjectItem project)
@@ -297,7 +343,9 @@ public partial class WorkspaceShellPage : ContentPage
             await workspace
                 .NavigateAsync(WorkspaceRoute.ToProjectOverview(project.ProjectId, project.Root), CancellationToken.None)
                 .ConfigureAwait(true));
-        column.Children.Add(projectButton);
+        column.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project:{project.ProjectId:D}"),
+            projectButton));
 
         foreach (SidebarSprintItem sprint in project.ActiveSprints)
         {
@@ -313,7 +361,9 @@ public partial class WorkspaceShellPage : ContentPage
                         WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
                         CancellationToken.None)
                     .ConfigureAwait(true));
-            column.Children.Add(sprintButton);
+            column.Children.Add(TrackSidebarFocus(
+                string.Create(System.Globalization.CultureInfo.InvariantCulture, $"sprint:{sprint.SprintId:D}"),
+                sprintButton));
         }
 
         if (project.HistoryCount > 0)
@@ -332,7 +382,9 @@ public partial class WorkspaceShellPage : ContentPage
             await workspace
                 .NavigateAsync(WorkspaceRoute.ToProjectSettings(project.ProjectId, project.Root), CancellationToken.None)
                 .ConfigureAwait(true));
-        column.Children.Add(settingsButton);
+        column.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project-settings:{project.ProjectId:D}"),
+            settingsButton));
 
         Button removeButton = new() { Text = text.Resolve(MessageKeys.SidebarRemoveProjectAction) };
         removeButton.Clicked += (_, _) => _ = RunAsync(async () =>
@@ -354,7 +406,9 @@ public partial class WorkspaceShellPage : ContentPage
 
             await RenderSidebarAsync().ConfigureAwait(true);
         });
-        column.Children.Add(removeButton);
+        column.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project-remove:{project.ProjectId:D}"),
+            removeButton));
         return column;
     }
 

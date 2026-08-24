@@ -2,6 +2,23 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.73.0
+
+### Added
+
+- The Desktop workspace shell keeps keyboard focus on the equivalent control after a re-render that
+  used to lose it to the top of the page: refreshing the sidebar (add/remove a project, collapse or
+  expand it) and refreshing the sprint workspace's action panel (run/resume/cancel a sprint, stop,
+  approve/reject a gate, supersede an attempt, confirm, record test work, finalize, move to a stage)
+  now return focus to the same logical button or field instead of dropping it.
+
+### Fixed
+
+- Confirmed (and pinned down with new static checks) that every interactive control in the Desktop
+  workspace shell is a real, natively keyboard-focusable MAUI control -- reachable via Tab/Shift+Tab
+  and activatable via Enter/Space -- and that the shell never fixes a pixel height or disables font
+  auto-scaling on a text-bearing row, so its text keeps scaling with the OS text-scale setting.
+
 ## v0.72.0
 
 ### Added
