@@ -455,6 +455,20 @@ public interface ISprintStore
         string instruction,
         CancellationToken cancellationToken);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.UserMessagePostedType"/> event carrying the
+    /// operator's bounded <paramref name="text"/> (post-release timeline gap closure, ADR 0054) --
+    /// like <see cref="AppendAttemptSupersededAsync"/>, not gated by <see cref="AppendTransitionAsync"/>'s
+    /// optimistic concurrency, since a message post never conflicts with concurrent workflow
+    /// progress. Deduplicated by <paramref name="messageId"/> (the event's own caller-supplied
+    /// <see cref="WorkflowEvent.EventId"/>) rather than a version/idempotency-key pair -- a second
+    /// call with the same id is always a replay and returns without appending again.</summary>
+    Task AppendUserMessageAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid messageId,
+        string text,
+        CancellationToken cancellationToken);
+
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for
     /// <paramref name="attemptId"/> (plan section 7.3's durable stop intent) -- recorded once per
     /// attempt, like <see cref="AppendAttemptSupersededAsync"/>: a second call for the same attempt

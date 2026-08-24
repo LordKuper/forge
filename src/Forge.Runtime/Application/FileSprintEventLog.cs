@@ -404,6 +404,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             Revision = handoff.Revision.Value,
             SupersededAtRevision = handoff.Superseded?.AtRevision.Value,
             SupersededRecordedAt = handoff.Superseded?.RecordedAt,
+            Sequence = handoff.Sequence,
         };
         await AtomicConfigurationFile.WriteAsync(
             Path.Combine(directory, $"{handoff.HandoffId:N}.json"),
@@ -777,6 +778,54 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.SupersessionInstructionArgument] = instruction,
                 });
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(superseded), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendUserMessageAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid messageId,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+
+            // Deduplicated by the caller-supplied message id itself (this event's own EventId) rather
+            // than a version/idempotency-key pair, mirroring AppendAttemptSupersededAsync -- a second
+            // call for the same id is always a replay, never a distinct message.
+            if (events.Any(item => item.Type == WorkflowEvent.UserMessagePostedType && item.EventId == messageId))
+            {
+                return;
+            }
+
+            string sprintKey = sprintId.Value.ToString("D");
+            long sprintVersion = CurrentVersion(events, AggregateKind.Sprint, sprintKey);
+            WorkflowEvent posted = new(
+                messageId,
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.UserMessagePostedType,
+                new(AggregateKind.Sprint, sprintKey, sprintVersion),
+                "workflow.user_message_posted",
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.UserMessageTextArgument] = text,
+                });
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(posted), cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -1606,7 +1655,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             handoff.OpenRisks,
             handoff.NextNodeIds,
             new(handoff.Revision),
-            ToSupersededBy(handoff.SupersededAtRevision, handoff.SupersededRecordedAt));
+            ToSupersededBy(handoff.SupersededAtRevision, handoff.SupersededRecordedAt),
+            handoff.Sequence);
 
     private static PersistedEvidence ToPersisted(ConfirmationEvidence evidence) =>
         new() { Kind = WorkflowStateNames.ToSnakeCase(evidence.Kind), Description = evidence.Description };
@@ -2484,6 +2534,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public int? SupersededAtRevision { get; set; }
 
         public DateTimeOffset? SupersededRecordedAt { get; set; }
+
+        public long Sequence { get; set; }
     }
 
     private sealed class PersistedArtifact

@@ -256,6 +256,19 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
     public Task<ProjectCatalogResult> SaveDraftAsync(string? draft, CancellationToken cancellationToken) =>
         catalog.SetSprintDraftAsync(projectId, sprintId, draft, cancellationToken);
 
+    /// <summary>ADR 0054's message-composer draft -- a PARALLEL slot to <see cref="LoadDraftAsync"/>'s
+    /// rewind-reason draft, not a reuse of it (see <see cref="ProjectCatalogEntry.MessageDrafts"/>'s
+    /// own remarks).</summary>
+    public async Task<string?> LoadMessageDraftAsync(CancellationToken cancellationToken)
+    {
+        ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+        ProjectCatalogEntry? entry = listing.Entries.FirstOrDefault(candidate => candidate.ProjectId == projectId);
+        return entry?.MessageDrafts?.GetValueOrDefault(sprintId.ToString("D"));
+    }
+
+    public Task<ProjectCatalogResult> SaveMessageDraftAsync(string? draft, CancellationToken cancellationToken) =>
+        catalog.SetSprintMessageDraftAsync(projectId, sprintId, draft, cancellationToken);
+
     /// <summary>Reads the persisted watermark, an opaque <see langword="long"/> compared against
     /// <see cref="SprintTimelineItem.Sequence"/>. This field (<c>ProjectCatalogEntry.
     /// TimelineReadWatermarks</c>) was introduced in this same PR and never shipped storing

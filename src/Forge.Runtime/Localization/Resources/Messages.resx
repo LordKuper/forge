@@ -165,6 +165,9 @@
   <data name="WorkspaceSummaryDescription" xml:space="preserve"><value>Show a bounded summary of every cataloged project.</value></data>
   <data name="WorkspaceActionsDescription" xml:space="preserve"><value>List the actions currently available for a project or sprint.</value></data>
   <data name="SprintTimelineDescription" xml:space="preserve"><value>Read a sprint's projected, cursor-paged timeline.</value></data>
+  <data name="SprintMessageDescription" xml:space="preserve"><value>Post a free-text message to a sprint's timeline.</value></data>
+  <data name="SprintMessagePosted" xml:space="preserve"><value>Message posted.</value></data>
+  <data name="SprintMessagePostFailed" xml:space="preserve"><value>The message could not be posted.</value></data>
   <data name="ProjectDescription" xml:space="preserve"><value>Local project catalog commands.</value></data>
   <data name="ProjectAddDescription" xml:space="preserve"><value>Add an initialized project to the local catalog.</value></data>
   <data name="ProjectRemoveDescription" xml:space="preserve"><value>Remove a project from the local catalog without touching its repository.</value></data>
@@ -277,6 +280,9 @@
   <data name="ActionRewindReasonRequired" xml:space="preserve"><value>A reason is required to move back to an earlier stage.</value></data>
   <data name="ActionStaleRefreshed" xml:space="preserve"><value>This action was no longer current; the view has been refreshed.</value></data>
   <data name="ActionRewindReasonDraftSaveFailed" xml:space="preserve"><value>The reason draft could not be saved.</value></data>
+  <data name="TimelineMessageLabel" xml:space="preserve"><value>Message</value></data>
+  <data name="TimelineMessageSendAction" xml:space="preserve"><value>Send</value></data>
+  <data name="TimelineMessageDraftSaveFailed" xml:space="preserve"><value>The message draft could not be saved.</value></data>
   <data name="workspace_action.resume_sprint" xml:space="preserve"><value>Resume the paused, blocked, or failed sprint.</value></data>
   <data name="workspace_action.run_sprint" xml:space="preserve"><value>Advance the sprint from draft or ready.</value></data>
   <data name="workspace_action.cancel_sprint" xml:space="preserve"><value>Cancel the sprint.</value></data>

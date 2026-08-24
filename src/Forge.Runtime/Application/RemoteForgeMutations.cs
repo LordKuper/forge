@@ -302,6 +302,25 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
             : new(false, null, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
+    /// <summary>Post-release timeline gap closure (ADR 0054). Unlike the human-only capabilities
+    /// above, <see cref="ControlProtocol.PostSprintMessageKind"/> stays absent from
+    /// <see cref="CapabilityByKind"/> -- it is a reserved capability (matching
+    /// `sprint.timeline`/`workflow.stop_operation`/`sprint.move_stage`'s own precedent), so this
+    /// request is never gated client-side even though it is fully served today.</summary>
+    public async Task<PostSprintMessageResult> PostSprintMessageAsync(
+        string? projectRoot, Guid sprintId, string text, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        JsonElement payload = JsonSerializer.SerializeToElement(
+            new PostSprintMessageRequest(sprintId, text), ControlProtocol.JsonOptions);
+        ControlResponse response =
+            await SendAsync(ControlProtocol.PostSprintMessageKind, payload, cancellationToken).ConfigureAwait(false);
+        return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
+            ? responsePayload.Deserialize<PostSprintMessageResult>(ControlProtocol.JsonOptions) ??
+                new(false, null, DiagnosticCodes.HostUnavailable)
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
+    }
+
     private async Task<SprintTransitionResult> SendSprintIdRequestAsync(
         string kind, Guid sprintId, CancellationToken cancellationToken)
     {

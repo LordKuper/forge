@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.10.0",
+  "contract_version": "1.11.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -203,7 +203,7 @@
       "desktop": "SprintWorkspace/Timeline",
       "permission": "read_redacted",
       "acceptance": "sprint-timeline-parity",
-      "note": "Implemented on Host, CLI, and Desktop (plan section 6.3, Slice 4/ADR 0049; Desktop's SprintWorkspace/Timeline, Slice 6/ADR 0051). Projects the existing append-only workflow journal only -- user messages and agent summaries (plan section 6.3's 'separate bounded artifacts') have no durable representation anywhere in this codebase yet and are out of scope for this slice (ADR 0049). Redacted twice: once when the projector builds each item, again at render time. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved, matching ADR 0047/0048/0049/0050's own precedent, since promoting it also requires widening `SurfaceParityTests.DesktopControls`'s fixed dictionary, a separable follow-up."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 6.3, Slice 4/ADR 0049; Desktop's SprintWorkspace/Timeline, Slice 6/ADR 0051). Projects the existing append-only workflow journal -- user messages (`sprint.post_message` below) are now their own event type in this same journal, and agent summaries are projected from the existing `Handoff.Summary` a node already records (ADR 0054 closes the gap ADR 0049 originally deferred). Redacted twice: once when the projector builds each item, again at render time. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved, matching ADR 0047/0048/0049/0050's own precedent, since promoting it also requires widening `SurfaceParityTests.DesktopControls`'s fixed dictionary, a separable follow-up."
     },
     {
       "id": "workspace.available_actions",
@@ -259,6 +259,17 @@
       "permission": "read",
       "acceptance": "provider-quota-parity",
       "note": "Implemented on Host, CLI, and Desktop (plan section 6.5, Slice 7, ADR 0043/0052). Distinct from `provider.health`: reports verified account/model quota, never sprint retry budget. ADR 0052's investigation found no provider integration in this codebase (Claude Code, Codex) exposes a verified quota signal, so every reading currently projects `unknown`, truthfully -- see ADR 0052. Not yet in `CapabilityIds.Implemented`, matching ADR 0049/0050/0051's own precedent for `workspace.summary`/`sprint.timeline`/`workspace.available_actions`: promoting it is a separable follow-up (widening `SurfaceParityTests.DesktopControls`'s fixed dictionary) that does not gate this capability's own functional correctness, since Desktop already consumes it through the same local, in-process call every other reserved read model uses."
+    },
+    {
+      "id": "sprint.post_message",
+      "kind": "command",
+      "contract": "PostSprintMessage",
+      "events": ["SprintChanged"],
+      "cli": "forge sprint message <id> <text>",
+      "desktop": "SprintWorkspace/PostMessage",
+      "permission": "workflow_mutate",
+      "acceptance": "sprint-message-parity",
+      "note": "Implemented on Host, CLI, and Desktop (plan section 4.3/6.3, post-release timeline gap closure, ADR 0054). Appends a `UserMessagePosted` WorkflowEvent to the sprint's existing append-only journal rather than a second store, so it gets the same dense per-sprint Sequence, redaction, and restart-persistence machinery every other timeline item already has (`sprint.timeline`'s own note above is updated by the same ADR: agent summaries are now also projected, from the existing `Handoff.Summary` a node already records). Not confirmable -- posting a message is additive, not destructive. Not yet in `CapabilityIds.Implemented`, matching ADR 0049/0050/0051's own precedent for `sprint.timeline`/`workflow.stop_operation`/`sprint.move_stage`: promoting it is a separable follow-up that also requires widening `SurfaceParityTests.DesktopCapabilityCalls`'s fixed dictionary."
     }
   ]
 }

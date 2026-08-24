@@ -352,6 +352,46 @@ public sealed class MainPageViewModel(
         }).ConfigureAwait(false);
     }
 
+    /// <summary>Post-release timeline gap closure (ADR 0054): the reserved `sprint.post_message`
+    /// capability. Shares <see cref="ResolveSprintIdAsync"/>'s blank-means-active-sprint/ambiguity
+    /// resolution exactly (see <see cref="ResolveGateAsync"/>). Not confirmable -- posting a message
+    /// is additive, matching <see cref="RunSprintAsync"/>'s own shape rather than
+    /// <see cref="SupersedeAttemptAsync"/>'s confirmation-gated one.</summary>
+    public async Task<string> PostMessageAsync(
+        string? projectRoot, string? sprintId, string? messageText, CancellationToken cancellationToken)
+    {
+        SprintTarget target = await ResolveSprintIdAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (target.SprintId is not { } resolvedSprintId)
+        {
+            return target.Ambiguous
+                ? text.Resolve(MessageKeys.SprintManageSprintAmbiguous)
+                : Message(text.Resolve(MessageKeys.SprintMessagePostFailed), DiagnosticCodes.SprintNotFound);
+        }
+
+        string effectiveText = messageText ?? string.Empty;
+        if (effectiveText.Length > SprintScheduler.MaxUserMessageLength)
+        {
+            return Message(text.Resolve(MessageKeys.SprintMessagePostFailed), DiagnosticCodes.UserMessageTooLong);
+        }
+
+        if (string.IsNullOrWhiteSpace(effectiveText))
+        {
+            return Message(text.Resolve(MessageKeys.SprintMessagePostFailed), DiagnosticCodes.UserMessageRequired);
+        }
+
+        IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
+        return await UseMutationsAsync(mutations, async () =>
+        {
+            PostSprintMessageResult result = await mutations
+                .PostSprintMessageAsync(projectRoot, resolvedSprintId, effectiveText, cancellationToken)
+                .ConfigureAwait(false);
+            return Message(
+                text.Resolve(result.Succeeded ? MessageKeys.SprintMessagePosted : MessageKeys.SprintMessagePostFailed),
+                result.DiagnosticCode);
+        }).ConfigureAwait(false);
+    }
+
     /// <summary>A confirmation prompt naming the sprint/attempt a pending supersession would act on,
     /// mirroring <see cref="GatePrompt"/>'s own shape and defaulting rules exactly.</summary>
     public string AttemptSupersedePrompt(string? sprintId, string? attemptId) =>

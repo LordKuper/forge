@@ -161,6 +161,13 @@ public static class DiagnosticCodes
     /// actual content is rejected the same way an over-length one is.</summary>
     public const string SupersessionInstructionRequired = "supersession_instruction_required";
 
+    /// <summary>ADR 0054's bounded user-message timeline artifact exceeded
+    /// <see cref="SprintScheduler.MaxUserMessageLength"/>.</summary>
+    public const string UserMessageTooLong = "user_message_too_long";
+
+    /// <summary>ADR 0054's bounded user-message timeline artifact was empty or whitespace-only.</summary>
+    public const string UserMessageRequired = "user_message_required";
+
     /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";

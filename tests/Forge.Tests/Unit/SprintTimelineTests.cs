@@ -218,6 +218,273 @@ public sealed class SprintTimelineTests
         Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
     }
 
+    // ADR 0054, post-release timeline gap closure: user messages and agent summaries.
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostingAUserMessageAppendsItToTheTimelineAsAnOperatorItemWithADenseSequence()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        PostSprintMessageResult posted = await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "please hold off on merging", cancellationToken);
+        Assert.True(posted.Succeeded);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        SprintTimelineItem item =
+            Assert.Single(page.Items, candidate => candidate.Type == WorkflowEvent.UserMessagePostedType);
+        Assert.Equal(TimelineActor.Operator, item.Actor);
+        Assert.Equal("please hold off on merging", item.Arguments[WorkflowEvent.UserMessageTextArgument]);
+        // A real, dense per-sprint sequence -- not a sentinel -- so it pages exactly like every
+        // other item (PR #99 review finding 4's own "consumers... must use Sequence" discipline).
+        Assert.True(item.Sequence >= 0);
+        Assert.All(page.Items, other => Assert.True(other.Sequence <= item.Sequence || other == item));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARawCredentialInAPostedUserMessageNeverAppearsInAProjectedTimelineItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        const string secret = "password=Sup3rSecretValue!!";
+
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, $"please retry, {secret}", cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        SprintTimelineItem posted =
+            Assert.Single(page.Items, item => item.Type == WorkflowEvent.UserMessagePostedType);
+        Assert.All(
+            posted.Arguments.Values,
+            value => Assert.DoesNotContain(secret, value ?? string.Empty, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(page);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostingAMessageOverTheLengthBoundIsRejectedWithoutAppendingAnything()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        PostSprintMessageResult result = await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value,
+            new string('x', SprintScheduler.MaxUserMessageLength + 1), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.UserMessageTooLong, result.DiagnosticCode);
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.DoesNotContain(page.Items, item => item.Type == WorkflowEvent.UserMessagePostedType);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostingAWhitespaceOnlyMessageIsRejectedAsRequired()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        PostSprintMessageResult result = await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "   ", cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.UserMessageRequired, result.DiagnosticCode);
+    }
+
+    /// <summary>The store-level idempotency anchor (ADR 0054: dedup by the caller-supplied
+    /// <c>WorkflowEvent.EventId</c>, not by sprint version) -- a retried append with the same message
+    /// id is a safe no-op, never a duplicate timeline item.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RepostingTheSameMessageIdIsASafeNoOpThatNeverDuplicatesTheItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        Guid messageId = Guid.NewGuid();
+
+        await scheduler.PostUserMessageAsync(environment.ProjectRoot, sprintId, messageId, "hello", cancellationToken);
+        await scheduler.PostUserMessageAsync(environment.ProjectRoot, sprintId, messageId, "hello", cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Single(page.Items, item => item.Type == WorkflowEvent.UserMessagePostedType);
+    }
+
+    /// <summary>A page spanning both system events and user messages never skips or duplicates an
+    /// item, mirroring <see cref="RepeatingTheSameCursorNeverRedeliversAnAlreadySeenItemAndANewEventArrivesExactlyOnce"/>
+    /// but across every kind of item this timeline now projects.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PagingAcrossInterleavedSystemEventsAndUserMessagesNeverSkipsOrDuplicatesAnItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "message before running", cancellationToken);
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "message after ready", cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await environment.Application.PostSprintMessageAsync(
+            environment.ProjectRoot, sprintId.Value, "message after start", cancellationToken);
+
+        SprintTimelinePage full = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Equal(3, full.Items.Count(item => item.Type == WorkflowEvent.UserMessagePostedType));
+
+        // Page through one item at a time -- the smallest possible page -- and confirm the union of
+        // every page is exactly the full set, with no id repeated and every sequence in the same
+        // (non-decreasing) order the single-fetch page above reported.
+        List<SprintTimelineItem> paged = [];
+        string? cursor = null;
+        do
+        {
+            SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+                environment.ProjectRoot, sprintId.Value, cursor, cancellationToken);
+            paged.AddRange(page.Items);
+            cursor = page.Cursor;
+        }
+        while (paged.Count < full.Items.Count);
+
+        Assert.Equal(full.Items.Select(item => item.Id), paged.Select(item => item.Id));
+        Assert.Equal(paged.Count, paged.Select(item => item.Id).Distinct().Count());
+        Assert.Equal(full.Items.Select(item => item.Sequence), paged.Select(item => item.Sequence));
+    }
+
+    /// <summary>Investigation confirmed user-visible agent-summary content already exists
+    /// (<see cref="Handoff.Summary"/>) -- ADR 0054 projects it rather than adding a new artifact
+    /// type. <see cref="TimelineActor.Agent"/> is neither <see cref="TimelineActor.System"/> nor
+    /// <see cref="TimelineActor.Operator"/>.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AHandoffSummaryIsProjectedAsAnAgentTimelineItemNamingItsProducingNode()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+
+        RecordHandoffResult handoff = await scheduler.RecordHandoffAsync(
+            environment.ProjectRoot, sprintId, "a", new string('a', 40), "implemented the widget",
+            decisions: [], openRisks: [], nextNodeIds: null, cancellationToken);
+        Assert.True(handoff.Succeeded);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        SprintTimelineItem summary = Assert.Single(
+            page.Items, item => item.Type == SprintTimelineProjector.AgentSummaryRecordedType);
+        Assert.Equal(TimelineActor.Agent, summary.Actor);
+        Assert.Equal("node", summary.TargetKind);
+        Assert.Equal("a", summary.TargetId);
+        Assert.Equal("implemented the widget", summary.Arguments["summary"]);
+        // Ordered into the same dense sequence space as every system event -- never trailing behind
+        // or duplicated relative to the node's own completion.
+        Assert.Contains(page.Items, item => item.Sequence == summary.Sequence && item != summary);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARawCredentialInAnAgentSummaryNeverAppearsInAProjectedTimelineItem()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        const string secret = "password=Sup3rSecretValue!!";
+
+        await scheduler.RecordHandoffAsync(
+            environment.ProjectRoot, sprintId, "a", new string('a', 40), $"done, {secret}",
+            decisions: [], openRisks: [], nextNodeIds: null, cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+
+        SprintTimelineItem summary = Assert.Single(
+            page.Items, item => item.Type == SprintTimelineProjector.AgentSummaryRecordedType);
+        Assert.All(
+            summary.Arguments.Values,
+            value => Assert.DoesNotContain(secret, value ?? string.Empty, StringComparison.Ordinal));
+        string serialized = StatusJson.Serialize(page);
+        Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
+    }
+
+    /// <summary>A superseded handoff's summary is stale and must never appear -- the same exclusion
+    /// <c>SprintScheduler.IsTestWorkEligibleAsync</c> already applies to a superseded artifact.
+    /// Supersedes it directly through the store (no rewind saga needed to prove the projector's own
+    /// filter) exactly like <c>MarkHandoffSupersededAsync</c>'s existing callers do.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ASupersededHandoffSummaryIsNeverProjected()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        RecordHandoffResult handoff = await scheduler.RecordHandoffAsync(
+            environment.ProjectRoot, sprintId, "a", new string('a', 40), "implemented the widget",
+            decisions: [], openRisks: [], nextNodeIds: null, cancellationToken);
+
+        await store.MarkHandoffSupersededAsync(
+            environment.ProjectRoot, sprintId, handoff.Handoff!.HandoffId, new(new(1), DateTimeOffset.UtcNow),
+            cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.DoesNotContain(page.Items, item => item.Type == SprintTimelineProjector.AgentSummaryRecordedType);
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

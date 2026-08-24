@@ -1054,6 +1054,110 @@ public sealed class MainPageViewModelTests
         Assert.DoesNotContain(DiagnosticCodes.SupersessionInstructionRequired, message, StringComparison.Ordinal);
     }
 
+    // ADR 0054's reserved `sprint.post_message` capability -- mirrors the SupersedeAttemptAsync
+    // group above exactly, minus the confirmation/attempt-id concerns that capability alone has
+    // (posting a message is not confirmable).
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostMessageAsyncRoutesThroughTheResolvedMutationsWithForwardedValues()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        Guid sprintId = Guid.NewGuid();
+        const string messageText = "please hold off on merging";
+
+        string message = await viewModel.PostMessageAsync(
+            environment.ProjectRoot, sprintId.ToString(), messageText, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.PostSprintMessageCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.SprintMessagePosted), message);
+        Assert.Equal(sprintId, mutations.LastMessageSprintId);
+        Assert.Equal(messageText, mutations.LastMessageText);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostMessageAsyncReportsSprintNotFoundForAnUnparsableSprintIdWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.PostMessageAsync(
+            environment.ProjectRoot, "not-a-guid", "hello", TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.PostSprintMessageCalls);
+        Assert.Contains(DiagnosticCodes.SprintNotFound, message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task PostMessageAsyncReportsAnEmptyMessageWithoutCallingMutations(string? messageText)
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+
+        string message = await viewModel.PostMessageAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), messageText, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.PostSprintMessageCalls);
+        Assert.Contains(DiagnosticCodes.UserMessageRequired, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostMessageAsyncReportsAnOverLongMessageWithoutCallingMutations()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        string messageText = new('x', SprintScheduler.MaxUserMessageLength + 1);
+
+        string message = await viewModel.PostMessageAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), messageText, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, mutations.PostSprintMessageCalls);
+        Assert.Contains(DiagnosticCodes.UserMessageTooLong, message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PostMessageAsyncAcceptsAMessageAtExactlyTheMaximumLength()
+    {
+        using TestEnvironment environment = new();
+        FakeForgeMutations mutations = new();
+        MainPageViewModel viewModel = new(
+            Text(),
+            environment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(mutations));
+        string messageText = new('x', SprintScheduler.MaxUserMessageLength);
+
+        string message = await viewModel.PostMessageAsync(
+            environment.ProjectRoot, Guid.NewGuid().ToString(), messageText, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, mutations.PostSprintMessageCalls);
+        Assert.Equal(Text().Resolve(MessageKeys.SprintMessagePosted), message);
+        Assert.Equal(messageText, mutations.LastMessageText);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task SupersedeAttemptAsyncWithABlankSprintIdTargetsTheActiveSprint()

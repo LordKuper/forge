@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.72.0
+
+### Added
+
+- The sprint workspace timeline can now show what actually happened, not just system events: you can
+  post a free-text message to a sprint (`forge sprint message <sprint-id> "<text>"`, or the new
+  message composer in the Desktop sprint workspace), and it appears in the timeline durably,
+  redacted, and ordered alongside every workflow event. A sprint's timeline also now surfaces the
+  summary an agent leaves behind when it completes a planning or implementation step, attributed to
+  the node that produced it. The message composer remembers an unsent draft across app restarts,
+  independently of the existing move-to-stage reason draft.
+
 ## v0.71.0
 
 ### Added

@@ -367,6 +367,8 @@ public sealed class ControlPlaneHostedService(
                     await DispatchGetAvailableActionsAsync(request, cancellationToken).ConfigureAwait(false),
                 ControlProtocol.GetProviderQuotaStatusKind =>
                     await DispatchGetProviderQuotaStatusAsync(request, cancellationToken).ConfigureAwait(false),
+                ControlProtocol.PostSprintMessageKind =>
+                    await DispatchPostSprintMessageAsync(request, cancellationToken).ConfigureAwait(false),
                 _ => new ControlResponse(
                     request.CorrelationId,
                     new ControlDiagnostic(ControlDiagnosticCode.Malformed, $"Unknown request kind '{request.Kind}'.")),
@@ -603,6 +605,25 @@ public sealed class ControlPlaneHostedService(
             .SupersedeAttemptAsync(
                 options.ProjectRoot, payload.SprintId, payload.AttemptId, payload.Instruction, payload.Confirmed,
                 cancellationToken)
+            .ConfigureAwait(false);
+        JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
+        return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
+    }
+
+    private async Task<ControlResponse> DispatchPostSprintMessageAsync(
+        ControlRequest request,
+        CancellationToken cancellationToken)
+    {
+        PostSprintMessageRequest? payload = request.Payload is { } value
+            ? value.Deserialize<PostSprintMessageRequest>(ControlProtocol.JsonOptions)
+            : null;
+        if (payload is null || payload.Text is null)
+        {
+            throw new InvalidDataException("The post_sprint_message payload is required.");
+        }
+
+        PostSprintMessageResult result = await application
+            .PostSprintMessageAsync(options.ProjectRoot, payload.SprintId, payload.Text, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

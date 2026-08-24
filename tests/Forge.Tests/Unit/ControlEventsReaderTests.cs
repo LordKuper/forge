@@ -292,6 +292,10 @@ public sealed class ControlEventsReaderTests
             CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 
+        public Task AppendUserMessageAsync(
+            string projectRoot, SprintId sprintId, Guid messageId, string text, CancellationToken cancellationToken) =>
+            throw new NotSupportedException();
+
         public Task<AppendOutcome> AppendAttemptStopRequestedAsync(
             string projectRoot, SprintId sprintId, AttemptId attemptId, long expectedAttemptVersion,
             CancellationToken cancellationToken) =>

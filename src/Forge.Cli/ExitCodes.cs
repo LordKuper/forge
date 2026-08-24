@@ -30,7 +30,8 @@ public static class ExitCodes
             DiagnosticCodes.SupersessionInstructionUnreadable or
             DiagnosticCodes.SupersessionInstructionRequired or
             DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired or
-            DiagnosticCodes.TestWorkJustificationRequired or DiagnosticCodes.StageTransitionReasonRequired => Usage,
+            DiagnosticCodes.TestWorkJustificationRequired or DiagnosticCodes.StageTransitionReasonRequired or
+            DiagnosticCodes.UserMessageTooLong or DiagnosticCodes.UserMessageRequired => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or

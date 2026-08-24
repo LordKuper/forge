@@ -65,6 +65,21 @@ public sealed class CapabilityNegotiationMappingTests
             id => Assert.Contains(id, implemented));
     }
 
+    /// <summary>ADR 0054: `sprint.post_message` deliberately stays a reserved capability, matching
+    /// `sprint.timeline`/`workflow.stop_operation`/`sprint.move_stage`'s own precedent -- it must be
+    /// documented in the contract (so a future promotion has an entry to widen) but never gated
+    /// client-side (gating it would reject a request against a Host that already serves it).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void PostSprintMessageIsDocumentedAsReservedAndNeverGated()
+    {
+        using JsonDocument contract = ReadCapabilities();
+        Assert.Contains("sprint.post_message", DocumentedIds(contract));
+        Assert.DoesNotContain(
+            Forge.Host.Client.ControlProtocol.PostSprintMessageKind, RemoteForgeMutations.CapabilityByKind.Keys);
+        Assert.DoesNotContain("sprint.post_message", CapabilityIds.Implemented);
+    }
+
     private static JsonDocument ReadCapabilities() =>
         JsonDocument.Parse(File.ReadAllText(Path.Combine(
             Forge.UnitTests.RepositoryRoot.Find(),

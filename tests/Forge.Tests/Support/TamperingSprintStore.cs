@@ -120,6 +120,10 @@ internal sealed class TamperingSprintStore(ISprintStore inner, string rawMessage
         CancellationToken cancellationToken) =>
         inner.AppendAttemptSupersededAsync(projectRoot, sprintId, attemptId, instruction, cancellationToken);
 
+    public Task AppendUserMessageAsync(
+        string projectRoot, SprintId sprintId, Guid messageId, string text, CancellationToken cancellationToken) =>
+        inner.AppendUserMessageAsync(projectRoot, sprintId, messageId, text, cancellationToken);
+
     public Task<AppendOutcome> AppendAttemptStopRequestedAsync(
         string projectRoot, SprintId sprintId, AttemptId attemptId, long expectedAttemptVersion,
         CancellationToken cancellationToken) =>

@@ -30,6 +30,14 @@ public sealed record HandoffArtifact(
 /// </summary>
 /// <summary><paramref name="Revision"/>/<paramref name="Superseded"/> follow the same rewind
 /// supersession rule as <see cref="NodeResult"/> (plan section 8.4, ADR 0045).</summary>
+/// <summary><paramref name="Sequence"/> (ADR 0054, post-release timeline gap closure): the sprint
+/// journal's own <c>WorkflowEvent.Sequence</c> watermark at the moment this handoff was recorded --
+/// <c>SprintScheduler.RecordHandoffAsync</c> is always called immediately after the node's own
+/// completing transition already landed, so this is exactly that transition's sequence, not an
+/// approximation. Lets <c>SprintTimelineProjector</c> place this handoff's projected summary item in
+/// the same dense per-sprint order as every system event, without a second cursor/watermark to merge.
+/// Defaults to <c>0</c> for a handoff recorded before this field existed; the projector treats an
+/// unresolvable anchor defensively (never throws), see its own remarks.</summary>
 public sealed record Handoff(
     Guid HandoffId,
     SprintId SprintId,
@@ -41,4 +49,5 @@ public sealed record Handoff(
     IReadOnlyList<string> OpenRisks,
     IReadOnlyList<string>? NextNodeIds = null,
     StageRevision Revision = default,
-    SupersededBy? Superseded = null);
+    SupersededBy? Superseded = null,
+    long Sequence = 0);

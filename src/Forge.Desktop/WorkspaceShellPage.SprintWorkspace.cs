@@ -62,6 +62,11 @@ public partial class WorkspaceShellPage
         Label stopResult = new();
         Label moveResult = new();
         Entry rewindReasonEntry = Describe(new Entry(), text.Resolve(MessageKeys.ActionRewindReasonLabel));
+        // ADR 0054, post-release timeline gap closure: the message composer, hoisted here like
+        // rewindReasonEntry already is for the same reason (a re-render triggered by a failed
+        // mutation must reuse the same Entry instance rather than replace it with a blank one).
+        Entry messageEntry = Describe(new Entry(), text.Resolve(MessageKeys.TimelineMessageLabel));
+        Label messageResult = new();
         // PR #99 review finding 7: hoisted out of RefreshActionsAsync (like rewindReasonEntry already
         // was) so a re-render triggered by a FAILED mutation -- every mutation handler calls
         // RefreshAllAsync unconditionally on completion -- reuses the same Entry instance instead of
@@ -198,6 +203,8 @@ public partial class WorkspaceShellPage
                 .InitializeAsync(workspace.Route.ProjectId!.Value, root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
             rewindReasonEntry.Text = await sprintWorkspace.Timeline.LoadDraftAsync(CancellationToken.None).ConfigureAwait(true);
+            messageEntry.Text =
+                await sprintWorkspace.Timeline.LoadMessageDraftAsync(CancellationToken.None).ConfigureAwait(true);
             RenderTimelineItems(state);
         }
 
@@ -688,6 +695,35 @@ public partial class WorkspaceShellPage
                 moveResult.Text = Message(text.Resolve(MessageKeys.ActionRewindReasonDraftSaveFailed), saveResult.DiagnosticCode);
             }
         });
+        messageEntry.Unfocused += (_, _) => _ = RunAsync(async () =>
+        {
+            ProjectCatalogResult saveResult = await sprintWorkspace.Timeline
+                .SaveMessageDraftAsync(messageEntry.Text, CancellationToken.None)
+                .ConfigureAwait(true);
+            if (!saveResult.Succeeded)
+            {
+                messageResult.Text = Message(text.Resolve(MessageKeys.TimelineMessageDraftSaveFailed), saveResult.DiagnosticCode);
+            }
+        });
+        Button sendMessageButton = new() { Text = text.Resolve(MessageKeys.TimelineMessageSendAction) };
+        sendMessageButton.Clicked += (_, _) => _ = RunAsync(async () =>
+        {
+            string message = await sprintWorkspace
+                .PostMessageAsync(root, sprintId, messageEntry.Text, CancellationToken.None)
+                .ConfigureAwait(true);
+            // Only a genuinely successful post clears the composer and its saved draft -- matching
+            // AttemptSupersedeAsync's own "exact match is a reliable success signal" convention
+            // immediately above (a Host success always resolves to exactly this fixed text with no
+            // diagnostic-code suffix).
+            if (string.Equals(message, text.Resolve(MessageKeys.SprintMessagePosted), StringComparison.Ordinal))
+            {
+                messageEntry.Text = null;
+                await sprintWorkspace.Timeline.SaveMessageDraftAsync(null, CancellationToken.None).ConfigureAwait(true);
+            }
+
+            await RefreshAllAsync().ConfigureAwait(true);
+            messageResult.Text = message;
+        });
 
         ContentHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineTitle), FontAttributes = FontAttributes.Bold }));
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { filterPicker, markAllReadButton } });
@@ -695,6 +731,8 @@ public partial class WorkspaceShellPage
         ContentHost.Children.Add(timelineItemsHost);
         ContentHost.Children.Add(loadMoreButton);
         ContentHost.Children.Add(copyNoticeLabel);
+        ContentHost.Children.Add(new HorizontalStackLayout { Children = { messageEntry, sendMessageButton } });
+        ContentHost.Children.Add(messageResult);
 
         // ADR 0005's project-wide `control.events` capability is distinct from the sprint-scoped
         // Timeline above (it spans every sprint in the project, not just this one) -- kept reachable

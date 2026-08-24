@@ -26,6 +26,10 @@ public sealed record ResolveReviewConvergenceResult(bool Succeeded, string Diagn
 
 public sealed record RecordActivityResult(bool Succeeded, AttemptSnapshot? Attempt, string DiagnosticCode);
 
+/// <summary>Post-release timeline gap closure (ADR 0054): the outcome of posting one durable user
+/// message to a sprint's timeline.</summary>
+public sealed record PostSprintMessageResult(bool Succeeded, SprintWorkflowState? State, string DiagnosticCode);
+
 /// <summary>
 /// Drives a sprint's frozen node graph: dependency-based readiness, bounded automatic retries,
 /// human gates, findings, handoffs, node results, and the sprint-level completion gate. This is
@@ -52,6 +56,11 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
     /// 0006's "bounded instruction artifact") — generous for an operator's own written guidance,
     /// far below anything that could be mistaken for a provider-scale payload.</summary>
     public const int MaxSupersessionInstructionLength = 4000;
+
+    /// <summary>Post-release timeline gap closure (ADR 0054): a posted user message is the same kind
+    /// of bounded, human-authored free text a supersession instruction already is, so it reuses that
+    /// exact bound rather than inventing a new one.</summary>
+    public const int MaxUserMessageLength = MaxSupersessionInstructionLength;
 
     // ponytail: every routed call today is the one MVP surface ("batch", non-interactive) —
     // revisit once a second surface (e.g. an interactive session) actually exists to distinguish.
@@ -1601,11 +1610,16 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         IReadOnlyList<string>? nextNodeIds,
         CancellationToken cancellationToken)
     {
-        StageRevision handoffRevision = (await RequireStateAsync(projectRoot, sprintId, cancellationToken)
-            .ConfigureAwait(false)).Sprint.Revision;
+        SprintWorkflowState state = await RequireStateAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        // ADR 0054: this call always lands immediately after the node's own completing transition
+        // already appended (PlanningExecutionHostedService/ImplementationExecutionHostedService call
+        // CompleteNodeAsync first), so LastSequence here IS that transition's own sequence, not an
+        // approximation -- SprintTimelineProjector uses it to place this handoff's projected summary
+        // in the same dense per-sprint order as every system event.
         Handoff handoff = new(
             Guid.NewGuid(), sprintId, new(nodeId), baseSha, summary, decisions, [], openRisks, nextNodeIds,
-            handoffRevision);
+            state.Sprint.Revision, Superseded: null, Sequence: state.LastSequence);
         try
         {
             await store.SaveHandoffAsync(projectRoot, handoff, cancellationToken).ConfigureAwait(false);
@@ -1616,6 +1630,45 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
         }
 
         return new(true, handoff, DiagnosticCodes.None);
+    }
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): appends a bounded
+    /// user-posted message to the sprint's existing append-only journal. Not confirmable/destructive
+    /// -- posting a message is purely additive, matching <see cref="SprintOrchestrator.CreateSprintAsync"/>'s
+    /// own reasoning; no expected sprint version is required, since a message never conflicts with
+    /// concurrent workflow progress. <paramref name="messageId"/> is the caller's own idempotency
+    /// anchor (see <see cref="ISprintStore.AppendUserMessageAsync"/>) -- a retried call with the same
+    /// id is a safe no-op rather than a duplicate post.</summary>
+    public async Task<PostSprintMessageResult> PostUserMessageAsync(
+        string projectRoot,
+        SprintId sprintId,
+        Guid messageId,
+        string text,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return new(false, null, DiagnosticCodes.UserMessageRequired);
+        }
+
+        if (text.Length > MaxUserMessageLength)
+        {
+            return new(false, null, DiagnosticCodes.UserMessageTooLong);
+        }
+
+        SprintWorkflowState? state = await store.LoadAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        if (state is null)
+        {
+            return new(false, null, DiagnosticCodes.SprintNotFound);
+        }
+
+        await store.AppendUserMessageAsync(projectRoot, sprintId, messageId, text, cancellationToken)
+            .ConfigureAwait(false);
+        SprintWorkflowState? updated = await store.LoadAsync(projectRoot, sprintId, cancellationToken)
+            .ConfigureAwait(false);
+        return new(true, updated, DiagnosticCodes.None);
     }
 
     public Task<IReadOnlyList<Handoff>> GetHandoffsAsync(

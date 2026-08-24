@@ -188,6 +188,23 @@ public sealed record WorkflowEvent(
     /// the exact key the original, still-unconverged commit used, rather than only ever seeing it
     /// once the saga has already finished.</summary>
     public const string IdempotencyKeyArgument = "idempotency_key";
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): a user-posted,
+    /// bounded free-text message attached to a sprint. Appended to this SAME per-sprint journal
+    /// (rather than a second store) so it gets a dense, unique <see cref="Sequence"/> for free and
+    /// <see cref="Forge.Application.SprintTimelineProjector"/>'s existing cursor/redaction machinery
+    /// needs no second merge step. Recorded on the sprint's own aggregate, never a transition itself
+    /// (no <see cref="ToStateArgument"/>), matching <see cref="AttemptSupersededType"/>'s own
+    /// non-transition shape. Deduplicated by the caller-supplied <see cref="WorkflowEvent.EventId"/>
+    /// itself (see <see cref="Forge.Application.ISprintStore.AppendUserMessageAsync"/>) rather than a
+    /// version/idempotency-key pair: nothing about a message post conflicts with concurrent workflow
+    /// progress, so it is never gated on the sprint's current version.</summary>
+    public const string UserMessagePostedType = "UserMessagePosted";
+
+    /// <summary>Carried on a <see cref="UserMessagePostedType"/> event: the bounded message text
+    /// itself (ADR 0054), reusing <see cref="Forge.Application.SprintScheduler.MaxSupersessionInstructionLength"/>
+    /// as its bound rather than inventing a new one.</summary>
+    public const string UserMessageTextArgument = "message_text";
 }
 
 public sealed record SprintWorkflowState(
@@ -294,6 +311,15 @@ public static class WorkflowFold
                     attempts[current.Aggregate.Id] = convergedAttempt with { StopConvergedAt = current.OccurredAt };
                 }
 
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.UserMessagePostedType)
+            {
+                // Validated (throws loudly on corruption) but, like AttemptSupersededType, never a
+                // transition and never projected into the folded snapshot itself: the bounded message
+                // it carries is durable timeline content, not workflow state.
+                _ = IsTransitionRecord(current);
                 continue;
             }
 
@@ -488,6 +514,15 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Stop-converged event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.UserMessagePostedType)
+        {
+            bool hasText = current.Arguments.TryGetValue(
+                WorkflowEvent.UserMessageTextArgument, out string? text) && text is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint || !hasText
+                ? throw new InvalidDataException($"User-message event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 
