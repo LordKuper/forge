@@ -589,14 +589,28 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            if (!assessment.Allowed)
+            // PR #101 review finding 3 (critical): an unconverged rewind already in progress reports
+            // Allowed=false (StageTransitionAssessor.AssessAsync's own rewind-in-progress branch --
+            // no other stage move is legal until it resumes and converges), but
+            // StageTransitionCoordinator.MoveAsync's own resume path bypasses Allowed entirely for
+            // exactly this diagnostic, the same way `forge sprint move-stage` already does
+            // (CliApplication ignores Allowed for this call). Without this carve-out a Desktop user
+            // could never reach that resume call: every render of this row would just keep
+            // re-reporting "blocked, cannot proceed" forever, with no way to unstick a sprint a
+            // conflict interrupted mid-rewind. Every other `!Allowed` reason still blocks exactly as
+            // before -- only this specific, genuinely-resumable diagnostic is let through.
+            bool isRewindInProgress = assessment.DiagnosticCode == DiagnosticCodes.StageTransitionRewindInProgress;
+            if (!assessment.Allowed && !isRewindInProgress)
             {
                 moveResult.Text = sprintWorkspace.Actions.MovePrompt(assessment);
                 return;
             }
 
             bool isRewind = assessment.Direction == StageTransitionDirection.Rewind;
-            if (isRewind && string.IsNullOrWhiteSpace(rewindReasonEntry.Text))
+            // A resume carries no caller-supplied reason of its own (the coordinator's own resume
+            // path reuses the reason already recorded when the rewind first committed, ignoring
+            // whatever this call passes), so the ordinary reason requirement does not apply to it.
+            if (isRewind && !isRewindInProgress && string.IsNullOrWhiteSpace(rewindReasonEntry.Text))
             {
                 moveResult.Text = text.Resolve(MessageKeys.ActionRewindReasonRequired);
                 return;
@@ -613,9 +627,10 @@ public partial class WorkspaceShellPage
             }
 
             string message = await sprintWorkspace.Actions
-                // The dialog's own answer, never a literal `true`.
+                // The dialog's own answer, never a literal `true`. No reason on a resume (see above).
                 .MoveAsync(
-                    root, sprintId, assessment, isRewind ? rewindReasonEntry.Text : null, confirmed, CancellationToken.None)
+                    root, sprintId, assessment, isRewind && !isRewindInProgress ? rewindReasonEntry.Text : null,
+                    confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
             await RefreshAllAsync().ConfigureAwait(true);
             moveResult.Text = message;

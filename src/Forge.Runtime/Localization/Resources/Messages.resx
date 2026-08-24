@@ -269,6 +269,7 @@
   <data name="MoveToStageConsequencesAttemptsLabel" xml:space="preserve"><value>attempts</value></data>
   <data name="MoveToStageConsequencesArtifactsLabel" xml:space="preserve"><value>artifacts</value></data>
   <data name="MoveToStageBlockedCannotProceed" xml:space="preserve"><value>This target is blocked and cannot be moved to yet.</value></data>
+  <data name="MoveToStageResumeRewindPrompt" xml:space="preserve"><value>A previous rewind to this target did not finish converging; confirming will resume and finish it.</value></data>
   <data name="ActionRewindReasonLabel" xml:space="preserve"><value>Reason for moving back (required)</value></data>
   <data name="ActionRewindReasonRequired" xml:space="preserve"><value>A reason is required to move back to an earlier stage.</value></data>
   <data name="ActionStaleRefreshed" xml:space="preserve"><value>This action was no longer current; the view has been refreshed.</value></data>
@@ -280,6 +281,7 @@
   <data name="workspace_action.move_to_stage.advance" xml:space="preserve"><value>Advance to this stage.</value></data>
   <data name="workspace_action.move_to_stage.rewind" xml:space="preserve"><value>Rewind to this stage.</value></data>
   <data name="workspace_action.move_to_stage.same" xml:space="preserve"><value>This is already the current stage.</value></data>
+  <data name="workspace_action.move_to_stage.resume_rewind" xml:space="preserve"><value>Resume the interrupted rewind to this stage.</value></data>
   <data name="ModelsQuotaDescription" xml:space="preserve"><value>Show provider/model account quota status.</value></data>
   <data name="ModelsQuotaTitle" xml:space="preserve"><value>Provider quota:</value></data>
   <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Quota status: not yet available.</value></data>

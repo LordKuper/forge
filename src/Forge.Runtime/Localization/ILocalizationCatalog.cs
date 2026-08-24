@@ -343,6 +343,13 @@ public static class MessageKeys
     public const string MoveToStageConsequencesAttemptsLabel = "MoveToStageConsequencesAttemptsLabel";
     public const string MoveToStageConsequencesArtifactsLabel = "MoveToStageConsequencesArtifactsLabel";
     public const string MoveToStageBlockedCannotProceed = "MoveToStageBlockedCannotProceed";
+
+    /// <summary>PR #101 review finding 3: shown instead of <see cref="MoveToStageBlockedCannotProceed"/>
+    /// when the assessment's blocking reason is specifically an unconverged rewind already in
+    /// progress -- confirming proceeds and resumes it (<c>StageTransitionCoordinator.MoveAsync</c>'s
+    /// own resume path bypasses <c>Allowed</c> entirely for exactly this diagnostic), so the prompt
+    /// must not tell the user the move is impossible.</summary>
+    public const string MoveToStageResumeRewindPrompt = "MoveToStageResumeRewindPrompt";
     public const string ActionRewindReasonLabel = "ActionRewindReasonLabel";
     public const string ActionRewindReasonRequired = "ActionRewindReasonRequired";
     public const string ActionRewindReasonDraftSaveFailed = "ActionRewindReasonDraftSaveFailed";
@@ -360,6 +367,10 @@ public static class MessageKeys
     public const string WorkspaceActionMoveToStageAdvanceRationale = "workspace_action.move_to_stage.advance";
     public const string WorkspaceActionMoveToStageRewindRationale = "workspace_action.move_to_stage.rewind";
     public const string WorkspaceActionMoveToStageSameRationale = "workspace_action.move_to_stage.same";
+
+    /// <summary>PR #101 review finding 3: the one row <c>AvailableActionProjector.ForSprintAsync</c>
+    /// offers while a rewind has not yet converged -- a resume, not an ordinary fresh move.</summary>
+    public const string WorkspaceActionResumeRewindRationale = "workspace_action.move_to_stage.resume_rewind";
 
     // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnknown`
     // (defined above, Slice 5) is the only state this codebase currently produces -- the remaining

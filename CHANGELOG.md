@@ -11,12 +11,19 @@ User-facing Forge changes are listed by release, newest first.
   an attempt that finished right as the stop landed could still commit and integrate its changes
   (implementation), or complete the node and let the sprint advance (planning/review), instead of
   being cancelled. Each executor now re-checks the durable stop intent right before its own point of
-  no return and honors a stop that landed in between.
+  no return and honors a stop that landed in between, including when a concurrent rewind converges
+  that same stop before the re-check runs. Implementation also re-checks a second time immediately
+  before publishing to the sprint's integration branch, closing the remaining window between
+  committing to the attempt's own branch and that publish.
 - Rewinding a sprint to an earlier stage could, under a genuinely concurrent conflicting change, mark
   the rewind as durably converged before it had actually finished walking the sprint back to
   `ready`/`blocked`, leaving it stuck with no way to resume. The rewind now only marks itself
   converged once that final walk actually completes; a conflict now correctly resumes on the next
   attempt instead of being silently sealed as done.
+- A sprint whose rewind was interrupted by a genuine conflict had no way to be unstuck from Desktop:
+  the workspace offered no action at all while the rewind was pending, and the CLI was the only
+  surface that could resume it. Desktop now offers a dedicated action to resume and finish an
+  interrupted rewind.
 
 ## v0.69.0
 

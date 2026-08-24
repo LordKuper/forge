@@ -557,8 +557,14 @@ public sealed class SurfaceParityTests
         // dialog answer, never a literal true -- the exact bug class this file already had to fix
         // once for the five gates above.
         Assert.Contains(".StopAsync(root, fresh, confirmed, CancellationToken.None)", source, StringComparison.Ordinal);
+        // PR #101 review finding 3: the reason argument now also excludes a rewind-in-progress resume
+        // (which reuses the reason already recorded when the rewind first committed), but `confirmed`
+        // itself must still be the dialog's own answer here too.
         Assert.Contains(
-            "isRewind ? rewindReasonEntry.Text : null, confirmed, CancellationToken.None)",
+            "isRewind && !isRewindInProgress ? rewindReasonEntry.Text : null,",
+            source, StringComparison.Ordinal);
+        Assert.Contains(
+            "confirmed, CancellationToken.None)\n                .ConfigureAwait(true);\n            await RefreshAllAsync",
             source, StringComparison.Ordinal);
         // None of the mutation calls above may pass a literal `true` for the confirmation
         // argument -- every occurrence of `true` immediately before `CancellationToken.None)` in
