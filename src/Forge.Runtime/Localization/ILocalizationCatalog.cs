@@ -254,6 +254,17 @@ public static class MessageKeys
     public const string SidebarRemoveProjectAction = "SidebarRemoveProjectAction";
     public const string SidebarNoProjectsHint = "SidebarNoProjectsHint";
 
+    /// <summary>Plan 12.1 final-sweep gap 1: accessible name for the per-project chevron that
+    /// hides/shows that project's active-sprint list -- distinct from
+    /// <see cref="SidebarCollapseAction"/>/<see cref="SidebarExpandAction"/>, which govern the whole
+    /// sidebar rail instead.</summary>
+    public const string SidebarProjectCollapseSprintsAction = "SidebarProjectCollapseSprintsAction";
+    public const string SidebarProjectExpandSprintsAction = "SidebarProjectExpandSprintsAction";
+
+    /// <summary>Same shape as <see cref="SidebarCollapseSaveFailed"/>, for a failed write of one
+    /// project's own sprint-list disclosure state instead of the whole sidebar's.</summary>
+    public const string SidebarProjectSprintsSaveFailed = "SidebarProjectSprintsSaveFailed";
+
     /// <summary>PR #103 review finding 1: the collapse/expand toggle discarded
     /// <c>Forge.Application.ConfigurationWriteResult</c> and silently re-rendered the unchanged
     /// (pre-toggle) state on a failed write. Same shape as <see cref="ProjectAddFailed"/>/

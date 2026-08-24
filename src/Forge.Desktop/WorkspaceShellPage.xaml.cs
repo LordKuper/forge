@@ -288,42 +288,113 @@ public partial class WorkspaceShellPage : ContentPage
         return new VerticalStackLayout { Children = { pathEntry, addButton } };
     }
 
+    /// <summary>Plan 12.1 final-sweep gap 1's per-project chevron: hides/shows only
+    /// <see cref="SidebarProjectItem.ActiveSprints"/>, mirroring the whole-sidebar rail toggle's own
+    /// "render straight from the snapshot already in hand" optimization (PR #103 review finding 3) --
+    /// flipping one row's disclosure changes no domain data, so it never re-fetches
+    /// <see cref="SidebarViewModel.LoadAsync"/>'s full per-project workspace summary.</summary>
+    private Button BuildProjectSprintsToggleButton(SidebarProjectItem project)
+    {
+        Button toggle = new()
+        {
+            Text = project.SprintListExpanded ? "v" : ">",
+            MinimumWidthRequest = SidebarCollapsedToggleMinimumWidth,
+        };
+        SemanticProperties.SetDescription(
+            toggle,
+            text.Resolve(project.SprintListExpanded
+                ? MessageKeys.SidebarProjectCollapseSprintsAction
+                : MessageKeys.SidebarProjectExpandSprintsAction));
+        toggle.Clicked += (_, _) => _ = RunAsync(async () =>
+        {
+            bool nowExpanded = !project.SprintListExpanded;
+            ProjectCatalogResult result = await sidebar
+                .SetProjectSprintsExpandedAsync(project.ProjectId, nowExpanded, CancellationToken.None)
+                .ConfigureAwait(true);
+            if (!result.Succeeded)
+            {
+                sidebarNotice = Message(
+                    text.Resolve(MessageKeys.SidebarProjectSprintsSaveFailed), result.DiagnosticCode);
+            }
+
+            SidebarSnapshot snapshot =
+                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            SidebarSnapshot updated = snapshot with
+            {
+                Projects =
+                [
+                    .. snapshot.Projects.Select(item => item.ProjectId == project.ProjectId
+                        ? item with { SprintListExpanded = nowExpanded }
+                        : item),
+                ],
+            };
+            RenderSidebarFromSnapshot(updated);
+        });
+        return toggle;
+    }
+
     private VerticalStackLayout BuildProjectRow(SidebarProjectItem project)
     {
         VerticalStackLayout column = new();
+        HorizontalStackLayout header = new() { Children = { BuildProjectSprintsToggleButton(project) } };
         Button projectButton = new() { Text = project.DisplayName };
         SemanticProperties.SetDescription(projectButton, project.AccessibleName);
         projectButton.Clicked += (_, _) => _ = RunAsync(async () =>
             await workspace
                 .NavigateAsync(WorkspaceRoute.ToProjectOverview(project.ProjectId, project.Root), CancellationToken.None)
                 .ConfigureAwait(true));
-        column.Children.Add(projectButton);
+        header.Children.Add(projectButton);
+        column.Children.Add(header);
 
-        foreach (SidebarSprintItem sprint in project.ActiveSprints)
+        if (project.SprintListExpanded)
         {
-            Button sprintButton = new()
+            foreach (SidebarSprintItem sprint in project.ActiveSprints)
             {
-                Text = string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture, $"  {sprint.CreationSequence}. {sprint.StateText}"),
-            };
-            SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
-            sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
-                await workspace
-                    .NavigateAsync(
-                        WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
-                        CancellationToken.None)
-                    .ConfigureAwait(true));
-            column.Children.Add(sprintButton);
+                Button sprintButton = new()
+                {
+                    Text = string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture, $"  {sprint.CreationSequence}. {sprint.StateText}"),
+                };
+                SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
+                sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
+                    await workspace
+                        .NavigateAsync(
+                            WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
+                            CancellationToken.None)
+                        .ConfigureAwait(true));
+                column.Children.Add(sprintButton);
+            }
         }
 
-        if (project.HistoryCount > 0)
+        if (project.History.Count > 0)
         {
             column.Children.Add(new Label
             {
                 Text = string.Create(
                     System.Globalization.CultureInfo.InvariantCulture,
-                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryCount})"),
+                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.History.Count})"),
             });
+            // Plan 12.1 final-sweep gap 3: every history entry is now navigable, the same "open"
+            // affordance active sprints get above -- reusing the same sprint-workspace route, which
+            // already renders a terminal sprint read-only (no lifecycle/stage-transition action is
+            // ever offered for one; plan 13 excludes editing raw sprint state).
+            foreach (SidebarHistoryItem historyItem in project.History)
+            {
+                Button historyButton = new()
+                {
+                    Text = string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"  {historyItem.CreationSequence}. {historyItem.StateText}"),
+                };
+                SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
+                historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
+                    await workspace
+                        .NavigateAsync(
+                            WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
+                            CancellationToken.None)
+                        .ConfigureAwait(true));
+                column.Children.Add(historyButton);
+            }
         }
 
         Button settingsButton = new() { Text = "..." };

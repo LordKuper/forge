@@ -30,6 +30,18 @@ public partial class WorkspaceShellPage
     private static readonly TimeSpan TimelinePollInterval = TimeSpan.FromSeconds(15);
 
     private readonly Dictionary<Guid, double> sprintScrollPositions = [];
+
+    /// <summary>Plan 12.1 final-sweep gap 2: the last scroll offset actually written to the durable
+    /// catalog for each sprint, so <see cref="ScrollPositionPersistThreshold"/>'s throttle compares
+    /// against what was last persisted rather than re-issuing a write for every delta since the
+    /// previous in-memory update.</summary>
+    private readonly Dictionary<Guid, double> lastPersistedScrollPositions = [];
+
+    /// <summary>Minimum scroll-offset delta, in device-independent units, before a new value is
+    /// written to the catalog -- a continuous drag/fling raises <c>ScrollView.Scrolled</c> many times
+    /// a second, and only the position at rest needs to survive a restart.</summary>
+    private const double ScrollPositionPersistThreshold = 4.0;
+
     private IDispatcherTimer? timelinePollTimer;
     private Guid scrollTrackedSprintId;
     private bool scrollHandlerAttached;
@@ -780,16 +792,43 @@ public partial class WorkspaceShellPage
                 // is the active route is ever recorded.
                 scrollView.Scrolled += (_, args) =>
                 {
-                    if (scrollTrackedSprintId != Guid.Empty)
+                    if (scrollTrackedSprintId == Guid.Empty)
                     {
-                        sprintScrollPositions[scrollTrackedSprintId] = args.ScrollY;
+                        return;
+                    }
+
+                    Guid trackedSprintId = scrollTrackedSprintId;
+                    sprintScrollPositions[trackedSprintId] = args.ScrollY;
+                    // Plan 12.1 final-sweep gap 2: mirrors the in-memory dictionary above into the
+                    // durable catalog so the position survives a restart, not just in-session
+                    // navigation. Throttled by ScrollPositionPersistThreshold rather than writing on
+                    // every single delta -- a continuous drag/fling raises this event many times a
+                    // second, and only the value at rest actually needs to survive a restart (plan:
+                    // "don't over-engineer... a single double per sprint id is enough").
+                    if (workspace.Route.ProjectId is { } scrolledProjectId &&
+                        (!lastPersistedScrollPositions.TryGetValue(trackedSprintId, out double persistedScrollY) ||
+                            Math.Abs(persistedScrollY - args.ScrollY) >= ScrollPositionPersistThreshold))
+                    {
+                        lastPersistedScrollPositions[trackedSprintId] = args.ScrollY;
+                        _ = sprintWorkspace
+                            .SaveScrollPositionAsync(scrolledProjectId, trackedSprintId, args.ScrollY, CancellationToken.None);
                     }
                 };
             }
 
-            if (sprintScrollPositions.TryGetValue(sprintId, out double previousScrollY) && previousScrollY > 0)
+            // In-session navigation reads the in-memory cache first (unchanged from before this gap
+            // was closed); only the first render of a sprint since the app started -- nothing cached
+            // yet -- falls back to the catalog's durably persisted value.
+            double? previousScrollY = sprintScrollPositions.TryGetValue(sprintId, out double cachedScrollY)
+                ? cachedScrollY
+                : await sprintWorkspace
+                    .LoadScrollPositionAsync(workspace.Route.ProjectId!.Value, sprintId, CancellationToken.None)
+                    .ConfigureAwait(true);
+            if (previousScrollY is { } restoredScrollY && restoredScrollY > 0)
             {
-                _ = scrollView.ScrollToAsync(0, previousScrollY, false);
+                sprintScrollPositions[sprintId] = restoredScrollY;
+                lastPersistedScrollPositions[sprintId] = restoredScrollY;
+                _ = scrollView.ScrollToAsync(0, restoredScrollY, false);
             }
             else
             {

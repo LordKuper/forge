@@ -52,9 +52,14 @@ public sealed class SidebarViewModelTests
         return sprintId;
     }
 
+    /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint is reachable through
+    /// <see cref="SidebarProjectItem.History"/> (a real, navigable entry naming its own sprint id) --
+    /// never listed as active, and never merely counted the way this row rendered before that gap was
+    /// closed (PR review contract change: <c>HistoryCount</c> was replaced by this typed list).
+    /// </summary>
     [Fact]
     [Trait("Category", "Unit")]
-    public async Task LoadAsyncCountsTerminalSprintsAsHistoryWithoutListingThemAsActive()
+    public async Task LoadAsyncExposesTerminalSprintsAsNavigableHistoryWithoutListingThemAsActive()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
@@ -76,7 +81,74 @@ public sealed class SidebarViewModelTests
 
         SidebarProjectItem project = Assert.Single(snapshot.Projects);
         Assert.Empty(project.ActiveSprints);
-        Assert.Equal(1, project.HistoryCount);
+        SidebarHistoryItem historyItem = Assert.Single(project.History);
+        Assert.Equal(created.SprintId!.Value, historyItem.SprintId);
+        Assert.False(string.IsNullOrWhiteSpace(historyItem.AccessibleName));
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 3's cap -- matches
+    /// <see cref="ProjectOverviewViewModel"/>'s own recent-history bound so more terminal sprints
+    /// than that never crowd the sidebar, while still keeping the newest ones reachable.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncCapsHistoryAtTheDocumentedBoundOrderedNewestFirst()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        List<int> creationSequences = [];
+        for (int index = 0; index < SidebarViewModel.MaxSidebarHistory + 3; index++)
+        {
+            CreateSprintResult created = await orchestrator.CreateSprintAsync(
+                new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+            SprintSnapshot sprint = (await orchestrator.GetSprintAsync(
+                environment.ProjectRoot, created.SprintId!, cancellationToken))!;
+            await orchestrator.CancelSprintAsync(
+                new(environment.ProjectRoot, created.SprintId!, sprint.Version,
+                    SprintOrchestrator.CancelSprintKey(sprint)),
+                cancellationToken);
+            creationSequences.Add(index + 1);
+        }
+
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        Assert.Equal(SidebarViewModel.MaxSidebarHistory, project.History.Count);
+        Assert.Equal(
+            [.. creationSequences.OrderByDescending(sequence => sequence).Take(SidebarViewModel.MaxSidebarHistory)],
+            [.. project.History.Select(item => item.CreationSequence)]);
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 1: the per-project sprint-list disclosure defaults to
+    /// expanded so an upgrading user sees exactly what every prior release always rendered, and
+    /// toggling it persists across a fresh view-model instance simulating an app restart --
+    /// independently of the whole-sidebar rail (<see cref="SidebarSnapshot.Collapsed"/>).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetProjectSprintsExpandedAsyncPersistsAcrossANewViewModelInstanceSimulatingARestart()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SidebarViewModel first = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+
+        SidebarSnapshot beforeToggle = await first.LoadAsync(cancellationToken);
+        Assert.True(Assert.Single(beforeToggle.Projects).SprintListExpanded);
+
+        ProjectCatalogResult result =
+            await first.SetProjectSprintsExpandedAsync(added.Entry!.ProjectId, false, cancellationToken);
+        Assert.True(result.Succeeded);
+
+        SidebarViewModel second = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarSnapshot afterRestart = await second.LoadAsync(cancellationToken);
+        Assert.False(Assert.Single(afterRestart.Projects).SprintListExpanded);
     }
 
     [Fact]

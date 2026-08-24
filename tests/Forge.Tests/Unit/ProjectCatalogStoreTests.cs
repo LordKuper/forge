@@ -350,4 +350,64 @@ public sealed class ProjectCatalogStoreTests
         Assert.False(tooLong.Succeeded);
         Assert.Equal(DiagnosticCodes.ProjectCatalogDraftTooLong, tooLong.DiagnosticCode);
     }
+
+    /// <summary>Plan 12.1 final-sweep gap 1: the sidebar's per-project sprint-list disclosure state
+    /// defaults to expanded (an entry added before this field existed has no persisted value at all)
+    /// and toggles independently of every other catalog field.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintListCollapsedDefaultsToFalseAndIsReversible()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Assert.False(added.Entry.SprintListCollapsed);
+
+        ProjectCatalogResult collapsed = await catalog.SetSprintListCollapsedAsync(projectId, true, cancellationToken);
+        Assert.True(collapsed.Succeeded);
+        Assert.True(collapsed.Entry!.SprintListCollapsed);
+
+        ProjectCatalogResult expanded = await catalog.SetSprintListCollapsedAsync(projectId, false, cancellationToken);
+        Assert.True(expanded.Succeeded);
+        Assert.False(expanded.Entry!.SprintListCollapsed);
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 2: the sprint workspace's persisted scroll offset is set,
+    /// independent per sprint, cleared by a non-positive value (nothing to restore below the top),
+    /// and rejects a value that cannot round-trip through JSON.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintScrollPositionIsSetPerSprintClearedByZeroAndRejectsNonFiniteValues()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintA = Guid.NewGuid();
+        Guid sprintB = Guid.NewGuid();
+
+        ProjectCatalogResult first = await catalog.SetSprintScrollPositionAsync(projectId, sprintA, 512.25, cancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(512.25, first.Entry!.SprintScrollPositions![sprintA.ToString("D")]);
+
+        // A second sprint's scroll position is independent of the first's.
+        ProjectCatalogResult other = await catalog.SetSprintScrollPositionAsync(projectId, sprintB, 10, cancellationToken);
+        Assert.True(other.Succeeded);
+        Assert.Equal(512.25, other.Entry!.SprintScrollPositions![sprintA.ToString("D")]);
+        Assert.Equal(10, other.Entry.SprintScrollPositions[sprintB.ToString("D")]);
+
+        ProjectCatalogResult cleared = await catalog.SetSprintScrollPositionAsync(projectId, sprintA, 0, cancellationToken);
+        Assert.True(cleared.Succeeded);
+        Assert.False(cleared.Entry!.SprintScrollPositions!.ContainsKey(sprintA.ToString("D")));
+
+        ProjectCatalogResult rejected =
+            await catalog.SetSprintScrollPositionAsync(projectId, sprintA, double.NaN, cancellationToken);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.ProjectCatalogScrollPositionInvalid, rejected.DiagnosticCode);
+    }
 }

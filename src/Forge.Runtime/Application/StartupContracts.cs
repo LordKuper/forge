@@ -279,6 +279,12 @@ public static class DiagnosticCodes
     /// <summary>Slice 6's sprint-workspace draft preservation given text longer than
     /// <see cref="ProjectCatalogStore.MaxDraftLength"/>.</summary>
     public const string ProjectCatalogDraftTooLong = "project_catalog_draft_too_long";
+
+    /// <summary>Plan 12.1 final-sweep gap 2: <see cref="ProjectCatalogStore.SetSprintScrollPositionAsync"/>
+    /// given a NaN or infinite scroll offset -- neither round-trips through
+    /// <see cref="System.Text.Json.JsonSerializer"/>, and no legitimate scroll position is ever one.
+    /// </summary>
+    public const string ProjectCatalogScrollPositionInvalid = "project_catalog_scroll_position_invalid";
 }
 
 public enum StartupState
