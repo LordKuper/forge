@@ -316,6 +316,79 @@ public sealed class ProcessRunnerTests
         }
     }
 
+    /// <summary>Plan ~588-593's remaining unverified risk (Known gaps bucket 3, sub-item 3): this
+    /// codebase has no process-group/job-object containment, so an abrupt Host process kill --
+    /// <c>TerminateProcess</c>/<c>SIGKILL</c>, giving <see cref="ProcessRunner.RunAsync"/>'s own
+    /// cancellation-triggered <c>process.Kill(true)</c> cleanup no chance to ever run, unlike
+    /// <see cref="CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild"/>'s cooperative
+    /// path above -- could leave a spawned provider process orphaned. That risk is real but
+    /// unverified rather than known-fixed. <c>feature/process-group-containment</c> is expected to
+    /// add OS-level containment (a Windows Job Object / POSIX process group) surviving exactly this
+    /// scenario; as of this test's own branch point, no such containment code exists anywhere on
+    /// `main` (confirmed by searching for job-object/process-group primitives across the codebase).
+    /// Kept skipped as a ready-to-activate placeholder -- once containment lands, remove the
+    /// <c>Skip</c> argument; the fixture and assertions below already exercise the exact scenario the
+    /// containment must survive, reusing this file's own tree-spawning fixture
+    /// (<see cref="TreeSpawningCommand"/>) rather than a fresh one. The immediate child spawned via
+    /// <see cref="ProcessRunner"/> stands in for "the Host process" here: this test process (the
+    /// xunit host) plays the role of whatever supervises the real Host, and forcibly killing only
+    /// that immediate child -- never cancelling <see cref="ProcessRunner.RunAsync"/>'s own token --
+    /// is what makes this an *abrupt*, uncooperative kill rather than the graceful shutdown the
+    /// existing cancellation test already covers.</summary>
+    [Fact(Skip =
+        "Pending feature/process-group-containment (plan ~588-593): no job-object/process-group " +
+        "containment exists on main yet, so an abrupt Host kill cannot yet be proven to avoid " +
+        "orphaning a provider process. Un-skip once containment lands.")]
+    [Trait("Category", "Integration")]
+    public async Task AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess()
+    {
+        string directory = CreateTestDirectory();
+        try
+        {
+            string childPidPath = Path.Combine(directory, "child.pid");
+            string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
+            string readyPath = Path.Combine(directory, "ready");
+            (string fileName, string[] arguments) = TreeSpawningCommand(
+                directory, childPidPath, grandchildPidPath, readyPath, sleepSeconds: 30);
+
+            ProcessRunner runner = new();
+            using CancellationTokenSource cancellation = new();
+            Task<ProcessResult> run = runner.RunAsync(new(fileName, arguments, directory), null, cancellation.Token);
+
+            await WaitForFileAsync(readyPath);
+            int childPid = await ReadPidAsync(childPidPath);
+            int grandchildPid = await ReadPidAsync(grandchildPidPath);
+            Assert.True(IsProcessAlive(childPid), "The child (stand-in Host) process should still be running.");
+            Assert.True(
+                IsProcessAlive(grandchildPid), "The grandchild (stand-in provider) process should still be running.");
+            DateTime grandchildStartedAt = GetProcessStartTimeUtc(grandchildPid);
+
+            // The abrupt, uncooperative kill: only the immediate child dies, and never through
+            // ProcessRunner's own cancellation path -- containment (once it exists), not cooperative
+            // cleanup code, is what must reclaim the grandchild here.
+            using (System.Diagnostics.Process killTarget = System.Diagnostics.Process.GetProcessById(childPid))
+            {
+                killTarget.Kill(entireProcessTree: false);
+            }
+
+            await AssertProcessDiesAsync(grandchildPid, grandchildStartedAt);
+
+            cancellation.Cancel();
+            try
+            {
+                await run;
+            }
+            catch (Exception)
+            {
+                // The child's own abrupt death already makes RunAsync's outcome moot for this test.
+            }
+        }
+        finally
+        {
+            await DeleteDirectoryAsync(directory);
+        }
+    }
+
     private static string CreateTestDirectory()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"forge-process-tree-tests-{Guid.NewGuid():N}");

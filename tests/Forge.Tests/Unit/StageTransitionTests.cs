@@ -1232,6 +1232,209 @@ public sealed class StageTransitionTests
         Assert.Equal(NodeState.Ready, result.TargetNode!.State);
     }
 
+    /// <summary>Plan section 8.5's "a Host crash during a move resumes or converges to one valid
+    /// revision" guarantee, exercised for the Advance path specifically (plan ~617-621): unlike
+    /// <c>CommitRewindAsync</c>, <c>CommitAdvanceAsync</c> has no durable "pending" marker -- it
+    /// relies on <c>SkipNodeAsync</c>'s own idempotent, version-gated re-check
+    /// (<c>node.State is not (Pending or Ready) =&gt; continue</c>) to make a resumed skip loop safely
+    /// pick up wherever an interrupted one left off. Simulates the crash by performing exactly the
+    /// loop's first iteration directly through <see cref="SprintScheduler.SkipNodeAsync"/> (skipping
+    /// "b1") and stopping there -- precisely what a Host crash right after that call, before the loop
+    /// reaches "b2", would leave behind. A fresh <c>MoveAsync</c> call (a new idempotency key, exactly
+    /// like a restarted client would use) must finish skipping "b2" and activate the target, without
+    /// re-attempting "b1" (already <c>Skipped</c>, so the loop's own state re-check must pass over
+    /// it).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACrashMidTheOptionalPredecessorSkipLoopConvergesTheRemainingSkipsOnResumeForAnAdvance()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph:
+                [
+                    new("a", NodeKind.Work, []),
+                    new("b1", NodeKind.Work, ["a"], Optional: true),
+                    new("b2", NodeKind.Work, ["a"], Optional: true),
+                    new("c", NodeKind.Work, ["b1", "b2"]),
+                ]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+
+        // Simulates the crash: exactly CommitAdvanceAsync's loop, first iteration only ("b1"),
+        // stopping before "b2" is ever reached.
+        long b1Version = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["b1"].Version;
+        NodeActionResult preSkip = await scheduler.SkipNodeAsync(
+            environment.ProjectRoot, sprintId, "b1", b1Version, cancellationToken);
+        Assert.True(preSkip.Succeeded);
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Skipped, wedged.Nodes["b1"].State);
+        Assert.Equal(NodeState.Ready, wedged.Nodes["b2"].State);
+        Assert.Equal(NodeState.Pending, wedged.Nodes["c"].State);
+        long b1VersionAfterSkip = wedged.Nodes["b1"].Version;
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "c", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Advance, assessment.Direction);
+        Assert.True(assessment.Allowed);
+
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "c", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            null, true, Guid.NewGuid(), cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, result.TargetNode!.State);
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Skipped, final.Nodes["b1"].State);
+        // "b1" must never be re-attempted by the resumed loop -- its version is unchanged from right
+        // after the original (simulated pre-crash) skip.
+        Assert.Equal(b1VersionAfterSkip, final.Nodes["b1"].Version);
+        Assert.Equal(NodeState.Skipped, final.Nodes["b2"].State);
+        Assert.Equal(NodeState.Ready, final.Nodes["c"].State);
+    }
+
+    /// <summary>The other meaningful Advance-path crash boundary (plan ~617-621): a Host crash after
+    /// the target has already been promoted to <c>ready</c> (<c>CommitAdvanceAsync</c>'s own
+    /// <see cref="SprintScheduler.AdvanceGraphAsync"/> call already ran) but before the durable
+    /// convergence marker (<see cref="ISprintStore.AppendStageTransitionConvergedAsync"/>) landed --
+    /// the exact window round 1 review of PR #96 (finding 4) found missing for this same call.
+    /// Simulates the crash by calling <c>AdvanceGraphAsync</c> directly, bypassing the coordinator
+    /// entirely, so no convergence marker is ever recorded for this attempt. A fresh <c>MoveAsync</c>
+    /// call (a new idempotency key) must still recognize the target as reachable (direction
+    /// re-derives as <c>Advance</c> again, since a merely-<c>Ready</c> target is never mistaken for
+    /// the sprint's own "current" stage -- unlike the rewind saga, no durable marker is needed here
+    /// because this re-derivation is itself stable across every step boundary) and durably record
+    /// convergence, without disturbing the already-`Ready` target a second time.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ACrashAfterAdvanceGraphPromotesTheTargetButBeforeTheConvergenceMarkerConvergesOnResumeForAnAdvance()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = await CreateLinearSprintAsync(orchestrator, environment.ProjectRoot, cancellationToken, "a", "b");
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+
+        // Simulates the crash: exactly CommitAdvanceAsync's own AdvanceGraphAsync call, invoked
+        // directly rather than through the coordinator, so its own final convergence-marker append
+        // never runs.
+        await scheduler.AdvanceGraphAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, wedged.Nodes["b"].State);
+        Assert.Equal(0, wedged.Nodes["b"].AttemptCount);
+
+        Guid idempotencyKey = Guid.NewGuid();
+        Assert.Null(await store.TryGetConvergedStageTransitionAsync(
+            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "b", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Advance, assessment.Direction);
+        Assert.True(assessment.Allowed);
+
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "b", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            null, true, idempotencyKey, cancellationToken);
+
+        Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
+        Assert.Equal(NodeState.Ready, result.TargetNode!.State);
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, final.Nodes["b"].State);
+        Assert.Equal(0, final.Nodes["b"].AttemptCount);
+        Assert.NotNull(await store.TryGetConvergedStageTransitionAsync(
+            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+    }
+
+    /// <summary>Plan ~605-609: <c>StagePrerequisiteIds.NoActiveOperation</c> is already checked inside
+    /// <c>StageTransitionAssessor</c>'s Advance-direction branch, but until this test only Rewind's
+    /// own stop-path (<see cref="RewindStopsTheActiveOperationFirstBeforeInvalidatingItsNode"/>)
+    /// exercised an active-operation interaction -- no test asserted an Advance is actually rejected
+    /// while an unrelated operation is running. "b1" is optional and deliberately left unstarted (the
+    /// same skip-ahead shape as <see cref="AdvanceSkipAheadActivatesTargetWhenEveryIntermediateStageIsAlreadySatisfied"/>)
+    /// so "c" stays genuinely `pending` -- <see cref="SprintScheduler.AdvanceGraphAsync"/>'s own
+    /// automatic promotion never touches it on its own, and no prior test can be mistaken for this
+    /// one by relying on that automatic promotion instead of the coordinator's own gate. The active
+    /// attempt runs on "b2", a parallel branch that is NOT among "c"'s own predecessors, so every
+    /// predecessor-based prerequisite (<c>PredecessorSuccess</c> et al., scoped only to the *required*
+    /// -- non-optional -- predecessor "a") is already satisfied and <c>NoActiveOperation</c> is the
+    /// only thing standing between this assessment and <c>Allowed</c> --
+    /// <see cref="ActiveOperationImpact.HasActiveOperation"/> is sprint-wide, not scoped to the
+    /// target's own predecessors (<c>StageTransitionAssessor.ResolveActiveOperation</c> scans every
+    /// node).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnActiveOperationOnAnUnrelatedNodeBlocksAdvance()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, StageTransitionCoordinator coordinator,
+                StageTransitionAssessor assessor) = Resolve(environment);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Graph:
+                [
+                    new("a", NodeKind.Work, []),
+                    new("b1", NodeKind.Work, ["a"], Optional: true),
+                    new("c", NodeKind.Work, ["b1"]),
+                    new("b2", NodeKind.Work, ["a"]),
+                ]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        // "b1" is optional and deliberately left unstarted -- "c" therefore stays `pending` on its
+        // own (AdvanceGraphAsync never promotes it without "b1" settled), so the assertion below that
+        // it is still `pending` after the rejected move actually proves something.
+
+        long b2Version = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["b2"].Version;
+        StartAttemptResult startedB2 = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "b2", b2Version, cancellationToken);
+        Assert.True(startedB2.Succeeded);
+
+        StageTransitionAssessment assessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "c", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Advance, assessment.Direction);
+        Assert.True(assessment.ActiveOperation.HasActiveOperation);
+        Assert.False(assessment.Allowed);
+        Assert.Contains(
+            assessment.UnsatisfiedPrerequisites,
+            prerequisite => prerequisite.Id == StagePrerequisiteIds.NoActiveOperation);
+        // Every predecessor-based prerequisite is already satisfied -- NoActiveOperation is the only
+        // reason this Advance is blocked.
+        Assert.DoesNotContain(
+            assessment.UnsatisfiedPrerequisites,
+            prerequisite => prerequisite.Id == StagePrerequisiteIds.PredecessorSuccess);
+
+        MoveStageResult result = await coordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "c", assessment.ExpectedStateVersion, assessment.AssessmentToken,
+            null, true, Guid.NewGuid(), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.WorkflowBlocked, result.DiagnosticCode);
+        SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Pending, final.Nodes["c"].State);
+        Assert.Equal(NodeState.Running, final.Nodes["b2"].State);
+    }
+
     private static async Task SupersedeNodeResultDirectlyAsync(
         ISprintStore store, string projectRoot, SprintId sprintId, string nodeId, StageRevision revision,
         CancellationToken cancellationToken)
