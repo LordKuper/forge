@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Forge.Application;
 using Forge.Infrastructure;
 
@@ -6,6 +7,61 @@ namespace Forge.IntegrationTests;
 [Collection("External process tests")]
 public sealed class ProcessRunnerTests
 {
+    /// <summary>Proves the plan section 12.4 wiring itself (attach immediately after start, release
+    /// only once the process is known to have exited on every code path), independent of any real
+    /// OS guarantee -- the actual Windows/POSIX guarantees are proven separately (Windows: a real
+    /// process-kill against Forge.ProcessContainmentProbe in
+    /// tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs; POSIX: not exercisable on
+    /// this Windows-only CI matrix). A fake here keeps this test deterministic and cross-platform,
+    /// matching every other test in this file.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ContainmentIsAttachedImmediatelyAfterStartAndReleasedAfterNormalExit()
+    {
+        RecordingContainment containment = new();
+        ProcessRunner runner = new(containment);
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "exit 0" })
+            : ("/bin/sh", new[] { "-c", "exit 0" });
+
+        ProcessResult result = await runner.RunAsync(
+            new(fileName, arguments, Path.GetTempPath()), null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, containment.AttachCount);
+        Assert.True(containment.Disposed);
+    }
+
+    /// <summary>The cancellation-path counterpart: containment must still be released even when the
+    /// process is torn down via <c>Process.Kill(true)</c> rather than exiting on its own -- the
+    /// cancellation branch in <c>ProcessRunner.RunAsync</c> is a second, independent code path back
+    /// to the method's single exit, and only manual inspection (not the normal-exit test above)
+    /// would have caught a release that only ran on the happy path.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ContainmentIsReleasedAfterCancellationKillsTheProcess()
+    {
+        RecordingContainment containment = new();
+        ProcessRunner runner = new(containment);
+        using CancellationTokenSource cancellation = new();
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" })
+            : ("/bin/sh", new[] { "-c", "sleep 30" });
+
+        Task<ProcessResult> run = runner.RunAsync(
+            new(fileName, arguments, Path.GetTempPath()), null, cancellation.Token);
+        for (int attempt = 0; attempt < 100 && containment.AttachCount == 0; attempt++)
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(1, containment.AttachCount);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+
+        Assert.True(containment.Disposed);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task CancellationTerminatesProcessTree()
@@ -448,6 +504,25 @@ public sealed class ProcessRunnerTests
         }
 
         Assert.False(StillAlive(), $"Process {processId} should no longer be running.");
+    }
+
+    private sealed class RecordingContainment : IProcessContainment
+    {
+        public int AttachCount { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public IDisposable Attach(Process process)
+        {
+            ArgumentNullException.ThrowIfNull(process);
+            AttachCount++;
+            return new Handle(this);
+        }
+
+        private sealed class Handle(RecordingContainment owner) : IDisposable
+        {
+            public void Dispose() => owner.Disposed = true;
+        }
     }
 
     private sealed class RecordingSink : IProcessOutputSink

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Forge.Domain;
 
 namespace Forge.Application;
@@ -63,6 +64,32 @@ public interface IProcessRunner
 public interface INetworkClient
 {
     Task<Stream> GetStreamAsync(Uri uri, CancellationToken cancellationToken);
+}
+
+/// <summary>
+/// Plan section 12.4's process-containment port: ties a just-started child process's lifetime to
+/// the current process, on whichever platforms the current adapter can actually offer that, so an
+/// abrupt death of the current process (crash, `kill -9`, `taskkill /F`) does not necessarily leave
+/// the child -- and whatever descendants it has spawned -- running forever as an orphan. This port
+/// promises only "the strongest containment the installed adapter can offer, applied consistently
+/// to every process <see cref="IProcessRunner"/> spawns"; it never promises every platform behaves
+/// identically. See <c>Forge.Runtime.Windows.WindowsJobObjectProcessContainment</c> (a real
+/// kill-on-parent-death guarantee via a Windows Job Object) versus
+/// <c>Forge.Runtime.Posix.PosixProcessGroupContainment</c> (best-effort process-group isolation
+/// only -- read that type's own doc comment before assuming parity) for what "the installed
+/// adapter" actually means on each platform, and <see cref="Infrastructure.NullProcessContainment"/>
+/// for the no-op default a composition root gets until it installs one of those.
+/// </summary>
+public interface IProcessContainment
+{
+    /// <summary>
+    /// Attaches containment to <paramref name="process"/>, which must already be started. Returns a
+    /// handle the caller disposes once <paramref name="process"/> is known to have exited (normally
+    /// or via a kill the caller itself issued) -- disposing releases whatever OS resource backs the
+    /// containment; it never itself terminates a child that, by the time a caller disposes, has
+    /// already exited.
+    /// </summary>
+    IDisposable Attach(Process process);
 }
 
 public interface IEnvironmentPaths

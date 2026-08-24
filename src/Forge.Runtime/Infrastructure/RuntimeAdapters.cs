@@ -20,8 +20,36 @@ public sealed class PhysicalFileSystem : IFileSystem
         File.WriteAllTextAsync(path, contents, cancellationToken);
 }
 
-public sealed class ProcessRunner : IProcessRunner
+/// <summary>
+/// The cross-platform default <see cref="IProcessContainment"/>: does nothing. Every current
+/// user-facing composition root (Forge.Host.Windows, Forge.Cli.Windows, Forge.Desktop) overrides
+/// this with a real adapter at startup (see each project's own `Program.cs`/`MauiProgram.cs`); a
+/// composition root that does not install one is choosing "no containment," exactly as every
+/// composition root always has, not silently losing a guarantee it never had.
+/// </summary>
+public sealed class NullProcessContainment : IProcessContainment
 {
+    public IDisposable Attach(Process process) => NoopHandle.Instance;
+
+    private sealed class NoopHandle : IDisposable
+    {
+        public static readonly NoopHandle Instance = new();
+
+        public void Dispose()
+        {
+        }
+    }
+}
+
+public sealed class ProcessRunner(IProcessContainment? containment = null) : IProcessRunner
+{
+    // Optional constructor parameter (rather than a required one) so every pre-existing
+    // `new ProcessRunner()` call site -- test code that has no DI container to resolve
+    // IProcessContainment from -- keeps compiling and gets the same "no containment" behavior it
+    // always had; DI-resolved construction (InfrastructureServices.AddForgeInfrastructure) supplies
+    // whatever IProcessContainment a composition root installed instead.
+    private readonly IProcessContainment containment = containment ?? new NullProcessContainment();
+
     /// <summary>Bare UTF-8, no byte-order mark. `Encoding.UTF8` emits a BOM preamble on a
     /// `StreamWriter`'s first write, which would silently prepend three corrupting bytes
     /// (`EF BB BF`) to every prompt sent to a provider's stdin -- exactly the byte-fidelity
@@ -96,6 +124,13 @@ public sealed class ProcessRunner : IProcessRunner
 
         using Process process = new() { StartInfo = startInfo };
         process.Start();
+        // Every process this runner spawns gets containment (plan section 12.4) -- attached as
+        // early as the installed adapter allows (immediately after Start(), before any `await` in
+        // this method yields control) and released only once this method's every exit path
+        // (success below, or the cancellation branch's own kill-then-drain) has already observed
+        // the process exit. A statement-level `using` disposes at the end of this method's own
+        // scope, not this block's -- exactly the lifetime containment needs.
+        using IDisposable containmentHandle = containment.Attach(process);
 
         // Read loops are started before stdin is written so a child that begins writing output
         // before it has fully consumed stdin can never deadlock against Forge's own unread pipe
@@ -378,6 +413,11 @@ public static class InfrastructureServices
         ArgumentNullException.ThrowIfNull(services);
         services.AddSingleton<IClock, SystemClock>();
         services.AddSingleton<IFileSystem, PhysicalFileSystem>();
+        // A platform composition overrides this with a real adapter (e.g. Forge.Runtime.Windows's
+        // AddForgeRuntimeWindowsProcessContainment), matching IPlatformPreflight/INotificationService's
+        // own TryAdd-then-override convention -- ProcessRunner's constructor resolves whichever
+        // implementation wins.
+        services.TryAddSingleton<IProcessContainment, NullProcessContainment>();
         services.AddSingleton<IProcessRunner, ProcessRunner>();
         services.AddSingleton<IRepository, GitRepository>();
         services.AddSingleton<IWorktreeManager, GitWorktreeManager>();
