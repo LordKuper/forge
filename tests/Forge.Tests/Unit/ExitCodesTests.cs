@@ -35,4 +35,13 @@ public sealed class ExitCodesTests
     [Trait("Category", "Unit")]
     public void StageTransitionRewindInProgressMapsToTheWorkflowExitCode() =>
         Assert.Equal(ExitCodes.Workflow, ExitCodes.For(DiagnosticCodes.StageTransitionRewindInProgress));
+
+    /// <summary>Round 1 review of PR #102: <see cref="DiagnosticCodes.CapabilityNotSupported"/> (ADR
+    /// 0053) had no `ExitCodes.For` case, so it fell through to `Internal` (13, "sanitized unexpected
+    /// failure") instead of the client/Host-compatibility family `docs/contracts/v1/README.md` already
+    /// reserves exit 14 for.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void CapabilityNotSupportedMapsToTheCompatibilityExitCode() =>
+        Assert.Equal(ExitCodes.Compatibility, ExitCodes.For(DiagnosticCodes.CapabilityNotSupported));
 }

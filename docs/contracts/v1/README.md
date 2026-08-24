@@ -72,6 +72,7 @@ gate on workstations and CI.
 | 12 | dependency | `dependency_unavailable` | Required immutable input is unavailable |
 | 13 | internal | `internal_error` | Sanitized unexpected failure |
 | 14 | compatibility | `host_protocol_incompatible` | Client and Host protocol majors cannot communicate |
+| 14 | compatibility | `capability_not_supported` | Connected Host does not advertise a capability the request needs |
 
 Machine stdout contains only the requested schema. Diagnostics use stderr and
 carry `code`, `category`, `message_key`, typed `arguments`, `correlation_id`, and

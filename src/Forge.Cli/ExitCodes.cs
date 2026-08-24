@@ -20,6 +20,7 @@ public static class ExitCodes
     public const int Concurrency = 10;
     public const int Workflow = 11;
     public const int Internal = 13;
+    public const int Compatibility = 14;
 
     public static int For(string diagnosticCode) => diagnosticCode switch
     {
@@ -44,6 +45,10 @@ public static class ExitCodes
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,
         DiagnosticCodes.ModelPolicyViolation or DiagnosticCodes.NoActiveOperation or
             DiagnosticCodes.ActiveOperationChanged or DiagnosticCodes.StageTransitionRewindInProgress => Workflow,
+        // ADR 0053: a client/Host version mismatch that blocked one specific request client-side --
+        // the same client/Host-compatibility family exit 14 already reserves for
+        // `host_protocol_incompatible` (docs/contracts/v1/README.md), not a sanitized internal error.
+        DiagnosticCodes.CapabilityNotSupported => Compatibility,
         _ => Internal,
     };
 }

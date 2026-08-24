@@ -193,7 +193,12 @@ public sealed class ForgeHostClient : IAsyncDisposable
             }
 
             connection = candidate;
-            HostCapabilities = response.Capabilities;
+            // Never trust ANY field on the response (see above): System.Text.Json passes a JSON
+            // `null`/absent `capabilities` straight through this non-nullable positional-record
+            // parameter at runtime, regardless of the declared type. Coalescing here keeps
+            // HostCapabilities.Contains callers (RemoteForgeMutations.SendAsync) safe from a
+            // NullReferenceException a malformed or differently-versioned Host could trigger.
+            HostCapabilities = response.Capabilities ?? [];
             return ControlDiagnostic.None;
         }
         catch (ControlProtocolException exception)

@@ -32,6 +32,29 @@ public sealed class RemoteForgeMutationsCapabilityGateTests
         Assert.Equal(0, connection.RequestCount);
     }
 
+    /// <summary>Round 1 review of PR #102: a malformed or differently-versioned Host answering the
+    /// handshake with a JSON `null` (or absent) `capabilities` field must not crash. System.Text.Json
+    /// passes that `null` straight through <see cref="ControlHandshakeResponse.Capabilities"/>'s
+    /// non-nullable positional-record parameter at runtime, so before this fix
+    /// <see cref="ForgeHostClient.HostCapabilities"/> stored `null` and this call's
+    /// <c>HostCapabilities.Contains(...)</c> gate threw an uncaught <see cref="ArgumentNullException"/>
+    /// -- breaking <see cref="RemoteForgeMutations"/>'s own documented "never a thrown exception a
+    /// caller must specifically catch" contract.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReturnsCapabilityNotSupportedInsteadOfCrashingWhenTheHandshakeResponseCapabilitiesFieldIsNull()
+    {
+        SequencedFakeConnection connection = new(null);
+        await using RemoteForgeMutations mutations = CreateMutations(connection);
+
+        ConfigurationWriteResult result = await mutations.SetConfigurationAsync(
+            ConfigurationScope.Project, "root", "some.key", "value", TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.CapabilityNotSupported, result.DiagnosticCode);
+        Assert.Equal(0, connection.RequestCount);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ProceedsWhenTheConnectedHostAdvertisesTheGoverningCapability()
@@ -61,12 +84,13 @@ public sealed class RemoteForgeMutationsCapabilityGateTests
         return new RemoteForgeMutations(client);
     }
 
-    /// <summary>Answers the handshake first (echoing whichever capability list the test supplies),
-    /// then answers every later request with <paramref name="buildRequestResponse"/> -- defaulted to
-    /// a value that must never actually be invoked, since a capability-gated test never expects its
-    /// request to reach this far.</summary>
+    /// <summary>Answers the handshake first (echoing whichever capability list the test supplies --
+    /// `null` simulates a Host whose handshake response omits or nulls the field), then answers every
+    /// later request with <paramref name="buildRequestResponse"/> -- defaulted to a value that must
+    /// never actually be invoked, since a capability-gated test never expects its request to reach
+    /// this far.</summary>
     private sealed class SequencedFakeConnection(
-        IReadOnlyList<string> hostCapabilities,
+        IReadOnlyList<string>? hostCapabilities,
         Func<ControlRequest, ControlResponse>? buildRequestResponse = null)
         : ILocalControlConnection
     {
@@ -85,7 +109,7 @@ public sealed class RemoteForgeMutationsCapabilityGateTests
                     JsonSerializer.Deserialize<ControlHandshakeRequest>(message.Span, ControlProtocol.JsonOptions)!;
                 pendingResponseBytes = JsonSerializer.SerializeToUtf8Bytes(
                     new ControlHandshakeResponse(
-                        ControlProtocol.Version, "1.0.0-test", hostCapabilities, ControlDiagnostic.None,
+                        ControlProtocol.Version, "1.0.0-test", hostCapabilities!, ControlDiagnostic.None,
                         request.CorrelationId),
                     ControlProtocol.JsonOptions);
                 handshaked = true;

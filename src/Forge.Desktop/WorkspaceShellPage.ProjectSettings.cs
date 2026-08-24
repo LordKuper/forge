@@ -81,7 +81,16 @@ public partial class WorkspaceShellPage
             ProjectSettingsSaveResult saveResult = await projectSettings
                 .SaveAsync(root, edit, snapshot, CancellationToken.None)
                 .ConfigureAwait(true);
-            result.Text = text.Resolve(saveResult.Succeeded ? MessageKeys.SettingsSaved : MessageKeys.SettingsValidationFailed);
+            // PR #102 round 1 review: this is the only Desktop caller of the gated
+            // `configuration.manage` capability -- a bare Succeeded ternary discarded
+            // saveResult.DiagnosticCode entirely, so a CapabilityNotSupported rejection rendered as
+            // the same generic "settings validation failed" as any other cause. Route through the
+            // shared Message helper (WorkspaceShellPage.xaml.cs), the same pattern already used for
+            // every other Desktop save/action failure in this class (e.g.
+            // WorkspaceShellPage.SprintWorkspace.cs's stale-refresh and rewind-reason-save results).
+            result.Text = Message(
+                text.Resolve(saveResult.Succeeded ? MessageKeys.SettingsSaved : MessageKeys.SettingsValidationFailed),
+                saveResult.DiagnosticCode);
             if (saveResult.Succeeded)
             {
                 await RenderContentAsync().ConfigureAwait(true);

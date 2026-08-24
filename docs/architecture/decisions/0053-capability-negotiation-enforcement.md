@@ -107,14 +107,24 @@ Rendering follows each surface's existing mechanism, unchanged in shape:
   content) for every diagnostic, including the existing `DiagnosticCodes.HostUnavailable` -- no
   diagnostic code gets bespoke localized prose through this path today. `capability_not_supported`
   needs no new rendering path: it already prints there like every other code, staying script-friendly.
-- **Desktop**: `MainPageViewModel`'s shared `Message(text, diagnosticCode)` helper -- the single
-  render point every gated mutation's result already flows through -- gains one `switch` arm: instead
-  of the generic `"{message} ({diagnosticCode})"` suffix every other code gets, `CapabilityNotSupported`
-  resolves the new `MessageKeys.CapabilityNotSupported` localized sentence ("This Host does not yet
-  support this operation. Upgrade Forge on this project's Host to use it." / Russian translation). The
-  message is deliberately generic (not naming the specific operation): the typed result carries only a
-  diagnostic code, no free-text detail field, and adding one to every result type across the whole
-  surface to parametrize one rare message would be disproportionate to what this fix needs.
+- **Desktop**: rendering is not actually a single point -- `MainPageViewModel` has no
+  configuration-write path at all (removed by ADR 0050), so the one live Desktop caller of the gated
+  `configuration.manage` capability is `ProjectSettingsViewModel.SaveAsync`
+  (`WorkspaceShellPage.ProjectSettings.cs`), which renders through the same generic
+  `Message(text, diagnosticCode)` helper `WorkspaceShellPage.xaml.cs` and
+  `WorkspaceShellPage.SprintWorkspace.cs` already use for every other save/action failure --
+  `"{message} ({diagnosticCode})"` for every code, including `CapabilityNotSupported`. Only the
+  `MainPageViewModel` copy of this helper (an instance method there, used by the mutations that do
+  flow through it -- e.g. `ConfirmNodeAsync`, `ResolveGateAsync`) gains the one `switch` arm this
+  ADR originally described: instead of the generic suffix, `CapabilityNotSupported` resolves the new
+  `MessageKeys.CapabilityNotSupported` localized sentence ("This Host does not yet support this
+  operation. Upgrade Forge on this project's Host to use it." / Russian translation). The project
+  settings save path currently shows the raw code suffix, not that sentence -- giving it the same
+  localized branch is tracked as follow-up, not required for this fix's narrow client/Host-mismatch
+  scope. The message is deliberately generic (not naming the specific operation): the typed result
+  carries only a diagnostic code, no free-text detail field, and adding one to every result type
+  across the whole surface to parametrize one rare message would be disproportionate to what this fix
+  needs.
 
 ## What stays deferred
 
