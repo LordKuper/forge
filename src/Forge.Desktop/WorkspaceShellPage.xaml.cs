@@ -117,10 +117,29 @@ public partial class WorkspaceShellPage : ContentPage
     /// guard releases, not be silently dropped).</summary>
     private Task RunAsync(Func<Task> action) => renderGate.RunAsync(action);
 
+    /// <summary>Sidebar column width when expanded -- the plan 4.1 layout's own fixed 280 (matching
+    /// <c>WorkspaceShellPage.xaml</c>'s original <c>ColumnDefinitions</c>).</summary>
+    private const double SidebarExpandedWidth = 280;
+
+    /// <summary>Sidebar column width when collapsed to its icon-only rail (ADR 0050 addendum): wide
+    /// enough for the toggle button's own tap target, nothing more.</summary>
+    private const double SidebarCollapsedWidth = 56;
+
     private async Task RenderSidebarAsync()
     {
         SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
         SidebarHost.Children.Clear();
+        ShellGrid.ColumnDefinitions[0].Width =
+            new GridLength(snapshot.Collapsed ? SidebarCollapsedWidth : SidebarExpandedWidth);
+        SidebarHost.Children.Add(BuildSidebarToggleButton(snapshot.Collapsed));
+        if (snapshot.Collapsed)
+        {
+            // ADR 0050 addendum: collapsed is an icon-only rail -- only the re-expand affordance
+            // above stays visible, matching plan 12.6 ("state conveyed by an icon/text change, not
+            // merely a width change") since the toggle's own accessible name already flips with it.
+            return;
+        }
+
         SidebarHost.Children.Add(BuildAddProjectRow());
         foreach (SidebarProjectItem project in snapshot.Projects)
         {
@@ -152,6 +171,23 @@ public partial class WorkspaceShellPage : ContentPage
         {
             SidebarHost.Children.Add(Describe(new Label { Text = sidebarNotice }));
         }
+    }
+
+    /// <summary>The whole-sidebar collapse/expand toggle (ADR 0050 addendum): always the sidebar's
+    /// first control, in both states, so the rail retains its own re-expand affordance. Routes its
+    /// click through <see cref="RunAsync"/>/<see cref="ShellRenderGate"/> -- the same guard every
+    /// other shell-driven mutation already uses -- rather than a second, ad-hoc render path.</summary>
+    private Button BuildSidebarToggleButton(bool collapsed)
+    {
+        Button toggle = new() { Text = collapsed ? ">>" : "<<" };
+        SemanticProperties.SetDescription(
+            toggle, text.Resolve(collapsed ? MessageKeys.SidebarExpandAction : MessageKeys.SidebarCollapseAction));
+        toggle.Clicked += (_, _) => _ = RunAsync(async () =>
+        {
+            await sidebar.SetCollapsedAsync(!collapsed, CancellationToken.None).ConfigureAwait(true);
+            await RenderSidebarAsync().ConfigureAwait(true);
+        });
+        return toggle;
     }
 
     private VerticalStackLayout BuildAddProjectRow()

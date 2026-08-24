@@ -13,6 +13,11 @@ public enum ConfigurationScope
 public static class ConfigurationKeys
 {
     public const string ProvidersEnabled = "providers.enabled";
+
+    /// <summary>Desktop-instance-level UI preference (ADR 0050 addendum): whether the workspace
+    /// shell's sidebar is collapsed to its icon-only rail. User-scoped like
+    /// <c>notifications.enabled</c> -- a per-installation preference, never tied to one project.</summary>
+    public const string SidebarCollapsed = "shell.sidebar_collapsed";
 }
 
 public enum ConfigurationProvenance

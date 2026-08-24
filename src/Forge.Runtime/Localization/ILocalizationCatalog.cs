@@ -241,6 +241,8 @@ public static class MessageKeys
     public const string SettingsTokenBudgetInvalid = "SettingsTokenBudgetInvalid";
     public const string SidebarAddProjectAction = "SidebarAddProjectAction";
     public const string SidebarAddProjectPathLabel = "SidebarAddProjectPathLabel";
+    public const string SidebarCollapseAction = "SidebarCollapseAction";
+    public const string SidebarExpandAction = "SidebarExpandAction";
     public const string SidebarForgeSettingsAction = "SidebarForgeSettingsAction";
     public const string SidebarHistoryLabel = "SidebarHistoryLabel";
     public const string SidebarRemoveProjectAction = "SidebarRemoveProjectAction";

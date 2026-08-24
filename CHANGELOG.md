@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.71.0
+
+### Added
+
+- Desktop's workspace sidebar can now be collapsed to a narrow icon-only rail, giving the content
+  area the full window width, and expanded back. The toggle is keyboard-reachable and screen-reader
+  named ("Collapse sidebar" / "Expand sidebar", switching with its state); the collapsed rail keeps
+  the toggle itself visible as its own re-expand affordance. The chosen state persists across app
+  restarts, independently of any one project.
+
 ## v0.70.0
 
 ### Added

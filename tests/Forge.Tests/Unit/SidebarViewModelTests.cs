@@ -205,6 +205,63 @@ public sealed class SidebarViewModelTests
     /// <c>CheckAsync</c> is never called by a sidebar load: the quota row must be projected from the
     /// <see cref="Forge.Providers.ProviderHealthEntry"/> set the same render pass already
     /// collected.</summary>
+    /// <summary>ADR 0050 addendum: the workspace shell's whole-sidebar collapse toggle defaults to
+    /// expanded, matching the fixed layout every prior release shipped.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncDefaultsToAnExpandedSidebar()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.False(snapshot.Collapsed);
+    }
+
+    /// <summary>Plan section 2's "collapsible sidebar" requirement (docs/plans/desktop-workspace-redesign.md)
+    /// includes surviving a restart. <see cref="SidebarViewModel.SetCollapsedAsync"/> writes through
+    /// the real, local user-scope configuration store (never a project's Host -- ADR 0050), so a
+    /// second, independently constructed <see cref="SidebarViewModel"/> standing in for a fresh app
+    /// process must observe the first instance's write.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncPersistsAcrossANewViewModelInstanceSimulatingARestart()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel first =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        ConfigurationWriteResult result = await first.SetCollapsedAsync(true, cancellationToken);
+
+        Assert.True(result.Succeeded);
+        SidebarViewModel second =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarSnapshot snapshot = await second.LoadAsync(cancellationToken);
+        Assert.True(snapshot.Collapsed);
+    }
+
+    /// <summary>Same persistence path as the restart test above, proving the toggle is reversible
+    /// (expand after collapse), not a one-way latch.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncCanExpandAnAlreadyCollapsedSidebar()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        await viewModel.SetCollapsedAsync(true, cancellationToken);
+
+        await viewModel.SetCollapsedAsync(false, cancellationToken);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+        Assert.False(snapshot.Collapsed);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow()

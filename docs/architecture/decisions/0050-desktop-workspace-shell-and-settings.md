@@ -194,6 +194,62 @@ functional correctness, since the reserved status never blocked local, in-proces
   delegation) and to static text-based checks against the Windows adapter's source
   (`SurfaceParityTests`), matching the previous page's own established testing discipline.
 
+## Addendum: collapsible sidebar completes this ADR's own deferred scope
+
+A post-release audit found that plan section 2's "the first UI layout is a fixed two-panel
+workspace **with a collapsible sidebar**" was never actually implemented: `WorkspaceShellPage.xaml`
+shipped the fixed `280,*` grid with no collapse control anywhere. This addendum records the two
+decisions closing that gap, without a new ADR number, since it completes this ADR's own original
+scope rather than introducing a new one.
+
+### Collapse state lives in the existing local user-scope configuration store, not `ProjectCatalogStore` or a new file
+
+Whether the sidebar is collapsed is a Desktop-instance-level UI preference: it applies to the whole
+installation, not to any one project. `ProjectCatalogStore` was considered and rejected -- despite
+being described as "Desktop-installation-local persistence," every field on
+`ProjectCatalogEntry` is keyed by a specific project's own `ProjectId`, so a project-agnostic
+preference has no natural row to live on there (and adding one to the top-level `Persisted` wrapper
+instead of an entry would create a second, differently-shaped persistence convention in the same
+file for no benefit).
+
+Instead, this reuses the mechanism `ForgeSettingsViewModel` already established for exactly this
+kind of state: a new `ConfigurationRegistry` key (`shell.sidebar_collapsed`, `ConfigurationScope.User`,
+default `false`, no session override -- same shape as `notifications.enabled`), written and read
+through `ForgeApplication.SetConfigurationAsync`/`GetUserConfigurationAsync` directly, never through
+a project's Host (ADR 0005/0049's existing "user-scope configuration stays local" rule). This is a
+genuinely public, documented contract addition, not an internal implementation detail: `docs/contracts/v1/configuration.json`
+gains the new key (`contract_version` 1.4.0 -> 1.5.0), `docs/contracts/v1/schemas/user-config.schema.json`
+gains the corresponding `shell.sidebar_collapsed` property and a `1.3.0` `schema_version` entry, and
+`ConfigurationSchemaCodec`'s `UserContractVersion` moves to `1.3.0` in step -- the same three-file
+pattern `notifications.enabled` established (ADR 0024).
+
+`SidebarViewModel.LoadAsync` now also reads this key (one extra `GetUserConfigurationAsync` call,
+no new Host round-trip) and returns it on `SidebarSnapshot.Collapsed`; `SidebarViewModel.SetCollapsedAsync`
+writes it. Both are exercised directly by real, file-backed round-trip tests
+(`SidebarViewModelTests`) rather than a live MAUI process, matching this ADR's own established test
+discipline for `Forge.Desktop.Presentation`.
+
+### Collapsed is an icon-only rail rendered by the same `RenderSidebarAsync`/`ShellRenderGate` path, not a second render pipeline
+
+`WorkspaceShellPage.RenderSidebarAsync` now also sets `ShellGrid.ColumnDefinitions[0].Width` (280
+expanded, 56 collapsed) and always renders one new toggle button first; when collapsed, it returns
+immediately after that button, so the rail keeps its own re-expand affordance instead of vanishing
+entirely. The toggle's `Clicked` handler calls `SidebarViewModel.SetCollapsedAsync` then
+`RenderSidebarAsync` from inside `RunAsync`, the exact same `ShellRenderGate`-backed idiom every
+other sidebar-mutating control here already uses (add/remove project, Forge settings) -- deliberately
+not a new render path, given `ShellRenderGate` itself exists because two earlier PRs (#98, #99) had
+to fix bugs from exactly that mistake. The toggle's accessible name
+(`MessageKeys.SidebarCollapseAction`/`SidebarExpandAction`, English and Russian) flips with the
+state it describes, so the state change is conveyed by more than a bare column-width change a screen
+reader cannot perceive (plan 12.6).
+
+### What stays deferred
+
+Live visual, keyboard-navigation, and screen-reader verification of the toggle and the collapsed
+rail is not possible here either, for the same reason this ADR's own "what stays deferred" section
+already gives: no MAUI control can be instantiated headlessly in this repository's test suite. Test
+coverage is limited to `SidebarViewModel`'s collapse state and its real persistence round-trip.
+
 ## Consequences
 
 - `Forge.Desktop.Presentation` gains `SurfaceTextProvider`, `WorkspaceRoute`/`WorkspacePage`,
