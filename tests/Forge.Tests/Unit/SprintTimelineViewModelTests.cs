@@ -340,4 +340,47 @@ public sealed class SprintTimelineViewModelTests
 
         Assert.Equal("stale finding, rewinding to replan", draft);
     }
+
+    /// <summary>ADR 0054: the message-composer draft is a PARALLEL slot to the rewind-reason draft
+    /// above, not a reuse of it -- both must survive independently, and neither may clobber the
+    /// other.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task MessageDraftIsRestoredByAFreshViewModelInstanceIndependentlyOfTheRewindReasonDraft()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        await timeline.SaveDraftAsync("stale finding, rewinding to replan", cancellationToken);
+        await timeline.SaveMessageDraftAsync("still typing a status update...", cancellationToken);
+
+        SprintTimelineViewModel reopened = new(environment.Application, catalog);
+        await reopened.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        Assert.Equal("stale finding, rewinding to replan", await reopened.LoadDraftAsync(cancellationToken));
+        Assert.Equal("still typing a status update...", await reopened.LoadMessageDraftAsync(cancellationToken));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SavingAMessageDraftOverTheLengthBoundIsRejected()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        ProjectCatalogResult result = await timeline.SaveMessageDraftAsync(
+            new string('x', ProjectCatalogStore.MaxDraftLength + 1), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ProjectCatalogDraftTooLong, result.DiagnosticCode);
+        Assert.Null(await timeline.LoadMessageDraftAsync(cancellationToken));
+    }
 }

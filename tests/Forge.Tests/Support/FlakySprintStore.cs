@@ -134,6 +134,15 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         CancellationToken cancellationToken) =>
         inner.AppendAttemptSupersededAsync(projectRoot, sprintId, attemptId, instruction, cancellationToken);
 
+    public Task AppendUserMessageAsync(
+        string projectRoot, SprintId sprintId, Guid messageId, string text, CancellationToken cancellationToken) =>
+        inner.AppendUserMessageAsync(projectRoot, sprintId, messageId, text, cancellationToken);
+
+    public Task AppendAgentSummaryRecordedAsync(
+        string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
+        CancellationToken cancellationToken) =>
+        inner.AppendAgentSummaryRecordedAsync(projectRoot, sprintId, nodeId, handoffId, summaryText, cancellationToken);
+
     /// <summary>Optional side effect run immediately before delegating an
     /// <see cref="AppendAttemptStopRequestedAsync"/> call to the wrapped store -- lets a test inject
     /// a concurrent mutation (e.g. a real <c>CompleteAttemptAsync</c>/<c>SupersedeAttemptAsync</c>

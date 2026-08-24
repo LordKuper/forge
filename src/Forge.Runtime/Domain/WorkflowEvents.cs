@@ -188,6 +188,50 @@ public sealed record WorkflowEvent(
     /// the exact key the original, still-unconverged commit used, rather than only ever seeing it
     /// once the saga has already finished.</summary>
     public const string IdempotencyKeyArgument = "idempotency_key";
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): a user-posted,
+    /// bounded free-text message attached to a sprint. Appended to this SAME per-sprint journal
+    /// (rather than a second store) so it gets a dense, unique <see cref="Sequence"/> for free and
+    /// <see cref="Forge.Application.SprintTimelineProjector"/>'s existing cursor/redaction machinery
+    /// needs no second merge step. Recorded on the sprint's own aggregate, never a transition itself
+    /// (no <see cref="ToStateArgument"/>), matching <see cref="AttemptSupersededType"/>'s own
+    /// non-transition shape. Deduplicated by the caller-supplied <see cref="WorkflowEvent.EventId"/>
+    /// itself (see <see cref="Forge.Application.ISprintStore.AppendUserMessageAsync"/>) rather than a
+    /// version/idempotency-key pair: nothing about a message post conflicts with concurrent workflow
+    /// progress, so it is never gated on the sprint's current version.</summary>
+    public const string UserMessagePostedType = "UserMessagePosted";
+
+    /// <summary>Carried on a <see cref="UserMessagePostedType"/> event: the bounded message text
+    /// itself (ADR 0054), reusing <see cref="Forge.Application.SprintScheduler.MaxSupersessionInstructionLength"/>
+    /// as its bound rather than inventing a new one.</summary>
+    public const string UserMessageTextArgument = "message_text";
+
+    /// <summary>ADR 0054, redesigned (round of PR #104 review, finding 1): a node's user-visible
+    /// summary (<see cref="Forge.Domain.Handoff.Summary"/>), recorded as its own real entry in this
+    /// SAME per-sprint journal the instant <see cref="Forge.Application.SprintScheduler.RecordHandoffAsync"/>
+    /// runs -- mirrors <see cref="UserMessagePostedType"/>'s own "give it a real, dense
+    /// <see cref="Sequence"/>, never borrow one" shape. The original design instead stamped the
+    /// <c>Handoff</c> record itself with the sprint's current <c>LastSequence</c> at record time and
+    /// had the projector anchor to "the nearest event at or before" that borrowed value -- unsound on
+    /// two counts: the borrowed sequence could belong to a completely unrelated later event appended
+    /// in the gap before the handoff write landed (including this very journal's own
+    /// <see cref="UserMessagePostedType"/>), and a cursor that had already advanced past that sequence
+    /// could never see the handoff once it finally landed, since the two writes are not atomic. A real
+    /// event closes both holes: its own <see cref="Sequence"/> is assigned atomically at append time,
+    /// the same guarantee every other event type here already has, so there is nothing left to borrow
+    /// or anchor. Recorded on the producing node's own aggregate, never a transition itself (no
+    /// <see cref="ToStateArgument"/>), matching <see cref="AttemptSupersededType"/>'s own non-transition
+    /// shape.</summary>
+    public const string AgentSummaryRecordedType = "AgentSummaryRecorded";
+
+    /// <summary>Carried on an <see cref="AgentSummaryRecordedType"/> event: the summary text itself
+    /// (<see cref="Forge.Domain.Handoff.Summary"/>, duplicated onto the event) -- the projector never
+    /// needs to resolve the separate <c>Handoff</c> store for this item's content, only for its
+    /// mutable <see cref="Forge.Domain.Handoff.Superseded"/> flag (see
+    /// <see cref="Forge.Application.SprintTimelineProjector.MergeAndPage"/>). The event's own
+    /// <see cref="WorkflowEvent.CorrelationId"/> carries the exact <c>Handoff.HandoffId</c> this
+    /// summary corresponds to, so that superseded check can still find it.</summary>
+    public const string AgentSummaryTextArgument = "summary";
 }
 
 public sealed record SprintWorkflowState(
@@ -294,6 +338,24 @@ public static class WorkflowFold
                     attempts[current.Aggregate.Id] = convergedAttempt with { StopConvergedAt = current.OccurredAt };
                 }
 
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.UserMessagePostedType)
+            {
+                // Validated (throws loudly on corruption) but, like AttemptSupersededType, never a
+                // transition and never projected into the folded snapshot itself: the bounded message
+                // it carries is durable timeline content, not workflow state.
+                _ = IsTransitionRecord(current);
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.AgentSummaryRecordedType)
+            {
+                // Validated (throws loudly on corruption) but, like UserMessagePostedType, never a
+                // transition and never projected into the folded snapshot itself: the summary it
+                // carries is durable timeline content, not workflow state.
+                _ = IsTransitionRecord(current);
                 continue;
             }
 
@@ -488,6 +550,28 @@ public static class WorkflowFold
         {
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt
                 ? throw new InvalidDataException($"Stop-converged event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.UserMessagePostedType)
+        {
+            bool hasText = current.Arguments.TryGetValue(
+                WorkflowEvent.UserMessageTextArgument, out string? text) && text is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Sprint || !hasText
+                ? throw new InvalidDataException($"User-message event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AgentSummaryRecordedType)
+        {
+            bool hasSummary = current.Arguments.TryGetValue(
+                WorkflowEvent.AgentSummaryTextArgument, out string? summary) && summary is not null;
+            // CorrelationId (not an Arguments entry) carries the owning Handoff.HandoffId -- required
+            // so a later rewind's supersession of that Handoff can still be matched back to this
+            // already-landed, immutable event (see SprintTimelineProjector.MergeAndPage).
+            return hasState || current.Aggregate.Kind != AggregateKind.Node || !hasSummary ||
+                current.CorrelationId is null
+                ? throw new InvalidDataException($"Agent-summary event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

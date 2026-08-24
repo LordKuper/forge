@@ -165,6 +165,9 @@
   <data name="WorkspaceSummaryDescription" xml:space="preserve"><value>Показать ограниченную сводку по каждому каталогизированному проекту.</value></data>
   <data name="WorkspaceActionsDescription" xml:space="preserve"><value>Показать действия, доступные сейчас для проекта или спринта.</value></data>
   <data name="SprintTimelineDescription" xml:space="preserve"><value>Прочитать проекцию временной шкалы спринта постранично.</value></data>
+  <data name="SprintMessageDescription" xml:space="preserve"><value>Опубликовать текстовое сообщение на временной шкале спринта.</value></data>
+  <data name="SprintMessagePosted" xml:space="preserve"><value>Сообщение опубликовано.</value></data>
+  <data name="SprintMessagePostFailed" xml:space="preserve"><value>Не удалось опубликовать сообщение.</value></data>
   <data name="ProjectDescription" xml:space="preserve"><value>Команды локального каталога проектов.</value></data>
   <data name="ProjectAddDescription" xml:space="preserve"><value>Добавить инициализированный проект в локальный каталог.</value></data>
   <data name="ProjectRemoveDescription" xml:space="preserve"><value>Удалить проект из локального каталога, не затрагивая его репозиторий.</value></data>
@@ -277,6 +280,9 @@
   <data name="ActionRewindReasonRequired" xml:space="preserve"><value>Для возврата на более раннюю стадию требуется указать причину.</value></data>
   <data name="ActionStaleRefreshed" xml:space="preserve"><value>Это действие устарело; экран обновлён.</value></data>
   <data name="ActionRewindReasonDraftSaveFailed" xml:space="preserve"><value>Не удалось сохранить черновик причины.</value></data>
+  <data name="TimelineMessageLabel" xml:space="preserve"><value>Сообщение</value></data>
+  <data name="TimelineMessageSendAction" xml:space="preserve"><value>Отправить</value></data>
+  <data name="TimelineMessageDraftSaveFailed" xml:space="preserve"><value>Не удалось сохранить черновик сообщения.</value></data>
   <data name="workspace_action.resume_sprint" xml:space="preserve"><value>Возобновить приостановленный, заблокированный или неудавшийся спринт.</value></data>
   <data name="workspace_action.run_sprint" xml:space="preserve"><value>Продвинуть спринт из черновика или готовности.</value></data>
   <data name="workspace_action.cancel_sprint" xml:space="preserve"><value>Отменить спринт.</value></data>

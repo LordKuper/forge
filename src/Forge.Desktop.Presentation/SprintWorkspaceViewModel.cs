@@ -79,6 +79,12 @@ public sealed class SprintWorkspaceViewModel(
         CancellationToken cancellationToken) =>
         legacy.ResolveGateAsync(projectRoot, Id(sprintId), nodeId, approved, confirmed, cancellationToken);
 
+    /// <summary>ADR 0054's reserved `sprint.post_message` capability. Not confirmable -- posting a
+    /// message is additive.</summary>
+    public Task<string> PostMessageAsync(
+        string? projectRoot, Guid sprintId, string? messageText, CancellationToken cancellationToken) =>
+        legacy.PostMessageAsync(projectRoot, Id(sprintId), messageText, cancellationToken);
+
     public string AttemptSupersedePrompt(Guid sprintId, string? attemptId) =>
         legacy.AttemptSupersedePrompt(Id(sprintId), attemptId);
 

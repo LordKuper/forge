@@ -30,6 +30,15 @@ public sealed record HandoffArtifact(
 /// </summary>
 /// <summary><paramref name="Revision"/>/<paramref name="Superseded"/> follow the same rewind
 /// supersession rule as <see cref="NodeResult"/> (plan section 8.4, ADR 0045).</summary>
+/// <remarks>ADR 0054 briefly added a <c>Sequence</c> field here so <c>SprintTimelineProjector</c>
+/// could anchor a projected summary into the journal's own order by borrowing the sprint's current
+/// watermark at record time. Round of PR #104 review (finding 1) found that borrowing unsound (the
+/// borrowed value could belong to an unrelated later event, and a cursor already past it could never
+/// see the handoff once written) and redesigned it: the summary is now its own real
+/// <see cref="Forge.Domain.WorkflowEvent.AgentSummaryRecordedType"/> journal entry with its own real
+/// <see cref="Forge.Domain.WorkflowEvent.Sequence"/>, so <see cref="Handoff"/> needs no sequence of
+/// its own at all -- removed rather than kept as unused debt (finding 2 confirmed nothing else read
+/// it once the redesign lands).</remarks>
 public sealed record Handoff(
     Guid HandoffId,
     SprintId SprintId,

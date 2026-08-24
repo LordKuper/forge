@@ -15,7 +15,11 @@ namespace Forge.Application;
 /// this slice adds) -- both keyed by the sprint id's <c>"D"</c> string form, matching how every other
 /// catalog id here is already stored on the wire. Every other typed input this slice renders
 /// (gate/confirm/test-work justification) is a one-shot decision entered and submitted in a single
-/// dialog turn, not a draft worth surviving a restart.
+/// dialog turn, not a draft worth surviving a restart. <see cref="MessageDrafts"/> (ADR 0054,
+/// post-release timeline gap closure) is a PARALLEL field for the message composer's own draft, not
+/// a reuse of <see cref="SprintDrafts"/> -- that field is specific to the rewind-reason input (one
+/// draft slot per sprint already), and a sprint can have an in-progress rewind reason and an
+/// in-progress message at the same time.
 /// </summary>
 public sealed record ProjectCatalogEntry(
     Guid ProjectId,
@@ -25,7 +29,8 @@ public sealed record ProjectCatalogEntry(
     Guid? LastSelectedSprintId,
     string? LastRoute,
     IReadOnlyDictionary<string, long>? TimelineReadWatermarks = null,
-    IReadOnlyDictionary<string, string>? SprintDrafts = null);
+    IReadOnlyDictionary<string, string>? SprintDrafts = null,
+    IReadOnlyDictionary<string, string>? MessageDrafts = null);
 
 public sealed record ProjectCatalogResult(bool Succeeded, ProjectCatalogEntry? Entry, string DiagnosticCode)
 {
@@ -362,6 +367,36 @@ public sealed class ProjectCatalogStore(
             }
 
             return entry with { SprintDrafts = drafts };
+        }, cancellationToken);
+    }
+
+    /// <summary>ADR 0054's parallel draft slot for the sprint workspace's message composer (see
+    /// <see cref="ProjectCatalogEntry.MessageDrafts"/>'s own remarks for why this is not a reuse of
+    /// <see cref="SetSprintDraftAsync"/>) -- same bound and empty-clears convention.</summary>
+    public Task<ProjectCatalogResult> SetSprintMessageDraftAsync(
+        Guid projectId, Guid sprintId, string? draft, CancellationToken cancellationToken)
+    {
+        if (draft is { Length: > MaxDraftLength })
+        {
+            return Task.FromResult(ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogDraftTooLong));
+        }
+
+        return MutateEntryAsync(projectId, entry =>
+        {
+            string key = sprintId.ToString("D");
+            Dictionary<string, string> drafts = entry.MessageDrafts is { } existing
+                ? new(existing, StringComparer.Ordinal)
+                : new(StringComparer.Ordinal);
+            if (string.IsNullOrWhiteSpace(draft))
+            {
+                drafts.Remove(key);
+            }
+            else
+            {
+                drafts[key] = draft;
+            }
+
+            return entry with { MessageDrafts = drafts };
         }, cancellationToken);
     }
 

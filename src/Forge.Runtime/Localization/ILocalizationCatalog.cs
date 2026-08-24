@@ -206,6 +206,12 @@ public static class MessageKeys
     public const string WorkspaceSummaryDescription = "WorkspaceSummaryDescription";
     public const string WorkspaceActionsDescription = "WorkspaceActionsDescription";
     public const string SprintTimelineDescription = "SprintTimelineDescription";
+
+    /// <summary>Post-release timeline gap closure (ADR 0054): `forge sprint message` and its
+    /// Desktop composer counterpart.</summary>
+    public const string SprintMessageDescription = "SprintMessageDescription";
+    public const string SprintMessagePosted = "SprintMessagePosted";
+    public const string SprintMessagePostFailed = "SprintMessagePostFailed";
     public const string ProjectDescription = "ProjectDescription";
     public const string ProjectAddDescription = "ProjectAddDescription";
     public const string ProjectRemoveDescription = "ProjectRemoveDescription";
@@ -363,6 +369,14 @@ public static class MessageKeys
     public const string ActionRewindReasonRequired = "ActionRewindReasonRequired";
     public const string ActionRewindReasonDraftSaveFailed = "ActionRewindReasonDraftSaveFailed";
     public const string ActionStaleRefreshed = "ActionStaleRefreshed";
+
+    /// <summary>Post-release timeline gap closure (ADR 0054): the sprint workspace's message
+    /// composer -- a free-text entry and send action, distinct from <see cref="ActionRewindReasonLabel"/>'s
+    /// own draft field (<c>ProjectCatalogEntry.MessageDrafts</c> is a parallel field, not a reused
+    /// one -- the rewind-reason draft is specific to that one action).</summary>
+    public const string TimelineMessageLabel = "TimelineMessageLabel";
+    public const string TimelineMessageSendAction = "TimelineMessageSendAction";
+    public const string TimelineMessageDraftSaveFailed = "TimelineMessageDraftSaveFailed";
 
     /// <summary><c>AvailableActionProjector</c>'s sprint-lifecycle rationale keys, resolved as
     /// descriptive text (the contextual-action renderer's row label uses

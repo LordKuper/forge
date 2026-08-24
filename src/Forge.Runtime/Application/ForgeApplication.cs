@@ -210,6 +210,15 @@ public interface IForgeMutations
         bool confirmed,
         Guid idempotencyKey,
         CancellationToken cancellationToken);
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): appends a bounded
+    /// user-posted message to the sprint's own timeline. Not confirmable/destructive -- posting a
+    /// message is additive, matching <see cref="CreateSprintAsync"/>/<see cref="RunSprintAsync"/>'s
+    /// own reasoning (plan section 6.4's <c>AvailableAction.safety_class</c> concept: this needs no
+    /// confirmation gate, unlike <see cref="SupersedeAttemptAsync"/> or <see cref="CancelSprintAsync"/>).
+    /// </summary>
+    Task<PostSprintMessageResult> PostSprintMessageAsync(
+        string? projectRoot, Guid sprintId, string text, CancellationToken cancellationToken);
 }
 
 /// <summary>
@@ -1303,6 +1312,26 @@ public sealed class ForgeApplication(
         return await scheduler
             .SupersedeAttemptAsync(
                 status.Root, id, attempt, attemptSnapshot.Version, key, confirmed, instruction, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>Post-release timeline gap closure (ADR 0054): resolves the project root and mints
+    /// this message's own idempotency anchor server-side (the same "server-side version/idempotency-
+    /// key derivation" <see cref="SupersedeAttemptAsync"/>'s own remarks describe), then delegates to
+    /// <see cref="SprintScheduler.PostUserMessageAsync"/>.</summary>
+    public async Task<PostSprintMessageResult> PostSprintMessageAsync(
+        string? projectRoot, Guid sprintId, string text, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ProjectRootStatus status =
+            await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
+        if (!status.Initialized)
+        {
+            return new(false, null, status.DiagnosticCode);
+        }
+
+        return await scheduler
+            .PostUserMessageAsync(status.Root, new(sprintId), Guid.NewGuid(), text, cancellationToken)
             .ConfigureAwait(false);
     }
 

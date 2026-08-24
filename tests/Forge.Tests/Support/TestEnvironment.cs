@@ -675,6 +675,21 @@ internal sealed class FakeForgeMutations : IForgeMutations
         return Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
     }
 
+    public int PostSprintMessageCalls { get; private set; }
+
+    public Guid? LastMessageSprintId { get; private set; }
+
+    public string? LastMessageText { get; private set; }
+
+    public Task<PostSprintMessageResult> PostSprintMessageAsync(
+        string? projectRoot, Guid sprintId, string text, CancellationToken cancellationToken)
+    {
+        PostSprintMessageCalls++;
+        LastMessageSprintId = sprintId;
+        LastMessageText = text;
+        return Task.FromResult(new PostSprintMessageResult(true, null, DiagnosticCodes.None));
+    }
+
     public int StopCurrentOperationCalls { get; private set; }
 
     public Guid? LastStopSprintId { get; private set; }
@@ -904,6 +919,10 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         bool confirmed,
         CancellationToken cancellationToken) =>
         Task.FromResult(new CompleteAttemptResult(true, null, DiagnosticCodes.None));
+
+    public Task<PostSprintMessageResult> PostSprintMessageAsync(
+        string? projectRoot, Guid sprintId, string text, CancellationToken cancellationToken) =>
+        Task.FromResult(new PostSprintMessageResult(true, null, DiagnosticCodes.None));
 
     public Task<StopOperationResult> StopCurrentOperationAsync(
         string? projectRoot,

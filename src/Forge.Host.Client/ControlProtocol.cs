@@ -185,6 +185,13 @@ public sealed record GetAvailableActionsRequest(Guid? SprintId);
 /// reading with no sprint/project-specific parameter.</summary>
 public sealed record GetProviderQuotaStatusRequest;
 
+/// <summary><see cref="ControlProtocol.PostSprintMessageKind"/>'s request payload (post-release
+/// timeline gap closure, ADR 0054). No expected version travels on the wire -- a message post never
+/// conflicts with concurrent workflow progress, matching <see cref="ResolveGateRequest"/>'s own
+/// "the Host derives it from a fresh state read" reasoning. Not confirmable: posting a message is
+/// additive, matching <see cref="SprintIdRequest"/>'s own run/resume commands.</summary>
+public sealed record PostSprintMessageRequest(Guid SprintId, string Text);
+
 public static class ControlProtocol
 {
     /// <summary>The control-plane wire protocol's own version, independent of the Forge product version.</summary>
@@ -315,6 +322,15 @@ public static class ControlProtocol
     /// instance. ADR 0052 found no provider integration in this codebase exposes a verified quota
     /// signal, so every reading is currently `unknown`.</summary>
     public const string GetProviderQuotaStatusKind = "get_provider_quota_status";
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): the reserved
+    /// `sprint.post_message` capability -- appends a bounded user-posted message to the sprint's own
+    /// append-only journal. Request payload: a <see cref="PostSprintMessageRequest"/>. Response
+    /// payload: a `PostSprintMessageResult` instance
+    /// (<c>{"succeeded": bool, "state"?: {...}, "diagnostic_code": string}</c>). Not yet in
+    /// <c>CapabilityIds.Implemented</c>, matching ADR 0049/0050/0051's own precedent for
+    /// `sprint.timeline`/`workflow.stop_operation`/`sprint.move_stage`.</summary>
+    public const string PostSprintMessageKind = "post_sprint_message";
 
     // Matches Forge.Application.StatusJson/Forge.Configuration.ConfigurationSchemaCodec's snake_case convention
     // for wire compatibility with the existing contracts. Duplicated rather than shared: Forge.Host.Client is

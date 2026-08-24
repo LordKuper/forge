@@ -429,6 +429,46 @@ public static class CliApplication
         command.Subcommands.Add(
             CreateSprintMoveStageCommand(text, output, diagnostics, application, resolveMutations, isInteractive));
         command.Subcommands.Add(CreateSprintTimelineCommand(text, output, diagnostics, application));
+        command.Subcommands.Add(CreateSprintMessageCommand(text, output, diagnostics, resolveMutations));
+        return command;
+    }
+
+    /// <summary>Post-release timeline gap closure (plan section 4.3/6.3, ADR 0054): the reserved
+    /// `sprint.post_message` capability. Not confirmable -- posting a message is additive, matching
+    /// <see cref="CreateSprintCreateCommand"/>/<see cref="CreateSprintRunCommand"/>'s own shape rather
+    /// than <see cref="CreateAttemptSupersedeCommand"/>'s confirmation-gated one.</summary>
+    private static Command CreateSprintMessageCommand(
+        SurfaceText text,
+        TextWriter output,
+        TextWriter diagnostics,
+        Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
+    {
+        Option<string?> projectRoot = CreateProjectRootOption();
+        Argument<string> id = new("id") { Description = "Sprint id." };
+        Argument<string> messageText = new("text") { Description = "Message text." };
+        Command command = new("message", text.Resolve(MessageKeys.SprintMessageDescription));
+        command.Arguments.Add(id);
+        command.Arguments.Add(messageText);
+        command.Options.Add(projectRoot);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            if (!Guid.TryParse(parseResult.GetValue(id), out Guid sprintId))
+            {
+                return Report(diagnostics, DiagnosticCodes.SprintNotFound);
+            }
+
+            string? root = parseResult.GetValue(projectRoot);
+            IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
+            PostSprintMessageResult result = await mutations
+                .PostSprintMessageAsync(root, sprintId, parseResult.GetValue(messageText)!, cancellationToken)
+                .ConfigureAwait(false);
+            if (result.Succeeded)
+            {
+                output.WriteLine(text.Resolve(MessageKeys.SprintMessagePosted));
+            }
+
+            return Report(diagnostics, result.DiagnosticCode);
+        });
         return command;
     }
 
