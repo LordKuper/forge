@@ -21,6 +21,14 @@ public enum ControlDiagnosticCode
     /// (e.g. an unreadable journal file) that was never the client's fault — distinct from
     /// <see cref="Malformed"/>, which always means the request itself was invalid.</summary>
     InternalError,
+
+    /// <summary>The client resolved this request's <see cref="ControlRequest.Kind"/> to a capability
+    /// absent from the Host's own handshake-advertised set and refused to send it — never returned
+    /// by the Host itself, since anything the Host actually dispatches has, by definition, that
+    /// capability. Distinct from <see cref="Malformed"/>'s "unknown kind": the client recognizes the
+    /// kind fine, it just knows in advance this particular Host cannot serve it (an older Host talking
+    /// to a newer client).</summary>
+    CapabilityNotSupported,
 }
 
 public sealed record ControlDiagnostic(ControlDiagnosticCode Code, string Detail)

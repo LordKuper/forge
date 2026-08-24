@@ -727,10 +727,17 @@ public sealed class MainPageViewModel(
         }
     }
 
-    private static string Message(string message, string diagnosticCode) =>
-        diagnosticCode == DiagnosticCodes.None
-            ? message
-            : string.Create(CultureInfo.InvariantCulture, $"{message} ({diagnosticCode})");
+    /// <summary>ADR 0053: <see cref="DiagnosticCodes.CapabilityNotSupported"/> gets its own localized
+    /// sentence instead of the raw-code suffix every other diagnostic gets -- it is the one outcome
+    /// here a user can actually act on ("upgrade Forge on this project's Host"), not merely a code to
+    /// report.</summary>
+    private string Message(string message, string diagnosticCode) => diagnosticCode switch
+    {
+        DiagnosticCodes.None => message,
+        DiagnosticCodes.CapabilityNotSupported =>
+            string.Create(CultureInfo.InvariantCulture, $"{message}: {text.Resolve(MessageKeys.CapabilityNotSupported)}"),
+        _ => string.Create(CultureInfo.InvariantCulture, $"{message} ({diagnosticCode})"),
+    };
 
     private static string Render(string? title, IEnumerable<string> lines)
     {

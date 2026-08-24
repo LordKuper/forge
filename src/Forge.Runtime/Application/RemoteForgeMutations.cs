@@ -2,6 +2,7 @@ using System.Text.Json;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Host.Client;
+using Forge.Presentation;
 
 namespace Forge.Application;
 
@@ -13,13 +14,46 @@ namespace Forge.Application;
 /// remarks). Connecting is the caller's responsibility (<see cref="ForgeHostClient.EnsureConnectedAsync"/>
 /// with a launcher, so a missing Host is started); a request sent before that, or a connection or
 /// protocol failure, reports <see cref="DiagnosticCodes.HostUnavailable"/> — never a thrown
-/// exception a caller must specifically catch, and never a silent local fallback. Disposing this
-/// disposes the underlying <see cref="ForgeHostClient"/>.
+/// exception a caller must specifically catch, and never a silent local fallback. ADR 0053: a request
+/// whose <see cref="CapabilityByKind"/> capability is absent from <see cref="ForgeHostClient.HostCapabilities"/>
+/// reports <see cref="DiagnosticCodes.CapabilityNotSupported"/> instead and is never actually sent.
+/// Disposing this disposes the underlying <see cref="ForgeHostClient"/>.
 /// </summary>
 public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync? startHost = null)
     : IForgeMutations, IAsyncDisposable
 {
     private readonly ForgeHostClient client = client ?? throw new ArgumentNullException(nameof(client));
+
+    /// <summary>ADR 0053's hand-maintained `ControlRequest.Kind` -> `CapabilityIds` gate table:
+    /// every <see cref="ControlProtocol"/> kind this class ever sends, whose governing capability is
+    /// already in <see cref="CapabilityIds.Implemented"/>. Drift against `capabilities.json` is
+    /// caught by <c>CapabilityNegotiationMappingTests</c>, not at runtime -- see that test's own
+    /// remarks for why this stays hand-written instead of loaded from the contract file. A kind
+    /// absent here is never gated: that covers both "no capability governs it" (<c>ping</c>,
+    /// `recover_startup` -- neither has a `capabilities.json` entry at all) and "its capability is
+    /// still reserved" (`workflow.stop_operation`, `sprint.move_stage`, ...) -- gating the latter
+    /// would reject a request against a Host that actually serves it today, only because
+    /// `CapabilityIds.Implemented` has not been widened yet (ADR 0049/0050/0051's own "separable
+    /// cleanup" precedent). Internal (not private) so that test can verify it directly rather than
+    /// through reflection.</summary>
+    internal static readonly Dictionary<string, string> CapabilityByKind =
+        new(StringComparer.Ordinal)
+        {
+            [ControlProtocol.GetProjectSnapshotKind] = CapabilityIds.ProjectSnapshot,
+            [ControlProtocol.ReadControlEventsKind] = CapabilityIds.ControlEvents,
+            [ControlProtocol.SetConfigurationKind] = CapabilityIds.ConfigurationManage,
+            [ControlProtocol.InstallIntegrationKind] = CapabilityIds.IntegrationSkill,
+            [ControlProtocol.RemoveIntegrationKind] = CapabilityIds.IntegrationSkill,
+            [ControlProtocol.ResolveGateKind] = CapabilityIds.WorkflowReview,
+            [ControlProtocol.SupersedeAttemptKind] = CapabilityIds.AttemptSupersede,
+            [ControlProtocol.ConfirmNodeKind] = CapabilityIds.WorkflowConfirm,
+            [ControlProtocol.RecordTestWorkKind] = CapabilityIds.WorkflowTestWork,
+            [ControlProtocol.FinalizeSprintKind] = CapabilityIds.WorkflowFinalize,
+            [ControlProtocol.CreateSprintKind] = CapabilityIds.SprintManage,
+            [ControlProtocol.RunSprintKind] = CapabilityIds.SprintManage,
+            [ControlProtocol.ResumeSprintKind] = CapabilityIds.SprintManage,
+            [ControlProtocol.CancelSprintKind] = CapabilityIds.SprintManage,
+        };
 
     public async Task<RecoverStartupResult> RecoverStartupAsync(
         string? projectRoot,
@@ -34,7 +68,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<RecoverStartupResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<ConfigurationWriteResult> SetConfigurationAsync(
@@ -63,7 +97,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<ConfigurationWriteResult>(ControlProtocol.JsonOptions) ??
                 new(false, DiagnosticCodes.HostUnavailable)
-            : new(false, DiagnosticCodes.HostUnavailable);
+            : new(false, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public Task<IntegrationWriteResult> InstallIntegrationAsync(
@@ -95,7 +129,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<NodeActionResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<RecordConfirmationResult> ConfirmNodeAsync(
@@ -125,7 +159,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<RecordConfirmationResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<RecordTestWorkResult> RecordTestWorkAsync(
@@ -147,7 +181,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<RecordTestWorkResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     private static string EvidenceKindWireValue(ConfirmationEvidenceKind kind) => kind switch
@@ -173,7 +207,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<FinalizeSprintResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<CompleteAttemptResult> SupersedeAttemptAsync(
@@ -193,7 +227,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<CompleteAttemptResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<StopOperationResult> StopCurrentOperationAsync(
@@ -210,7 +244,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<StopOperationResult>(ControlProtocol.JsonOptions) ??
                 new(false, DiagnosticCodes.HostUnavailable)
-            : new(false, DiagnosticCodes.HostUnavailable);
+            : new(false, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
@@ -221,7 +255,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<CreateSprintResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public Task<SprintTransitionResult> RunSprintAsync(
@@ -242,7 +276,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<SprintTransitionResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     public async Task<MoveStageResult> MoveSprintToStageAsync(
@@ -265,7 +299,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<MoveStageResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     private async Task<SprintTransitionResult> SendSprintIdRequestAsync(
@@ -277,7 +311,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<SprintTransitionResult>(ControlProtocol.JsonOptions) ??
                 new(false, null, DiagnosticCodes.HostUnavailable)
-            : new(false, null, DiagnosticCodes.HostUnavailable);
+            : new(false, null, DiagnosticCodeFor(response.Diagnostic));
     }
 
     private async Task<IntegrationWriteResult> SendIntegrationRequestAsync(
@@ -293,7 +327,7 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload
             ? responsePayload.Deserialize<IntegrationWriteResult>(ControlProtocol.JsonOptions) ??
                 IntegrationWriteResult.Empty(DiagnosticCodes.HostUnavailable)
-            : IntegrationWriteResult.Empty(DiagnosticCodes.HostUnavailable);
+            : IntegrationWriteResult.Empty(DiagnosticCodeFor(response.Diagnostic));
     }
 
     private async Task<ControlResponse> SendAsync(
@@ -305,15 +339,43 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         {
             ControlDiagnostic connected = await client.EnsureConnectedAsync(startHost, cancellationToken)
                 .ConfigureAwait(false);
-            return connected.Code != ControlDiagnosticCode.None
-                ? new(Guid.Empty, connected)
-                : await client.SendAsync(kind, payload, cancellationToken).ConfigureAwait(false);
+            if (connected.Code != ControlDiagnosticCode.None)
+            {
+                return new(Guid.Empty, connected);
+            }
+
+            // Checked only once connected, against THIS Host's own just-negotiated set -- never a
+            // stale value from an earlier connection (ForgeHostClient.HostCapabilities resets on
+            // every disconnect). A missing capability is rejected here, before the request ever
+            // reaches the wire (plan section 9.2).
+            if (CapabilityByKind.TryGetValue(kind, out string? capability) &&
+                !client.HostCapabilities.Contains(capability, StringComparer.Ordinal))
+            {
+                return new(
+                    Guid.Empty,
+                    new ControlDiagnostic(
+                        ControlDiagnosticCode.CapabilityNotSupported,
+                        $"The connected Host does not advertise the '{capability}' capability this request needs."));
+            }
+
+            return await client.SendAsync(kind, payload, cancellationToken).ConfigureAwait(false);
         }
         catch (ControlProtocolException exception)
         {
             return new(Guid.Empty, new(exception.Code, exception.Message));
         }
     }
+
+    /// <summary>Collapses every non-success wire diagnostic to one typed-result field.
+    /// <see cref="ControlDiagnosticCode.CapabilityNotSupported"/> (ADR 0053) surfaces as its own
+    /// distinct <see cref="DiagnosticCodes.CapabilityNotSupported"/>; every other code (unreachable
+    /// Host, malformed response, timeout, ...) keeps collapsing to the existing generic
+    /// <see cref="DiagnosticCodes.HostUnavailable"/> -- callers never needed, and still don't need,
+    /// to tell those apart.</summary>
+    private static string DiagnosticCodeFor(ControlDiagnostic diagnostic) =>
+        diagnostic.Code == ControlDiagnosticCode.CapabilityNotSupported
+            ? DiagnosticCodes.CapabilityNotSupported
+            : DiagnosticCodes.HostUnavailable;
 
     public ValueTask DisposeAsync() => client.DisposeAsync();
 }

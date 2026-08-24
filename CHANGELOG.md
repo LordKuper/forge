@@ -2,6 +2,21 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.70.0
+
+### Added
+
+- Capability negotiation is now enforced on the client side: before sending a mutation, the CLI and
+  Desktop check it against the capability set the connected Host actually advertised during the
+  handshake. If an older Host does not yet support the operation, the request is never sent — it is
+  rejected immediately with a clean, structured diagnostic instead of the Host's generic "unknown
+  request kind" error. On the main workspace surface, Desktop shows a localized message explaining
+  that the project's Host needs to be upgraded; elsewhere on Desktop (e.g. project settings) and on
+  the CLI, the outcome carries the `capability_not_supported` diagnostic code it already reports for
+  other failures, and the CLI's exit code (14, `compatibility`) now distinguishes it from a generic
+  internal error. This only changes behavior when a client is newer than the Host it talks to — Host
+  and client shipping together (the common case today) is unaffected.
+
 ## v0.69.1
 
 ### Fixed
