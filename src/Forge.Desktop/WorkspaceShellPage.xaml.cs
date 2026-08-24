@@ -23,11 +23,20 @@ public partial class WorkspaceShellPage : ContentPage
     private readonly WorkspaceViewModel workspace;
     private readonly SidebarViewModel sidebar;
     private readonly ShellRenderGate renderGate;
-    /// <summary>Set right before a sidebar re-render whose triggering action (add/remove project)
-    /// has a result worth telling the user about (PR #98 review finding 3); read once by
-    /// <see cref="RenderSidebarAsync"/> and left in place until the next add/remove so it survives
-    /// that render instead of a stale value flashing and vanishing.</summary>
+    /// <summary>Set right before a sidebar re-render whose triggering action (add/remove project, or
+    /// a failed collapse/expand write -- PR #103 review finding 1) has a result worth telling the
+    /// user about (PR #98 review finding 3); read once by <see cref="RenderSidebarFromSnapshot"/> and
+    /// left in place until the next such action so it survives that render instead of a stale value
+    /// flashing and vanishing. Not shown while the sidebar is collapsed (the icon-only rail has no
+    /// room for it); a notice set while collapsed is retained and surfaces once the sidebar is next
+    /// expanded.</summary>
     private string? sidebarNotice;
+    /// <summary>The most recently loaded sidebar snapshot (PR #103 review finding 3): lets the
+    /// collapse/expand toggle re-render from data already in hand instead of paying for
+    /// <see cref="SidebarViewModel.LoadAsync"/>'s full per-project workspace-summary refetch just to
+    /// flip a column width. Refreshed by every <see cref="RenderSidebarAsync"/> call and by the
+    /// toggle itself; never read for anything that needs current data.</summary>
+    private SidebarSnapshot? lastSidebarSnapshot;
     private MainPageViewModel legacy;
     private ProjectOverviewViewModel projectOverview;
     private ProjectSettingsViewModel projectSettings;
@@ -121,16 +130,35 @@ public partial class WorkspaceShellPage : ContentPage
     /// <c>WorkspaceShellPage.xaml</c>'s original <c>ColumnDefinitions</c>).</summary>
     private const double SidebarExpandedWidth = 280;
 
-    /// <summary>Sidebar column width when collapsed to its icon-only rail (ADR 0050 addendum): wide
-    /// enough for the toggle button's own tap target, nothing more.</summary>
-    private const double SidebarCollapsedWidth = 56;
+    /// <summary>Minimum comfortable tap-target width for the collapsed rail's toggle button (PR #103
+    /// review finding 2). The collapsed column itself is sized to its content
+    /// (<see cref="GridLength.Auto"/>, set below) rather than a fixed width that has to happen to
+    /// exceed <c>SidebarHost</c>'s own <c>Padding="12"</c> plus the button's default chrome -- a
+    /// fixed 56 left roughly 32 units of content width, and WinUI's default <c>Button</c> horizontal
+    /// padding alone is about 22, before any user text-scaling grows the glyph further. Because the
+    /// collapsed state now persists across restart, a clipped/untappable toggle would be
+    /// unrecoverable without hand-editing <c>config.json</c>; sizing to content plus this floor keeps
+    /// the tap target comfortable at every text-scale setting (plan 12.6) instead of only the one
+    /// scale factor 56 happened to fit.</summary>
+    private const double SidebarCollapsedToggleMinimumWidth = 44;
 
     private async Task RenderSidebarAsync()
     {
         SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        RenderSidebarFromSnapshot(snapshot);
+    }
+
+    /// <summary>Rebuilds the sidebar UI tree from an already-loaded <paramref name="snapshot"/>
+    /// without itself fetching anything (PR #103 review finding 3): the collapse/expand toggle calls
+    /// this directly from data it already has, so a purely cosmetic width change never pays for
+    /// <see cref="SidebarViewModel.LoadAsync"/>'s full per-project workspace-summary refetch and
+    /// configuration read while holding <see cref="ShellRenderGate"/>'s mutation guard.</summary>
+    private void RenderSidebarFromSnapshot(SidebarSnapshot snapshot)
+    {
+        lastSidebarSnapshot = snapshot;
         SidebarHost.Children.Clear();
         ShellGrid.ColumnDefinitions[0].Width =
-            new GridLength(snapshot.Collapsed ? SidebarCollapsedWidth : SidebarExpandedWidth);
+            snapshot.Collapsed ? GridLength.Auto : new GridLength(SidebarExpandedWidth);
         SidebarHost.Children.Add(BuildSidebarToggleButton(snapshot.Collapsed));
         if (snapshot.Collapsed)
         {
@@ -174,18 +202,44 @@ public partial class WorkspaceShellPage : ContentPage
     }
 
     /// <summary>The whole-sidebar collapse/expand toggle (ADR 0050 addendum): always the sidebar's
-    /// first control, in both states, so the rail retains its own re-expand affordance. Routes its
-    /// click through <see cref="RunAsync"/>/<see cref="ShellRenderGate"/> -- the same guard every
-    /// other shell-driven mutation already uses -- rather than a second, ad-hoc render path.</summary>
+    /// first control, in both states, so the rail retains its own re-expand affordance. The write
+    /// still goes through <see cref="RunAsync"/>/<see cref="ShellRenderGate"/> -- the same guard
+    /// every other shell-driven mutation already uses -- but the re-render after it does not: see
+    /// the click handler's own remarks (PR #103 review finding 3).</summary>
     private Button BuildSidebarToggleButton(bool collapsed)
     {
-        Button toggle = new() { Text = collapsed ? ">>" : "<<" };
+        Button toggle = new() { Text = collapsed ? ">>" : "<<", MinimumWidthRequest = SidebarCollapsedToggleMinimumWidth };
         SemanticProperties.SetDescription(
             toggle, text.Resolve(collapsed ? MessageKeys.SidebarExpandAction : MessageKeys.SidebarCollapseAction));
         toggle.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            await sidebar.SetCollapsedAsync(!collapsed, CancellationToken.None).ConfigureAwait(true);
-            await RenderSidebarAsync().ConfigureAwait(true);
+            ConfigurationWriteResult result =
+                await sidebar.SetCollapsedAsync(!collapsed, CancellationToken.None).ConfigureAwait(true);
+            // PR #103 review finding 1: this used to discard `result` and always re-render as if the
+            // toggle succeeded. A failed write (unwritable config.json, schema validation rejection,
+            // a scope violation) left the sidebar silently inert -- the click did nothing and no
+            // diagnostic appeared anywhere. Same sidebarNotice/Message pattern PR #98 review finding
+            // 3 already established in this file for add/remove-project.
+            bool nowCollapsed = collapsed;
+            if (result.Succeeded)
+            {
+                nowCollapsed = !collapsed;
+            }
+            else
+            {
+                sidebarNotice = Message(text.Resolve(MessageKeys.SidebarCollapseSaveFailed), result.DiagnosticCode);
+            }
+
+            // PR #103 review finding 3: collapsing/expanding changes no domain data, so render
+            // straight from the snapshot already loaded (falling back to a real load only if this
+            // is somehow reached before the sidebar has ever loaded once) instead of paying for
+            // SidebarViewModel.LoadAsync's full per-project workspace-summary refetch and
+            // configuration read just to flip a column width -- the exact "unnecessary work holding
+            // the mutation guard" pattern PR #99 review finding 1 and PR #100 review finding 1 both
+            // already pushed back on in this same surface.
+            SidebarSnapshot snapshot =
+                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            RenderSidebarFromSnapshot(snapshot with { Collapsed = nowCollapsed });
         });
         return toggle;
     }

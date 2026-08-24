@@ -1,4 +1,5 @@
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
 using Forge.Localization;
@@ -195,16 +196,6 @@ public sealed class SidebarViewModelTests
         Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaAccessibleText));
     }
 
-    /// <summary>PR #100 review finding 1: <c>GetProviderQuotaStatusAsync</c> issues its own fresh,
-    /// uncached <c>ProviderToolchainManager.CheckAsync</c> probe (a `--version` child process plus an
-    /// authentication probe per enabled provider). Calling it a second time from
-    /// <see cref="SidebarViewModel.LoadAsync"/> -- on top of the <c>EnsureReadyAsync</c> check
-    /// <see cref="ForgeApplication.GetWorkspaceSummaryAsync"/> already ran once per project in the
-    /// same render -- would spawn redundant provider child processes on every sidebar render for a
-    /// value ADR 0052 guarantees is always "unknown" regardless. This proves the toolchain's own
-    /// <c>CheckAsync</c> is never called by a sidebar load: the quota row must be projected from the
-    /// <see cref="Forge.Providers.ProviderHealthEntry"/> set the same render pass already
-    /// collected.</summary>
     /// <summary>ADR 0050 addendum: the workspace shell's whole-sidebar collapse toggle defaults to
     /// expanded, matching the fixed layout every prior release shipped.</summary>
     [Fact]
@@ -262,6 +253,43 @@ public sealed class SidebarViewModelTests
         Assert.False(snapshot.Collapsed);
     }
 
+    /// <summary>PR #103 review finding 1: <c>WorkspaceShellPage</c>'s collapse toggle used to discard
+    /// this method's <see cref="ConfigurationWriteResult"/> and always re-render as if the write had
+    /// succeeded, leaving a failed toggle silently inert. This proves the signal it now checks is
+    /// real and load-bearing rather than always-success: the same real, file-backed failure
+    /// technique already used elsewhere in this suite (<c>ScopedConfigurationTests</c>'s
+    /// <c>AMalformedUserConfigurationFileDegradesToOmittedInsteadOfThrowing</c>,
+    /// <c>ProjectCatalogStoreTests</c>'s <c>AFutureSchemaVersionCatalogFailsClosedInsteadOfBeingSilentlyDowngraded</c>)
+    /// -- a malformed existing user configuration file -- makes the write genuinely fail with a
+    /// non-<see cref="DiagnosticCodes.None"/> diagnostic instead of a mock standing in for one.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncReportsFailureWhenTheUserConfigurationFileIsUnreadable()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "not json", cancellationToken);
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        ConfigurationWriteResult result = await viewModel.SetCollapsedAsync(true, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.NotEqual(DiagnosticCodes.None, result.DiagnosticCode);
+    }
+
+    /// <summary>PR #100 review finding 1: <c>GetProviderQuotaStatusAsync</c> issues its own fresh,
+    /// uncached <c>ProviderToolchainManager.CheckAsync</c> probe (a `--version` child process plus an
+    /// authentication probe per enabled provider). Calling it a second time from
+    /// <see cref="SidebarViewModel.LoadAsync"/> -- on top of the <c>EnsureReadyAsync</c> check
+    /// <see cref="ForgeApplication.GetWorkspaceSummaryAsync"/> already ran once per project in the
+    /// same render -- would spawn redundant provider child processes on every sidebar render for a
+    /// value ADR 0052 guarantees is always "unknown" regardless. This proves the toolchain's own
+    /// <c>CheckAsync</c> is never called by a sidebar load: the quota row must be projected from the
+    /// <see cref="Forge.Providers.ProviderHealthEntry"/> set the same render pass already
+    /// collected.</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow()

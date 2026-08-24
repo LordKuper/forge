@@ -625,6 +625,34 @@ public sealed class SurfaceParityTests
         Assert.Contains("renderGate.RequestRender(", pollMethod, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// PR #103 review finding 3: the sidebar collapse/expand toggle used to re-render by calling the
+    /// full <c>RenderSidebarAsync</c>, which drives <c>SidebarViewModel.LoadAsync</c>'s per-project
+    /// workspace-summary refetch and a configuration read -- work a purely cosmetic width change
+    /// needs none of -- while holding <c>ShellRenderGate.busy</c> for the whole round-trip. The exact
+    /// "unnecessary work holding the mutation guard" pattern PR #99 review finding 1 and PR #100
+    /// review finding 1 already pushed back on in this same surface (see
+    /// <see cref="TimelinePollNeverRoutesThroughTheSharedMutationGate"/> and
+    /// <c>SidebarViewModelTests.LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow</c> for
+    /// those fixes' own regression coverage). Unlike those two, this one is not reachable from a
+    /// neutral view-model call-count assertion: the decision to skip the reload lives entirely in the
+    /// toggle's own code-behind click handler, and no MAUI control can be instantiated headlessly in
+    /// this suite (see this file's other dialog/source pins), so this pins the fix directly in the
+    /// source text instead -- the handler must never call the full-reload <c>RenderSidebarAsync(</c>,
+    /// only the cheap, already-loaded-snapshot <c>RenderSidebarFromSnapshot(</c> rebuild.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarToggleNeverTriggersAFullSidebarReload()
+    {
+        string handler = BracedBlockAfter(
+            DesktopSourceText(), "toggle.Clicked += (_, _) => _ = RunAsync(async () =>");
+
+        Assert.DoesNotContain("RenderSidebarAsync(", handler, StringComparison.Ordinal);
+        Assert.Contains("RenderSidebarFromSnapshot(", handler, StringComparison.Ordinal);
+        Assert.Contains(".SetCollapsedAsync(", handler, StringComparison.Ordinal);
+    }
+
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
     /// parameter entirely (<c>(string labelKeyIgnored, View control) =&gt; control</c>), so
     /// confirm-destructive and notifications-enabled shipped as bare switches with no visible

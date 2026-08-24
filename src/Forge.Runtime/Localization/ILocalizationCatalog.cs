@@ -247,6 +247,13 @@ public static class MessageKeys
     public const string SidebarHistoryLabel = "SidebarHistoryLabel";
     public const string SidebarRemoveProjectAction = "SidebarRemoveProjectAction";
     public const string SidebarNoProjectsHint = "SidebarNoProjectsHint";
+
+    /// <summary>PR #103 review finding 1: the collapse/expand toggle discarded
+    /// <c>Forge.Application.ConfigurationWriteResult</c> and silently re-rendered the unchanged
+    /// (pre-toggle) state on a failed write. Same shape as <see cref="ProjectAddFailed"/>/
+    /// <see cref="ProjectRemoveFailed"/> -- resolved through <c>WorkspaceShellPage.Message</c> with
+    /// the write's <c>DiagnosticCode</c> appended.</summary>
+    public const string SidebarCollapseSaveFailed = "SidebarCollapseSaveFailed";
     public const string WorkspaceEmptyStateTitle = "WorkspaceEmptyStateTitle";
     public const string ProjectOverviewTitle = "ProjectOverviewTitle";
     public const string ProjectOverviewActiveSprintsTitle = "ProjectOverviewActiveSprintsTitle";

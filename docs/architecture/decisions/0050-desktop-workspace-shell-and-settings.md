@@ -229,16 +229,31 @@ writes it. Both are exercised directly by real, file-backed round-trip tests
 (`SidebarViewModelTests`) rather than a live MAUI process, matching this ADR's own established test
 discipline for `Forge.Desktop.Presentation`.
 
-### Collapsed is an icon-only rail rendered by the same `RenderSidebarAsync`/`ShellRenderGate` path, not a second render pipeline
+### Collapsed is an icon-only rail rendered by the same `RenderSidebarFromSnapshot`/`ShellRenderGate` path, not a second render pipeline
 
-`WorkspaceShellPage.RenderSidebarAsync` now also sets `ShellGrid.ColumnDefinitions[0].Width` (280
-expanded, 56 collapsed) and always renders one new toggle button first; when collapsed, it returns
-immediately after that button, so the rail keeps its own re-expand affordance instead of vanishing
-entirely. The toggle's `Clicked` handler calls `SidebarViewModel.SetCollapsedAsync` then
-`RenderSidebarAsync` from inside `RunAsync`, the exact same `ShellRenderGate`-backed idiom every
-other sidebar-mutating control here already uses (add/remove project, Forge settings) -- deliberately
-not a new render path, given `ShellRenderGate` itself exists because two earlier PRs (#98, #99) had
-to fix bugs from exactly that mistake. The toggle's accessible name
+`WorkspaceShellPage.RenderSidebarFromSnapshot` sets `ShellGrid.ColumnDefinitions[0].Width` (280
+expanded, `GridLength.Auto` collapsed -- PR #103 review finding 2: a fixed collapsed width had to
+happen to exceed `SidebarHost`'s own padding plus the toggle button's default chrome to avoid
+clipping it, and did not scale with text-scaling settings; sizing to content plus a
+`MinimumWidthRequest` floor on the toggle (`SidebarCollapsedToggleMinimumWidth`) keeps the tap
+target comfortable at every scale factor instead of only the one a hardcoded constant happened to
+fit) and always renders one new toggle button first; when collapsed, it returns immediately after
+that button, so the rail keeps its own re-expand affordance instead of vanishing entirely.
+
+The toggle's `Clicked` handler still writes through `SidebarViewModel.SetCollapsedAsync` inside
+`RunAsync` -- the exact same `ShellRenderGate`-backed guard every other shell-driven mutation here
+already uses -- but, unlike the first release of this addendum, it no longer re-renders by calling
+the full `RenderSidebarAsync`/`SidebarViewModel.LoadAsync` (PR #103 review finding 3: that path
+re-fetches every cataloged project's workspace summary and re-reads user configuration, work a pure
+width toggle needs none of, while holding `ShellRenderGate.busy` for the whole round-trip). Instead
+it caches the last snapshot `RenderSidebarFromSnapshot` rendered (`lastSidebarSnapshot`) and, after
+the write, re-renders from `snapshot with { Collapsed = ... }` directly -- no second fetch, and the
+guard is held only for the write itself. The handler also now checks the write's
+`ConfigurationWriteResult.Succeeded` (PR #103 review finding 1: it used to discard the result and
+always render as if the toggle had succeeded, so a failed write left the sidebar silently inert with
+no diagnostic); on failure it sets `sidebarNotice` via the same `Message(text, diagnosticCode)`
+helper add/remove-project already use (PR #98 review finding 3) and renders with the state left
+unchanged, so the visible rail matches what was actually persisted. The toggle's accessible name
 (`MessageKeys.SidebarCollapseAction`/`SidebarExpandAction`, English and Russian) flips with the
 state it describes, so the state change is conveyed by more than a bare column-width change a screen
 reader cannot perceive (plan 12.6).
