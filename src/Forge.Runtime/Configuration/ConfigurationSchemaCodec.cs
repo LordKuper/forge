@@ -9,7 +9,7 @@ internal static class ConfigurationSchemaCodec
     /// <summary>Every new write stamps the latest minor version; an older document (missing
     /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
     /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
-    private const string UserContractVersion = "1.2.0";
+    private const string UserContractVersion = "1.3.0";
     /// <summary>Bumped for ADR 0042's optional, nullable `models.allowed_models` -- an older
     /// document (missing `models`) still validates under `project-manifest.schema.json`'s tolerant
     /// `schema_version` enum, matching ADR 0029's own `context.token_budget` precedent.</summary>
@@ -55,6 +55,12 @@ internal static class ConfigurationSchemaCodec
             Notifications = GetOptionalBoolean(document, "notifications.enabled") is { } notificationsEnabled
                 ? new() { Enabled = notificationsEnabled }
                 : null,
+            // Optional and nullable, like Notifications above -- ADR 0050 addendum added this key
+            // after schema_version 1.2.0 shipped, so an on-disk document written before this key
+            // existed must still validate on read with it entirely absent.
+            Shell = GetOptionalBoolean(document, ConfigurationKeys.SidebarCollapsed) is { } sidebarCollapsed
+                ? new() { SidebarCollapsed = sidebarCollapsed }
+                : null,
         };
         Validate(JsonSerializer.SerializeToElement(persisted, JsonOptions), UserSchema, "user");
         return persisted;
@@ -72,6 +78,7 @@ internal static class ConfigurationSchemaCodec
         Add(values, "interaction.confirm_destructive", persisted.Interaction.ConfirmDestructive);
         Add(values, ConfigurationKeys.ProvidersEnabled, persisted.Providers?.Enabled);
         Add(values, "notifications.enabled", persisted.Notifications?.Enabled);
+        Add(values, ConfigurationKeys.SidebarCollapsed, persisted.Shell?.SidebarCollapsed);
         return new(1, values);
     }
 
@@ -289,6 +296,8 @@ internal static class ConfigurationSchemaCodec
         public UserProviders? Providers { get; set; }
 
         public UserNotifications? Notifications { get; set; }
+
+        public UserShell? Shell { get; set; }
     }
 
     internal sealed class UserLanguage
@@ -313,6 +322,11 @@ internal static class ConfigurationSchemaCodec
     internal sealed class UserNotifications
     {
         public bool? Enabled { get; set; }
+    }
+
+    internal sealed class UserShell
+    {
+        public bool? SidebarCollapsed { get; set; }
     }
 
     internal sealed class ProjectConfiguration

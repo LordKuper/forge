@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
@@ -45,9 +47,14 @@ public sealed record SidebarStatusRow(
     string QuotaStatusText,
     string QuotaAccessibleText);
 
+/// <summary>ADR 0050 addendum: <see cref="Collapsed"/> is the workspace shell's whole-sidebar
+/// collapse state -- a Desktop-instance-level UI preference (<see cref="ConfigurationKeys.SidebarCollapsed"/>,
+/// User scope), never tied to any one project, distinct from a future per-project sprint-list
+/// disclosure.</summary>
 public sealed record SidebarSnapshot(
     IReadOnlyList<SidebarProjectItem> Projects,
-    SidebarStatusRow Status);
+    SidebarStatusRow Status,
+    bool Collapsed);
 
 public sealed record AddProjectResult(bool Succeeded, Guid? ProjectId, string? Root, string DiagnosticCode)
 {
@@ -117,7 +124,23 @@ public sealed class SidebarViewModel(
         // ProviderToolchainManager.CheckAsync probe on every render for a value ADR 0052 guarantees
         // is constant regardless (PR #100 review finding 1).
         IReadOnlyList<ProviderQuotaSnapshot> quota = application.ProjectProviderQuota(knownProviders.Values);
-        return new(projects, BuildStatusRow(knownProviders.Values, quota));
+        ConfigurationView userConfiguration =
+            await application.GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false);
+        return new(projects, BuildStatusRow(knownProviders.Values, quota), IsCollapsed(userConfiguration));
+    }
+
+    /// <summary>Persists the workspace shell's whole-sidebar collapse state (ADR 0050 addendum) so
+    /// it survives an app restart -- the same local, direct <see cref="ForgeApplication"/> write
+    /// every other user-scope key here already uses (never a project Host round-trip).</summary>
+    public Task<ConfigurationWriteResult> SetCollapsedAsync(bool collapsed, CancellationToken cancellationToken) =>
+        application.SetConfigurationAsync(
+            ConfigurationScope.User, null, ConfigurationKeys.SidebarCollapsed, collapsed ? "true" : "false", cancellationToken);
+
+    private static bool IsCollapsed(ConfigurationView view)
+    {
+        EffectiveConfigurationValue? value =
+            view.Values.FirstOrDefault(item => item.Key == ConfigurationKeys.SidebarCollapsed);
+        return value?.Value.ValueKind == JsonValueKind.True;
     }
 
     public async Task<AddProjectResult> AddProjectAsync(string? manualPath, CancellationToken cancellationToken)

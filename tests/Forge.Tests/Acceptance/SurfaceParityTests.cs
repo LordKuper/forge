@@ -625,6 +625,74 @@ public sealed class SurfaceParityTests
         Assert.Contains("renderGate.RequestRender(", pollMethod, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// PR #103 review finding 3: the sidebar collapse/expand toggle used to re-render by calling the
+    /// full <c>RenderSidebarAsync</c>, which drives <c>SidebarViewModel.LoadAsync</c>'s per-project
+    /// workspace-summary refetch and a configuration read -- work a purely cosmetic width change
+    /// needs none of -- while holding <c>ShellRenderGate.busy</c> for the whole round-trip. The exact
+    /// "unnecessary work holding the mutation guard" pattern PR #99 review finding 1 and PR #100
+    /// review finding 1 already pushed back on in this same surface (see
+    /// <see cref="TimelinePollNeverRoutesThroughTheSharedMutationGate"/> and
+    /// <c>SidebarViewModelTests.LoadAsyncNeverIssuesASecondToolchainProbeToComputeTheQuotaRow</c> for
+    /// those fixes' own regression coverage). Unlike those two, this one is not reachable from a
+    /// neutral view-model call-count assertion: the decision to skip the reload lives entirely in the
+    /// toggle's own code-behind click handler, and no MAUI control can be instantiated headlessly in
+    /// this suite (see this file's other dialog/source pins), so this pins the fix directly in the
+    /// source text instead -- the handler must never call the full-reload <c>RenderSidebarAsync(</c>,
+    /// only the cheap, already-loaded-snapshot <c>RenderSidebarFromSnapshot(</c> rebuild.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarToggleNeverTriggersAFullSidebarReload()
+    {
+        string handler = BracedBlockAfter(
+            DesktopSourceText(), "toggle.Clicked += (_, _) => _ = RunAsync(async () =>");
+
+        Assert.DoesNotContain("RenderSidebarAsync(", handler, StringComparison.Ordinal);
+        Assert.Contains("RenderSidebarFromSnapshot(", handler, StringComparison.Ordinal);
+        Assert.Contains(".SetCollapsedAsync(", handler, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// PR #103 review, iteration 2 (thread discussion_r3843212692): the finding-1 fix (surfacing a
+    /// failed collapse/expand write via <c>sidebarNotice</c>) worked only for the collapse direction.
+    /// Two defects combined to strand the user for the expand direction specifically: (1)
+    /// <c>RenderSidebarFromSnapshot</c> rendered <c>sidebarNotice</c> only after its collapsed-state
+    /// early return, so a notice set by a failed *expand* write -- which leaves the rail collapsed --
+    /// was built and then discarded before it could ever appear; (2) the toggle's <c>Clicked</c>
+    /// handler rolled the visible state back to <c>collapsed</c> on any failed write, so a failed
+    /// expand attempt re-entered the one layout whose only control is this same toggle, and since the
+    /// write kept failing for the same durable reason (a locked/read-only/full <c>config.json</c>),
+    /// every retry reproduced the identical silent lockout with no in-app way back to an expanded
+    /// sidebar. No MAUI control can be instantiated headlessly in this suite (see this file's other
+    /// dialog/source pins), so this pins both parts of the fix directly in the source text: the
+    /// notice must render before the collapsed-state early return (visible in both layouts), and the
+    /// click handler must always apply the requested state rather than rolling it back on failure.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarCollapseToggleNeverStrandsTheUserInACollapsedRailAfterAFailedWrite()
+    {
+        string source = DesktopSourceText();
+        string renderMethod =
+            BracedBlockAfter(source, "private void RenderSidebarFromSnapshot(SidebarSnapshot snapshot)");
+        string toggleHandler = BracedBlockAfter(source, "toggle.Clicked += (_, _) => _ = RunAsync(async () =>");
+
+        int noticeIndex = renderMethod.IndexOf(
+            "Add(Describe(new Label { Text = sidebarNotice }))", StringComparison.Ordinal);
+        int collapsedReturnIndex = renderMethod.IndexOf("if (snapshot.Collapsed)", StringComparison.Ordinal);
+        Assert.True(noticeIndex >= 0, "sidebarNotice must still be rendered inside RenderSidebarFromSnapshot.");
+        Assert.True(collapsedReturnIndex >= 0, "The collapsed-state early return must still exist.");
+        Assert.True(
+            noticeIndex < collapsedReturnIndex,
+            "sidebarNotice must render before the collapsed-state early return, or a notice set by a " +
+            "failed expand attempt is discarded before it can ever be shown.");
+
+        Assert.Contains("bool nowCollapsed = !collapsed;", toggleHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("nowCollapsed = collapsed;", toggleHandler, StringComparison.Ordinal);
+        Assert.DoesNotContain("if (result.Succeeded)", toggleHandler, StringComparison.Ordinal);
+    }
+
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label
     /// parameter entirely (<c>(string labelKeyIgnored, View control) =&gt; control</c>), so
     /// confirm-destructive and notifications-enabled shipped as bare switches with no visible

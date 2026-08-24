@@ -1,4 +1,5 @@
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
 using Forge.Localization;
@@ -193,6 +194,90 @@ public sealed class SidebarViewModelTests
         Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnknown), snapshot.Status.QuotaStatusText);
         Assert.Equal(en.Resolve(MessageKeys.QuotaStatusUnknownAccessible), snapshot.Status.QuotaAccessibleText);
         Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaAccessibleText));
+    }
+
+    /// <summary>ADR 0050 addendum: the workspace shell's whole-sidebar collapse toggle defaults to
+    /// expanded, matching the fixed layout every prior release shipped.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncDefaultsToAnExpandedSidebar()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.False(snapshot.Collapsed);
+    }
+
+    /// <summary>Plan section 2's "collapsible sidebar" requirement (docs/plans/desktop-workspace-redesign.md)
+    /// includes surviving a restart. <see cref="SidebarViewModel.SetCollapsedAsync"/> writes through
+    /// the real, local user-scope configuration store (never a project's Host -- ADR 0050), so a
+    /// second, independently constructed <see cref="SidebarViewModel"/> standing in for a fresh app
+    /// process must observe the first instance's write.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncPersistsAcrossANewViewModelInstanceSimulatingARestart()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel first =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        ConfigurationWriteResult result = await first.SetCollapsedAsync(true, cancellationToken);
+
+        Assert.True(result.Succeeded);
+        SidebarViewModel second =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarSnapshot snapshot = await second.LoadAsync(cancellationToken);
+        Assert.True(snapshot.Collapsed);
+    }
+
+    /// <summary>Same persistence path as the restart test above, proving the toggle is reversible
+    /// (expand after collapse), not a one-way latch.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncCanExpandAnAlreadyCollapsedSidebar()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        await viewModel.SetCollapsedAsync(true, cancellationToken);
+
+        await viewModel.SetCollapsedAsync(false, cancellationToken);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+        Assert.False(snapshot.Collapsed);
+    }
+
+    /// <summary>PR #103 review finding 1: <c>WorkspaceShellPage</c>'s collapse toggle used to discard
+    /// this method's <see cref="ConfigurationWriteResult"/> and always re-render as if the write had
+    /// succeeded, leaving a failed toggle silently inert. This proves the signal it now checks is
+    /// real and load-bearing rather than always-success: the same real, file-backed failure
+    /// technique already used elsewhere in this suite (<c>ScopedConfigurationTests</c>'s
+    /// <c>AMalformedUserConfigurationFileDegradesToOmittedInsteadOfThrowing</c>,
+    /// <c>ProjectCatalogStoreTests</c>'s <c>AFutureSchemaVersionCatalogFailsClosedInsteadOfBeingSilentlyDowngraded</c>)
+    /// -- a malformed existing user configuration file -- makes the write genuinely fail with a
+    /// non-<see cref="DiagnosticCodes.None"/> diagnostic instead of a mock standing in for one.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SetCollapsedAsyncReportsFailureWhenTheUserConfigurationFileIsUnreadable()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(path, "not json", cancellationToken);
+        SidebarViewModel viewModel =
+            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+
+        ConfigurationWriteResult result = await viewModel.SetCollapsedAsync(true, cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.NotEqual(DiagnosticCodes.None, result.DiagnosticCode);
     }
 
     /// <summary>PR #100 review finding 1: <c>GetProviderQuotaStatusAsync</c> issues its own fresh,

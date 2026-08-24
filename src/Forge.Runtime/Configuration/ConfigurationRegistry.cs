@@ -100,6 +100,16 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             "[]",
             null,
             false);
+        // ADR 0050 addendum: a per-installation UI preference (whether the workspace shell's
+        // sidebar is collapsed), not tied to any one project -- user-scoped like
+        // notifications.enabled above, defaulting to expanded (matching the layout every prior
+        // release shipped).
+        yield return Create(
+            ConfigurationKeys.SidebarCollapsed,
+            ConfigurationScope.User,
+            "false",
+            null,
+            false);
     }
 
     private static ConfigurationKey Create(

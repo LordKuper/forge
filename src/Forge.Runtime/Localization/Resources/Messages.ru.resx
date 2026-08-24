@@ -185,10 +185,13 @@
   <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Бюджет токенов должен быть положительным числом.</value></data>
   <data name="SidebarAddProjectAction" xml:space="preserve"><value>Добавить проект</value></data>
   <data name="SidebarAddProjectPathLabel" xml:space="preserve"><value>Папка проекта (необязательно при использовании обзора)</value></data>
+  <data name="SidebarCollapseAction" xml:space="preserve"><value>Свернуть боковую панель</value></data>
+  <data name="SidebarExpandAction" xml:space="preserve"><value>Развернуть боковую панель</value></data>
   <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Настройки Forge</value></data>
   <data name="SidebarHistoryLabel" xml:space="preserve"><value>История</value></data>
   <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Удалить из списка</value></data>
   <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Добавьте проект, чтобы начать.</value></data>
+  <data name="SidebarCollapseSaveFailed" xml:space="preserve"><value>Не удалось сохранить состояние свёрнутой панели.</value></data>
   <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>Проект ещё не выбран.</value></data>
   <data name="ProjectOverviewTitle" xml:space="preserve"><value>Обзор проекта</value></data>
   <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Активные спринты</value></data>
