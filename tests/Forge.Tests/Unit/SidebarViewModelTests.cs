@@ -1,8 +1,10 @@
+using System.Globalization;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
 using Forge.Localization;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
@@ -307,5 +309,196 @@ public sealed class SidebarViewModelTests
         Assert.Equal(0, toolchain.CheckCalls);
         Assert.NotEmpty(snapshot.Projects);
         Assert.False(string.IsNullOrWhiteSpace(snapshot.Status.QuotaStatusText));
+    }
+
+    /// <summary>Plan 12.6: the status row must distinguish provider health from authentication and
+    /// model availability, not conflate them. A provider whose toolchain install is ready but whose
+    /// authentication is missing must show as toolchain-healthy (this provider counts toward
+    /// <see cref="SidebarStatusRow.ProviderSummaryText"/>'s ready count) while still being reported
+    /// as unauthenticated and unavailable for real model work -- proving these are independent
+    /// signals, not the same "ready" bit rendered under two labels.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncDistinguishesToolchainHealthFromAuthenticationAndModelAvailability()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProviderId codex = new("codex");
+        ProviderToolchainStatus status =
+            new([ProviderStatus.Ready(codex, "1.0.0") with { Authentication = ProviderAuthenticationStatus.Required }]);
+        using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(status));
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, en.Resolve(MessageKeys.SidebarProvidersReadyStatus), 1, 1),
+            snapshot.Status.ProviderSummaryText);
+        Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusRequired), snapshot.Status.AuthenticationStatusText);
+        Assert.Equal(
+            en.Resolve(MessageKeys.AuthenticationStatusRequiredAccessible), snapshot.Status.AuthenticationAccessibleText);
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, en.Resolve(MessageKeys.SidebarModelsAvailableStatus), 0, 1),
+            snapshot.Status.ModelAvailabilityText);
+        Assert.True(snapshot.Status.AnyModelUnavailable);
+    }
+
+    /// <summary>The counterpart to the previous test: once a provider is BOTH toolchain-ready and
+    /// authenticated, model availability must report it as actually usable, not merely "installed."
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncReportsAModelAsAvailableOnlyWhenReadyAndAuthenticated()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProviderId codex = new("codex");
+        ProviderToolchainStatus status =
+            new([ProviderStatus.Ready(codex, "1.0.0") with { Authentication = ProviderAuthenticationStatus.Ready }]);
+        using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(status));
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusReady), snapshot.Status.AuthenticationStatusText);
+        Assert.Equal(
+            string.Format(CultureInfo.InvariantCulture, en.Resolve(MessageKeys.SidebarModelsAvailableStatus), 1, 1),
+            snapshot.Status.ModelAvailabilityText);
+        Assert.False(snapshot.Status.AnyModelUnavailable);
+    }
+
+    /// <summary>The authentication indicator reports the single worst state across every enabled
+    /// provider (mirroring <c>SurfaceFormatting.QuotaStatusSummary</c>'s own worst-case shape): a
+    /// broken authentication probe on one provider must not be hidden behind another provider that
+    /// merely needs login.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncReportsTheWorstAuthenticationStateAcrossEveryEnabledProvider()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProviderId codex = new("codex");
+        ProviderId claudeCode = new("claude_code");
+        ProviderToolchainStatus status = new([
+            ProviderStatus.Ready(codex, "1.0.0") with { Authentication = ProviderAuthenticationStatus.Required },
+            ProviderStatus.Ready(claudeCode, "1.0.0") with { Authentication = ProviderAuthenticationStatus.CheckFailed },
+        ]);
+        using TestEnvironment environment = new(providers: new FakeProviderToolchainManager(status));
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusCheckFailed), snapshot.Status.AuthenticationStatusText);
+    }
+
+    /// <summary>Plan 12.6: the status row must have a Host-connectivity indicator. Before any
+    /// mutation has been attempted this process, <see cref="IHostConnectivityMonitor.LastObserved"/>
+    /// is <see langword="null"/> -- the sidebar must report that honestly as "not yet checked," never
+    /// fabricate a connected/disconnected guess (the same "unknown, never inferred" discipline plan
+    /// 12.6 already requires of quota).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncReportsHostConnectivityAsUnknownBeforeAnyMutationIsAttempted()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel = new(
+            catalog, environment.Application, new FakeFolderPicker(), en, connectivityMonitor: new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityUnknown), snapshot.Status.HostConnectivityText);
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityUnknownAccessible), snapshot.Status.HostConnectivityAccessibleText);
+    }
+
+    /// <summary>Wires <c>ForgeHostClient.IsConnected</c>'s real outcome (via
+    /// <see cref="IHostConnectivityMonitor.Report"/>, the same call <c>RemoteForgeMutations</c> makes
+    /// after a real mutation attempt -- see its own remarks) through to the status row's real, load
+    /// -bearing text: a connected reading and a disconnected reading must render as different,
+    /// distinguishable states.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true, MessageKeys.HostConnectivityConnected, MessageKeys.HostConnectivityConnectedAccessible)]
+    [InlineData(false, MessageKeys.HostConnectivityDisconnected, MessageKeys.HostConnectivityDisconnectedAccessible)]
+    public async Task LoadAsyncReportsTheMonitorsLastObservedConnectivity(
+        bool connected, string expectedTextKey, string expectedAccessibleKey)
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        HostConnectivityMonitor monitor = new();
+        monitor.Report(connected, DateTimeOffset.UtcNow);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, connectivityMonitor: monitor);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(expectedTextKey), snapshot.Status.HostConnectivityText);
+        Assert.Equal(en.Resolve(expectedAccessibleKey), snapshot.Status.HostConnectivityAccessibleText);
+    }
+
+    /// <summary>Plan 12.6's "stale data" indicator: a Host-connectivity reading old enough that it
+    /// can no longer be trusted as current must be reported as its own distinct "stale" state --
+    /// never silently presented as if it were a fresh "connected" reading. Uses a fixed
+    /// <see cref="IClock"/> instead of a real sleep, so the test is deterministic and fast.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncReportsHostConnectivityAsStaleOnceTheLastObservedReadingIsTooOld()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        DateTimeOffset observedAt = DateTimeOffset.UtcNow;
+        HostConnectivityMonitor monitor = new();
+        monitor.Report(true, observedAt);
+        FixedClock clock = new(observedAt + SidebarViewModel.HostConnectivityStaleAfter + TimeSpan.FromSeconds(1));
+        SidebarViewModel viewModel = new(
+            catalog, environment.Application, new FakeFolderPicker(), en, clock: clock, connectivityMonitor: monitor);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityStale), snapshot.Status.HostConnectivityText);
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityStaleAccessible), snapshot.Status.HostConnectivityAccessibleText);
+    }
+
+    /// <summary>The same reading, read just BEFORE the staleness threshold elapses, must still be
+    /// reported as the ordinary connected state -- proving the threshold is a real boundary, not
+    /// merely always-stale or always-fresh.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncStillReportsAFreshReadingAsConnectedJustBeforeTheStaleThreshold()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        DateTimeOffset observedAt = DateTimeOffset.UtcNow;
+        HostConnectivityMonitor monitor = new();
+        monitor.Report(true, observedAt);
+        FixedClock clock = new(observedAt + SidebarViewModel.HostConnectivityStaleAfter - TimeSpan.FromSeconds(1));
+        SidebarViewModel viewModel = new(
+            catalog, environment.Application, new FakeFolderPicker(), en, clock: clock, connectivityMonitor: monitor);
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityConnected), snapshot.Status.HostConnectivityText);
+    }
+
+    private sealed class FixedClock(DateTimeOffset now) : IClock
+    {
+        public DateTimeOffset UtcNow => now;
     }
 }

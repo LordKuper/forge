@@ -19,7 +19,8 @@ namespace Forge.Application;
 /// reports <see cref="DiagnosticCodes.CapabilityNotSupported"/> instead and is never actually sent.
 /// Disposing this disposes the underlying <see cref="ForgeHostClient"/>.
 /// </summary>
-public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync? startHost = null)
+public sealed class RemoteForgeMutations(
+    ForgeHostClient client, StartHostAsync? startHost = null, IHostConnectivityMonitor? connectivityMonitor = null)
     : IForgeMutations, IAsyncDisposable
 {
     private readonly ForgeHostClient client = client ?? throw new ArgumentNullException(nameof(client));
@@ -358,6 +359,9 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         {
             ControlDiagnostic connected = await client.EnsureConnectedAsync(startHost, cancellationToken)
                 .ConfigureAwait(false);
+            // Plan 12.6's Host-connectivity status-row indicator: report the real outcome of THIS
+            // attempt (see HostConnectivityMonitor's own remarks -- it never probes on its own).
+            connectivityMonitor?.Report(client.IsConnected, DateTimeOffset.UtcNow);
             if (connected.Code != ControlDiagnosticCode.None)
             {
                 return new(Guid.Empty, connected);

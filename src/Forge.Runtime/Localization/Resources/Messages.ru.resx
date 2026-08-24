@@ -303,4 +303,22 @@
   <data name="QuotaStatusStale" xml:space="preserve"><value>Данные о квоте устарели.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Статус квоты: данные устарели.</value></data>
   <data name="CapabilityNotSupported" xml:space="preserve"><value>Этот Host пока не поддерживает эту операцию. Обновите Forge на Host этого проекта, чтобы использовать её.</value></data>
+  <data name="AuthenticationStatusUnknown" xml:space="preserve"><value>Статус аутентификации ещё не проверен.</value></data>
+  <data name="AuthenticationStatusUnknownAccessible" xml:space="preserve"><value>Статус аутентификации: ещё не проверен.</value></data>
+  <data name="AuthenticationStatusReady" xml:space="preserve"><value>Все включённые провайдеры аутентифицированы.</value></data>
+  <data name="AuthenticationStatusReadyAccessible" xml:space="preserve"><value>Статус аутентификации: все включённые провайдеры аутентифицированы.</value></data>
+  <data name="AuthenticationStatusRequired" xml:space="preserve"><value>Требуется аутентификация как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Статус аутентификации: требуется аутентификация как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>Проверка аутентификации не удалась как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Статус аутентификации: проверка не удалась как минимум для одного провайдера.</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} моделей доступно</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} из {1} включённых провайдеров имеют доступную для работы модель</value></data>
+  <data name="HostConnectivityUnknown" xml:space="preserve"><value>Статус подключения к Host ещё не проверен.</value></data>
+  <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Подключение к Host: ещё не проверено.</value></data>
+  <data name="HostConnectivityConnected" xml:space="preserve"><value>Подключено к Host.</value></data>
+  <data name="HostConnectivityConnectedAccessible" xml:space="preserve"><value>Подключение к Host: подключено.</value></data>
+  <data name="HostConnectivityDisconnected" xml:space="preserve"><value>Нет подключения к Host.</value></data>
+  <data name="HostConnectivityDisconnectedAccessible" xml:space="preserve"><value>Подключение к Host: нет подключения.</value></data>
+  <data name="HostConnectivityStale" xml:space="preserve"><value>Статус подключения к Host устарел.</value></data>
+  <data name="HostConnectivityStaleAccessible" xml:space="preserve"><value>Подключение к Host: статус устарел.</value></data>
 </root>

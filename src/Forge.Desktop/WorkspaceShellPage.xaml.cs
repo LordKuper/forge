@@ -50,7 +50,8 @@ public partial class WorkspaceShellPage : ContentPage
         ProjectCatalogStore catalog,
         ProviderCatalog providerCatalog,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        IFolderPickerPort folderPicker)
+        IFolderPickerPort folderPicker,
+        IHostConnectivityMonitor connectivityMonitor)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
@@ -58,6 +59,7 @@ public partial class WorkspaceShellPage : ContentPage
         ArgumentNullException.ThrowIfNull(providerCatalog);
         ArgumentNullException.ThrowIfNull(resolveMutations);
         ArgumentNullException.ThrowIfNull(folderPicker);
+        ArgumentNullException.ThrowIfNull(connectivityMonitor);
         InitializeComponent();
         this.text = text;
         this.application = application;
@@ -65,7 +67,7 @@ public partial class WorkspaceShellPage : ContentPage
         this.providerCatalog = providerCatalog;
         this.resolveMutations = resolveMutations;
         workspace = new(catalog, application);
-        sidebar = new(catalog, application, folderPicker, text);
+        sidebar = new(catalog, application, folderPicker, text, connectivityMonitor: connectivityMonitor);
         forgeSettings = new(application, providerCatalog, text);
         (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
         renderGate = new(RenderSidebarAsync, RenderContentAsync);
@@ -199,12 +201,25 @@ public partial class WorkspaceShellPage : ContentPage
             await workspace.NavigateAsync(WorkspaceRoute.ToForgeSettings(), CancellationToken.None).ConfigureAwait(true));
         SidebarHost.Children.Add(forgeSettingsButton);
 
+        // Plan 12.6: the status row distinguishes provider health, authentication, model
+        // availability, quota (known and unknown), and Host connectivity (including stale data) --
+        // each its own text/accessible-name pair, per this file's established convention. Never
+        // color alone: every state is named in text, not merely implied by a color or icon.
         Label status = new() { Text = snapshot.Status.ProviderSummaryText };
         SemanticProperties.SetDescription(status, snapshot.Status.ProviderAccessibleText);
         SidebarHost.Children.Add(status);
+        Label authentication = new() { Text = snapshot.Status.AuthenticationStatusText };
+        SemanticProperties.SetDescription(authentication, snapshot.Status.AuthenticationAccessibleText);
+        SidebarHost.Children.Add(authentication);
+        Label modelAvailability = new() { Text = snapshot.Status.ModelAvailabilityText };
+        SemanticProperties.SetDescription(modelAvailability, snapshot.Status.ModelAvailabilityAccessibleText);
+        SidebarHost.Children.Add(modelAvailability);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
         SemanticProperties.SetDescription(quota, snapshot.Status.QuotaAccessibleText);
         SidebarHost.Children.Add(quota);
+        Label hostConnectivity = new() { Text = snapshot.Status.HostConnectivityText };
+        SemanticProperties.SetDescription(hostConnectivity, snapshot.Status.HostConnectivityAccessibleText);
+        SidebarHost.Children.Add(hostConnectivity);
         // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an
         // invalid root, an already-cataloged entry, a catalog write failure) completely silent.
         // `sidebarNotice` is set by the add/remove handlers just before they trigger this render, so

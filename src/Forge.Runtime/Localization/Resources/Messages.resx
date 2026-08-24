@@ -303,4 +303,22 @@
   <data name="QuotaStatusStale" xml:space="preserve"><value>Provider quota data is stale.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Quota status: data is stale.</value></data>
   <data name="CapabilityNotSupported" xml:space="preserve"><value>This Host does not yet support this operation. Upgrade Forge on this project's Host to use it.</value></data>
+  <data name="AuthenticationStatusUnknown" xml:space="preserve"><value>Authentication status not yet checked.</value></data>
+  <data name="AuthenticationStatusUnknownAccessible" xml:space="preserve"><value>Authentication status: not yet checked.</value></data>
+  <data name="AuthenticationStatusReady" xml:space="preserve"><value>All enabled providers are authenticated.</value></data>
+  <data name="AuthenticationStatusReadyAccessible" xml:space="preserve"><value>Authentication status: all enabled providers are authenticated.</value></data>
+  <data name="AuthenticationStatusRequired" xml:space="preserve"><value>Authentication is required for at least one provider.</value></data>
+  <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Authentication status: authentication is required for at least one provider.</value></data>
+  <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>An authentication check failed for at least one provider.</value></data>
+  <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Authentication status: an authentication check failed for at least one provider.</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} models available</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} of {1} enabled providers have a model available for work</value></data>
+  <data name="HostConnectivityUnknown" xml:space="preserve"><value>Host connection status not yet checked.</value></data>
+  <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Host connectivity: not yet checked.</value></data>
+  <data name="HostConnectivityConnected" xml:space="preserve"><value>Connected to Host.</value></data>
+  <data name="HostConnectivityConnectedAccessible" xml:space="preserve"><value>Host connectivity: connected.</value></data>
+  <data name="HostConnectivityDisconnected" xml:space="preserve"><value>Not connected to Host.</value></data>
+  <data name="HostConnectivityDisconnectedAccessible" xml:space="preserve"><value>Host connectivity: not connected.</value></data>
+  <data name="HostConnectivityStale" xml:space="preserve"><value>Host connection status is stale.</value></data>
+  <data name="HostConnectivityStaleAccessible" xml:space="preserve"><value>Host connectivity: status is stale.</value></data>
 </root>

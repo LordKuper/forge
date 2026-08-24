@@ -34,18 +34,41 @@ public sealed record SidebarProjectItem(
     int HistoryCount,
     string AccessibleName);
 
-/// <summary>Plan section 4.1's bottom status row. <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
+/// <summary>Plan section 4.1's bottom status row, distinguishing every state plan 12.6 requires:
+/// provider (toolchain) health, authentication, model availability, quota (including unknown
+/// quota), and Host connectivity (including stale connectivity data). Every state is a
+/// <c>XxxText</c>/<c>XxxAccessibleText</c> pair, this file's established screen-reader convention --
+/// color is never the only carrier (plan 12.6).
+/// <see cref="ProviderSummaryText"/>/<see cref="ProviderAccessibleText"/> report the enabled
+/// providers whose toolchain install is ready, independent of authentication.
+/// <see cref="AuthenticationStatusText"/>/<see cref="AuthenticationAccessibleText"/> report the
+/// worst-case authentication readiness across enabled providers.
+/// <see cref="ModelAvailabilityText"/>/<see cref="ModelAvailabilityAccessibleText"/> and
+/// <see cref="AnyModelUnavailable"/> report how many enabled providers are actually usable for model
+/// work right now -- toolchain-ready AND authenticated -- superseding the old
+/// <c>AnyKnownProviderUnavailable</c> field (computed but never read by any UI): that field only
+/// considered toolchain state, never authentication, so it could not distinguish "installed but not
+/// authenticated" from "fully usable." <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
 /// report the worst-case state across every known provider's <see cref="ProviderQuotaSnapshot"/>
 /// (<see cref="Forge.Localization.SurfaceFormatting.QuotaStatusSummary"/>). ADR 0052 found no
 /// provider integration in this codebase exposes a verified quota signal, so today this always
 /// resolves to the "unknown" text -- a truthful report, never a fabricated number (plan: "render...
-/// unknown, never inferred").</summary>
+/// unknown, never inferred"). <see cref="HostConnectivityText"/>/<see cref="HostConnectivityAccessibleText"/>
+/// report the most recently observed <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved"/>
+/// reading (never a fresh probe -- see that type's own remarks), including a distinct "stale" state
+/// when that reading is older than <see cref="SidebarViewModel.HostConnectivityStaleAfter"/>.</summary>
 public sealed record SidebarStatusRow(
     string ProviderSummaryText,
     string ProviderAccessibleText,
-    bool AnyKnownProviderUnavailable,
+    string AuthenticationStatusText,
+    string AuthenticationAccessibleText,
+    string ModelAvailabilityText,
+    string ModelAvailabilityAccessibleText,
+    bool AnyModelUnavailable,
     string QuotaStatusText,
-    string QuotaAccessibleText);
+    string QuotaAccessibleText,
+    string HostConnectivityText,
+    string HostConnectivityAccessibleText);
 
 /// <summary>ADR 0050 addendum: <see cref="Collapsed"/> is the workspace shell's whole-sidebar
 /// collapse state -- a Desktop-instance-level UI preference (<see cref="ConfigurationKeys.SidebarCollapsed"/>,
@@ -74,12 +97,24 @@ public sealed class SidebarViewModel(
     ProjectCatalogStore catalog,
     ForgeApplication application,
     IFolderPickerPort folderPicker,
-    SurfaceTextProvider text)
+    SurfaceTextProvider text,
+    IClock? clock = null,
+    IHostConnectivityMonitor? connectivityMonitor = null)
 {
+    /// <summary>A <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved"/> reading older
+    /// than this is reported as the status row's distinct "stale" Host-connectivity state (plan
+    /// 12.6) rather than trusted as current -- the sidebar itself has no fixed refresh cadence (it
+    /// reloads on demand: route change, add/remove project, collapse toggle -- see
+    /// <c>WorkspaceShellPage</c>'s own remarks), so a reading from well before "now" may no longer
+    /// reflect whether the Host is actually reachable.</summary>
+    public static readonly TimeSpan HostConnectivityStaleAfter = TimeSpan.FromMinutes(5);
+
     private readonly ProjectCatalogStore catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
     private readonly IFolderPickerPort folderPicker = folderPicker ?? throw new ArgumentNullException(nameof(folderPicker));
     private readonly SurfaceTextProvider text = text ?? throw new ArgumentNullException(nameof(text));
+    private readonly IClock clock = clock ?? new SystemClock();
+    private readonly IHostConnectivityMonitor connectivityMonitor = connectivityMonitor ?? new HostConnectivityMonitor();
 
     public async Task<SidebarSnapshot> LoadAsync(CancellationToken cancellationToken)
     {
@@ -228,8 +263,114 @@ public sealed class SidebarViewModel(
             text.Resolve(MessageKeys.SidebarProvidersReadyAccessible),
             ready,
             enabled);
-        bool anyUnavailable = enabled > ready;
+        (string authenticationText, string authenticationAccessible) = AuthenticationStatusSummary(known);
+        (string modelText, string modelAccessible, bool anyModelUnavailable) = ModelAvailabilitySummary(known, enabled);
         (string quotaText, string quotaAccessible) = SurfaceFormatting.QuotaStatusSummary(text.Current, quota);
-        return new(summaryText, accessible, anyUnavailable, quotaText, quotaAccessible);
+        (string hostText, string hostAccessible) = HostConnectivitySummary();
+        return new(
+            summaryText,
+            accessible,
+            authenticationText,
+            authenticationAccessible,
+            modelText,
+            modelAccessible,
+            anyModelUnavailable,
+            quotaText,
+            quotaAccessible,
+            hostText,
+            hostAccessible);
+    }
+
+    /// <summary>The worst-case local authentication readiness (ADR 0008) across every ENABLED
+    /// provider -- disabled providers are never probed and carry no <see cref="ProviderHealthEntry.Authentication"/>
+    /// signal at all (see <see cref="ProviderHealthProjector.Project"/>), so including them here
+    /// would misreport "authentication required" for a provider the user never asked to use.
+    /// Mirrors <see cref="Forge.Localization.SurfaceFormatting.QuotaStatusSummary"/>'s own
+    /// worst-case-across-many shape: <see cref="ProviderHealthAuthentication.CheckFailed"/> outranks
+    /// <see cref="ProviderHealthAuthentication.Required"/> (a broken probe hides whether login would
+    /// even fix it), which outranks <see langword="null"/> ("not yet checked" -- e.g. the toolchain
+    /// probe itself is still pending), which outranks <see cref="ProviderHealthAuthentication.Ready"/>.
+    /// No enabled provider at all reports the same "not yet checked" text as a null reading, matching
+    /// <see cref="Forge.Providers.ProviderQuotaAggregation.Worst"/>'s own empty-list convention.</summary>
+    private (string Text, string Accessible) AuthenticationStatusSummary(IReadOnlyList<ProviderHealthEntry> known)
+    {
+        ProviderHealthAuthentication?[] enabledAuthentication =
+            [.. known.Where(provider => provider.Enabled).Select(provider => provider.Authentication)];
+        ProviderHealthAuthentication? worst = enabledAuthentication.Length == 0
+            ? null
+            : enabledAuthentication.MaxBy(authentication => AuthenticationSeverity(authentication));
+        (string textKey, string accessibleKey) = worst switch
+        {
+            ProviderHealthAuthentication.CheckFailed =>
+                (MessageKeys.AuthenticationStatusCheckFailed, MessageKeys.AuthenticationStatusCheckFailedAccessible),
+            ProviderHealthAuthentication.Required =>
+                (MessageKeys.AuthenticationStatusRequired, MessageKeys.AuthenticationStatusRequiredAccessible),
+            ProviderHealthAuthentication.Ready =>
+                (MessageKeys.AuthenticationStatusReady, MessageKeys.AuthenticationStatusReadyAccessible),
+            null => (MessageKeys.AuthenticationStatusUnknown, MessageKeys.AuthenticationStatusUnknownAccessible),
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(known), worst, "Unmapped ProviderHealthAuthentication value."),
+        };
+        return (text.Resolve(textKey), text.Resolve(accessibleKey));
+    }
+
+    private static int AuthenticationSeverity(ProviderHealthAuthentication? authentication) => authentication switch
+    {
+        ProviderHealthAuthentication.CheckFailed => 3,
+        ProviderHealthAuthentication.Required => 2,
+        null => 1,
+        ProviderHealthAuthentication.Ready => 0,
+        _ => throw new ArgumentOutOfRangeException(
+            nameof(authentication), authentication, "Unmapped ProviderHealthAuthentication value."),
+    };
+
+    /// <summary>How many enabled providers are actually usable for model work right now --
+    /// toolchain-ready AND authenticated (ADR 0008: "every enabled provider must report local
+    /// authentication readiness" before it counts as ready for model work; mirrors
+    /// <see cref="Forge.Providers.ProviderToolchainStatus.Ready"/>'s own per-provider rule). Distinct
+    /// from <see cref="MessageKeys.SidebarProvidersReadyStatus"/> above, which counts toolchain state
+    /// alone: a provider can be "installed and current" (counted there) while still blocking real
+    /// model work because authentication is missing (not counted here). Supersedes the old, unread
+    /// <c>AnyKnownProviderUnavailable</c> field -- see <see cref="SidebarStatusRow"/>'s own
+    /// remarks.</summary>
+    private (string Text, string Accessible, bool AnyUnavailable) ModelAvailabilitySummary(
+        IReadOnlyList<ProviderHealthEntry> known, int enabled)
+    {
+        int available = known.Count(provider =>
+            provider.Enabled &&
+            provider.State == ProviderState.Ready &&
+            provider.Authentication == ProviderHealthAuthentication.Ready);
+        string modelText = string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            text.Resolve(MessageKeys.SidebarModelsAvailableStatus),
+            available,
+            enabled);
+        string modelAccessible = string.Format(
+            System.Globalization.CultureInfo.InvariantCulture,
+            text.Resolve(MessageKeys.SidebarModelsAvailableAccessible),
+            available,
+            enabled);
+        return (modelText, modelAccessible, enabled > available);
+    }
+
+    /// <summary>The Host-connectivity status-row indicator (plan 12.6), read from
+    /// <see cref="connectivityMonitor"/>'s last actually-observed reading -- never a fresh probe (see
+    /// <see cref="IHostConnectivityMonitor"/>'s own remarks). A reading older than
+    /// <see cref="HostConnectivityStaleAfter"/> is reported as the distinct "stale" state rather than
+    /// trusted as current, satisfying plan 12.6's "stale data" indicator honestly instead of
+    /// fabricating freshness for a value this codebase cannot actually keep live without forcing a
+    /// Host launch just to render a status row.</summary>
+    private (string Text, string Accessible) HostConnectivitySummary()
+    {
+        (string textKey, string accessibleKey) = connectivityMonitor.LastObserved switch
+        {
+            null => (MessageKeys.HostConnectivityUnknown, MessageKeys.HostConnectivityUnknownAccessible),
+            { } observed when clock.UtcNow - observed.ObservedAt > HostConnectivityStaleAfter =>
+                (MessageKeys.HostConnectivityStale, MessageKeys.HostConnectivityStaleAccessible),
+            { Connected: true } => (MessageKeys.HostConnectivityConnected, MessageKeys.HostConnectivityConnectedAccessible),
+            { Connected: false } =>
+                (MessageKeys.HostConnectivityDisconnected, MessageKeys.HostConnectivityDisconnectedAccessible),
+        };
+        return (text.Resolve(textKey), text.Resolve(accessibleKey));
     }
 }

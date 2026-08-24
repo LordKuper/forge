@@ -623,12 +623,17 @@ prior behavior or an equivalent mutation.
 
 ### 12.6 Status, accessibility, and parity
 
-- [ ] The global status row distinguishes provider health, authentication, model availability,
-      quota, unknown quota, Host connectivity, and stale data. *(Not satisfied: only provider-health
-      count and quota exist in the status row today. Authentication, model availability, and Host
-      connectivity have no representation anywhere in it — `ForgeHostClient.IsConnected` exists but
-      is never surfaced, and `SidebarStatusRow.AnyKnownProviderUnavailable` is computed but never
-      read by anything.)*
+- [x] The global status row distinguishes provider health, authentication, model availability,
+      quota, unknown quota, Host connectivity, and stale data. `SidebarStatusRow` now carries a
+      `XxxText`/`XxxAccessibleText` pair for each: provider health (toolchain install state, as
+      before), authentication (worst-case readiness across enabled providers), model availability
+      (toolchain-ready AND authenticated — the old, unread `AnyKnownProviderUnavailable` field is
+      superseded by `AnyModelUnavailable`, computed from both signals instead of toolchain state
+      alone), quota and unknown quota (unchanged, already distinguished), and Host connectivity
+      (sourced from `ForgeHostClient.IsConnected` via a process-lifetime `HostConnectivityMonitor`
+      that `RemoteForgeMutations` reports into after every real connection attempt — never a probe
+      issued just to render the sidebar), including a distinct "stale" state once that reading is
+      older than a fixed threshold.
 - [ ] All actions are keyboard reachable, screen-reader named, focus-stable after refresh, usable
       at supported text scaling, and never communicate status by color alone. *(Partial: accessible
       names are real, wired, and tested throughout. No mechanism or test exists yet for keyboard
@@ -663,8 +668,8 @@ hold under adversarial review). They fall into three groups:
 1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
    completed/cancelled sprint navigability are UI-only additions not yet built.
 2. **Missing data/localization** — the sticky header's provider/model field and timeline item content
-   have no real data source or localized rendering yet; the global status row covers only provider
-   health and quota, not authentication/model-availability/Host-connectivity.
+   have no real data source or localized rendering yet. (The global status row's own authentication,
+   model-availability, and Host-connectivity gap is closed — see 12.6 above.)
 3. **Missing test coverage** (not missing behavior) — a handful of crash-recovery and cross-surface
    parity scenarios are plausible-and-unexercised rather than known-broken: the advance-path crash
    saga, the active-operation-blocks-advance prerequisite, a Host-process-kill orphan check, and
