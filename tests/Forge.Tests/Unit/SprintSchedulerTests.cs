@@ -147,6 +147,59 @@ public sealed class SprintSchedulerTests
         Assert.Equal(started.AttemptId, result.AttemptId);
     }
 
+    /// <summary>Regression: the resume path (`nodeAlreadyRunning`, reached when "a prior call
+    /// already moved the node but the attempt record itself did not land — a crash, or a
+    /// conflicting append") only ever populated `routedProvider`/`routedModel` inside the
+    /// fresh-attempt branch, leaving them `null` here. Since the attempt aggregate does not exist
+    /// yet in this state, the unconditional `workflow.attempt_created` append below succeeds and
+    /// permanently records `Provider = null`/`Model = null` for what is a model-bearing attempt.
+    /// Fixed by deriving provider/model from the node's frozen `ExecutionProfile` unconditionally,
+    /// before branching on `nodeAlreadyRunning`, rather than only inside the fresh-attempt
+    /// branch.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResumingAnInterruptedStartStillRecordsTheRoutedProviderAndModel()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ImplementationNodeGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ExecutionProfile expected = definition.ExecutionProfiles[ExecutionPhase.Implementation];
+
+        // Simulates a prior, crashed `StartAttemptAsync` call whose `workflow.node_running` append
+        // landed but whose own `workflow.attempt_created` append never did -- the exact precondition
+        // this method's own doc comment for the resume branch describes. No attempt aggregate exists
+        // for `resumedAttemptId` yet.
+        NodeSnapshot ready = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["a"];
+        AttemptId resumedAttemptId = AttemptId.New();
+        AppendOutcome moved = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Node, "a", "NodeChanged", "workflow.node_running",
+            WorkflowStateNames.ToSnakeCase(NodeState.Running), ready.Version, Guid.NewGuid(), cancellationToken,
+            new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [WorkflowEvent.AttemptNumberArgument] = "1",
+                [WorkflowEvent.CurrentAttemptIdArgument] = resumedAttemptId.Value.ToString("D"),
+            });
+        Assert.True(moved.Succeeded);
+
+        StartAttemptResult resumed = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", moved.State!.Nodes["a"].Version, cancellationToken);
+
+        Assert.True(resumed.Succeeded, $"diag={resumed.DiagnosticCode}");
+        Assert.Equal(resumedAttemptId, resumed.AttemptId);
+        AttemptSnapshot attempt = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Attempts[resumedAttemptId.Value.ToString("D")];
+        Assert.Equal(expected.Provider, attempt.Provider);
+        Assert.Equal(expected.Model, attempt.Model);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ADownstreamNodeBecomesReadyOnceItsDependencySucceeds()
@@ -599,6 +652,58 @@ public sealed class SprintSchedulerTests
             (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Attempts[
                 attemptId.Value.ToString("D")];
         Assert.Equal(AttemptState.Created, untouched.State);
+    }
+
+    /// <summary>Regression: a legacy attempt created before this feature existed recorded neither
+    /// `Provider` nor `Model` (both fields are additive). The round-1 fix carried
+    /// `attempt.Provider`/`.Model` forward onto a superseded attempt's replacement -- for a legacy
+    /// attempt that cached copy is itself `null`, so the replacement (a brand-new attempt minted by
+    /// current code, not itself a legacy attempt) was left permanently `null` too, propagating down
+    /// every later supersession in the chain. Fixed by deriving provider/model from the node's own
+    /// frozen `ExecutionProfile` (the same source `StartAttemptAsync` itself routes from) instead of
+    /// copying the superseded attempt's own recorded fields.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SupersedingALegacyAttemptWithNoRecordedProviderStillProducesARealReplacement()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: ImplementationNodeGraph), cancellationToken))
+            .SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ExecutionProfile expected = definition.ExecutionProfiles[ExecutionPhase.Implementation];
+
+        // Simulates a pre-1.4.0 attempt: `workflow.attempt_created` with no provider/model
+        // arguments at all, the way every attempt recorded before this feature existed.
+        AttemptId legacyAttemptId = AttemptId.New();
+        AppendOutcome created = await store.AppendTransitionAsync(
+            environment.ProjectRoot, sprintId, AggregateKind.Attempt, legacyAttemptId.Value.ToString("D"),
+            "AttemptChanged", "workflow.attempt_created", WorkflowStateNames.ToSnakeCase(AttemptState.Created), 0,
+            Guid.NewGuid(), cancellationToken,
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.NodeIdArgument] = "a" });
+        Assert.True(created.Succeeded);
+        AttemptSnapshot legacyAttempt = created.State!.Attempts[legacyAttemptId.Value.ToString("D")];
+        Assert.Null(legacyAttempt.Provider);
+        Assert.Null(legacyAttempt.Model);
+
+        CompleteAttemptResult superseded = await scheduler.SupersedeAttemptAsync(
+            environment.ProjectRoot, sprintId, legacyAttemptId, legacyAttempt.Version,
+            SprintScheduler.SupersedeAttemptKey(sprintId, legacyAttempt), true, "Try a different approach.",
+            cancellationToken);
+        Assert.True(superseded.Succeeded, $"diag={superseded.DiagnosticCode}");
+
+        SprintWorkflowState afterSupersede =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot replacement = Assert.Single(
+            afterSupersede.Attempts.Values, candidate => candidate.SupersedesAttemptId == legacyAttemptId);
+        Assert.Equal(expected.Provider, replacement.Provider);
+        Assert.Equal(expected.Model, replacement.Model);
     }
 
     [Fact]
@@ -1220,6 +1325,9 @@ public sealed class SprintSchedulerTests
     }
 
     private static readonly IReadOnlyList<NodeDefinition> OneNodeGraph = [new("a", NodeKind.Work, [])];
+
+    private static readonly IReadOnlyList<NodeDefinition> ImplementationNodeGraph =
+        [new("a", NodeKind.Work, [], NodeRole.Implementation)];
 
     private static readonly IReadOnlyList<NodeDefinition> TwoNodeGraph =
     [

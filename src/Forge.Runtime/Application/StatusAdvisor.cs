@@ -16,7 +16,7 @@ namespace Forge.Application;
 /// </summary>
 public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
-    public const string ContractVersion = "1.3.0";
+    public const string ContractVersion = "1.4.0";
 
     /// <summary>Kept separate from <see cref="ContractVersion"/>: `suggested-action.schema.json`
     /// did not change when the snapshot's own contract gained provider/startup-check fields, so
@@ -162,7 +162,9 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
                 OwnerId: attempt.NodeId,
                 Kind: attempt.TargetOutcome,
                 UpdatedAt: attempt.UpdatedAt,
-                LastActivityAt: attempt.LastActivityAt))];
+                LastActivityAt: attempt.LastActivityAt,
+                Provider: attempt.Provider,
+                Model: attempt.Model))];
         IReadOnlyList<Finding> findings = await store
             .GetFindingsAsync(projectRoot, new(sprintId), cancellationToken)
             .ConfigureAwait(false);
