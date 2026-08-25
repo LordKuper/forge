@@ -480,17 +480,22 @@ public sealed class ProcessRunnerTests
     {
         // The Windows-TFM build of this test assembly (Forge.Tests.csproj's net10.0-windows
         // ItemGroup) references the probe directly, so MSBuild copies it next to the test binaries
-        // -- the common case, and the same path ProcessContainmentCrashTests.cs relies on.
-        string copiedPath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.exe");
-        if (File.Exists(copiedPath))
+        // -- the common case, and the same path ProcessContainmentCrashTests.cs relies on. Both the
+        // apphost .exe AND its managed .dll must be present: the build-order-only reference this
+        // project's own net10.0 TFM group takes (ReferenceOutputAssembly="false") still copies the
+        // apphost .exe as a content item even though it does not copy the managed .dll the .exe
+        // needs to actually run -- checking the .exe alone would find a non-functional stub there.
+        string copiedExePath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.exe");
+        string copiedDllPath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.dll");
+        if (File.Exists(copiedExePath) && File.Exists(copiedDllPath))
         {
-            return copiedPath;
+            return copiedExePath;
         }
 
         // This file also compiles under the portable net10.0 TFM, where Forge.Tests.csproj only
-        // takes a build-order-only reference to the probe (ReferenceOutputAssembly="false"), so
-        // nothing is copied here -- but the probe project was still built, at its own single
-        // (Windows-only) TargetFramework. Locate that output directly.
+        // takes a build-order-only reference to the probe (ReferenceOutputAssembly="false"), so the
+        // managed .dll is not copied here -- but the probe project was still built, at its own
+        // single (Windows-only) TargetFramework. Locate that complete output directly.
         DirectoryInfo tfmDirectory = new(AppContext.BaseDirectory);
         string configurationName = tfmDirectory.Parent!.Name;
         DirectoryInfo testsDirectory = tfmDirectory.Parent!.Parent!.Parent!.Parent!;

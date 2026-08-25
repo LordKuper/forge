@@ -113,8 +113,25 @@ public sealed class ProcessContainmentCrashTests
         }
 
         Assert.True(File.Exists(path), $"'{path}' was never created -- the harness never reported a live child.");
-        string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-        return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+
+        // File.Exists just returned true, but the writer's own handle (or a transient share
+        // violation, e.g. a security scanner momentarily holding the just-created file) can still
+        // make an immediate read fail -- observed in practice under a machine busy running the rest
+        // of this suite in parallel. A short bounded retry closes that TOCTOU window without masking
+        // a genuine, persistent failure: 20 * 50ms = 1s, far shorter than the 10s existence wait
+        // above, since a real writer-side lock here is expected to clear in milliseconds.
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+                return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (IOException) when (attempt < 19)
+            {
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+        }
     }
 
     private static bool IsProcessAlive(int processId)
