@@ -73,12 +73,15 @@ public interface INetworkClient
 /// the child -- and whatever descendants it has spawned -- running forever as an orphan. This port
 /// promises only "the strongest containment the installed adapter can offer, applied consistently
 /// to every process <see cref="IProcessRunner"/> spawns"; it never promises every platform behaves
-/// identically. See <c>Forge.Runtime.Windows.WindowsJobObjectProcessContainment</c> (a real
-/// kill-on-parent-death guarantee via a Windows Job Object) versus
-/// <c>Forge.Runtime.Posix.PosixProcessGroupContainment</c> (best-effort process-group isolation
-/// only -- read that type's own doc comment before assuming parity) for what "the installed
-/// adapter" actually means on each platform, and <see cref="Infrastructure.NullProcessContainment"/>
-/// for the no-op default a composition root gets until it installs one of those.
+/// identically. On Windows, <c>Forge.Runtime.Windows.WindowsJobObjectProcessContainment</c> gives a
+/// real kill-on-parent-death guarantee via a Windows Job Object. Linux and macOS have no containment
+/// adapter at all today (a known limitation, not a lesser guarantee): a POSIX process group was
+/// investigated and found unusable for this purpose -- `setpgid` can only take effect from inside the
+/// child between `fork` and `exec`, a window `System.Diagnostics.Process.Start` gives no hook to
+/// reach, and even a successful group change carries no OS-level kill-on-parent-death semantic
+/// without a separate reaper process this codebase does not have -- so <see
+/// cref="Infrastructure.NullProcessContainment"/>, the no-op every composition root gets until it
+/// installs an adapter, is also what Linux/macOS composition roots run with permanently today.
 /// </summary>
 public interface IProcessContainment
 {

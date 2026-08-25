@@ -1,26 +1,15 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!-- Not itself an OS-specific adapter, and deliberately NOT marked ForgeOsAdapter: unlike the
-         other composition roots (Forge.Cli.Windows, Forge.Host.Windows, Forge.Desktop), which are
-         Windows-only executables where losing every neutral architecture rule costs nothing, this
-         project is the cross-platform stand-in .github/scripts/test-portable.ps1 builds and tests on
-         ubuntu-24.04 and macos-14, so it must keep being caught by
-         ArchitectureTests.NeutralProjectsDoNotTargetAnOsSpecificFramework if a future change ever
-         adds a Windows-only TFM or a Forge.Runtime.Windows reference here. It still needs to
-         reference the Forge.Runtime.Posix adapter below (selecting between adapters at runtime by OS,
-         see Program.cs, the same "OS detection to select an adapter" carve-out
-         PlatformUpdateStrategyResolver uses, per AGENTS.md Portability), so
-         ArchitectureTests.NeutralProjectsDoNotReferenceAnOsAdapter carries a narrow,
-         IsCompositionRoot-only exemption instead of the blanket ForgeOsAdapter one: a composition
-         root's whole purpose is wiring adapters together, but that alone should not also exempt it
-         from the OS-specific-TFM and leaf-adapter rules it has no reason to need. -->
+    <!-- Deliberately NOT marked ForgeOsAdapter, and references no OS adapter: this project is the
+         cross-platform stand-in .github/scripts/test-portable.ps1 builds and tests on ubuntu-24.04
+         and macos-14, so it stays fully covered by every ArchitectureTests rule like any other
+         neutral project (no exemption needed; it runs everywhere with the cross-platform
+         NullProcessContainment default). The real Windows containment guarantee, plan section 12.4,
+         is exercised only against Forge.Host.Windows/Forge.Cli.Windows/Forge.Desktop, which install
+         it. -->
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Forge.Host.Runtime\Forge.Host.Runtime.csproj" />
-    <!-- Plain net10.0, no OS-specific TFM (see Forge.Runtime.Posix.csproj); safe to reference
-         unconditionally from this single-TFM project on every OS. Program.cs only calls into it
-         when actually running on Linux/macOS. -->
-    <ProjectReference Include="..\Forge.Runtime.Posix\Forge.Runtime.Posix.csproj" />
   </ItemGroup>
 </Project>

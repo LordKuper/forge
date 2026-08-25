@@ -36,11 +36,11 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
     private const int JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x2000;
 
-    // Round 2 review: a fail-open path that never says anything is indistinguishable from success.
-    // Logged once (the first failure), not per spawn -- the scenarios this exists for (a Host
-    // already confined to a job that disallows breakaway, a sandbox/CI/enterprise policy blocking
-    // AssignProcessToJobObject) are permanent for the life of this process, so every subsequent
-    // spawn would just repeat the identical warning.
+    // A fail-open path that never says anything is indistinguishable from success. Logged once (the
+    // first failure), not per spawn -- the scenarios this exists for (a Host already confined to a
+    // job that disallows breakaway, a sandbox/CI/enterprise policy blocking AssignProcessToJobObject)
+    // are permanent for the life of this process, so every subsequent spawn would just repeat the
+    // identical warning.
     private static readonly Action<ILogger, int, Exception> LogAttachFailed = LoggerMessage.Define<int>(
         LogLevel.Warning,
         new EventId(2070, "ProcessContainmentAttachFailed"),
@@ -63,15 +63,16 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
         // environments restrict job-object nesting or breakaway (a Forge Host itself already
         // confined to a restrictive job, as some CI/sandbox hosts do) -- a Job Object failure there
         // must degrade to "no containment for this one process," never regress the process spawn
-        // itself, which owes nothing to this adapter's success. Widened beyond Win32Exception (round
-        // 2 review): AttachCore's own Marshal.AllocHGlobal can throw OutOfMemoryException, and
+        // itself, which owes nothing to this adapter's success. Widened beyond Win32Exception:
         // process.SafeHandle can throw InvalidOperationException/ObjectDisposedException if the
         // process is not in the started-and-undisposed state this type assumes (verified empirically:
         // Process.SafeHandle on a disposed Process throws InvalidOperationException, "No process is
         // associated with this object.", not ObjectDisposedException -- both are still caught here,
         // since which one a future runtime version chooses is an implementation detail this adapter
-        // should not depend on) -- none of those are any more acceptable to propagate out of Attach
-        // and abort a spawn than a Win32Exception is.
+        // should not depend on) -- neither is any more acceptable to propagate out of Attach and
+        // abort a spawn than a Win32Exception is. AttachCore no longer allocates unmanaged memory (the
+        // limit-information struct is passed by ref, being fully blittable), so there is no
+        // OutOfMemoryException case to widen the catch for.
         //
         // process.Id is captured before the try, not inside the catch: the same disposed/unassociated
         // state that makes AttachCore throw also makes Id itself throw InvalidOperationException, so
@@ -84,7 +85,7 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
             return AttachCore(process);
         }
         catch (Exception exception) when (exception is Win32Exception or InvalidOperationException
-            or ObjectDisposedException or OutOfMemoryException)
+            or ObjectDisposedException)
         {
             if (Interlocked.CompareExchange(ref attachFailureLogged, 1, 0) == 0)
             {
@@ -118,23 +119,20 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
 
         try
         {
+            // JOBOBJECT_EXTENDED_LIMIT_INFORMATION is fully blittable (long/uint/nuint fields only),
+            // so it is passed by ref directly -- no unmanaged allocation (Marshal.AllocHGlobal) is
+            // needed to marshal it, and therefore nothing here can throw OutOfMemoryException.
             JOBOBJECT_EXTENDED_LIMIT_INFORMATION info = default;
             info.BasicLimitInformation.LimitFlags = JobObjectLimitKillOnJobClose;
-            int length = Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>();
-            nint buffer = Marshal.AllocHGlobal(length);
-            try
+            if (!SetInformationJobObject(
+                    job,
+                    JobObjectExtendedLimitInformationClass,
+                    ref info,
+                    (uint)Marshal.SizeOf<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>()))
             {
-                Marshal.StructureToPtr(info, buffer, false);
-                if (!SetInformationJobObject(job, JobObjectExtendedLimitInformationClass, buffer, (uint)length))
-                {
-                    throw new Win32Exception(
-                        Marshal.GetLastPInvokeError(),
-                        "Failed to configure kill-on-job-close for process containment.");
-                }
-            }
-            finally
-            {
-                Marshal.FreeHGlobal(buffer);
+                throw new Win32Exception(
+                    Marshal.GetLastPInvokeError(),
+                    "Failed to configure kill-on-job-close for process containment.");
             }
 
             if (!AssignProcessToJobObject(job, process.SafeHandle))
@@ -195,7 +193,10 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool SetInformationJobObject(
-        SafeJobObjectHandle job, int infoClass, nint jobObjectInfo, uint jobObjectInfoLength);
+        SafeJobObjectHandle job,
+        int infoClass,
+        ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobObjectInfo,
+        uint jobObjectInfoLength);
 
     [LibraryImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

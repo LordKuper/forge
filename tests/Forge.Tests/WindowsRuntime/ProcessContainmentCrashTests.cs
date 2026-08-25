@@ -9,14 +9,15 @@ namespace Forge.WindowsRuntimeTests;
 /// test can observe this about itself -- the test host is the very process that would need to die
 /// -- so this spawns a genuine, separate harness process
 /// (<see href="../../../Forge.ProcessContainmentProbe">Forge.ProcessContainmentProbe</see>) that
-/// itself spawns a child, which in turn spawns its own grandchild (both through the real production
-/// <c>ProcessRunner</c> + <c>WindowsJobObjectProcessContainment</c> path), then kills that harness
-/// ungracefully (<see cref="Process.Kill()"/>, no process tree) and confirms neither the child NOR
-/// the grandchild survives as an orphan -- round 2 review's point: a Job Object's automatic
-/// job-membership inheritance for further descendants is exactly what makes this containment useful
-/// in practice (a contained provider process routinely spawns its own helpers), and is otherwise
-/// asserted in three places (this class's target, the doc comment, CHANGELOG.md) but was previously
-/// never actually exercised -- only the shallowest, directly-assigned-process case was.
+/// itself spawns a child (through the real production <c>ProcessRunner</c> +
+/// <c>WindowsJobObjectProcessContainment</c> path), which in turn spawns its own grandchild through
+/// a plain, uncontained <c>ProcessRunner</c> (no <c>Attach</c> call of its own) -- so the grandchild's
+/// only route into any job is the OS's automatic job-membership inheritance from its parent, not a
+/// second, independent containment layer. This then kills the harness ungracefully
+/// (<see cref="Process.Kill()"/>, no process tree) and confirms neither the child NOR the grandchild
+/// survives as an orphan: proof that inheritance itself works, not merely that a directly assigned
+/// process dies -- the property this containment's real-world usefulness depends on, since a
+/// contained provider process routinely spawns its own helpers with no containment of their own.
 /// </summary>
 [Collection("External process tests")]
 public sealed class ProcessContainmentCrashTests

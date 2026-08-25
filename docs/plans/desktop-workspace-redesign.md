@@ -595,23 +595,21 @@ prior behavior or an equivalent mutation.
       and confirms both its directly contained child and that child's own grandchild do not survive
       as orphans. A fail-open failure to attach containment (e.g. a Host already confined to a
       restrictive job) is now logged once rather than silent.
-      Linux/macOS: round 2 review's investigation found `PosixProcessGroupContainment`'s `setpgid`
-      call does NOT currently take effect at all, on any currently supported .NET version — not
-      merely "best-effort" as first documented. .NET's Unix process-launch implementation
+      Linux/macOS: investigated and found no viable equivalent, so no POSIX containment adapter
+      exists here. A POSIX process group (`setpgid`) was prototyped and removed: `setpgid` can only
+      change a child's group before it execs, but .NET's Unix process-launch implementation
       synchronously waits, inside the native `Process.Start` call itself, for the spawned child to
-      reach `execve` before returning control to managed code, so by the time `Attach` runs the child
-      has, by construction, already exec'd; POSIX specifies `setpgid` fails with `EACCES` once a
-      target child has already exec'd. This is now confirmed by a real test on the portable CI matrix
-      (`PosixProcessGroupContainmentTests`, ubuntu-24.04/macos-14) asserting the failure is logged,
-      and the failure itself is observable in production rather than silently discarded. Making it
-      actually work would require running code inside the child between `fork` and `exec` — a self
-      `setpgid(0, 0)` — which `System.Diagnostics.Process.Start` has no hook for; reaching it means
-      bypassing `Process.Start` with a bespoke fork/exec/`posix_spawn` wrapper, out of scope for this
-      change. So on Linux/macOS this remains inert scaffolding, not a mitigation: an abrupt Host crash
-      there leaves a live provider child (and its descendants) running as an orphan exactly as if no
-      containment adapter were installed at all. In practice this gap was Windows-only anyway:
-      provider adapters (Codex, Claude) are Windows-only in this codebase, so Linux/macOS never ran a
-      real long-lived provider child before this change either.)*
+      reach `execve` before returning control to managed code — so by the time any caller-side code
+      could run, the child has, by construction, already exec'd, and POSIX specifies `setpgid` fails
+      with `EACCES` in exactly that case (confirmed against .NET's own runtime source and the POSIX
+      spec). Reaching the child before `execve` would require bypassing `Process.Start` with a bespoke
+      fork/exec/`posix_spawn` wrapper, out of scope for this change — and even that would not close
+      the gap: a POSIX process group carries no OS-level kill-on-parent-death semantic on its own,
+      only a separate reaper process explicitly calling `kill(-pgid)` would, and this codebase has no
+      such reaper. So Linux/macOS remain a genuine, honestly-documented behavior gap: an abrupt Host
+      crash there leaves a live provider child (and its descendants) running as an orphan. In practice
+      this gap is Windows-only in impact today: provider adapters (Codex, Claude) are Windows-only in
+      this codebase, so Linux/macOS never run a real long-lived provider child at all.)*
 - [x] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
       explanation, confirmation, and result.
 

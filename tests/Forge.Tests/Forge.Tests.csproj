@@ -29,11 +29,6 @@
          tests below run on Windows, Linux, and macOS without a real, Windows-only provider adapter. -->
     <ProjectReference Include="..\..\src\Forge.Host.TestHost\Forge.Host.TestHost.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
-    <!-- Plain net10.0, no OS-specific TFM (see Forge.Runtime.Posix.csproj); safe to reference
-         unconditionally, matching Forge.Host.TestHost's own reference to it. Lets
-         PosixProcessGroupContainmentTests exercise the real adapter directly on the portable
-         ubuntu-24.04/macos-14 CI matrix, not merely compile it. -->
-    <ProjectReference Include="..\..\src\Forge.Runtime.Posix\Forge.Runtime.Posix.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">

@@ -12,14 +12,8 @@ public sealed class ArchitectureTests
     {
         foreach (SourceProject project in SourceProjects())
         {
-            if (project.IsOsAdapter || project.IsCompositionRoot)
+            if (project.IsOsAdapter)
             {
-                // A composition root's whole purpose is wiring adapters together (e.g.
-                // Forge.Host.TestHost referencing Forge.Runtime.Posix to select it at runtime by
-                // OS -- see that project's own csproj comment). Deliberately narrower than the
-                // IsOsAdapter skip above: unlike ForgeOsAdapter, this exemption does NOT also skip
-                // NeutralProjectsDoNotTargetAnOsSpecificFramework below, so a composition root that
-                // is not itself an OS adapter (Forge.Host.TestHost) stays covered by that rule.
                 continue;
             }
 
@@ -207,10 +201,11 @@ public sealed class ArchitectureTests
         Assert.Equal(expected, actual);
     }
 
-    // "Windows" names a single OS directly; "Posix" names the recognized POSIX family (Linux and
-    // macOS share one adapter, e.g. Forge.Runtime.Posix, when their real implementations are
-    // identical -- see that project's own doc comment) rather than requiring two near-duplicate
-    // per-OS adapters for behavior that does not actually differ per OS within that family.
+    // "Windows" names a single OS directly; "Posix" names the recognized POSIX family, for a future
+    // adapter shared by Linux and macOS when their real implementations are identical, rather than
+    // requiring two near-duplicate per-OS adapters for behavior that does not actually differ per OS
+    // within that family. No adapter currently uses "Posix" -- Linux/macOS process containment does
+    // not exist yet (see IProcessContainment's own doc comment).
     private static readonly string[] RecognizedOsAdapterMonikers = ["Windows", "Linux", "macOS", "Posix"];
 
     // The source tree does not change within a test run, and every [Fact] above needs the full project list, so

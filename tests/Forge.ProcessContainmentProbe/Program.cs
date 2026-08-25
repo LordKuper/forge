@@ -18,8 +18,10 @@ using Forge.Runtime.Windows;
 //     so an external caller can kill this harness process itself.
 //   Forge.ProcessContainmentProbe child <directory> <sleepSeconds>
 //     Writes its own process id to <directory>/child.pid, spawns itself again in "grandchild" mode
-//     (through the same production path, so descendant containment -- not just direct-child
-//     containment -- is actually exercised), then sleeps.
+//     through a PLAIN, uncontained ProcessRunner (no WindowsJobObjectProcessContainment.Attach call
+//     of its own), then sleeps. The grandchild's only route into any job is therefore the OS's
+//     automatic job-membership inheritance from this process -- not a second, independent
+//     containment layer -- so its death after the harness is killed actually proves inheritance.
 //   Forge.ProcessContainmentProbe grandchild <directory> <sleepSeconds>
 //     Writes its own process id to <directory>/grandchild.pid, then sleeps.
 if (args.Length != 3 ||
@@ -54,12 +56,14 @@ if (mode == "child")
     await File.WriteAllTextAsync(
         Path.Combine(directory, "child.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
-    // Spawned well after Attach has already landed on this process (the exact non-racy descendant
-    // case round 2 review asked to exercise), through the same production ProcessRunner +
-    // WindowsJobObjectProcessContainment path: proves the OS's automatic job-membership inheritance
-    // actually contains a DESCENDANT, not merely the process WindowsJobObjectProcessContainment.Attach
-    // was itself called on.
-    ProcessRunner grandchildRunner = new(new WindowsJobObjectProcessContainment());
+    // Spawned well after Attach has already landed on this process (the non-racy descendant case,
+    // outside WindowsJobObjectProcessContainment's own accepted Attach-after-Start race window),
+    // through a PLAIN ProcessRunner with no containment of its own (NullProcessContainment, the
+    // default): the grandchild's only route into any job is therefore the OS's automatic
+    // job-membership inheritance from this process, not a second, independent job object. If it were
+    // spawned through its own WindowsJobObjectProcessContainment instead, the grandchild would die
+    // when ITS OWN job closes regardless of whether inheritance works at all, proving nothing.
+    ProcessRunner grandchildRunner = new();
     Task<ProcessResult> grandchildTask = grandchildRunner.RunAsync(
         new ProcessRequest(
             selfPath, ["grandchild", directory, sleepSeconds.ToString(CultureInfo.InvariantCulture)], directory),
