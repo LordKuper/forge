@@ -51,6 +51,60 @@ public sealed class ContractTests
         Assert.True(result.IsValid, json);
     }
 
+    /// <summary>Plan section 12.3: `project-snapshot.schema.json` 1.4.0 adds `provider`/`model` to
+    /// `$defs.entity` so an attempt row can carry the routed decision the sticky header now renders
+    /// (<see cref="AttemptSnapshot.Provider"/>/<c>.Model</c>). Proven with the actual serializer, not
+    /// a hand-built JSON string, so a converter or naming-policy change is caught here too -- the
+    /// same discipline <see cref="ASnapshotWithAPausedSprintSatisfiesTheProjectSnapshotContract"/>
+    /// already applies to the sprint-state enum.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void ASnapshotWithAnAttemptsRoutedProviderAndModelSatisfiesTheProjectSnapshotContract()
+    {
+        ProjectSnapshot snapshot = new(
+            SchemaVersion: "1.4.0",
+            StateVersion: 6,
+            GeneratedAt: DateTimeOffset.Parse("2026-08-24T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Project: new ProjectDescriptor("C:/src/forge", true),
+            Startup: StartupState.Ready,
+            ActiveSprintId: Guid.Parse("44444444-4444-4444-8444-444444444444"),
+            Sprints:
+            [
+                new SprintStatus(
+                    Guid.Parse("44444444-4444-4444-8444-444444444444"),
+                    1,
+                    SprintState.Running,
+                    "implementation-critical",
+                    "0123456789abcdef0123456789abcdef01234567")
+            ],
+            Attention: [],
+            SuggestedActions: [],
+            StartupChecks: [],
+            Providers: [],
+            Detail: SnapshotDetail.Full,
+            Details: new SprintDetails(
+                Guid.Parse("44444444-4444-4444-8444-444444444444"),
+                Nodes: [new EntityStatus("implementation", "running", Kind: "work")],
+                Attempts:
+                [
+                    new EntityStatus(
+                        "55555555-5555-4555-8555-555555555555", "running", OwnerId: "implementation",
+                        Provider: "claude_code", Model: "claude-sonnet-4-5")
+                ],
+                Findings: [],
+                Gates: [],
+                Artifacts: [],
+                Routing: new RoutingStatus(9, null)));
+
+        string json = StatusJson.Serialize(snapshot);
+        using JsonDocument instance = JsonDocument.Parse(json);
+
+        EvaluationResults result = ContractSchemas.Load("project-snapshot").Evaluate(
+            instance.RootElement,
+            new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
+        Assert.True(result.IsValid, json);
+    }
+
     /// <summary>Round 1 review of PR #64 found `docs/contracts/v1/configuration.json`'s own `keys`
     /// list can drift from `ConfigurationRegistry.CreateDefaultKeys()` (it had, for the new
     /// `notifications.enabled` key) with nothing catching it. Proves both directions: every

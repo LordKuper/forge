@@ -8,10 +8,16 @@ namespace Forge.Desktop.Presentation;
 /// Plan section 4.3's sticky sprint-workspace status header: everything shown in the main row, plus
 /// an expandable <see cref="DetailsText"/> for UUIDs/paths/base commit -- never mixed into the main
 /// row itself (plan: "Show UUIDs, paths, base commit, worktrees, and routing detail only in an
-/// expandable details view"). <see cref="ActiveProviderModelText"/> is always the "not yet available"
-/// placeholder: no durable per-attempt provider/model record exists anywhere in this codebase today
-/// (<see cref="Forge.Domain.AttemptSnapshot"/> carries no such field), so this slice reports it
-/// honestly rather than fabricating one, the same posture Slice 5/7 already apply to account quota.
+/// expandable details view"). <see cref="ActiveProviderModelText"/> renders the sprint's current
+/// active-operation attempt's <see cref="Forge.Domain.AttemptSnapshot.Provider"/>/<c>.Model</c>
+/// once both are known, and falls back to the "not yet available" placeholder otherwise -- no
+/// active operation (nothing currently running), a non-model-bearing role (intake, confirmation,
+/// finalization; nothing was ever routed), a legacy attempt recorded before this field existed, or
+/// an attempt between a stop request and its convergence (<c>Forge.Application.ActiveOperationLookup.FindActive</c>
+/// deliberately treats a stop-requested attempt as not "active", mirroring
+/// <c>StopOperationCoordinator.RequestStopAsync</c>'s own live-operation check, so the placeholder
+/// shows during that window even though the provider/model is still genuinely running) -- the same
+/// honest-omission posture Slice 5/7 already apply to account quota.
 /// </summary>
 public sealed record SprintStatusHeaderData(
     string ProjectDisplayName,
@@ -88,6 +94,24 @@ public static class SprintStatusHeaderProjector
                 $"{text.Resolve(MessageKeys.SprintIdLabel)} {details?.SprintId.ToString("D", CultureInfo.InvariantCulture)}\n" +
                 $"base_commit={sprint?.BaseSha ?? "-"} workflow={sprint?.Workflow ?? "-"}");
 
+        // The active-operation attempt's own recorded provider/model (plan section 12.3) -- looked
+        // up by id rather than "the most recently active attempt" so a settled-but-not-yet-cleaned-up
+        // attempt row never masquerades as what is currently running. No active operation (terminal
+        // sprint, nothing running right now), a non-model-bearing role, or a legacy attempt with
+        // neither field recorded all fall back to the same placeholder as before. This is also true,
+        // intentionally, from the moment a stop is requested until it converges: `active` itself
+        // comes from `ActiveOperationLookup.FindActive`, which deliberately excludes any attempt
+        // with `StopRequestedAt` set (the same "is this exactly what's live right now" semantics
+        // `StopOperationCoordinator.RequestStopAsync` applies), so the header blanks the still-live
+        // provider/model for that window rather than showing a value that may already be stopping.
+        EntityStatus? activeAttempt = active?.ActiveOperationAttemptId is { } activeAttemptId
+            ? details?.Attempts.FirstOrDefault(
+                attempt => attempt.Id == activeAttemptId.ToString("D", CultureInfo.InvariantCulture))
+            : null;
+        string providerModelText = activeAttempt is { Provider: { Length: > 0 } provider, Model: { Length: > 0 } model }
+            ? string.Format(CultureInfo.InvariantCulture, text.Resolve(MessageKeys.SprintStatusHeaderProviderModelText), provider, model)
+            : text.Resolve(MessageKeys.SprintStatusHeaderProviderModelUnavailable);
+
         return new(
             projectDisplayName,
             sprint?.CreationSequence ?? 0,
@@ -96,7 +120,7 @@ public static class SprintStatusHeaderProjector
             stagesCompleted,
             stagesTotal,
             lastActivity,
-            text.Resolve(MessageKeys.SprintStatusHeaderProviderModelUnavailable),
+            providerModelText,
             openFindings,
             retryRemaining,
             resumeNotBefore,

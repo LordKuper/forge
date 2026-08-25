@@ -319,6 +319,77 @@ public sealed class SprintEventStoreTests
         Assert.Null(state!.Attempts[attemptKey].LastActivityKind);
     }
 
+    /// <summary>Plan section 12.3's sticky header provider/model gap: the attempt's own creation
+    /// event carries the routed <c>provider</c>/<c>model</c> arguments
+    /// (<see cref="SprintScheduler.StartAttemptAsync"/>'s own append), and a later transition that
+    /// omits them (every subsequent attempt state change) must carry the already-recorded values
+    /// forward rather than reset them to <see langword="null"/> -- the same carry-forward discipline
+    /// <see cref="LastActivityKindSurvivesASubsequentAttemptTransition"/> already proves for
+    /// <c>LastActivityKind</c>.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ProviderAndModelPopulateFromTheAttemptCreatedEventAndSurviveASubsequentTransition()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken,
+            new Dictionary<string, string?>
+            {
+                [WorkflowEvent.ProviderArgument] = "claude_code",
+                [WorkflowEvent.ModelArgument] = "claude-sonnet-4-5",
+            });
+
+        SprintWorkflowState? created = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal("claude_code", created!.Attempts[attemptKey].Provider);
+        Assert.Equal("claude-sonnet-4-5", created.Attempts[attemptKey].Model);
+
+        AppendOutcome transitioned = await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_preparing", "preparing", 1, Guid.NewGuid(), cancellationToken);
+        Assert.True(transitioned.Succeeded, "Created -> Preparing must be a valid attempt transition.");
+
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptState.Preparing, state!.Attempts[attemptKey].State);
+        Assert.Equal("claude_code", state.Attempts[attemptKey].Provider);
+        Assert.Equal("claude-sonnet-4-5", state.Attempts[attemptKey].Model);
+    }
+
+    /// <summary>An attempt recorded before <c>provider</c>/<c>model</c> existed on the creation
+    /// event (every attempt in every journal written before this slice) never carries either
+    /// argument at all -- replay must fold it to a <see langword="null"/> provider/model, not throw,
+    /// so historical journals stay loadable and the sticky header falls back to its existing "not
+    /// yet available" placeholder exactly as before this change.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyAttemptCreatedEventWithNoProviderOrModelFoldsToNullForBackwardCompatibility()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Null(state!.Attempts[attemptKey].Provider);
+        Assert.Null(state.Attempts[attemptKey].Model);
+    }
+
     /// <summary>Forge is the sole writer of its own event log, so an unrecognized `activity_kind`
     /// value means the journal was corrupted or written by an incompatible version -- this must
     /// fail loudly on replay, the same convention every other snake_case-encoded enum argument in

@@ -159,11 +159,6 @@ the Host offered, and typed free text for the reason, never a raw id.
 
 ## What stays deferred
 
-- Real per-attempt provider/model data for the status header: no durable field exists anywhere in
-  this codebase today (`AttemptSnapshot` carries none), so `ActiveProviderModelText` always renders
-  the honest "not yet available" placeholder — the same posture Slice 5/7 already apply to account
-  quota. Introducing this would need a new durable field and its own ADR, not a Slice 6 UI
-  workaround.
 - Localized prose for a stage assessment's `StagePrerequisite.MessageKey`: still rendered as the
   same raw machine text `forge sprint assess-stage` prints (parity, plan 12.6). None of the eleven
   `stage_transition.*` keys the assessor emits are registered in `Messages.resx` today; authoring
@@ -235,3 +230,5 @@ the Host offered, and typed free text for the reason, never a raw id.
   structural)
 - ADR 0050 (the shell and confirmation-dialog discipline this slice extends; the exact
   confirmation-bypass bug class this ADR's own tests guard against again)
+- ADR 0055 (records the per-attempt provider/model field this ADR's "What stays deferred" section
+  originally called out; `ActiveProviderModelText` now renders the real routed value once known)
