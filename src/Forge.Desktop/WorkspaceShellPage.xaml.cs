@@ -418,6 +418,20 @@ public partial class WorkspaceShellPage : ContentPage
     {
         WorkspaceRoute route = workspace.Route;
         StopTimelinePoll();
+        // PR #110 review round 2 finding 2: mirrors ClearContentFocusWhenFocused's own discipline for
+        // the content half (WorkspaceShellPage.SprintWorkspace.cs) -- rendering the content pane means
+        // the content pane, not the sidebar, is now what the user is looking at, so any key
+        // sidebarFocusTracker is still holding from before this render is no longer a meaningful
+        // restoration target for a LATER, unrelated sidebar-only rebuild (add/remove project, the
+        // collapse toggle, or a UI-language save's RequestSidebarRender). Without this, that later
+        // rebuild's RestoreSidebarFocus can still resolve the stale key against the freshly rebuilt
+        // sidebar and yank focus away from wherever the user has since moved it in the content pane --
+        // concretely: focus the sidebar's Forge Settings button, which navigates here (this method
+        // runs and, with this fix, clears the captured "forge-settings" key immediately); the user then
+        // edits and saves a UI-language change from the content pane, which raises
+        // SurfaceTextProvider.Changed and requests a sidebar re-render -- RestoreSidebarFocus finds
+        // nothing captured and leaves focus alone, instead of stealing it back into the sidebar.
+        sidebarFocusTracker.Clear();
         // PR #99 review finding 11: scrollTrackedSprintId is only ever set to a real sprint id by
         // RenderSprintWorkspaceAsync itself (see WorkspaceShellPage.SprintWorkspace.cs) -- resetting
         // it here for every render means a scroll on any other route is never attributed to the

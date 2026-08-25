@@ -99,7 +99,18 @@ public partial class WorkspaceShellPage
         T TrackContentFocus<T>(string key, T control) where T : VisualElement
         {
             contentFocusRegistry.Register(key, control);
-            control.Focused += (_, _) => contentFocusTracker.Capture(key);
+            // PR #110 review round 2 finding 1: the five hoisted Entry fields (rewindReasonEntry et
+            // al.) pass through here again on every RefreshActionsAsync call -- MarkWiredOnce guards
+            // the Focused subscription so a control already wired by an earlier call in this same
+            // navigation's lifetime (its own field declaration onward) never gets a second, third, ...
+            // Nth handler stacked on top of the first, while a freshly built control (every dynamic
+            // move/gate/lifecycle button) still gets its own handler exactly once, the only time it is
+            // ever seen. See FocusControlRegistry.MarkWiredOnce's own remarks.
+            if (contentFocusRegistry.MarkWiredOnce(control))
+            {
+                control.Focused += (_, _) => contentFocusTracker.Capture(key);
+            }
+
             return control;
         }
 

@@ -87,4 +87,72 @@ public sealed class FocusControlRegistryTests
 
         Assert.Throws<ArgumentNullException>(() => registry.Register(null!, "control"));
     }
+
+    // PR #110 review round 2 finding 1: TrackContentFocus (WorkspaceShellPage.SprintWorkspace.cs)
+    // re-registers each of the sprint workspace's five hoisted Entry fields on every
+    // RefreshActionsAsync call, but must subscribe that control's Focused handler exactly once for the
+    // control's entire lifetime -- not once per refresh -- or the handler count grows without bound on
+    // the page's highest-frequency re-render path. MarkWiredOnce is the primitive that guard is built
+    // on; these tests pin down its own dedupe behavior directly (headlessly, per ADR 0050), independent
+    // of any MAUI control or the WorkspaceShellPage call site itself.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void MarkWiredOnceReturnsTrueOnlyTheFirstTimeForAGivenControlInstance()
+    {
+        FocusControlRegistry<string> registry = new();
+        string control = SomeControl();
+
+        Assert.True(registry.MarkWiredOnce(control));
+        Assert.False(registry.MarkWiredOnce(control));
+        Assert.False(registry.MarkWiredOnce(control));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void MarkWiredOnceTreatsDistinctInstancesWithEqualContentAsDifferentControls()
+    {
+        // A real VisualElement never overrides Equals/GetHashCode, so control identity in production
+        // is always reference-based. This proves MarkWiredOnce agrees: two separately built stand-in
+        // controls that happen to carry equal content (the same string value here) must each still get
+        // their own independent "first time" result -- otherwise a freshly built control could be
+        // wrongly treated as "already wired" merely because an earlier, unrelated control happened to
+        // look the same, silently dropping its own Focused subscription.
+        FocusControlRegistry<string> registry = new();
+        string first = SomeControl();
+        string second = SomeControl();
+
+        Assert.True(registry.MarkWiredOnce(first));
+        Assert.True(registry.MarkWiredOnce(second));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void ClearDoesNotResetWiringState()
+    {
+        // The whole point of MarkWiredOnce: a hoisted control is re-Register()ed (and this registry's
+        // own Clear() called) on every refresh across the control's entire lifetime, yet its one-time
+        // side effect must stay applied throughout every one of those Clear() cycles.
+        FocusControlRegistry<string> registry = new();
+        string control = SomeControl();
+        Assert.True(registry.MarkWiredOnce(control));
+
+        registry.Clear();
+        registry.Register("action:move:rewind-reason", control);
+
+        Assert.False(registry.MarkWiredOnce(control));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void MarkWiredOnceRejectsANullControl()
+    {
+        FocusControlRegistry<string> registry = new();
+
+        Assert.Throws<ArgumentNullException>(() => registry.MarkWiredOnce(null!));
+    }
+
+    // A compile-time string literal would be interned and could collide in identity with an unrelated
+    // literal of equal content elsewhere in this file, defeating the reference-based scenarios above --
+    // this always allocates a genuinely distinct instance.
+    private static string SomeControl() => new("control".ToCharArray());
 }

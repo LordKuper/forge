@@ -48,10 +48,12 @@ public sealed class WorkspaceShellAccessibilityTests
     {
         // Plan 12.6 ("keyboard reachable"): a Grid/Label/Image wrapped in only a TapGestureRecognizer,
         // or a hand-drawn GraphicsView, looks clickable but is invisible to Tab/Shift+Tab and
-        // Enter/Space -- unlike a real Button/Entry/Picker/Switch/CheckBox, which WinUI already makes
-        // keyboard-focusable and activatable for free. Every interactive control in this shell today is
-        // one of those real controls; this pins that down so a future control does not quietly regress
-        // to a mouse-only fake button.
+        // Enter/Space -- unlike a real control of one of MauiFocusableControlTypes's own types (PR
+        // #110 review round 2 finding 3: the shared "real control" set, so this comment's own list and
+        // WorkspaceShellFocusTrackingTests's discovery regex can never silently drift apart again),
+        // which WinUI already makes keyboard-focusable and activatable for free. Every interactive
+        // control in this shell today is one of those real controls; this pins that down so a future
+        // control does not quietly regress to a mouse-only fake button.
         AssertNoneContain(["GestureRecognizer", "GraphicsView"]);
     }
 

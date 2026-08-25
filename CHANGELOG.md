@@ -27,6 +27,12 @@ User-facing Forge changes are listed by release, newest first.
   timeline, its filter, or the message composer) used to leave a stale focus record that could
   silently steal focus back to a button you had already left. Refreshing the panel now only ever
   restores focus to a control that is actually part of the current render.
+- A sidebar control you focused before navigating away could steal keyboard focus back out of the
+  content pane the next time the sidebar happened to refresh for an unrelated reason (adding or
+  removing a project, collapsing/expanding it, or saving a UI-language change) -- for example, saving
+  a language change from Forge Settings could yank focus back to the sidebar button you last clicked
+  before navigating there. Navigating into the content pane now always clears that stale sidebar
+  record first.
 
 ## v0.72.0
 
