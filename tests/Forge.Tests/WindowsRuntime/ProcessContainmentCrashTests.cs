@@ -9,10 +9,14 @@ namespace Forge.WindowsRuntimeTests;
 /// test can observe this about itself -- the test host is the very process that would need to die
 /// -- so this spawns a genuine, separate harness process
 /// (<see href="../../../Forge.ProcessContainmentProbe">Forge.ProcessContainmentProbe</see>) that
-/// itself spawns a grandchild through the real production
-/// <c>ProcessRunner</c> + <c>WindowsJobObjectProcessContainment</c> path, then kills that harness
-/// ungracefully (<see cref="Process.Kill()"/>, no process tree) and confirms the grandchild does not
-/// survive as an orphan.
+/// itself spawns a child, which in turn spawns its own grandchild (both through the real production
+/// <c>ProcessRunner</c> + <c>WindowsJobObjectProcessContainment</c> path), then kills that harness
+/// ungracefully (<see cref="Process.Kill()"/>, no process tree) and confirms neither the child NOR
+/// the grandchild survives as an orphan -- round 2 review's point: a Job Object's automatic
+/// job-membership inheritance for further descendants is exactly what makes this containment useful
+/// in practice (a contained provider process routinely spawns its own helpers), and is otherwise
+/// asserted in three places (this class's target, the doc comment, CHANGELOG.md) but was previously
+/// never actually exercised -- only the shallowest, directly-assigned-process case was.
 /// </summary>
 [Collection("External process tests")]
 public sealed class ProcessContainmentCrashTests
@@ -32,6 +36,7 @@ public sealed class ProcessContainmentCrashTests
         string directory = Path.Combine(Path.GetTempPath(), $"forge-containment-crash-{Guid.NewGuid():N}");
         Directory.CreateDirectory(directory);
         string childPidPath = Path.Combine(directory, "child.pid");
+        string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
         Process? harness = null;
         try
         {
@@ -44,21 +49,32 @@ public sealed class ProcessContainmentCrashTests
             Assert.NotNull(harness);
 
             int childPid = await ReadPidOnceWrittenAsync(childPidPath);
-            Assert.True(IsProcessAlive(childPid), "The contained grandchild should be running before the crash.");
+            Assert.True(IsProcessAlive(childPid), "The contained child should be running before the crash.");
+
+            // Written well after the child's own Attach has already landed (it sleeps afterward),
+            // so this deliberately does not touch the sub-millisecond Attach-after-Start race the
+            // class doc comment on WindowsJobObjectProcessContainment already accepts as a known,
+            // narrow gap -- this is the ordinary, non-racy descendant case outside that window.
+            int grandchildPid = await ReadPidOnceWrittenAsync(grandchildPidPath);
+            Assert.True(
+                IsProcessAlive(grandchildPid), "The contained grandchild should be running before the crash.");
 
             // Not Kill(true): an ungraceful kill of ONLY the harness itself, exactly simulating an
             // abrupt Forge Host crash that never runs any of its own graceful-shutdown/tree-kill
-            // code. Whatever keeps the grandchild from surviving this must come from the OS-level
-            // Job Object containment alone, not from any cooperation by the process being killed.
+            // code. Whatever keeps the child and grandchild from surviving this must come from the
+            // OS-level Job Object containment alone, not from any cooperation by the process being
+            // killed.
             harness.Kill();
             Assert.True(harness.WaitForExit((int)TimeSpan.FromSeconds(15).TotalMilliseconds));
 
             await AssertProcessDiesAsync(childPid);
+            await AssertProcessDiesAsync(grandchildPid);
         }
         finally
         {
             harness?.Dispose();
             TryKillByPidFile(childPidPath);
+            TryKillByPidFile(grandchildPidPath);
             await DeleteDirectoryAsync(directory);
         }
     }
