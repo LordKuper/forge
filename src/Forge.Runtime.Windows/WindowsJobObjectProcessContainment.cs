@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using Forge.Application;
 using Forge.Infrastructure;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
 
 namespace Forge.Runtime.Windows;
@@ -34,6 +36,24 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
     private const int JobObjectExtendedLimitInformationClass = 9;
     private const uint JobObjectLimitKillOnJobClose = 0x2000;
 
+    // Round 2 review: a fail-open path that never says anything is indistinguishable from success.
+    // Logged once (the first failure), not per spawn -- the scenarios this exists for (a Host
+    // already confined to a job that disallows breakaway, a sandbox/CI/enterprise policy blocking
+    // AssignProcessToJobObject) are permanent for the life of this process, so every subsequent
+    // spawn would just repeat the identical warning.
+    private static readonly Action<ILogger, int, Exception> LogAttachFailed = LoggerMessage.Define<int>(
+        LogLevel.Warning,
+        new EventId(2070, "ProcessContainmentAttachFailed"),
+        "Windows Job Object process containment failed to attach to process {ProcessId}; this Forge Host " +
+        "instance is running -- and, until the underlying condition changes, will keep running -- with no " +
+        "process containment at all, despite CHANGELOG.md's Security guarantee.");
+
+    private readonly ILogger<WindowsJobObjectProcessContainment> logger;
+    private int attachFailureLogged;
+
+    public WindowsJobObjectProcessContainment(ILogger<WindowsJobObjectProcessContainment>? logger = null) =>
+        this.logger = logger ?? NullLogger<WindowsJobObjectProcessContainment>.Instance;
+
     public IDisposable Attach(Process process)
     {
         ArgumentNullException.ThrowIfNull(process);
@@ -43,14 +63,47 @@ public sealed partial class WindowsJobObjectProcessContainment : IProcessContain
         // environments restrict job-object nesting or breakaway (a Forge Host itself already
         // confined to a restrictive job, as some CI/sandbox hosts do) -- a Job Object failure there
         // must degrade to "no containment for this one process," never regress the process spawn
-        // itself, which owes nothing to this adapter's success.
+        // itself, which owes nothing to this adapter's success. Widened beyond Win32Exception (round
+        // 2 review): AttachCore's own Marshal.AllocHGlobal can throw OutOfMemoryException, and
+        // process.SafeHandle can throw InvalidOperationException/ObjectDisposedException if the
+        // process is not in the started-and-undisposed state this type assumes (verified empirically:
+        // Process.SafeHandle on a disposed Process throws InvalidOperationException, "No process is
+        // associated with this object.", not ObjectDisposedException -- both are still caught here,
+        // since which one a future runtime version chooses is an implementation detail this adapter
+        // should not depend on) -- none of those are any more acceptable to propagate out of Attach
+        // and abort a spawn than a Win32Exception is.
+        //
+        // process.Id is captured before the try, not inside the catch: the same disposed/unassociated
+        // state that makes AttachCore throw also makes Id itself throw InvalidOperationException, so
+        // reading it only after the exception is already caught would let a second, unhandled
+        // exception escape from right inside this fail-open path -- exactly the defect this catch
+        // exists to prevent.
+        int? processId = TryGetProcessId(process);
         try
         {
             return AttachCore(process);
         }
-        catch (Win32Exception)
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException
+            or ObjectDisposedException or OutOfMemoryException)
         {
+            if (Interlocked.CompareExchange(ref attachFailureLogged, 1, 0) == 0)
+            {
+                LogAttachFailed(logger, processId ?? -1, exception);
+            }
+
             return new NullProcessContainment().Attach(process);
+        }
+    }
+
+    private static int? TryGetProcessId(Process process)
+    {
+        try
+        {
+            return process.Id;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
         }
     }
 
