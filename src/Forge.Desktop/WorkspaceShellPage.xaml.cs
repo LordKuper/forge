@@ -80,9 +80,45 @@ public partial class WorkspaceShellPage : ContentPage
         // changes which project is selected -- must also re-render the sidebar, not only the content
         // pane, or the indicator would keep showing whichever project was selected at the last
         // sidebar render instead of the one the user just navigated to.
+        //
+        // PR #106 round-2 review finding 2: the first cut of that fix called RequestSidebarRender()
+        // here, which routes through RenderSidebarAsync -> SidebarViewModel.LoadAsync's full
+        // per-project catalog scan (GetWorkspaceSummaryAsync + GetProjectSnapshotAsync per cataloged
+        // project) just to refresh one label -- on EVERY navigation click, while holding the
+        // mutation guard. That paid for a redundant full reload on top of the one
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync already run themselves, made app
+        // launch load the sidebar twice (RestoreAsync raises this event from inside OnAppearing's own
+        // guard, and OnAppearing's own explicit RenderSidebarAsync call runs again), and made removing
+        // a project load it three times -- the exact "no refetch for a render that changes no domain
+        // data" cost PR #99/#100/#103 already pushed back on elsewhere in this file (see
+        // BuildSidebarToggleButton's own remarks). A route change never changes any cataloged
+        // project's own data, only which project is selected, so this now re-renders the already
+        // -loaded lastSidebarSnapshot with just the Host-connectivity pair recomputed for the newly
+        // selected project via ShellRenderGate.RequestRender's cheap, synchronous path -- the same
+        // lastSidebarSnapshot/RenderSidebarFromSnapshot mechanism the toggle already uses for the
+        // same reason. Nothing loaded yet (this fires from RestoreAsync before OnAppearing's own
+        // first render, or before the sidebar has ever rendered) is a deliberate no-op: whichever real
+        // render already runs shortly after -- OnAppearing's own explicit call, or
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync's own sidebar.LoadAsync -- reports
+        // this same route's connectivity correctly on its own.
         workspace.RouteChanged += (_, _) =>
         {
-            renderGate.RequestSidebarRender();
+            renderGate.RequestRender(() =>
+            {
+                if (lastSidebarSnapshot is { } snapshot)
+                {
+                    (string hostText, string hostAccessible) = sidebar.HostConnectivityFor(workspace.Route.ProjectId);
+                    RenderSidebarFromSnapshot(
+                        snapshot with
+                        {
+                            Status = snapshot.Status with
+                            {
+                                HostConnectivityText = hostText,
+                                HostConnectivityAccessibleText = hostAccessible,
+                            },
+                        });
+                }
+            });
             renderGate.RequestContentRender();
         };
         // Plan 5.1/12.2: a UI-language save applies without restart -- every legacy-backed

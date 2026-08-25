@@ -441,6 +441,102 @@ public sealed class SidebarViewModelTests
         Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusCheckFailed), snapshot.Status.AuthenticationStatusText);
     }
 
+    /// <summary>PR #106 round-2 review finding 1: the systemic version of round 1's connectivity
+    /// scoping bug (<see cref="LoadAsyncScopesHostConnectivityToTheSelectedProjectNotToAnyOtherCatalogedProject"/>).
+    /// <c>LoadAsync</c> used to merge every cataloged project's <c>ProviderHealthEntry</c> set into
+    /// one last-project-wins dictionary and feed THAT into the authentication and model-availability
+    /// indicators, even though <see cref="ProviderHealthEntry.Enabled"/>/<see cref="ProviderHealthEntry.Authentication"/>
+    /// are per-project facts -- each cataloged project's own <c>GetWorkspaceSummaryAsync</c> call runs
+    /// its own provider probe. This is the regression test: project A's own provider set reports codex
+    /// as authenticated, project B's reports codex as requiring authentication, and each load must
+    /// show only the project it was asked about's own authentication state, never the other's (or
+    /// "whichever the catalog scan visited last," the pre-fix behavior).
+    /// <see cref="IProviderToolchainManager.EnsureReadyAsync"/> takes no project-root parameter (a
+    /// single toolchain probe answers for whichever project last asked), so this test drives that
+    /// divergence through <see cref="SequencedProviderToolchainManager"/>, matching the exact call
+    /// order <c>LoadAsync</c>'s own catalog loop produces: two calls per project during setup
+    /// (<c>TestEnvironment.InitializeAsync</c>'s snapshot read, then its own pre-check), then, per
+    /// <c>LoadAsync</c> call under test, one call per project from <c>GetWorkspaceSummaryAsync</c> (the
+    /// one this test asserts on) and one from <c>GetProjectSnapshotAsync</c> (unused for provider
+    /// health).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncScopesAuthenticationAndModelAvailabilityToTheSelectedProjectNotToAnyOtherCatalogedProject()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProviderId codex = new("codex");
+        ProviderToolchainStatus authenticated =
+            new([ProviderStatus.Ready(codex, "1.0.0") with { Authentication = ProviderAuthenticationStatus.Ready }]);
+        ProviderToolchainStatus requiresAuthentication =
+            new([ProviderStatus.Ready(codex, "1.0.0") with { Authentication = ProviderAuthenticationStatus.Required }]);
+        SequencedProviderToolchainManager toolchain = new(
+            // Setup (irrelevant to this test): project A's InitializeAsync (snapshot + pre-check),
+            // project B's InitializeAsync (snapshot + pre-check) -- initialization succeeds
+            // regardless of provider readiness.
+            authenticated, authenticated, authenticated, authenticated,
+            // First LoadAsync call under test: project A's GetWorkspaceSummaryAsync (asserted),
+            // its GetProjectSnapshotAsync (unused), project B's GetWorkspaceSummaryAsync (unused --
+            // A is selected this call), its GetProjectSnapshotAsync (unused).
+            authenticated, authenticated, requiresAuthentication, requiresAuthentication,
+            // Second LoadAsync call under test: same catalog loop order, B's own reading asserted.
+            authenticated, authenticated, requiresAuthentication, requiresAuthentication);
+        using TestEnvironment environment = new(providers: toolchain);
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string secondRoot = Path.Combine(environment.Root, "second-project");
+        Directory.CreateDirectory(secondRoot);
+        await environment.InitializeAsync(secondRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult projectA = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        ProjectCatalogResult projectB = await catalog.AddAsync(secondRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshotForA = await viewModel.LoadAsync(cancellationToken, projectA.Entry!.ProjectId);
+        SidebarSnapshot snapshotForB = await viewModel.LoadAsync(cancellationToken, projectB.Entry!.ProjectId);
+
+        Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusReady), snapshotForA.Status.AuthenticationStatusText);
+        Assert.Equal(en.Resolve(MessageKeys.AuthenticationStatusRequired), snapshotForB.Status.AuthenticationStatusText);
+        Assert.False(snapshotForA.Status.AnyModelUnavailable);
+        Assert.True(snapshotForB.Status.AnyModelUnavailable);
+    }
+
+    /// <summary>PR #106 round-2 review finding 2: <c>WorkspaceShellPage</c>'s <c>RouteChanged</c>
+    /// handler used to call the full <c>ShellRenderGate.RequestSidebarRender()</c> (routing through
+    /// <see cref="SidebarViewModel.LoadAsync"/>'s per-project catalog scan) on EVERY navigation, just
+    /// to refresh the Host-connectivity pair. <see cref="SidebarViewModel.HostConnectivityFor"/>
+    /// exists so that handler can instead recompute just this pair through
+    /// <c>ShellRenderGate.RequestRender</c>'s cheap, synchronous path (already proven decoupled from
+    /// any full reload by <c>ShellRenderGateTests</c>) and overlay it onto the already-loaded
+    /// snapshot. Its own signature is the structural proof this can never perform
+    /// <see cref="SidebarViewModel.LoadAsync"/>'s catalog scan: no <see cref="CancellationToken"/>,
+    /// not <see langword="async"/>, returning a plain value tuple -- nothing here can await a catalog
+    /// read or a project's workspace-summary/provider probe. This test proves it is also not merely
+    /// cheap but CORRECT: the exact same reading <see cref="SidebarViewModel.LoadAsync"/> itself
+    /// reports for the same selected project.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task HostConnectivityForReturnsTheSameReadingLoadAsyncWouldWithoutAnyCatalogOrProjectScan()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        Guid selectedProjectId = Guid.NewGuid();
+        HostConnectivityMonitor monitor = new();
+        monitor.Report(selectedProjectId, true, DateTimeOffset.UtcNow);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, connectivityMonitor: monitor);
+
+        (string cheapText, string cheapAccessible) = viewModel.HostConnectivityFor(selectedProjectId);
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken, selectedProjectId);
+
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityConnected), cheapText);
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityConnectedAccessible), cheapAccessible);
+        Assert.Equal(snapshot.Status.HostConnectivityText, cheapText);
+        Assert.Equal(snapshot.Status.HostConnectivityAccessibleText, cheapAccessible);
+    }
+
     /// <summary>Plan 12.6: the status row must have a Host-connectivity indicator. Before any
     /// mutation has been attempted this process, <see cref="IHostConnectivityMonitor.LastObserved(Guid)"/>
     /// is <see langword="null"/> -- the sidebar must report that honestly as "not yet checked," never
@@ -582,5 +678,29 @@ public sealed class SidebarViewModelTests
     private sealed class FixedClock(DateTimeOffset now) : IClock
     {
         public DateTimeOffset UtcNow => now;
+    }
+
+    /// <summary>Returns each response in order, then repeats the last one for any further call --
+    /// same convention as <c>ProviderInstallationTests.SequencedProcessRunner</c>. Exists because
+    /// <see cref="IProviderToolchainManager.EnsureReadyAsync"/> has no project-root parameter (see its
+    /// own remarks), so a test proving <see cref="SidebarViewModel.LoadAsync"/> scopes per-project
+    /// provider facts correctly must drive the divergence through call ORDER instead.</summary>
+    private sealed class SequencedProviderToolchainManager(params ProviderToolchainStatus[] responses)
+        : IProviderToolchainManager
+    {
+        private int index;
+
+        public Task<ProviderToolchainStatus> CheckAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(Next());
+
+        public Task<ProviderToolchainStatus> EnsureReadyAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
+            Task.FromResult(Next());
+
+        private ProviderToolchainStatus Next()
+        {
+            int position = Math.Min(index, responses.Length - 1);
+            index++;
+            return responses[position];
+        }
     }
 }

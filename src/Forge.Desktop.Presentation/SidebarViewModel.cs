@@ -42,13 +42,19 @@ public sealed record SidebarProjectItem(
 /// <see cref="ProviderSummaryText"/>/<see cref="ProviderAccessibleText"/> report the enabled
 /// providers whose toolchain install is ready, independent of authentication.
 /// <see cref="AuthenticationStatusText"/>/<see cref="AuthenticationAccessibleText"/> report the
-/// worst-case authentication readiness across enabled providers.
+/// worst-case authentication readiness across the SELECTED project's own enabled providers (PR #106
+/// round-2 review finding 1: <see cref="ProviderHealthEntry.Enabled"/>/<see cref="ProviderHealthEntry.Authentication"/>
+/// are per-project facts -- see <see cref="SidebarViewModel.LoadAsync"/>'s own remarks -- so this must
+/// never be computed from a last-project-wins merge across every cataloged project, the same class of
+/// bug <see cref="HostConnectivityText"/> was fixed for in round 1). No project selected falls back to
+/// the merged set across every cataloged project, the same "nothing routed yet" shape as the
+/// pre-existing <see cref="ProviderSummaryText"/>/quota rows.
 /// <see cref="ModelAvailabilityText"/>/<see cref="ModelAvailabilityAccessibleText"/> and
-/// <see cref="AnyModelUnavailable"/> report how many enabled providers are actually usable for model
-/// work right now -- toolchain-ready AND authenticated -- superseding the old
-/// <c>AnyKnownProviderUnavailable</c> field (computed but never read by any UI): that field only
-/// considered toolchain state, never authentication, so it could not distinguish "installed but not
-/// authenticated" from "fully usable." <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
+/// <see cref="AnyModelUnavailable"/> report how many of the SAME selected-project-scoped enabled
+/// providers are actually usable for model work right now -- toolchain-ready AND authenticated --
+/// superseding the old <c>AnyKnownProviderUnavailable</c> field (computed but never read by any UI):
+/// that field only considered toolchain state, never authentication, so it could not distinguish
+/// "installed but not authenticated" from "fully usable." <see cref="QuotaStatusText"/>/<see cref="QuotaAccessibleText"/>
 /// report the worst-case state across every known provider's <see cref="ProviderQuotaSnapshot"/>
 /// (<see cref="Forge.Localization.SurfaceFormatting.QuotaStatusSummary"/>). ADR 0052 found no
 /// provider integration in this codebase exposes a verified quota signal, so today this always
@@ -134,12 +140,19 @@ public sealed class SidebarViewModel(
     /// the status row's Host-connectivity text must name THIS project's own last-observed reading,
     /// never an arbitrary other cataloged project's. <see langword="null"/> (nothing routed yet, or
     /// the Forge-settings page, which names no single project) reports the same honest "not yet
-    /// checked" state as a project with no reading at all.</summary>
+    /// checked" state as a project with no reading at all. PR #106 round-2 review finding 1: the same
+    /// reasoning applies to <c>summary.Providers</c> -- each cataloged project's own
+    /// <see cref="ForgeApplication.GetWorkspaceSummaryAsync"/> call reports THAT project's own
+    /// <see cref="ProviderHealthEntry.Enabled"/>/<see cref="ProviderHealthEntry.Authentication"/>
+    /// facts, so the authentication and model-availability indicators must read the selected
+    /// project's own entry (<see cref="BuildStatusRow"/>), never a last-project-wins merge across
+    /// every cataloged project.</summary>
     public async Task<SidebarSnapshot> LoadAsync(CancellationToken cancellationToken, Guid? selectedProjectId = null)
     {
         ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
         List<SidebarProjectItem> projects = new(listing.Entries.Count);
         Dictionary<string, ProviderHealthEntry> knownProviders = new(StringComparer.Ordinal);
+        IReadOnlyList<ProviderHealthEntry>? selectedProjectProviders = null;
         foreach (ProjectCatalogEntry entry in listing.Entries)
         {
             ProjectWorkspaceSummary summary = await application
@@ -148,6 +161,11 @@ public sealed class SidebarViewModel(
             foreach (ProviderHealthEntry provider in summary.Providers)
             {
                 knownProviders[provider.Id] = provider;
+            }
+
+            if (selectedProjectId is { } selected && entry.ProjectId == selected)
+            {
+                selectedProjectProviders = summary.Providers;
             }
 
             ProjectSnapshot snapshot = await application
@@ -181,7 +199,9 @@ public sealed class SidebarViewModel(
         ConfigurationView userConfiguration =
             await application.GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false);
         return new(
-            projects, BuildStatusRow(knownProviders.Values, quota, selectedProjectId), IsCollapsed(userConfiguration));
+            projects,
+            BuildStatusRow(knownProviders.Values, selectedProjectProviders, quota, selectedProjectId),
+            IsCollapsed(userConfiguration));
     }
 
     /// <summary>Persists the workspace shell's whole-sidebar collapse state (ADR 0050 addendum) so
@@ -268,7 +288,10 @@ public sealed class SidebarViewModel(
     /// status-row text and its accessible name are now resolved templates instead of hardcoded
     /// English literals.</summary>
     private SidebarStatusRow BuildStatusRow(
-        IEnumerable<ProviderHealthEntry> providers, IReadOnlyList<ProviderQuotaSnapshot> quota, Guid? selectedProjectId)
+        IEnumerable<ProviderHealthEntry> providers,
+        IReadOnlyList<ProviderHealthEntry>? selectedProjectProviders,
+        IReadOnlyList<ProviderQuotaSnapshot> quota,
+        Guid? selectedProjectId)
     {
         List<ProviderHealthEntry> known = [.. providers];
         int ready = known.Count(provider => provider.Enabled && provider.State == ProviderState.Ready);
@@ -283,8 +306,14 @@ public sealed class SidebarViewModel(
             text.Resolve(MessageKeys.SidebarProvidersReadyAccessible),
             ready,
             enabled);
-        (string authenticationText, string authenticationAccessible) = AuthenticationStatusSummary(known);
-        (string modelText, string modelAccessible, bool anyModelUnavailable) = ModelAvailabilitySummary(known, enabled);
+        // PR #106 round-2 review finding 1: authentication and model availability are computed from
+        // the SELECTED project's own provider set, never the merged, last-project-wins `known` above
+        // -- ProviderHealthEntry.Enabled/Authentication are per-project facts (see LoadAsync's own
+        // remarks). No project selected falls back to the merged set, matching every other indicator
+        // here when nothing is routed yet.
+        IReadOnlyList<ProviderHealthEntry> scoped = selectedProjectProviders ?? known;
+        (string authenticationText, string authenticationAccessible) = AuthenticationStatusSummary(scoped);
+        (string modelText, string modelAccessible, bool anyModelUnavailable) = ModelAvailabilitySummary(scoped);
         (string quotaText, string quotaAccessible) = SurfaceFormatting.QuotaStatusSummary(text.Current, quota);
         (string hostText, string hostAccessible) = HostConnectivitySummary(selectedProjectId);
         return new(
@@ -302,7 +331,9 @@ public sealed class SidebarViewModel(
     }
 
     /// <summary>The worst-case local authentication readiness (ADR 0008) across every ENABLED
-    /// provider -- disabled providers are never probed and carry no <see cref="ProviderHealthEntry.Authentication"/>
+    /// provider IN THE GIVEN SCOPE (the selected project's own provider set, or the merged set across
+    /// every cataloged project when none is selected -- see <see cref="BuildStatusRow"/>) -- disabled
+    /// providers are never probed and carry no <see cref="ProviderHealthEntry.Authentication"/>
     /// signal at all (see <see cref="ProviderHealthProjector.Project"/>), so including them here
     /// would misreport "authentication required" for a provider the user never asked to use.
     /// Mirrors <see cref="Forge.Localization.SurfaceFormatting.QuotaStatusSummary"/>'s own
@@ -344,18 +375,23 @@ public sealed class SidebarViewModel(
             nameof(authentication), authentication, "Unmapped ProviderHealthAuthentication value."),
     };
 
-    /// <summary>How many enabled providers are actually usable for model work right now --
-    /// toolchain-ready AND authenticated (ADR 0008: "every enabled provider must report local
-    /// authentication readiness" before it counts as ready for model work; mirrors
-    /// <see cref="Forge.Providers.ProviderToolchainStatus.Ready"/>'s own per-provider rule). Distinct
-    /// from <see cref="MessageKeys.SidebarProvidersReadyStatus"/> above, which counts toolchain state
-    /// alone: a provider can be "installed and current" (counted there) while still blocking real
-    /// model work because authentication is missing (not counted here). Supersedes the old, unread
+    /// <summary>How many enabled providers, IN THE GIVEN SCOPE (see <see cref="AuthenticationStatusSummary"/>'s
+    /// own remarks), are actually usable for model work right now -- toolchain-ready AND
+    /// authenticated (ADR 0008: "every enabled provider must report local authentication readiness"
+    /// before it counts as ready for model work; mirrors <see cref="Forge.Providers.ProviderToolchainStatus.Ready"/>'s
+    /// own per-provider rule). Distinct from <see cref="MessageKeys.SidebarProvidersReadyStatus"/>
+    /// above, which counts toolchain state alone (and is never re-scoped -- see
+    /// <see cref="BuildStatusRow"/>'s own remarks): a provider can be "installed and current" (counted
+    /// there) while still blocking real model work because authentication is missing (not counted
+    /// here). Both <paramref name="known"/>'s own enabled count and the available count are computed
+    /// from the SAME scope, so the rendered "X/Y" ratio never mixes a selected project's numerator
+    /// with a merged-across-every-project denominator. Supersedes the old, unread
     /// <c>AnyKnownProviderUnavailable</c> field -- see <see cref="SidebarStatusRow"/>'s own
     /// remarks.</summary>
     private (string Text, string Accessible, bool AnyUnavailable) ModelAvailabilitySummary(
-        IReadOnlyList<ProviderHealthEntry> known, int enabled)
+        IReadOnlyList<ProviderHealthEntry> known)
     {
+        int enabled = known.Count(provider => provider.Enabled);
         int available = known.Count(provider =>
             provider.Enabled &&
             provider.State == ProviderState.Ready &&
@@ -372,6 +408,19 @@ public sealed class SidebarViewModel(
             enabled);
         return (modelText, modelAccessible, enabled > available);
     }
+
+    /// <summary>Public entry point for <see cref="HostConnectivitySummary"/> (PR #106 round-2 review
+    /// finding 2): a route change only ever changes WHICH project is selected -- it never changes any
+    /// cataloged project's own workspace/provider/quota data -- so <c>WorkspaceShellPage</c> re-renders
+    /// its already-loaded <c>SidebarSnapshot</c> with just this pair recomputed for the newly selected
+    /// project, instead of paying for <see cref="LoadAsync"/>'s full per-project catalog scan on every
+    /// navigation click (the same cost <see cref="LoadAsync"/>'s own remarks already document, and the
+    /// same "no refetch for a render that changes no domain data" shape PR #99/#100/#103 already
+    /// established for the sidebar-collapse toggle in this file's own history). Reads
+    /// <see cref="connectivityMonitor"/> directly -- like <see cref="HostConnectivitySummary"/> itself,
+    /// this is a synchronous, in-memory read, never a fresh Host probe.</summary>
+    public (string Text, string Accessible) HostConnectivityFor(Guid? selectedProjectId) =>
+        HostConnectivitySummary(selectedProjectId);
 
     /// <summary>The Host-connectivity status-row indicator (plan 12.6), read from
     /// <see cref="connectivityMonitor"/>'s last actually-observed reading for
