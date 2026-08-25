@@ -12,9 +12,17 @@ User-facing Forge changes are listed by release, newest first.
   own handle to it closes, whether that is a graceful shutdown or an unexpected termination. If
   containment itself cannot be established (e.g. a Host already confined to a restrictive job), the
   affected process still spawns normally and the degradation is now logged rather than silent.
-  Linux/macOS process containment does not exist yet — a known limitation, not a regression: those
-  platforms have no built-in provider adapters today, so an abrupt Host crash there still leaves a
-  live provider process running as an orphan, unchanged from before.
+  Linux/macOS process containment does not exist yet — a known limitation, not a regression: without
+  it, an abrupt Host crash on those platforms still leaves a live provider process running as an
+  orphan, unchanged from before.
+
+## v0.72.1
+
+### Changed
+
+- Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
+  crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
+  CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
 
 ## v0.72.0
 

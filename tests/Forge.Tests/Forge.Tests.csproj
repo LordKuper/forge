@@ -30,6 +30,12 @@
     <ProjectReference Include="..\..\src\Forge.Host.TestHost\Forge.Host.TestHost.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
+    <!-- Build-order dependency only (not an assembly reference): ProcessRunnerTests launches this
+         probe as a genuinely separate process and locates its build output on disk, so the probe
+         must exist next to the tests whenever this project builds, including under the portable CI
+         job that runs `dotnet test tests/Forge.Tests/...` directly rather than via the full solution. -->
+    <ProjectReference Include="..\Forge.ProcessContainmentProbe\Forge.ProcessContainmentProbe.csproj"
+                       ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />

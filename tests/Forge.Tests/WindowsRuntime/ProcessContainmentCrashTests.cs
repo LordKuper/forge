@@ -73,10 +73,33 @@ public sealed class ProcessContainmentCrashTests
         }
         finally
         {
-            harness?.Dispose();
-            TryKillByPidFile(childPidPath);
-            TryKillByPidFile(grandchildPidPath);
-            await DeleteDirectoryAsync(directory);
+            try
+            {
+                // The harness blocks forever (Timeout.InfiniteTimeSpan) until killed: if an earlier
+                // assertion above threw before the deliberate harness.Kill() ran, Dispose() alone
+                // would release only this test's own handle to it and leave the OS process itself
+                // running indefinitely as a leak -- exactly the immortal leaked harness processes a
+                // prior review found on this machine. Kill it here too (idempotent: a no-op once
+                // already exited) before disposing.
+                if (harness is { HasExited: false })
+                {
+                    harness.Kill();
+                }
+
+                harness?.Dispose();
+                TryKillByPidFile(childPidPath);
+                TryKillByPidFile(grandchildPidPath);
+                await DeleteDirectoryAsync(directory);
+            }
+            catch (Exception error)
+            {
+                // Cleanup is best-effort only: a failure here (e.g. a still-locked temp directory
+                // because an earlier kill above did not fully take effect) must never replace
+                // whatever exception -- typically the real assertion failure -- the try block above
+                // was already propagating out of this finally. Log it so it stays visible, but let
+                // the original exception win.
+                Console.Error.WriteLine($"[ProcessContainmentCrashTests] Cleanup failed for '{directory}': {error}");
+            }
         }
     }
 

@@ -472,8 +472,7 @@
       "forge.host.testhost": {
         "type": "Project",
         "dependencies": {
-          "Forge.Host.Runtime": "[0.73.0, )",
-          "Forge.Runtime.Windows": "[0.73.0, )"
+          "Forge.Host.Runtime": "[0.73.0, )"
         }
       },
       "forge.runtime": {
@@ -484,9 +483,6 @@
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
         }
-      },
-      "forge.runtime.windows": {
-        "type": "Project"
       },
       "forge.updater": {
         "type": "Project"
@@ -1032,8 +1028,7 @@
       "forge.host.testhost": {
         "type": "Project",
         "dependencies": {
-          "Forge.Host.Runtime": "[0.73.0, )",
-          "Forge.Runtime.Windows": "[0.73.0, )"
+          "Forge.Host.Runtime": "[0.73.0, )"
         }
       },
       "forge.processcontainmentprobe": {

@@ -280,9 +280,6 @@
           "YamlDotNet": "[18.1.0, )"
         }
       },
-      "forge.runtime.windows": {
-        "type": "Project"
-      },
       "JsonSchema.Net": {
         "type": "CentralTransitive",
         "requested": "[9.4.0, )",

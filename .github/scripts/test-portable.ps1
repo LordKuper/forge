@@ -3,8 +3,8 @@ param()
 
 # Proves the ADR 0007 neutral projects build and test on this OS via the portable net10.0 TFM. Windows-only
 # projects (Forge.Cli.Windows, Forge.Desktop, Forge.Host.Windows, Forge.Providers.Codex.Windows,
-# Forge.Providers.Claude.Windows, Forge.Runtime.Windows, Forge.Updater.Windows) are intentionally excluded; they
-# build only on Windows.
+# Forge.Providers.Claude.Windows, Forge.Runtime.Windows, Forge.Updater.Windows, Forge.ProcessContainmentProbe)
+# are intentionally excluded; they build only on Windows.
 
 $ErrorActionPreference = 'Stop'
 
@@ -21,6 +21,12 @@ $leafProjects = @(
     # build on every OS per this script's own rule.
     'tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj',
     'tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj'
+    # Forge.ProcessContainmentProbe is deliberately NOT here: unlike its two siblings above, it calls
+    # the real WindowsJobObjectProcessContainment directly and targets net10.0-windows10.0.19041.0
+    # only (no portable TFM, no POSIX branch), so it belongs with the Windows-only exclusion list
+    # above, not this neutral leaf-project list. Forge.Tests.csproj's own build-order-only reference
+    # to it (ReferenceOutputAssembly="false") still makes its restore/build get exercised on every OS
+    # via the "Forge.Tests multi-targets..." step below.
 )
 
 foreach ($project in $leafProjects) {
