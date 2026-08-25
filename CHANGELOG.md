@@ -15,6 +15,14 @@ User-facing Forge changes are listed by release, newest first.
   distinct "status is stale" state when that reading is old enough not to trust. Every new indicator
   has both visible text and a screen-reader name, matching the existing status-row convention.
 
+## v0.72.1
+
+### Changed
+
+- Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
+  crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
+  CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
+
 ## v0.72.0
 
 ### Added
