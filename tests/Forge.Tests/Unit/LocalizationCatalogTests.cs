@@ -294,6 +294,9 @@ public sealed class LocalizationCatalogTests
     private static readonly Dictionary<string, string> AllowedIdenticalKeys = new(StringComparer.Ordinal)
     {
         ["AppTitle"] = "Forge's own product/brand name (\"Forge\") -- a proper noun, never translated.",
+        ["SprintStatusHeaderProviderModelText"] =
+            "A bare \"{0} / {1}\" placeholder template with no natural-language content -- the " +
+            "surrounding label already carries the translated meaning; there is nothing here to translate.",
     };
 
     [Fact]
