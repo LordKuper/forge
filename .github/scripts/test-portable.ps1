@@ -24,9 +24,11 @@ $leafProjects = @(
     # Forge.ProcessContainmentProbe is deliberately NOT here: unlike its two siblings above, it calls
     # the real WindowsJobObjectProcessContainment directly and targets net10.0-windows10.0.19041.0
     # only (no portable TFM, no POSIX branch), so it belongs with the Windows-only exclusion list
-    # above, not this neutral leaf-project list. Forge.Tests.csproj's own build-order-only reference
-    # to it (ReferenceOutputAssembly="false") still makes its restore/build get exercised on every OS
-    # via the "Forge.Tests multi-targets..." step below.
+    # above, not this neutral leaf-project list. Forge.Tests.csproj's reference to it is scoped to the
+    # Windows TFM group only, so the "Forge.Tests multi-targets..." step below never restores or
+    # builds it here -- the orphan-check test it supports
+    # (AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess) already no-ops on non-Windows, so there
+    # is nothing to exercise for this probe on this OS.
 )
 
 foreach ($project in $leafProjects) {

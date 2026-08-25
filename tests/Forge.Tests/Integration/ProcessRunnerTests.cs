@@ -482,9 +482,9 @@ public sealed class ProcessRunnerTests
         // ItemGroup) references the probe directly, so MSBuild copies it next to the test binaries
         // -- the common case, and the same path ProcessContainmentCrashTests.cs relies on. Both the
         // apphost .exe AND its managed .dll must be present: the build-order-only reference this
-        // project's own net10.0 TFM group takes (ReferenceOutputAssembly="false") still copies the
-        // apphost .exe as a content item even though it does not copy the managed .dll the .exe
-        // needs to actually run -- checking the .exe alone would find a non-functional stub there.
+        // group takes (ReferenceOutputAssembly="false") still copies the apphost .exe as a content
+        // item even though it does not copy the managed .dll the .exe needs to actually run --
+        // checking the .exe alone would find a non-functional stub there.
         string copiedExePath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.exe");
         string copiedDllPath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.dll");
         if (File.Exists(copiedExePath) && File.Exists(copiedDllPath))
@@ -492,10 +492,13 @@ public sealed class ProcessRunnerTests
             return copiedExePath;
         }
 
-        // This file also compiles under the portable net10.0 TFM, where Forge.Tests.csproj only
-        // takes a build-order-only reference to the probe (ReferenceOutputAssembly="false"), so the
-        // managed .dll is not copied here -- but the probe project was still built, at its own
-        // single (Windows-only) TargetFramework. Locate that complete output directly.
+        // This file also compiles under the portable net10.0 TFM, which does not reference the probe
+        // at all (it is Windows-TFM-only; see Forge.Tests.csproj). The caller above already returns
+        // early on non-Windows before reaching this method, so this fallback only matters when a
+        // net10.0-TFM binary happens to run on Windows (e.g. `dotnet test --framework net10.0` on a
+        // Windows dev machine) after a full solution build already built the probe as a sibling
+        // top-level Forge.slnx project, at its own single (Windows-only) TargetFramework. Locate that
+        // complete output directly.
         DirectoryInfo tfmDirectory = new(AppContext.BaseDirectory);
         string configurationName = tfmDirectory.Parent!.Name;
         DirectoryInfo testsDirectory = tfmDirectory.Parent!.Parent!.Parent!.Parent!;

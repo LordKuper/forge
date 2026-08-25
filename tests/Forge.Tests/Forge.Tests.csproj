@@ -30,20 +30,6 @@
     <ProjectReference Include="..\..\src\Forge.Host.TestHost\Forge.Host.TestHost.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
-    <!-- Build-order dependency only (not an assembly reference): ProcessRunnerTests launches this
-         probe as a genuinely separate process and locates its build output on disk, so the probe
-         must exist next to the tests whenever this project builds, including under the portable CI
-         job that runs `dotnet test tests/Forge.Tests/...` directly rather than via the full solution.
-         SkipGetTargetFrameworkProperties is required here (ReferenceOutputAssembly="false" alone is
-         not enough): the probe's own TargetFramework (net10.0-windows10.0.19041.0) is otherwise
-         validated against this net10.0 TFM group's own, and MSBuild refuses an incompatible-TFM
-         reference outright regardless of whether the output assembly is actually linked.
-         SetTargetFramework pins which of the probe's own TargetFrameworks to build under that skip
-         (it has only one): without it, MSBuild would otherwise still propagate this project's own
-         active "net10.0" down as a global property and fail to find a matching output there. -->
-    <ProjectReference Include="..\Forge.ProcessContainmentProbe\Forge.ProcessContainmentProbe.csproj"
-                       ReferenceOutputAssembly="false" SkipGetTargetFrameworkProperties="true"
-                       SetTargetFramework="TargetFramework=net10.0-windows10.0.19041.0" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />
@@ -56,6 +42,18 @@
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Providers.Codex.Windows\Forge.Providers.Codex.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Providers.Claude.Windows\Forge.Providers.Claude.Windows.csproj" />
+    <!-- Build-order dependency only (ProcessRunnerTests launches this probe as a genuinely separate
+         process and locates its build output on disk); scoped to this Windows TFM group because the
+         probe itself only targets net10.0-windows10.0.19041.0 (ADR 0007). A prior round referenced it
+         unconditionally (via SkipGetTargetFrameworkProperties/SetTargetFramework, to satisfy MSBuild's
+         cross-TFM ProjectReference validation) so its restore/build would be exercised on every OS
+         too, which pulled Forge.Runtime.Windows (a transitive dependency of the probe) into the
+         portable net10.0 TFM's own restore graph, where its Windows-only package version constraints
+         cannot be satisfied on Linux/macOS (NU1102). The orphan-check test this probe supports
+         (AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess) already no-ops on non-Windows via
+         OperatingSystem.IsWindows(), so the portable TFM never needs the probe at all; keeping this
+         reference Windows-TFM-only, matching the probe's own single TargetFramework exactly, needs
+         neither workaround. -->
     <ProjectReference Include="..\Forge.ProcessContainmentProbe\Forge.ProcessContainmentProbe.csproj" />
   </ItemGroup>
 </Project>
