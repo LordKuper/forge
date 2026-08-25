@@ -52,7 +52,7 @@ crash -- the OS unconditionally closes every handle that process held, which fir
 cooperation from the dying process is required at that moment; this is what makes it a real guarantee
 for exactly the scenario ADR 0017 left open, rather than a best-effort one.
 
-`WindowsRuntimeServices.AddForgeRuntimeWindowsProcessContainment` overrides the cross-platform
+`WindowsProcessContainmentServices.AddForgeRuntimeWindowsProcessContainment` overrides the cross-platform
 `NullProcessContainment` default with this adapter; `Forge.Cli.Windows`, `Forge.Desktop`, and
 `Forge.Host.Windows` all call it from their composition roots, so every real Forge process embedding
 `ProcessRunner` gets real containment, matching how `WindowsNotificationServices` already overrides
@@ -110,9 +110,9 @@ for a different failure mode.
 ## Consequences
 
 - On Windows, an abrupt Host crash or kill no longer orphans a spawned provider process (or its
-  descendants) -- closing plan 12.4's last crash-recovery sub-gap for `AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`
-  (`tests/Forge.Tests/Integration/ProcessRunnerTests.cs`) and the deeper inheritance proof in
-  `ProcessContainmentCrashTests` (`tests/Forge.Tests/WindowsRuntime/`).
+  descendants) -- closing plan 12.4's last crash-recovery sub-gap through
+  `ProcessContainmentCrashTests.AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`
+  (`tests/Forge.Tests/WindowsRuntime/`).
 - Linux/macOS remain uncontained against this specific failure mode; revisit only if a real POSIX
   provider adapter is ever added, since today the gap has no live impact.
 - A Host already confined to a restrictive job (nested sandboxes, some CI runners) degrades to no

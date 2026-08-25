@@ -11,11 +11,9 @@ public sealed class ProcessRunnerTests
     /// only once the process is known to have exited on every code path), independent of any real
     /// OS guarantee -- the actual guarantee is proven separately by a real process-kill against
     /// Forge.ProcessContainmentProbe (Windows only: see
-    /// tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs and
-    /// <see cref="AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess"/> below; no equivalent
-    /// containment exists on Linux/macOS, so there is nothing to exercise there either). A fake here
-    /// keeps this test deterministic and cross-platform, matching every other test in this
-    /// file.</summary>
+    /// tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs; no equivalent containment
+    /// exists on Linux/macOS, so there is nothing to exercise there either). A fake here keeps this
+    /// test deterministic and cross-platform, matching every other test in this file.</summary>
     [Fact]
     [Trait("Category", "Integration")]
     public async Task ContainmentIsAttachedImmediatelyAfterStartAndReleasedAfterNormalExit()
@@ -372,147 +370,6 @@ public sealed class ProcessRunnerTests
         {
             await DeleteDirectoryAsync(directory);
         }
-    }
-
-    /// <summary>Plan 12.4's abrupt-Host-process-kill orphan risk (Known gaps bucket 3): proves that
-    /// when the process embedding <see cref="ProcessRunner"/> (playing "the Host") is itself killed
-    /// abruptly -- <c>TerminateProcess</c>, giving <c>RunAsync</c>'s own cancellation-triggered
-    /// <c>process.Kill(true)</c> cleanup no chance to ever run, unlike
-    /// <see cref="CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild"/>'s cooperative
-    /// path above -- the provider process it spawned through the real, production
-    /// <c>WindowsJobObjectProcessContainment</c> path still does not survive as an orphan.
-    /// Windows-only: no equivalent containment exists on Linux/macOS (plan 12.4, "Known gaps").
-    /// <para>Round 2 review of PR #109 found the prior version of this fixture killed the wrong
-    /// process: in production, <see cref="ProcessRunner"/> runs *inside* the Host and the process it
-    /// spawns *is* the provider, so any containment <c>ProcessRunner.RunAsync</c> gains would enclose
-    /// the process it directly starts -- never some further descendant spawned outside Forge's own
-    /// code entirely. The prior fixture reused <see cref="TreeSpawningCommand"/>, killed its "child",
-    /// and checked its "grandchild" -- but that grandchild is spawned by the child's own shell
-    /// script, never through <see cref="ProcessRunner"/>, so no containment scheme could ever have
-    /// reclaimed it that way; the fixture could not have passed once containment landed.</para>
-    /// <para>This version launches <c>Forge.ProcessContainmentProbe</c>
-    /// (tests/Forge.ProcessContainmentProbe/Program.cs) in its "harness" mode as a genuinely separate
-    /// process that itself spawns its "child" through the real <see cref="ProcessRunner"/> +
-    /// <c>WindowsJobObjectProcessContainment</c> path -- the harness plays "the Host" (production's
-    /// role for whatever process embeds <see cref="ProcessRunner"/>), this xunit test process plays
-    /// "whatever supervises the real Host" (an OS service manager in production), and only the
-    /// harness is ever killed abruptly -- never the child directly, and never through
-    /// <see cref="ProcessRunner.RunAsync"/>'s own cooperative cancellation path. This is the same
-    /// probe and containment path <c>ProcessContainmentCrashTests</c>
-    /// (tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs) exercises more deeply
-    /// (including a grandchild, to prove job-membership inheritance); this test only needs the
-    /// harness-to-child hop to prove the specific "Host embeds ProcessRunner, dies abruptly"
-    /// scenario plan 12.4 describes.</para></summary>
-    [Fact]
-    [Trait("Category", "Integration")]
-    public async Task AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess()
-    {
-        if (!OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
-        string directory = CreateTestDirectory();
-        System.Diagnostics.Process? harness = null;
-        try
-        {
-            string probePath = ResolveProcessContainmentProbeExePath();
-            string providerPidPath = Path.Combine(directory, "child.pid");
-
-            harness = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(probePath)
-            {
-                ArgumentList = { "harness", directory, "30" },
-                UseShellExecute = false,
-                CreateNoWindow = true,
-            });
-            Assert.NotNull(harness);
-
-            await WaitForFileAsync(providerPidPath);
-            int providerPid = await ReadPidAsync(providerPidPath);
-            // Sanity guard mirroring the sibling tree-spawning tests' own
-            // `Assert.NotEqual(childPid, grandchildPid)`: the harness's own pid (from .NET's own
-            // Process.Id) and the provider's pid (read back from the file the provider itself wrote)
-            // come from two independently-derived sources -- if they ever coincided, the kill/assert
-            // pair below would pass having exercised nothing.
-            Assert.NotEqual(harness.Id, providerPid);
-            Assert.False(harness.HasExited, "The harness (stand-in Host) process should still be running.");
-            Assert.True(IsProcessAlive(providerPid), "The provider process should still be running.");
-            DateTime providerStartedAt = GetProcessStartTimeUtc(providerPid);
-
-            // The abrupt, uncooperative kill: only the harness dies, and never through the harness's
-            // own ProcessRunner.RunAsync cancellation path -- containment, not cooperative cleanup
-            // code, is what must reclaim the provider here.
-            harness.Kill();
-
-            await AssertProcessDiesAsync(providerPid, providerStartedAt);
-        }
-        finally
-        {
-            try
-            {
-                // The harness blocks forever (Timeout.InfiniteTimeSpan) until killed: if an earlier
-                // assertion above threw before the deliberate harness.Kill() ran, Dispose() alone
-                // would release only this test's own handle to it and leave the OS process itself
-                // running indefinitely as a leak. Kill it here too (idempotent: a no-op once already
-                // exited) before disposing.
-                if (harness is { HasExited: false })
-                {
-                    harness.Kill();
-                }
-
-                harness?.Dispose();
-                await DeleteDirectoryAsync(directory);
-            }
-            catch (Exception error)
-            {
-                // Cleanup is best-effort only: a failure here (e.g. a still-locked temp directory)
-                // must never replace whatever exception -- typically the real assertion failure --
-                // the try block above was already propagating out of this finally.
-                Console.Error.WriteLine($"[ProcessRunnerTests] Cleanup failed for '{directory}': {error}");
-            }
-        }
-    }
-
-    /// <summary>Locates the build output of <c>Forge.ProcessContainmentProbe</c>
-    /// (tests/Forge.ProcessContainmentProbe), a sibling helper-process project this file launches as
-    /// a genuinely separate process to stand in for "the Host".</summary>
-    private static string ResolveProcessContainmentProbeExePath()
-    {
-        // The Windows-TFM build of this test assembly (Forge.Tests.csproj's net10.0-windows
-        // ItemGroup) references the probe directly, so MSBuild copies it next to the test binaries
-        // -- the common case, and the same path ProcessContainmentCrashTests.cs relies on. Both the
-        // apphost .exe AND its managed .dll must be present: the build-order-only reference this
-        // group takes (ReferenceOutputAssembly="false") still copies the apphost .exe as a content
-        // item even though it does not copy the managed .dll the .exe needs to actually run --
-        // checking the .exe alone would find a non-functional stub there.
-        string copiedExePath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.exe");
-        string copiedDllPath = Path.Combine(AppContext.BaseDirectory, "Forge.ProcessContainmentProbe.dll");
-        if (File.Exists(copiedExePath) && File.Exists(copiedDllPath))
-        {
-            return copiedExePath;
-        }
-
-        // This file also compiles under the portable net10.0 TFM, which does not reference the probe
-        // at all (it is Windows-TFM-only; see Forge.Tests.csproj). The caller above already returns
-        // early on non-Windows before reaching this method, so this fallback only matters when a
-        // net10.0-TFM binary happens to run on Windows (e.g. `dotnet test --framework net10.0` on a
-        // Windows dev machine) after a full solution build already built the probe as a sibling
-        // top-level Forge.slnx project, at its own single (Windows-only) TargetFramework. Locate that
-        // complete output directly.
-        DirectoryInfo tfmDirectory = new(AppContext.BaseDirectory);
-        string configurationName = tfmDirectory.Parent!.Name;
-        DirectoryInfo testsDirectory = tfmDirectory.Parent!.Parent!.Parent!.Parent!;
-        string path = Path.Combine(
-            testsDirectory.FullName, "Forge.ProcessContainmentProbe", "bin", configurationName,
-            "net10.0-windows10.0.19041.0", "Forge.ProcessContainmentProbe.exe");
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException(
-                "Forge.ProcessContainmentProbe was not built at the expected path -- build the solution first.",
-                path);
-        }
-
-        return path;
     }
 
     private static string CreateTestDirectory()

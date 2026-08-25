@@ -24,7 +24,7 @@ public sealed class ProcessContainmentCrashTests
 {
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task AnAbruptKillOfTheSpawningProcessDoesNotOrphanItsContainedChild()
+    public async Task AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess()
     {
         if (!OperatingSystem.IsWindows())
         {

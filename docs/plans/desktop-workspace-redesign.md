@@ -600,7 +600,7 @@ prior behavior or an equivalent mutation.
       and confirms both its directly contained child and that child's own grandchild do not survive
       as orphans. A fail-open failure to attach containment (e.g. a Host already confined to a
       restrictive job) is now logged once rather than silent. The abrupt-Host-process-kill orphan test
-      written in Slice 7 (`tests/Forge.Tests/Integration/ProcessRunnerTests.cs`,
+      written in Slice 7 (`tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs`,
       `AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) is un-skipped and passing now that this
       containment exists.
       Linux/macOS: investigated and found no viable equivalent, so no POSIX containment adapter
