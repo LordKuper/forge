@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <!-- Deliberately NOT marked ForgeOsAdapter, and references no OS adapter: this project is the
+         cross-platform stand-in .github/scripts/test-portable.ps1 builds and tests on ubuntu-24.04
+         and macos-14, so it stays fully covered by every ArchitectureTests rule like any other
+         neutral project (no exemption needed; it runs everywhere with the cross-platform
+         NullProcessContainment default). The real Windows containment guarantee, plan section 12.4,
+         is exercised only against Forge.Host.Windows/Forge.Cli.Windows/Forge.Desktop, which install
+         it. -->
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Forge.Host.Runtime\Forge.Host.Runtime.csproj" />

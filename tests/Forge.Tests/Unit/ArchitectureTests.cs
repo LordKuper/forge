@@ -77,7 +77,8 @@ public sealed class ArchitectureTests
             }
 
             Assert.True(
-                project.Name.Contains("Windows", StringComparison.Ordinal),
+                RecognizedOsAdapterMonikers.Any(
+                    moniker => project.Name.Contains(moniker, StringComparison.Ordinal)),
                 $"{project.Name} is marked ForgeOsAdapter but its name does not identify an operating system.");
         }
     }
@@ -199,6 +200,16 @@ public sealed class ArchitectureTests
 
         Assert.Equal(expected, actual);
     }
+
+    // Every OS adapter in this codebase today is Windows-only (ADR 0008; see also ADR 0056 for
+    // IProcessContainment, whose POSIX investigation ended in removal rather than a real adapter).
+    // A prior revision speculatively added "Linux"/"macOS"/"Posix" monikers for that never-built
+    // POSIX adapter; they had zero callers and "macOS" would not even match this codebase's own
+    // PascalCase project-naming convention (it would need "MacOs" or "Macos" to satisfy
+    // StringComparison.Ordinal against a real future project name). Removed rather than fixed: a
+    // genuinely new OS family should pick its own moniker and extend this list then, when a real
+    // adapter's actual naming is known, instead of this test guessing it in advance.
+    private static readonly string[] RecognizedOsAdapterMonikers = ["Windows"];
 
     // The source tree does not change within a test run, and every [Fact] above needs the full project list, so
     // it is parsed once and shared instead of re-walking/re-parsing src/*.csproj per assertion.

@@ -1,52 +1,117 @@
+using System.Globalization;
 using Forge.Application;
 using Forge.Infrastructure;
+using Forge.Runtime.Windows;
 
-// Stands in for the real Host process for
-// `ProcessRunnerTests.AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`
-// (tests/Forge.Tests/Integration/ProcessRunnerTests.cs): uses the exact production
-// Forge.Infrastructure.ProcessRunner -- the same class SprintScheduler's own provider invocation
-// path uses -- to spawn a long-lived "provider" stand-in child and then blocks on it. A caller kills
-// *this* process abruptly (never ProcessRunner's own cancellation path, and never the spawned child
-// directly) to observe whether ProcessRunner's containment (once
-// `feature/process-group-containment` lands) still reclaims the child once this process -- the
-// "Host" stand-in -- dies without warning. Routing through the real ProcessRunner (rather than a
-// hand-rolled `Process.Start`) matters: once containment lands inside ProcessRunner itself, only a
-// child it actually spawned is a candidate for that containment to reclaim.
+// A minimal harness proving Windows Job Object containment survives an abrupt kill of the SPAWNING
+// process, not merely a graceful one -- something no in-process xunit test can observe about
+// itself, since the xunit test host is the very process that would need to die. See
+// tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs, which spawns this probe in
+// "harness" mode, waits for it to report a live grandchild, then kills the harness itself
+// (Process.Kill(), no tree) to simulate an abrupt Forge Host crash.
 //
-// Usage: Forge.ProcessContainmentProbe <providerPidPath> <readyPath> <sleepSeconds>
-// Writes the provider's own pid to <providerPidPath> and signals <readyPath> once the provider has
-// started, then blocks until the provider exits (normally after <sleepSeconds>, or -- once this
-// process is killed and containment reclaims it -- early).
-if (args.Length != 3 || !int.TryParse(args[2], out int sleepSeconds))
+// Usage:
+//   Forge.ProcessContainmentProbe harness <directory> <sleepSeconds>
+//     Spawns itself in "child" mode through the real, production ProcessRunner +
+//     WindowsJobObjectProcessContainment path -- the exact adapter
+//     Forge.Host.Windows/Forge.Cli.Windows/Forge.Desktop install at startup -- then blocks forever
+//     so an external caller can kill this harness process itself.
+//   Forge.ProcessContainmentProbe child <directory> <sleepSeconds>
+//     Writes its own process id to <directory>/child.pid, waits until the harness confirms Attach has
+//     returned, then spawns itself again in "grandchild" mode through a PLAIN, uncontained
+//     ProcessRunner. The grandchild's only route into any job is therefore the OS's automatic
+//     job-membership inheritance from this process -- not a second containment layer.
+//   Forge.ProcessContainmentProbe grandchild <directory> <sleepSeconds>
+//     Writes its own process id to <directory>/grandchild.pid, then sleeps.
+if (args.Length != 3 ||
+    args[0] is not ("harness" or "child" or "grandchild") ||
+    !int.TryParse(args[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int sleepSeconds))
 {
-    Console.Error.WriteLine("Usage: Forge.ProcessContainmentProbe <providerPidPath> <readyPath> <sleepSeconds>");
+    Console.Error.WriteLine(
+        "Usage: Forge.ProcessContainmentProbe <harness|child|grandchild> <directory> <sleepSeconds>");
     return 64;
 }
 
-string providerPidPath = args[0];
-string readyPath = args[1];
+string mode = args[0];
+string directory = args[1];
 
-string fileName;
-string[] arguments;
-if (OperatingSystem.IsWindows())
+if (mode == "grandchild")
 {
-    fileName = "powershell.exe";
-    arguments =
-    [
-        "-NoProfile",
-        "-Command",
-        $"[IO.File]::WriteAllText('{providerPidPath}', $PID); " +
-        $"[IO.File]::WriteAllText('{readyPath}','ready'); " +
-        $"Start-Sleep -Seconds {sleepSeconds}",
-    ];
-}
-else
-{
-    fileName = "/bin/sh";
-    arguments = ["-c", $"echo $$ > '{providerPidPath}'; touch '{readyPath}'; sleep {sleepSeconds}"];
+    await WriteFileAtomicallyAsync(
+        Path.Combine(directory, "grandchild.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+    await Task.Delay(TimeSpan.FromSeconds(sleepSeconds));
+    return 0;
 }
 
-ProcessRunner runner = new();
-await runner.RunAsync(
-    new ProcessRequest(fileName, arguments, Path.GetTempPath()), null, CancellationToken.None).ConfigureAwait(false);
+string? selfPath = Environment.ProcessPath;
+if (selfPath is null)
+{
+    Console.Error.WriteLine("Could not resolve this process's own executable path.");
+    return 1;
+}
+
+if (mode == "child")
+{
+    await WriteFileAtomicallyAsync(
+        Path.Combine(directory, "child.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+
+    string attachedPath = Path.Combine(directory, "attached");
+    for (int attempt = 0; attempt < 200 && !File.Exists(attachedPath); attempt++)
+    {
+        await Task.Delay(50);
+    }
+
+    if (!File.Exists(attachedPath))
+    {
+        Console.Error.WriteLine("The harness did not confirm process-containment attachment.");
+        return 1;
+    }
+
+    // The marker is written only after the harness's RunAsync call has returned control, whose
+    // synchronous prefix includes Attach. The grandchild therefore starts outside the accepted
+    // Attach-after-Start race window, through a plain ProcessRunner with no containment of its own.
+    ProcessRunner grandchildRunner = new();
+    Task<ProcessResult> grandchildTask = grandchildRunner.RunAsync(
+        new ProcessRequest(
+            selfPath, ["grandchild", directory, sleepSeconds.ToString(CultureInfo.InvariantCulture)], directory),
+        null,
+        CancellationToken.None);
+    _ = grandchildTask.ContinueWith(
+        static faulted => Console.Error.WriteLine($"Grandchild spawn failed: {faulted.Exception}"),
+        CancellationToken.None,
+        TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+        TaskScheduler.Default);
+
+    await Task.Delay(TimeSpan.FromSeconds(sleepSeconds));
+    return 0;
+}
+
+// The exact production adapter -- proving crash survival against anything less would not prove
+// anything about the real product.
+ProcessRunner runner = new(new WindowsJobObjectProcessContainment());
+Task<ProcessResult> runTask = runner.RunAsync(
+    new ProcessRequest(
+        selfPath, ["child", directory, sleepSeconds.ToString(CultureInfo.InvariantCulture)], directory),
+    null,
+    CancellationToken.None);
+await WriteFileAtomicallyAsync(Path.Combine(directory, "attached"), "attached");
+// Observed, never awaited to completion here (the child sleeps far longer than this harness's own
+// startup): a faulted spawn must be visible on stderr rather than silently leaving no child.pid for
+// the test to wait on forever.
+_ = runTask.ContinueWith(
+    static faulted => Console.Error.WriteLine($"Child spawn failed: {faulted.Exception}"),
+    CancellationToken.None,
+    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+    TaskScheduler.Default);
+
+// Blocks forever: the test kills this process itself (not gracefully) to simulate an abrupt Host
+// crash, then checks whether the child (and grandchild) spawned above survived as an orphan.
+await Task.Delay(Timeout.InfiniteTimeSpan);
 return 0;
+
+static async Task WriteFileAtomicallyAsync(string path, string contents)
+{
+    string temporaryPath = path + ".tmp";
+    await File.WriteAllTextAsync(temporaryPath, contents);
+    File.Move(temporaryPath, path);
+}

@@ -18,6 +18,10 @@
     <!-- Provider adapters are Windows-only (ADR 0008); their tests exercise the real Codex/Claude
          adapters and only compile in the Windows TFM group below. -->
     <Compile Remove="ProviderAdapters/**/*.cs" />
+    <!-- Depends on Forge.ProcessContainmentProbe, a Windows-TFM-only exe proving the real
+         WindowsJobObjectProcessContainment guarantee against an abrupt process kill; only compiles
+         in the Windows TFM group below. -->
+    <Compile Remove="WindowsRuntime/**/*.cs" />
     <ProjectReference Include="..\..\src\Forge.Cli\Forge.Cli.csproj" />
     <ProjectReference Include="..\..\src\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />
     <ProjectReference Include="..\..\src\Forge.Host.Client\Forge.Host.Client.csproj" />
@@ -26,16 +30,11 @@
     <ProjectReference Include="..\..\src\Forge.Host.TestHost\Forge.Host.TestHost.csproj" />
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
     <ProjectReference Include="..\..\src\Forge.Updater\Forge.Updater.csproj" />
-    <!-- Build-order dependency only (not an assembly reference): ProcessRunnerTests launches this
-         probe as a genuinely separate process and locates its build output on disk, so the probe
-         must exist next to the tests whenever this project builds, including under the portable CI
-         job that runs `dotnet test tests/Forge.Tests/...` directly rather than via the full solution. -->
-    <ProjectReference Include="..\Forge.ProcessContainmentProbe\Forge.ProcessContainmentProbe.csproj"
-                       ReferenceOutputAssembly="false" />
   </ItemGroup>
   <ItemGroup Condition="'$(TargetFramework)' == 'net10.0-windows10.0.19041.0'">
     <Compile Include="Installer/**/*.cs" />
     <Compile Include="ProviderAdapters/**/*.cs" />
+    <Compile Include="WindowsRuntime/**/*.cs" />
     <!-- The real Windows durability adapter, installed by Installer/WindowsDurabilityAssemblyInitializer.cs,
          supersedes the portable fallback below; excluded here so the two module initializers never race. -->
     <Compile Remove="Support/PortableDurabilityFallback.cs" />
@@ -43,5 +42,9 @@
     <ProjectReference Include="..\..\src\Forge.Updater.Windows\Forge.Updater.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Providers.Codex.Windows\Forge.Providers.Codex.Windows.csproj" />
     <ProjectReference Include="..\..\src\Forge.Providers.Claude.Windows\Forge.Providers.Claude.Windows.csproj" />
+    <!-- WindowsRuntime/ProcessContainmentCrashTests launches this Windows-only probe as a separate
+         process. Keep the dependency in the matching Windows TFM so the portable test assembly has
+         neither OS-specific code nor a hidden build-order dependency (ADR 0007). -->
+    <ProjectReference Include="..\Forge.ProcessContainmentProbe\Forge.ProcessContainmentProbe.csproj" />
   </ItemGroup>
 </Project>

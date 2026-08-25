@@ -3,8 +3,8 @@ param()
 
 # Proves the ADR 0007 neutral projects build and test on this OS via the portable net10.0 TFM. Windows-only
 # projects (Forge.Cli.Windows, Forge.Desktop, Forge.Host.Windows, Forge.Providers.Codex.Windows,
-# Forge.Providers.Claude.Windows, Forge.Runtime.Windows, Forge.Updater.Windows) are intentionally excluded; they
-# build only on Windows.
+# Forge.Providers.Claude.Windows, Forge.Runtime.Windows, Forge.Updater.Windows, Forge.ProcessContainmentProbe)
+# are intentionally excluded; they build only on Windows.
 
 $ErrorActionPreference = 'Stop'
 
@@ -20,11 +20,11 @@ $leafProjects = @(
     # (test-same-user-isolation.ps1, requiring OS user creation), but the project itself must still
     # build on every OS per this script's own rule.
     'tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj',
-    'tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj',
-    # Neutral (references only Forge.Runtime); its own containment test is currently skipped pending
-    # feature/process-group-containment, but the project itself (including its POSIX branch) must
-    # still build on every OS per this script's own rule.
-    'tests/Forge.ProcessContainmentProbe/Forge.ProcessContainmentProbe.csproj'
+    'tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj'
+    # Forge.ProcessContainmentProbe is deliberately NOT here: unlike its two siblings above, it calls
+    # the real WindowsJobObjectProcessContainment directly and has no portable TFM. The full
+    # Forge.Tests restore below still evaluates and restores its Windows TFM; only the portable build
+    # and test exclude its code.
 )
 
 foreach ($project in $leafProjects) {

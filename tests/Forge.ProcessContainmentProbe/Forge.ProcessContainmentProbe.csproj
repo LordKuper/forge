@@ -1,8 +1,16 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <!-- tests/Forge.Tests references this project from its Windows TFM group; restoring that
+         multi-targeted project on Linux/macOS (see .github/scripts/test-portable.ps1) evaluates
+         this project too, which the SDK refuses without this flag (NETSDK1100). Matches
+         Forge.Runtime.Windows/Forge.Updater.Windows/Forge.Providers.Codex.Windows/
+         Forge.Providers.Claude.Windows, the other projects reachable from that same ItemGroup. -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\..\src\Forge.Runtime\Forge.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\Forge.Runtime.Windows\Forge.Runtime.Windows.csproj" />
   </ItemGroup>
 </Project>

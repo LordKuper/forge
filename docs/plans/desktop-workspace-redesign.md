@@ -593,12 +593,31 @@ prior behavior or an equivalent mutation.
 - [ ] A Host crash at every durable boundary recovers without resurrecting the stopped attempt or
       leaking its process/worktree. *(Partial: strong crash-simulation coverage exists for most
       boundaries, but no test covers a crash between the sprint-paused append and the final
-      convergence marker. A test for the abrupt-Host-process-kill orphan-process risk is now written
-      and ready (`tests/Forge.Tests/Integration/ProcessRunnerTests.cs`,
-      `AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) but stays `[Fact(Skip = ...)]`: this
-      codebase still has no process-group/job-object containment as of this update (confirmed by
-      searching for job-object/process-group primitives across the tree), so that risk stays real but
-      unverified until `feature/process-group-containment` lands and the test is un-skipped.)*
+      convergence marker. Process containment against an abrupt Host kill is now real on Windows —
+      `IProcessRunner` assigns every spawned process to a Windows Job Object configured with
+      `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`WindowsJobObjectProcessContainment`), and a
+      crash-simulation test (`ProcessContainmentCrashTests`) forcibly kills a real spawning process
+      and confirms both its directly contained child and that child's own grandchild do not survive
+      as orphans. A fail-open failure to attach containment (e.g. a Host already confined to a
+      restrictive job) is now logged once rather than silent. The abrupt-Host-process-kill orphan test
+      written in Slice 7 (`tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs`,
+      `AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) is un-skipped and passing now that this
+      containment exists.
+      Linux/macOS: investigated and found no viable equivalent, so no POSIX containment adapter
+      exists here. A POSIX process group (`setpgid`) was prototyped and removed: `setpgid` can only
+      change a child's group before it execs, but .NET's Unix process-launch implementation
+      synchronously waits, inside the native `Process.Start` call itself, for the spawned child to
+      reach `execve` before returning control to managed code — so by the time any caller-side code
+      could run, the child has, by construction, already exec'd, and POSIX specifies `setpgid` fails
+      with `EACCES` in exactly that case (confirmed against .NET's own runtime source and the POSIX
+      spec). Reaching the child before `execve` would require bypassing `Process.Start` with a bespoke
+      fork/exec/`posix_spawn` wrapper, out of scope for this change — and even that would not close
+      the gap: a POSIX process group carries no OS-level kill-on-parent-death semantic on its own,
+      only a separate reaper process explicitly calling `kill(-pgid)` would, and this codebase has no
+      such reaper. So Linux/macOS remain a genuine, honestly-documented behavior gap: an abrupt Host
+      crash there leaves a live provider child (and its descendants) running as an orphan. In practice
+      this gap is Windows-only in impact today: provider adapters (Codex, Claude) are Windows-only in
+      this codebase, so Linux/macOS never run a real long-lived provider child at all.)*
 - [x] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
       explanation, confirmation, and result.
 
@@ -715,7 +734,8 @@ prior behavior or an equivalent mutation.
 The items left unchecked above are genuine, honestly-assessed gaps found during Slice 7's
 release-hardening sweep (PR #100) rather than silently-passed boxes. None block the redesign's core
 correctness guarantees (workflow state machines, stop/rewind crash-recovery sagas, and redaction all
-hold under adversarial review). They originally fell into three groups; two are now fully closed:
+hold under adversarial review). They originally fell into three groups, now all closed, plus one
+partial gap found afterward:
 
 1. **Missing persistence/navigation** — closed in v0.76.0: sidebar expand/collapse state, timeline
    scroll position, and completed/cancelled sprint navigability are all built.
@@ -723,15 +743,14 @@ hold under adversarial review). They originally fell into three groups; two are 
    timeline item content localization (v0.75.0), and the global status row's authentication,
    model-availability, and Host-connectivity indicators (v0.74.0) are all now real — see 12.3/12.6
    above.
-3. **Missing test coverage** (not missing behavior) — three of the four sub-gaps here are now closed:
-   the advance-path crash saga and the active-operation-blocks-advance prerequisite each have real,
-   mutation-tested regression coverage (12.5 above), and Desktop-vs-CLI result parity for
+3. **Missing test coverage** (not missing behavior) — all four sub-gaps in this bucket are now
+   closed: the advance-path crash saga and the active-operation-blocks-advance prerequisite each have
+   real, mutation-tested regression coverage (12.5 above), Desktop-vs-CLI result parity for
    stop/assess-stage/move-stage is proven (12.6 above; assess-stage via semantic-fact parity, since
-   its two renderers deliberately differ in shape by design). The remaining sub-gap — a
-   Host-process-kill orphan check — has its test written and ready
-   (`AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) but stays skipped: this codebase still
-   has no process-group/job-object containment for it to verify, pending
-   `feature/process-group-containment`.
+   its two renderers deliberately differ in shape by design), and the Host-process-kill orphan check
+   (`AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) is un-skipped and passing now that
+   Windows Job Object containment exists (see 12.4 above). Linux/macOS still have no equivalent
+   containment — a genuine, honestly-documented behavior gap, not merely a test gap.
 4. **Partial focus preservation** — the sidebar and the sprint workspace's sticky header/action panel
    restore keyboard focus after their own re-renders (`FocusKeyTracker`,
    `TrackSidebarFocus`/`RestoreSidebarFocus`, `TrackContentFocus`/`RestoreContentFocus`), but a full

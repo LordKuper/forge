@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Forge.Application;
 using Forge.Infrastructure;
 
@@ -6,6 +7,61 @@ namespace Forge.IntegrationTests;
 [Collection("External process tests")]
 public sealed class ProcessRunnerTests
 {
+    /// <summary>Proves the plan section 12.4 wiring itself (attach immediately after start, release
+    /// only once the process is known to have exited on every code path), independent of any real
+    /// OS guarantee -- the actual guarantee is proven separately by a real process-kill against
+    /// Forge.ProcessContainmentProbe (Windows only: see
+    /// tests/Forge.Tests/WindowsRuntime/ProcessContainmentCrashTests.cs; no equivalent containment
+    /// exists on Linux/macOS, so there is nothing to exercise there either). A fake here keeps this
+    /// test deterministic and cross-platform, matching every other test in this file.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ContainmentIsAttachedImmediatelyAfterStartAndReleasedAfterNormalExit()
+    {
+        RecordingContainment containment = new();
+        ProcessRunner runner = new(containment);
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "exit 0" })
+            : ("/bin/sh", new[] { "-c", "exit 0" });
+
+        ProcessResult result = await runner.RunAsync(
+            new(fileName, arguments, Path.GetTempPath()), null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, containment.AttachCount);
+        Assert.True(containment.Disposed);
+    }
+
+    /// <summary>The cancellation-path counterpart: containment must still be released even when the
+    /// process is torn down via <c>Process.Kill(true)</c> rather than exiting on its own -- the
+    /// cancellation branch in <c>ProcessRunner.RunAsync</c> is a second, independent code path back
+    /// to the method's single exit, and only manual inspection (not the normal-exit test above)
+    /// would have caught a release that only ran on the happy path.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ContainmentIsReleasedAfterCancellationKillsTheProcess()
+    {
+        RecordingContainment containment = new();
+        ProcessRunner runner = new(containment);
+        using CancellationTokenSource cancellation = new();
+        (string fileName, string[] arguments) = OperatingSystem.IsWindows()
+            ? ("powershell.exe", new[] { "-NoProfile", "-Command", "Start-Sleep -Seconds 30" })
+            : ("/bin/sh", new[] { "-c", "sleep 30" });
+
+        Task<ProcessResult> run = runner.RunAsync(
+            new(fileName, arguments, Path.GetTempPath()), null, cancellation.Token);
+        for (int attempt = 0; attempt < 100 && containment.AttachCount == 0; attempt++)
+        {
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
+
+        Assert.Equal(1, containment.AttachCount);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => run);
+
+        Assert.True(containment.Disposed);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task CancellationTerminatesProcessTree()
@@ -316,106 +372,6 @@ public sealed class ProcessRunnerTests
         }
     }
 
-    /// <summary>Plan ~588-593's remaining unverified risk (Known gaps bucket 3, sub-item 3): this
-    /// codebase has no process-group/job-object containment, so an abrupt Host process kill --
-    /// <c>TerminateProcess</c>/<c>SIGKILL</c>, giving <see cref="ProcessRunner.RunAsync"/>'s own
-    /// cancellation-triggered <c>process.Kill(true)</c> cleanup no chance to ever run, unlike
-    /// <see cref="CancellationTerminatesTheEntireProcessTreeIncludingAGrandchild"/>'s cooperative
-    /// path above -- could leave a spawned provider process orphaned. That risk is real but
-    /// unverified rather than known-fixed. <c>feature/process-group-containment</c> is expected to
-    /// add OS-level containment (a Windows Job Object / POSIX process group) surviving exactly this
-    /// scenario; as of this test's own branch point, no such containment code exists anywhere on
-    /// `main` (confirmed by searching for job-object/process-group primitives across the codebase).
-    /// Kept skipped as a ready-to-activate placeholder -- once containment lands, remove the
-    /// <c>Skip</c> argument.
-    /// <para>Round 2 review of PR #109 found the prior version of this fixture killed the wrong
-    /// process: in production, <see cref="ProcessRunner"/> runs *inside* the Host and the process it
-    /// spawns *is* the provider, so any containment <c>ProcessRunner.RunAsync</c> gains would enclose
-    /// the process it directly starts -- never some further descendant spawned outside Forge's own
-    /// code entirely. The prior fixture reused <see cref="TreeSpawningCommand"/>, killed its "child",
-    /// and checked its "grandchild" -- but that grandchild is spawned by the child's own shell
-    /// script, never through <see cref="ProcessRunner"/>, so no containment scheme could ever have
-    /// reclaimed it that way; the fixture could not have passed once containment landed.</para>
-    /// <para>This version launches <c>Forge.ProcessContainmentProbe</c>
-    /// (tests/Forge.ProcessContainmentProbe/Program.cs) as a genuinely separate helper process that
-    /// itself calls the real <see cref="ProcessRunner"/> to spawn a "provider" stand-in and blocks on
-    /// it -- the helper plays "the Host" (production's role for whatever process embeds
-    /// <see cref="ProcessRunner"/>), this xunit test process plays "whatever supervises the real
-    /// Host" (an OS service manager in production), and only the helper is ever killed abruptly --
-    /// never the provider directly, and never through <see cref="ProcessRunner.RunAsync"/>'s own
-    /// cooperative cancellation path. Once containment lands inside <c>ProcessRunner</c>, killing the
-    /// helper this way must still reclaim the provider it spawned.</para></summary>
-    [Fact(Skip =
-        "Pending feature/process-group-containment (plan ~588-593): no job-object/process-group " +
-        "containment exists on main yet, so an abrupt Host kill cannot yet be proven to avoid " +
-        "orphaning a provider process. Un-skip once containment lands.")]
-    [Trait("Category", "Integration")]
-    public async Task AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess()
-    {
-        string directory = CreateTestDirectory();
-        try
-        {
-            string providerPidPath = Path.Combine(directory, "provider.pid");
-            string readyPath = Path.Combine(directory, "ready");
-            string probePath = ResolveProcessContainmentProbeDllPath();
-
-            using System.Diagnostics.Process helper = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "dotnet",
-                ArgumentList = { probePath, providerPidPath, readyPath, "30" },
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            })!;
-
-            await WaitForFileAsync(readyPath);
-            int providerPid = await ReadPidAsync(providerPidPath);
-            // Sanity guard mirroring the sibling tree-spawning tests' own
-            // `Assert.NotEqual(childPid, grandchildPid)`: the helper's own pid (from .NET's own
-            // Process.Id) and the provider's pid (read back from the file the provider itself wrote)
-            // come from two independently-derived sources -- if they ever coincided, the kill/assert
-            // pair below would pass having exercised nothing.
-            Assert.NotEqual(helper.Id, providerPid);
-            Assert.False(helper.HasExited, "The helper (stand-in Host) process should still be running.");
-            Assert.True(IsProcessAlive(providerPid), "The provider process should still be running.");
-            DateTime providerStartedAt = GetProcessStartTimeUtc(providerPid);
-
-            // The abrupt, uncooperative kill: only the helper dies, and never through the helper's
-            // own ProcessRunner.RunAsync cancellation path -- containment (once it exists), not
-            // cooperative cleanup code, is what must reclaim the provider here.
-            helper.Kill(entireProcessTree: false);
-
-            await AssertProcessDiesAsync(providerPid, providerStartedAt);
-        }
-        finally
-        {
-            await DeleteDirectoryAsync(directory);
-        }
-    }
-
-    /// <summary>Locates the build output of <c>Forge.ProcessContainmentProbe</c>
-    /// (tests/Forge.ProcessContainmentProbe), a sibling helper-process project this file launches as
-    /// a genuinely separate process to stand in for "the Host" -- reusing whatever configuration this
-    /// test assembly itself was built with, so the probe is found regardless of Debug/Release.</summary>
-    private static string ResolveProcessContainmentProbeDllPath()
-    {
-        DirectoryInfo tfmDirectory = new(AppContext.BaseDirectory);
-        string configurationName = tfmDirectory.Parent!.Name;
-        DirectoryInfo testsDirectory = tfmDirectory.Parent!.Parent!.Parent!.Parent!;
-        string path = Path.Combine(
-            testsDirectory.FullName, "Forge.ProcessContainmentProbe", "bin", configurationName, "net10.0",
-            "Forge.ProcessContainmentProbe.dll");
-        if (!File.Exists(path))
-        {
-            throw new FileNotFoundException(
-                "Forge.ProcessContainmentProbe was not built at the expected path -- build the solution first.",
-                path);
-        }
-
-        return path;
-    }
-
     private static string CreateTestDirectory()
     {
         string directory = Path.Combine(Path.GetTempPath(), $"forge-process-tree-tests-{Guid.NewGuid():N}");
@@ -492,8 +448,27 @@ public sealed class ProcessRunnerTests
 
     private static async Task<int> ReadPidAsync(string path)
     {
-        string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-        return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+                if (int.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture, out int processId))
+                {
+                    return processId;
+                }
+            }
+            catch (IOException) when (attempt < 19)
+            {
+            }
+
+            if (attempt >= 19)
+            {
+                Assert.Fail($"'{path}' did not contain a complete process id.");
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
+        }
     }
 
     private static bool IsProcessAlive(int processId)
@@ -548,6 +523,25 @@ public sealed class ProcessRunnerTests
         }
 
         Assert.False(StillAlive(), $"Process {processId} should no longer be running.");
+    }
+
+    private sealed class RecordingContainment : IProcessContainment
+    {
+        public int AttachCount { get; private set; }
+
+        public bool Disposed { get; private set; }
+
+        public IDisposable Attach(Process process)
+        {
+            ArgumentNullException.ThrowIfNull(process);
+            AttachCount++;
+            return new Handle(this);
+        }
+
+        private sealed class Handle(RecordingContainment owner) : IDisposable
+        {
+            public void Dispose() => owner.Disposed = true;
+        }
     }
 
     private sealed class RecordingSink : IProcessOutputSink
