@@ -248,6 +248,7 @@
   <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Прогресс</value></data>
   <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Последняя активность</value></data>
   <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Активный провайдер/модель пока недоступны.</value></data>
+  <data name="SprintStatusHeaderProviderModelText" xml:space="preserve"><value>{0} / {1}</value></data>
   <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Возобновление не раньше</value></data>
   <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Подробности</value></data>
   <data name="TimelineTitle" xml:space="preserve"><value>Хронология</value></data>

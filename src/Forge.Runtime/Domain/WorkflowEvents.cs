@@ -98,6 +98,18 @@ public sealed record WorkflowEvent(
     /// today records what commit an attempt's worktree would be created at.</summary>
     public const string BaseCommitArgument = "base_commit";
 
+    /// <summary>Carried on an attempt's creation event when a model-bearing role
+    /// (<see cref="Forge.Domain.ExecutionPhase"/>) actually routed to a provider -- the frozen
+    /// <see cref="ExecutionProfile.Provider"/> the `RouteDecision` was keyed on
+    /// (<see cref="Forge.Application.SprintScheduler.StartAttemptAsync"/>). Absent for a
+    /// non-model-bearing role (no routing decision exists) and for any attempt recorded before
+    /// this field existed.</summary>
+    public const string ProviderArgument = "provider";
+
+    /// <summary>Carried alongside <see cref="ProviderArgument"/> -- the frozen
+    /// <see cref="ExecutionProfile.Model"/> half of the same `RouteDecision` key.</summary>
+    public const string ModelArgument = "model";
+
     /// <summary>Plan section 7.3's durable stop intent: recorded once for the exact attempt a
     /// `StopCurrentOperation` request targets, before the stop coordinator relies on the in-memory
     /// <c>ActiveOperationRegistry</c> at all. Appended on the attempt's own aggregate, alongside
@@ -492,6 +504,16 @@ public static class WorkflowFold
                         out string? supersedesValue) && supersedesValue is not null
                         ? new AttemptId(Guid.Parse(supersedesValue))
                         : previousAttempt?.SupersedesAttemptId;
+                    string? provider = current.Arguments.TryGetValue(
+                        WorkflowEvent.ProviderArgument,
+                        out string? providerValue) && providerValue is not null
+                        ? providerValue
+                        : previousAttempt?.Provider;
+                    string? model = current.Arguments.TryGetValue(
+                        WorkflowEvent.ModelArgument,
+                        out string? modelValue) && modelValue is not null
+                        ? modelValue
+                        : previousAttempt?.Model;
                     attempts[current.Aggregate.Id] = new(
                         new(Guid.Parse(current.Aggregate.Id)),
                         WorkflowStateNames.Parse<AttemptState>(toState),
@@ -504,7 +526,9 @@ public static class WorkflowFold
                         baseCommit,
                         supersedesAttemptId,
                         previousAttempt?.StopRequestedAt,
-                        previousAttempt?.StopConvergedAt);
+                        previousAttempt?.StopConvergedAt,
+                        provider,
+                        model);
                     break;
                 default:
                     throw new InvalidDataException(

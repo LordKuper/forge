@@ -2,7 +2,7 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.73.0
+## v0.76.0
 
 ### Added
 
@@ -15,6 +15,25 @@ User-facing Forge changes are listed by release, newest first.
 - A project's completed and cancelled sprints, listed under its sidebar history entry, are now
   clickable and open the same read-only sprint workspace an active sprint's "open" button does —
   previously they were plain, non-interactive text.
+
+## v0.73.0
+
+### Added
+
+- The sprint workspace's sticky status header now shows which provider and model are actually
+  running the sprint's current attempt (e.g. "claude_code / claude-sonnet-4-5") instead of an
+  always-on "not yet available" placeholder. This also covers an attempt started as a
+  human-requested replacement (supersession). The placeholder still appears when nothing is
+  currently running, a stop has been requested but not yet converged, the running step never
+  involves a model (intake, confirmation, finalization), or the attempt predates this change.
+
+## v0.72.1
+
+### Changed
+
+- Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
+  crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
+  CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
 
 ## v0.72.0
 
