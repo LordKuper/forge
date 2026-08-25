@@ -3,6 +3,8 @@ param()
 
 $ErrorActionPreference = 'Stop'
 
+./.github/scripts/assert-lock-files-current.ps1
+
 dotnet restore Forge.slnx --locked-mode
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

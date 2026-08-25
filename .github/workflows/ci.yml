@@ -110,6 +110,10 @@ jobs:
         shell: pwsh
         run: ./.github/scripts/assert-toolchain.ps1
 
+      - name: Test build guards
+        shell: pwsh
+        run: ./.github/tests/build-guards.Tests.ps1
+
       - name: Test
         shell: pwsh
         run: ./.github/tests/publish-release.Tests.ps1
