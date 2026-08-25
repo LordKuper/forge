@@ -638,8 +638,8 @@ prior behavior or an equivalent mutation.
       reachability, focus stability after a refresh, or text scaling — these concepts don't appear
       anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
       at all today, not because of an enforced rule.)*
-- [x] English and Russian surfaces contain no missing or machine-only user-facing strings. Key-set
-      parity (365/365) and value parity are both enforced by automated tests
+- [ ] English and Russian surfaces contain no missing or machine-only user-facing strings. *(Partial:
+      key-set parity (365/365) and value parity are both enforced by automated tests
       (`LocalizationCatalogTests`): every key present in both `Messages.resx`/`Messages.ru.resx` must
       have a byte-different English/Russian value, unless it is on a documented, individually
       justified allow-list (currently one entry: `AppTitle`, the product's own brand name). A future
@@ -651,7 +651,11 @@ prior behavior or an equivalent mutation.
       `TimelineMessageFormatter`, so no second raw-key rendering path remains for this key space
       (PR #107 review finding 6). Machine-only argument values embedded in a few templates (the
       blocked reason, the attempt's to-state, the routing outcome) are likewise mapped to a localized
-      label before substitution rather than interpolated raw (PR #107 review findings 3-5).
+      label before substitution rather than interpolated raw (PR #107 review findings 3-5). Not
+      satisfied: `forge sprint assess-stage` still prints the eleven raw `stage_transition.*` keys
+      verbatim -- ADR 0051 explicitly retains that specific deferral ("What stays deferred") as
+      separable content work, not a Slice 6/timeline regression, so this box stays open until those
+      keys are registered too.)*
 - [ ] CLI and Desktop invoke the same Host commands and render semantically identical results for
       stop, stage assessment, stage move, configuration, and existing workflow operations. *(Partial:
       genuine output-equality parity tests exist for sprint tree/detail, events, startup checks,

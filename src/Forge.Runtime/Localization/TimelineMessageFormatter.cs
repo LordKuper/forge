@@ -123,7 +123,24 @@ public static class TimelineMessageFormatter
 
             _ => [],
         };
-        return values.Length == 0 ? template : string.Format(CultureInfo.InvariantCulture, template, values);
+        if (values.Length == 0)
+        {
+            return template;
+        }
+
+        // PR #107 round 2 review finding 4: the guard above only covered an unmapped messageKey --
+        // string.Format itself can still throw FormatException on a mistyped/mismatched placeholder
+        // (not hypothetical: workflow.stage_revision_recorded's own resx template already uses
+        // out-of-order placeholders in both EN and RU). Falls back to the raw key the same way as
+        // the unmapped-key case above rather than crashing the whole render.
+        try
+        {
+            return string.Format(CultureInfo.InvariantCulture, template, values);
+        }
+        catch (FormatException)
+        {
+            return messageKey;
+        }
     }
 
     /// <summary>PR #107 review finding 3: <c>workflow.sprint_blocked</c>'s <c>{0}</c> was the raw
@@ -144,7 +161,7 @@ public static class TimelineMessageFormatter
             "rewind" => MessageKeys.SprintBlockedReasonRewind,
             _ => null,
         };
-        return key is null ? rawReason : text.Resolve(key);
+        return key is null ? rawReason : ResolveOrFallback(text, key, rawReason);
     }
 
     /// <summary>PR #107 review finding 4: <c>workflow.attempt_transitioned</c>'s <c>{0}</c> was the
@@ -175,7 +192,7 @@ public static class TimelineMessageFormatter
             AttemptState.Cancelled => MessageKeys.AttemptStateCancelled,
             _ => null!,
         };
-        return key is null ? rawState : text.Resolve(key);
+        return key is null ? rawState : ResolveOrFallback(text, key, rawState);
     }
 
     /// <summary>PR #107 review finding 5: <c>routing.decision_recorded</c>'s <c>{2}</c> was the raw
@@ -207,7 +224,27 @@ public static class TimelineMessageFormatter
             RouteOutcome.Deferred => MessageKeys.RoutingOutcomeDeferred,
             _ => null!,
         };
-        return key is null ? rawOutcome : text.Resolve(key);
+        return key is null ? rawOutcome : ResolveOrFallback(text, key, rawOutcome);
+    }
+
+    /// <summary>PR #107 round 2 review finding 3: <see cref="BlockedReasonLabel"/>,
+    /// <see cref="AttemptStateLabel"/>, and <see cref="RoutingOutcomeLabel"/> each resolve one of
+    /// their own closed-set label keys -- hand-written switch arms, not driven off
+    /// <c>Enum.GetValues()</c>, so a missing catalog entry for one of them is not provably
+    /// impossible by construction. Guards every one of those three call sites the same way
+    /// <see cref="Format"/> itself guards <paramref name="key"/>: an unmapped label key degrades to
+    /// <paramref name="fallback"/> (the raw, un-localized code) instead of throwing and crashing the
+    /// whole timeline/events render.</summary>
+    private static string ResolveOrFallback(SurfaceText text, string key, string fallback)
+    {
+        try
+        {
+            return text.Resolve(key);
+        }
+        catch (MissingManifestResourceException)
+        {
+            return fallback;
+        }
     }
 
     private static string Value(IReadOnlyDictionary<string, string?> arguments, string key) =>

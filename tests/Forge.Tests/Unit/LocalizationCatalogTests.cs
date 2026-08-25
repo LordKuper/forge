@@ -1,3 +1,5 @@
+using System.Globalization;
+using System.Resources;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Forge.Domain;
@@ -7,6 +9,33 @@ namespace Forge.UnitTests;
 
 public sealed class LocalizationCatalogTests
 {
+    /// <summary>Delegates to <paramref name="inner"/> for every key except <paramref name="blockedKey"/>,
+    /// which it throws <see cref="MissingManifestResourceException"/> for -- simulates a genuinely
+    /// unmapped catalog entry for a key that is, in the real <c>Messages.resx</c> pair, actually
+    /// mapped (PR #107 round 2 review finding 3's "hypothetical unmapped label").</summary>
+    private sealed class KeyBlockingCatalog(ILocalizationCatalog inner, string blockedKey) : ILocalizationCatalog
+    {
+        public IReadOnlyCollection<string> SupportedCultures => inner.SupportedCultures;
+
+        public string Resolve(string key, CultureInfo? culture = null) =>
+            string.Equals(key, blockedKey, StringComparison.Ordinal)
+                ? throw new MissingManifestResourceException($"Simulated unmapped key '{key}'.")
+                : inner.Resolve(key, culture);
+    }
+
+    /// <summary>Delegates to <paramref name="inner"/> for every key except <paramref name="overriddenKey"/>,
+    /// which it resolves to <paramref name="template"/> instead -- lets a test force
+    /// <see cref="TimelineMessageFormatter.Format"/>'s <c>string.Format</c> call to see a
+    /// deliberately malformed template (PR #107 round 2 review finding 4) without needing an actual
+    /// resx typo.</summary>
+    private sealed class TemplateOverridingCatalog(ILocalizationCatalog inner, string overriddenKey, string template)
+        : ILocalizationCatalog
+    {
+        public IReadOnlyCollection<string> SupportedCultures => inner.SupportedCultures;
+
+        public string Resolve(string key, CultureInfo? culture = null) =>
+            string.Equals(key, overriddenKey, StringComparison.Ordinal) ? template : inner.Resolve(key, culture);
+    }
     [Fact]
     [Trait("Category", "Unit")]
     public void CatalogResolvesEnglishAndRussian()
@@ -161,6 +190,81 @@ public sealed class LocalizationCatalogTests
         Assert.Equal("Маршрутизировано на claude/sonnet: бюджет исчерпан.", russianText);
         Assert.DoesNotContain("budget_exhausted", englishText, StringComparison.Ordinal);
         Assert.DoesNotContain("budget_exhausted", russianText, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #107 round 2 review finding 3 (regression): <c>BlockedReasonLabel</c>,
+    /// <c>AttemptStateLabel</c>, and <c>RoutingOutcomeLabel</c> used to call <see cref="SurfaceText.Resolve"/>
+    /// unguarded for their own label keys -- reintroducing round 1 finding 1's exact crash class,
+    /// just for the 20 PascalCase label keys instead of the `workflow.`/`routing.` snake_case ones.
+    /// Simulates a genuinely unmapped label key via <see cref="KeyBlockingCatalog"/> for each of the
+    /// three helpers and proves none of them throw -- each falls back to the raw, un-localized code
+    /// instead.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(
+        MessageKeys.WorkflowSprintBlocked, WorkflowEvent.BlockedReasonArgument, "node",
+        MessageKeys.SprintBlockedReasonNode)]
+    [InlineData(
+        MessageKeys.WorkflowAttemptTransitioned, WorkflowEvent.ToStateArgument, "succeeded",
+        MessageKeys.AttemptStateSucceeded)]
+    public void TimelineMessageFormatterFallsBackToTheRawCodeWhenItsLabelKeyIsUnmapped(
+        string messageKey, string argumentKey, string rawCode, string labelKey)
+    {
+        SurfaceText text = new(new KeyBlockingCatalog(new ResourceLocalizationCatalog(), labelKey), new("en-US"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal) { [argumentKey] = rawCode };
+
+        string rendered = TimelineMessageFormatter.Format(text, messageKey, arguments);
+
+        Assert.Contains(rawCode, rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>Same regression as <see cref="TimelineMessageFormatterFallsBackToTheRawCodeWhenItsLabelKeyIsUnmapped"/>,
+    /// covering <c>RoutingOutcomeLabel</c> separately since it needs three arguments rather than
+    /// one.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterFallsBackToTheRawRoutingOutcomeWhenItsLabelKeyIsUnmapped()
+    {
+        SurfaceText text = new(
+            new KeyBlockingCatalog(new ResourceLocalizationCatalog(), MessageKeys.RoutingOutcomeRouted),
+            new("en-US"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            ["provider"] = "claude",
+            ["model"] = "sonnet",
+            ["outcome"] = "routed",
+        };
+
+        string rendered = TimelineMessageFormatter.Format(text, MessageKeys.RoutingDecisionRecorded, arguments);
+
+        Assert.Contains("routed", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #107 round 2 review finding 4 (regression): <see cref="TimelineMessageFormatter.Format"/>'s
+    /// unmapped-key guard did not cover <c>string.Format</c> itself throwing <see cref="FormatException"/>
+    /// on a mismatched placeholder -- not hypothetical, since `workflow.stage_revision_recorded`'s
+    /// own resx template already uses out-of-order placeholders in both EN and RU. Forces that exact
+    /// failure shape via <see cref="TemplateOverridingCatalog"/> (a placeholder index one past the
+    /// three supplied arguments) and proves it falls back to the raw key instead of throwing.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterFallsBackToTheRawKeyWhenTheResolvedTemplateHasAMismatchedPlaceholder()
+    {
+        SurfaceText text = new(
+            new TemplateOverridingCatalog(
+                new ResourceLocalizationCatalog(), MessageKeys.WorkflowStageRevisionRecorded, "{0} {1} {2} {3}"),
+            new("en-US"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.TargetStageIdArgument] = "stage-1",
+            [WorkflowEvent.RewindReasonArgument] = "stale finding",
+            [WorkflowEvent.RevisionArgument] = "3",
+        };
+
+        string rendered =
+            TimelineMessageFormatter.Format(text, MessageKeys.WorkflowStageRevisionRecorded, arguments);
+
+        Assert.Equal(MessageKeys.WorkflowStageRevisionRecorded, rendered);
     }
 
     [Fact]

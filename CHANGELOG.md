@@ -25,7 +25,20 @@ User-facing Forge changes are listed by release, newest first.
   left unregistered.
 - The sprint timeline no longer crashes if it encounters an internal event key with no registered
   text (e.g. after an upgrade removes an old key, or a diagnostic redaction rewrites one) -- it now
-  falls back to showing the raw key for that one entry instead of failing the whole timeline.
+  falls back to showing the raw key for that one entry instead of failing the whole timeline. That
+  same fallback now also covers a mistyped or mismatched translation template, and the machine-only
+  label lookups this release added.
+
+### Security
+
+- `forge events` and Desktop's events view now redact the same rendered text the sprint timeline
+  already redacts. Localizing these two surfaces' event lines had substituted the raw, unredacted
+  posted message, agent summary, supersession instruction, or rewind reason into the rendered
+  output with no redaction pass at all, unlike the sprint timeline's three independent passes over
+  the same underlying data -- a credential-shaped value in one of those fields could have reached
+  `forge events` or Desktop even though it could never reach `forge sprint timeline`. A multi-line
+  free-text value is also now collapsed to a single line so it can no longer split one event across
+  multiple rendered lines.
 
 ## v0.72.0
 

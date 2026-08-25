@@ -1,4 +1,6 @@
 using System.Globalization;
+using Forge.Application;
+using Forge.Domain;
 using Forge.Localization;
 using Forge.Providers;
 
@@ -51,5 +53,74 @@ public sealed class SurfaceFormattingTests
 
         Assert.NotEqual(unknownText, unavailableText);
         Assert.NotEqual(unknownAccessible, unavailableAccessible);
+    }
+
+    private static ControlEventsPage OneEventPage(string messageKey, IReadOnlyDictionary<string, string?> arguments) =>
+        new(
+            [
+                new ControlEventRecord(
+                    Guid.NewGuid(),
+                    new WorkflowEvent(
+                        Guid.NewGuid(),
+                        0,
+                        DateTimeOffset.UnixEpoch,
+                        WorkflowEvent.AttemptSupersededType,
+                        new AggregateRef(AggregateKind.Attempt, "attempt-1", 1),
+                        messageKey,
+                        arguments)),
+            ],
+            "cursor",
+            DiagnosticCodes.None);
+
+    /// <summary>PR #107 round 2 review finding 1 (security regression): unlike the sprint-timeline
+    /// render path (three independent <see cref="Infrastructure.SecretRedactor"/> passes), the raw
+    /// journal arguments <see cref="TimelineMessageFormatter.Format"/> substitutes into
+    /// <see cref="SurfaceFormatting.EventLines"/>'s output went through no redaction pass at all --
+    /// a credential-shaped supersession instruction reached `forge events`/Desktop's events view
+    /// verbatim even though the exact same string could never reach `forge sprint timeline`
+    /// (<c>WorkspaceCliTests.ARawCredentialNeverReachesTheRenderedTimelineInTextOrJsonMode</c>).
+    /// Proves the fix: the credential no longer appears anywhere in <see cref="SurfaceFormatting.EventLines"/>'s
+    /// rendered output.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void EventLinesRedactsACredentialShapedSupersessionInstruction()
+    {
+        const string secret = "authorization: Bearer sk-live-1234567890ABCDEFGH";
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.SupersessionInstructionArgument] = $"Instruction with {secret}",
+        };
+        ControlEventsPage page = OneEventPage(MessageKeys.WorkflowAttemptSupersededInstruction, arguments);
+
+        IReadOnlyList<string> lines = SurfaceFormatting.EventLines(Text, page);
+
+        string rendered = string.Join('\n', lines);
+        Assert.DoesNotContain("sk-live-1234567890ABCDEFGH", rendered, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:authorization]", rendered, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #107 round 2 review finding 2: the free text <see cref="TimelineMessageFormatter.Format"/>
+    /// substitutes into <see cref="SurfaceFormatting.EventLines"/>'s output was bounded in length but
+    /// not in newline content, so an embedded newline could split one event across multiple physical
+    /// lines -- breaking the "one ordered line list" contract every other <see cref="SurfaceFormatting"/>
+    /// method upholds. Proves embedded line breaks are collapsed to spaces so exactly one line is
+    /// produced per event.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void EventLinesCollapsesEmbeddedNewlinesInFreeTextToASingleLine()
+    {
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.SupersessionInstructionArgument] = "line one\nline two\r\nline three",
+        };
+        ControlEventsPage page = OneEventPage(MessageKeys.WorkflowAttemptSupersededInstruction, arguments);
+
+        IReadOnlyList<string> lines = SurfaceFormatting.EventLines(Text, page);
+
+        // Title line + exactly one line for the one event -- never more.
+        Assert.Equal(2, lines.Count);
+        Assert.All(lines, line => Assert.DoesNotContain('\n', line));
+        Assert.All(lines, line => Assert.DoesNotContain('\r', line));
+        Assert.Contains("line one line two line three", lines[1], StringComparison.Ordinal);
     }
 }
