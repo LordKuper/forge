@@ -324,6 +324,12 @@ public static class MessageKeys
     public const string SprintStatusHeaderProgressLabel = "SprintStatusHeaderProgressLabel";
     public const string SprintStatusHeaderLastActivityLabel = "SprintStatusHeaderLastActivityLabel";
     public const string SprintStatusHeaderProviderModelUnavailable = "SprintStatusHeaderProviderModelUnavailable";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?)"/> template
+    /// taking the active attempt's provider id then its model, e.g. "{0} / {1}" -- resolved only
+    /// once <see cref="Forge.Domain.AttemptSnapshot.Provider"/>/<c>.Model</c> are both known;
+    /// <see cref="SprintStatusHeaderProviderModelUnavailable"/> is used otherwise.</summary>
+    public const string SprintStatusHeaderProviderModelText = "SprintStatusHeaderProviderModelText";
     public const string SprintStatusHeaderResumeNotBeforeLabel = "SprintStatusHeaderResumeNotBeforeLabel";
     public const string SprintStatusHeaderDetailsAction = "SprintStatusHeaderDetailsAction";
     public const string TimelineTitle = "TimelineTitle";

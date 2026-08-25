@@ -2,7 +2,7 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.73.0
+## v0.77.0
 
 ### Added
 
@@ -33,6 +33,26 @@ User-facing Forge changes are listed by release, newest first.
   a language change from Forge Settings could yank focus back to the sidebar button you last clicked
   before navigating there. Navigating into the content pane now always clears that stale sidebar
   record first.
+
+## v0.73.0
+
+### Added
+
+- The sprint workspace's sticky status header now shows which provider and model are actually
+  running the sprint's current attempt (e.g. "claude_code / claude-sonnet-4-5") instead of an
+  always-on "not yet available" placeholder. This also covers an attempt started as a
+  human-requested replacement (supersession). The placeholder still appears when nothing is
+  currently running, a stop has been requested but not yet converged, the running step never
+  involves a model (intake, confirmation, finalization), or the attempt predates this change.
+
+## v0.72.1
+
+### Changed
+
+- Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
+  crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
+  CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
+>>>>>>> origin/main
 
 ## v0.72.0
 

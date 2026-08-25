@@ -15,5 +15,6 @@
   <Project Path="src/Forge.Updater/Forge.Updater.csproj" />
   <Project Path="tests/Forge.MutexIsolationProbe/Forge.MutexIsolationProbe.csproj" />
   <Project Path="tests/Forge.PipeIsolationProbe/Forge.PipeIsolationProbe.csproj" />
+  <Project Path="tests/Forge.ProcessContainmentProbe/Forge.ProcessContainmentProbe.csproj" />
   <Project Path="tests/Forge.Tests/Forge.Tests.csproj" />
 </Solution>
