@@ -50,6 +50,12 @@ public sealed class ForgeHostClient : IAsyncDisposable
 
     public bool IsConnected => connection is not null;
 
+    /// <summary>The project this client's Host connection is scoped to (PR #106 review finding 5):
+    /// the same id <see cref="InstanceIdentity.ComputePipeName"/> already keys the pipe endpoint by,
+    /// so any caller that needs to attribute an observation to "this client's Host" (e.g. connectivity
+    /// reporting) uses the same identity the connection itself is already scoped to.</summary>
+    public Guid ProjectId => options.ProjectId;
+
     /// <summary>The Host's own handshake-advertised capability set (<c>CapabilityIds.Implemented</c>
     /// on whichever version answered) — empty until a handshake succeeds, and refreshed by every
     /// subsequent one. Never the client's own requested set: a caller that wants to know what this

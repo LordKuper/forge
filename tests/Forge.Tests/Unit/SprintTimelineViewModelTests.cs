@@ -1,6 +1,8 @@
+using System.Globalization;
 using Forge.Application;
 using Forge.Desktop.Presentation;
 using Forge.Domain;
+using Forge.Localization;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
@@ -15,6 +17,8 @@ public sealed class SprintTimelineViewModelTests
 {
     private static readonly IReadOnlyList<NodeDefinition> TwoNodeGraph =
         [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])];
+
+    private static readonly SurfaceText Text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
 
     private static async Task<(Guid ProjectId, SprintId SprintId)> SeedSprintAsync(
         TestEnvironment environment, CancellationToken cancellationToken)
@@ -58,7 +62,7 @@ public sealed class SprintTimelineViewModelTests
         using TestEnvironment environment = new();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
-        SprintTimelineViewModel timeline = new(environment.Application, environment.Resolve<ProjectCatalogStore>());
+        SprintTimelineViewModel timeline = new(environment.Application, environment.Resolve<ProjectCatalogStore>(), Text);
 
         TimelineState state = await timeline.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
@@ -69,6 +73,41 @@ public sealed class SprintTimelineViewModelTests
         Assert.False(state.HasMore);
     }
 
+    /// <summary>Plan section 12.3's timeline localization closure: before this,
+    /// <c>SprintTimelineViewModel.ToView</c> set <c>MessageText</c> to the raw <c>item.MessageKey</c>
+    /// verbatim (e.g. `workflow.sprint_created`), never resolved through the localization catalog.
+    /// The very first event any freshly created sprint appends is always
+    /// <see cref="MessageKeys.WorkflowSprintCreated"/> (<c>SprintOrchestrator.CreateSprintAsync</c>
+    /// appends it before <c>InitializeGraphAsync</c> ever runs), so this asserts against that item
+    /// deterministically rather than searching for a message key that may or may not appear.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TimelineItemsRenderLocalizedTextInEnglishAndRussianInsteadOfTheRawMessageKey()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceText russianText = new(new ResourceLocalizationCatalog(), CultureInfo.GetCultureInfo("ru-RU"));
+        SprintTimelineViewModel englishTimeline = new(environment.Application, catalog, Text);
+        SprintTimelineViewModel russianTimeline = new(environment.Application, catalog, russianText);
+
+        TimelineState englishState = await englishTimeline.InitializeAsync(
+            projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+        TimelineState russianState = await russianTimeline.InitializeAsync(
+            projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        // Items render ordered by the underlying journal's own Sequence (BuildState), and
+        // SprintOrchestrator.CreateSprintAsync appends `workflow.sprint_created` as event 0 before
+        // InitializeGraphAsync appends anything else -- so index 0 is always that item.
+        TimelineItemView englishCreated = englishState.Items[0];
+        TimelineItemView russianCreated = russianState.Items[0];
+        Assert.NotEqual(MessageKeys.WorkflowSprintCreated, englishCreated.MessageText);
+        Assert.NotEqual(MessageKeys.WorkflowSprintCreated, russianCreated.MessageText);
+        Assert.Equal("Sprint created.", englishCreated.MessageText);
+        Assert.Equal("Спринт создан.", russianCreated.MessageText);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task FilteringByTypeNarrowsTheRenderedItemsWithoutDiscardingTheLoadedSet()
@@ -76,7 +115,7 @@ public sealed class SprintTimelineViewModelTests
         using TestEnvironment environment = new();
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
-        SprintTimelineViewModel timeline = new(environment.Application, environment.Resolve<ProjectCatalogStore>());
+        SprintTimelineViewModel timeline = new(environment.Application, environment.Resolve<ProjectCatalogStore>(), Text);
         TimelineState initial = await timeline.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
         string oneType = initial.AvailableFilterTypes[0];
@@ -97,7 +136,7 @@ public sealed class SprintTimelineViewModelTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
-        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        SprintTimelineViewModel timeline = new(environment.Application, catalog, Text);
         await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
         await timeline.MarkAllReadAsync(cancellationToken);
@@ -106,7 +145,7 @@ public sealed class SprintTimelineViewModelTests
 
         // A fresh view-model instance (simulating navigating away and back) must still see the
         // persisted watermark, not start over.
-        SprintTimelineViewModel reopened = new(environment.Application, catalog);
+        SprintTimelineViewModel reopened = new(environment.Application, catalog, Text);
         TimelineState reopenedState = await reopened.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
         Assert.Equal(0, reopenedState.UnreadCount);
@@ -146,7 +185,7 @@ public sealed class SprintTimelineViewModelTests
         DateTimeOffset tiedInstant = DateTimeOffset.UtcNow;
         ForgeApplication tiedApplication =
             environment.ResolveApplicationWithSprintStore(store => new TiedTimestampSprintStore(store, tiedInstant));
-        SprintTimelineViewModel timeline = new(tiedApplication, catalog);
+        SprintTimelineViewModel timeline = new(tiedApplication, catalog, Text);
 
         TimelineState initial = await timeline.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
@@ -194,7 +233,7 @@ public sealed class SprintTimelineViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         GatedSprintStore gated = new(environment.Resolve<ISprintStore>());
         ForgeApplication gatedApplication = environment.ResolveApplicationWithSprintStore(_ => gated);
-        SprintTimelineViewModel timeline = new(gatedApplication, catalog);
+        SprintTimelineViewModel timeline = new(gatedApplication, catalog, Text);
         TimelineState initial = await timeline.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
@@ -202,7 +241,7 @@ public sealed class SprintTimelineViewModelTests
         // many new items cancelling the sprint appends -- so the assertions below prove "no more, no
         // fewer than one uncontended fetch would produce," not a hardcoded item count.
         SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
-        SprintTimelineViewModel reference = new(environment.Application, catalog);
+        SprintTimelineViewModel reference = new(environment.Application, catalog, Text);
         TimelineState referenceInitial = await reference.InitializeAsync(
             projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
         SprintSnapshot running = (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
@@ -255,7 +294,7 @@ public sealed class SprintTimelineViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         GatedSprintStore gated = new(environment.Resolve<ISprintStore>());
         ForgeApplication gatedApplication = environment.ResolveApplicationWithSprintStore(_ => gated);
-        SprintTimelineViewModel timeline = new(gatedApplication, catalog);
+        SprintTimelineViewModel timeline = new(gatedApplication, catalog, Text);
         await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintA.Value, cancellationToken);
 
         // A brand-new event on sprint A, appended *after* this instance's own baseline fetch above --
@@ -272,11 +311,11 @@ public sealed class SprintTimelineViewModelTests
         // Ground truth for both sprints, established independently (via completely separate,
         // ungated instances) before the race, so the assertions below prove "exactly B, nothing
         // more/less/mixed in" and "exactly A's real post-cancellation state," not just "non-empty."
-        SprintTimelineViewModel reference = new(environment.Application, catalog);
+        SprintTimelineViewModel reference = new(environment.Application, catalog, Text);
         TimelineState referenceB = await reference.InitializeAsync(
             projectId, environment.ProjectRoot, sprintB.Value, cancellationToken);
         Assert.NotEmpty(referenceB.Items);
-        SprintTimelineViewModel referenceAfterCancel = new(environment.Application, catalog);
+        SprintTimelineViewModel referenceAfterCancel = new(environment.Application, catalog, Text);
         TimelineState referenceA = await referenceAfterCancel.InitializeAsync(
             projectId, environment.ProjectRoot, sprintA.Value, cancellationToken);
 
@@ -307,7 +346,7 @@ public sealed class SprintTimelineViewModelTests
 
         await timeline.MarkAllReadAsync(cancellationToken);
 
-        SprintTimelineViewModel freshB = new(environment.Application, catalog);
+        SprintTimelineViewModel freshB = new(environment.Application, catalog, Text);
         TimelineState freshBState = await freshB.InitializeAsync(
             projectId, environment.ProjectRoot, sprintB.Value, cancellationToken);
         Assert.Equal(0, freshBState.UnreadCount);
@@ -315,7 +354,7 @@ public sealed class SprintTimelineViewModelTests
         // Sprint A's own watermark must remain exactly what it was before the race (still fully
         // unread, since A's own new event was never itself marked read) -- untouched by both the
         // discarded stale fetch and by marking B read.
-        SprintTimelineViewModel freshA = new(environment.Application, catalog);
+        SprintTimelineViewModel freshA = new(environment.Application, catalog, Text);
         TimelineState freshAState = await freshA.InitializeAsync(
             projectId, environment.ProjectRoot, sprintA.Value, cancellationToken);
         Assert.Equal(referenceA.Items.Count, freshAState.UnreadCount);
@@ -329,12 +368,12 @@ public sealed class SprintTimelineViewModelTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
-        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        SprintTimelineViewModel timeline = new(environment.Application, catalog, Text);
         await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
         await timeline.SaveDraftAsync("stale finding, rewinding to replan", cancellationToken);
 
-        SprintTimelineViewModel reopened = new(environment.Application, catalog);
+        SprintTimelineViewModel reopened = new(environment.Application, catalog, Text);
         await reopened.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
         string? draft = await reopened.LoadDraftAsync(cancellationToken);
 
@@ -352,13 +391,13 @@ public sealed class SprintTimelineViewModelTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
-        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        SprintTimelineViewModel timeline = new(environment.Application, catalog, Text);
         await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
         await timeline.SaveDraftAsync("stale finding, rewinding to replan", cancellationToken);
         await timeline.SaveMessageDraftAsync("still typing a status update...", cancellationToken);
 
-        SprintTimelineViewModel reopened = new(environment.Application, catalog);
+        SprintTimelineViewModel reopened = new(environment.Application, catalog, Text);
         await reopened.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
         Assert.Equal("stale finding, rewinding to replan", await reopened.LoadDraftAsync(cancellationToken));
@@ -373,7 +412,7 @@ public sealed class SprintTimelineViewModelTests
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         (Guid projectId, SprintId sprintId) = await SeedSprintAsync(environment, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
-        SprintTimelineViewModel timeline = new(environment.Application, catalog);
+        SprintTimelineViewModel timeline = new(environment.Application, catalog, Text);
         await timeline.InitializeAsync(projectId, environment.ProjectRoot, sprintId.Value, cancellationToken);
 
         ProjectCatalogResult result = await timeline.SaveMessageDraftAsync(

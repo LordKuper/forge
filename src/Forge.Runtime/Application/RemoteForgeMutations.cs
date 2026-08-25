@@ -19,7 +19,8 @@ namespace Forge.Application;
 /// reports <see cref="DiagnosticCodes.CapabilityNotSupported"/> instead and is never actually sent.
 /// Disposing this disposes the underlying <see cref="ForgeHostClient"/>.
 /// </summary>
-public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync? startHost = null)
+public sealed class RemoteForgeMutations(
+    ForgeHostClient client, StartHostAsync? startHost = null, IHostConnectivityMonitor? connectivityMonitor = null)
     : IForgeMutations, IAsyncDisposable
 {
     private readonly ForgeHostClient client = client ?? throw new ArgumentNullException(nameof(client));
@@ -382,6 +383,23 @@ public sealed class RemoteForgeMutations(ForgeHostClient client, StartHostAsync?
         catch (ControlProtocolException exception)
         {
             return new(Guid.Empty, new(exception.Code, exception.Message));
+        }
+        finally
+        {
+            // Plan 12.6's Host-connectivity status-row indicator: report the real, CURRENT outcome of
+            // THIS attempt (see HostConnectivityMonitor's own remarks -- it never probes on its own),
+            // keyed by this client's own project (PR #106 review finding 5) so one project's
+            // connectivity is never attributed to another's status row. In a `finally` rather than
+            // only after a successful EnsureConnectedAsync (PR #106 review finding 3): a framing/
+            // timeout failure from client.SendAsync above drops the connection and rethrows, caught by
+            // the catch block above, which returns without ever reaching an inline report call after
+            // that point -- so the monitor kept whatever the EARLIER successful EnsureConnectedAsync
+            // reported, and the status row showed "Connected to Host." for up to the staleness window
+            // after the connection had actually died. `client.IsConnected` already reflects
+            // DropConnectionAsync's effect by the time this `finally` runs (it awaits that call before
+            // rethrowing), so reporting it here -- on every exit path, success or failure -- always
+            // reflects this attempt's real, current state.
+            connectivityMonitor?.Report(client.ProjectId, client.IsConnected, DateTimeOffset.UtcNow);
         }
     }
 
