@@ -152,6 +152,61 @@ public partial class WorkspaceShellPage
         // one-shot "not initialized yet" check that could never be false once the handler existed.
         bool suppressFilterChanged = false;
 
+        // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
+        // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
+        // confirm/test-work/finalize mutation -- the highest-frequency re-render in this page, since
+        // every one of those actions calls it. TrackContentFocus/RestoreContentFocus are this render's
+        // own local instance of the same mechanism RenderSidebarFromSnapshot uses (see
+        // WorkspaceShellPage.xaml.cs's TrackSidebarFocus/RestoreSidebarFocus and FocusKeyTracker's own
+        // remarks) -- scoped here rather than promoted to a field because these two hosts are rebuilt
+        // together only within this method's own closures.
+        FocusKeyTracker contentFocusTracker = new();
+        FocusControlRegistry<VisualElement> contentFocusRegistry = new();
+
+        T TrackContentFocus<T>(string key, T control) where T : VisualElement
+        {
+            contentFocusRegistry.Register(key, control);
+            // PR #110 review round 2 finding 1: the five hoisted Entry fields (rewindReasonEntry et
+            // al.) pass through here again on every RefreshActionsAsync call -- MarkWiredOnce guards
+            // the Focused subscription so a control already wired by an earlier call in this same
+            // navigation's lifetime (its own field declaration onward) never gets a second, third, ...
+            // Nth handler stacked on top of the first, while a freshly built control (every dynamic
+            // move/gate/lifecycle button) still gets its own handler exactly once, the only time it is
+            // ever seen. See FocusControlRegistry.MarkWiredOnce's own remarks.
+            if (contentFocusRegistry.MarkWiredOnce(control))
+            {
+                control.Focused += (_, _) => contentFocusTracker.Capture(key);
+            }
+
+            return control;
+        }
+
+        void RestoreContentFocus()
+        {
+            if (contentFocusTracker.Consume() is { } key &&
+                contentFocusRegistry.TryResolve(key, out VisualElement? control))
+            {
+                control.Focus();
+            }
+        }
+
+        // PR #110 review finding 3: a control never registered by TrackContentFocus is, by
+        // construction, outside the tracked focus region -- ContentHost hosts several of these
+        // (the timeline filter/load-more/mark-all-read/detail/copy controls, the message composer and
+        // its send button, the raw-events poll button) alongside the tracked ContextualActionHost/
+        // StickyHeaderHost controls. Without this, tabbing from a tracked control (e.g. the finalize
+        // button) into one of these leaves contentFocusTracker still holding the old key, and the next
+        // RefreshAllAsync -> RestoreContentFocus wrongly yanks focus back onto the stale control the
+        // user already tabbed away from. Wiring Focused here (not Unfocused) is deliberate: Focused
+        // only fires for a control genuinely live in the visual tree that is really receiving focus, so
+        // a control a rebuild tears down -- which never receives a Focused event -- cannot spuriously
+        // clear a key the very next RestoreContentFocus call still needs.
+        T ClearContentFocusWhenFocused<T>(T control) where T : VisualElement
+        {
+            control.Focused += (_, _) => contentFocusTracker.Clear();
+            return control;
+        }
+
         async Task RefreshHeaderAsync()
         {
             (SprintStatusHeaderData header, ProjectSnapshot snapshot) = await sprintWorkspace
@@ -201,7 +256,7 @@ public partial class WorkspaceShellPage
                 Describe(detailsLabel);
                 detailsLabel.IsVisible = !detailsLabel.IsVisible;
             };
-            StickyHeaderHost.Children.Add(detailsToggle);
+            StickyHeaderHost.Children.Add(TrackContentFocus("header:details-toggle", detailsToggle));
             StickyHeaderHost.Children.Add(detailsLabel);
         }
 
@@ -242,7 +297,10 @@ public partial class WorkspaceShellPage
                     await Clipboard.Default.SetTextAsync(item.CopyText).ConfigureAwait(true);
                     copyNoticeLabel.Text = text.Resolve(MessageKeys.TimelineCopiedNotice);
                 });
-                row.Children.Add(new HorizontalStackLayout { Children = { detailsButton, copyButton } });
+                row.Children.Add(new HorizontalStackLayout
+                {
+                    Children = { ClearContentFocusWhenFocused(detailsButton), ClearContentFocusWhenFocused(copyButton) },
+                });
                 row.Children.Add(technicalDetail);
                 timelineItemsHost.Children.Add(row);
             }
@@ -366,7 +424,8 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     stopResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(stopButton);
+                ContextualActionHost.Children.Add(
+                    TrackContentFocus($"action:{AvailableActionProjector.StopCurrentOperationActionId}", stopButton));
                 ContextualActionHost.Children.Add(BuildRationale(stop));
             }
 
@@ -388,7 +447,13 @@ public partial class WorkspaceShellPage
                     rewindReasonEntry.MaxLength = maxReasonLength;
                 }
 
-                ContextualActionHost.Children.Add(rewindReasonEntry);
+                // PR #110 review finding 2: this Entry is hoisted (see its own field declaration's
+                // remarks) so the *instance* -- and whatever the user already typed into it -- survives
+                // RefreshActionsAsync, but it is still removed from ContextualActionHost and re-added on
+                // every rebuild, which disconnects the handler and drops focus exactly as it would for a
+                // freshly built button. Tracking it here is what lets RestoreContentFocus bring focus
+                // back mid-edit instead of only ever restoring buttons.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:move:rewind-reason", rewindReasonEntry));
                 foreach (AvailableAction moveAction in moveActions)
                 {
                     string targetStageId = moveAction.Target.StageId!;
@@ -400,7 +465,8 @@ public partial class WorkspaceShellPage
                     };
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
-                    ContextualActionHost.Children.Add(moveButton);
+                    ContextualActionHost.Children.Add(TrackContentFocus(
+                        string.Create(CultureInfo.InvariantCulture, $"action:move:{targetStageId}"), moveButton));
                     ContextualActionHost.Children.Add(BuildRationale(moveAction));
                     if (!moveAction.Enabled && moveAction.Blockers.Count > 0)
                     {
@@ -423,7 +489,14 @@ public partial class WorkspaceShellPage
                 Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction) };
                 approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
                 reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false));
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { approve, reject } });
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:gate:approve", approve),
+                        TrackContentFocus("action:gate:reject", reject),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(gateResult);
@@ -468,8 +541,9 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     supersedeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(instructionEntry);
-                ContextualActionHost.Children.Add(supersede);
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:attempt:instruction", instructionEntry));
+                ContextualActionHost.Children.Add(TrackContentFocus("action:attempt:supersede", supersede));
             }
 
             ContextualActionHost.Children.Add(supersedeResult);
@@ -521,10 +595,23 @@ public partial class WorkspaceShellPage
 
                 confirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.Confirmed));
                 notConfirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.NotConfirmed));
-                ContextualActionHost.Children.Add(definitionOfDoneEntry);
-                ContextualActionHost.Children.Add(evidenceEntry);
-                ContextualActionHost.Children.Add(evidenceKind);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { confirmed, notConfirmed } });
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:definition-of-done", definitionOfDoneEntry));
+                ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:evidence", evidenceEntry));
+                // PR #110 review finding 3: evidenceKind is rebuilt fresh (not hoisted) on every
+                // RefreshActionsAsync call, so unlike the two Entry fields above it is never a
+                // meaningful restoration target and is deliberately left out of TrackContentFocus. But
+                // it is still a real, focusable control the user can tab into -- see
+                // ClearContentFocusWhenFocused's own remarks for why that still requires wiring.
+                ContextualActionHost.Children.Add(ClearContentFocusWhenFocused(evidenceKind));
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:confirm:confirmed", confirmed),
+                        TrackContentFocus("action:confirm:not-confirmed", notConfirmed),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(confirmResult);
@@ -570,8 +657,16 @@ public partial class WorkspaceShellPage
 
                 added.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.TestsAdded));
                 noNewTests.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.NoNewTestsJustified));
-                ContextualActionHost.Children.Add(justificationEntry);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { added, noNewTests } });
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:test-work:justification", justificationEntry));
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:test-work:added", added),
+                        TrackContentFocus("action:test-work:no-new-tests", noNewTests),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(testWorkResult);
@@ -597,7 +692,7 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     finalizeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(finalize);
+                ContextualActionHost.Children.Add(TrackContentFocus("action:finalize", finalize));
             }
 
             ContextualActionHost.Children.Add(finalizeResult);
@@ -614,7 +709,8 @@ public partial class WorkspaceShellPage
 
             Button button = new() { Text = label, IsEnabled = action.Enabled };
             button.Clicked += (_, _) => _ = RunAsync(execute);
-            ContextualActionHost.Children.Add(button);
+            ContextualActionHost.Children.Add(
+                TrackContentFocus(string.Create(CultureInfo.InvariantCulture, $"action:{actionId}"), button));
             ContextualActionHost.Children.Add(BuildRationale(action));
         }
 
@@ -717,6 +813,17 @@ public partial class WorkspaceShellPage
 
         async Task RefreshAllAsync(bool resetTimeline = false)
         {
+            // PR #110 review finding 1: mirrors RenderSidebarFromSnapshot's own
+            // sidebarFocusRegistry.Clear() discipline -- every control the two refreshes below create
+            // is re-registered under its own stable key, so clearing first means a control that no
+            // longer renders (a resolved gate, a move target whose legal set changed) leaves no stale
+            // entry behind for RestoreContentFocus to resolve to a now-detached instance. This spans
+            // both RefreshHeaderAsync and RefreshActionsAsync, so it belongs here rather than in either
+            // individually -- matching where RestoreContentFocus itself already sits, below, once both
+            // have finished. The initial three-call render at the end of RenderSprintWorkspaceAsync
+            // does not need this: contentFocusRegistry is declared empty immediately above and nothing
+            // has populated it yet by the time that render runs.
+            contentFocusRegistry.Clear();
             await RefreshHeaderAsync().ConfigureAwait(true);
             if (resetTimeline)
             {
@@ -737,6 +844,11 @@ public partial class WorkspaceShellPage
             }
 
             await RefreshActionsAsync().ConfigureAwait(true);
+            // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
+            // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
+            // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
+            // own remarks).
+            RestoreContentFocus();
         }
 
         await RefreshHeaderAsync().ConfigureAwait(true);
@@ -758,14 +870,18 @@ public partial class WorkspaceShellPage
 
             RenderTimelineItems(sprintWorkspace.Timeline.SetFilter(SelectedFilterOrNull()));
         };
+        // PR #110 review finding 3: see ClearContentFocusWhenFocused's own remarks.
+        ClearContentFocusWhenFocused(filterPicker);
         loadMoreButton.Clicked += (_, _) => _ = RunAsync(async () =>
             RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true)));
+        ClearContentFocusWhenFocused(loadMoreButton);
         Button markAllReadButton = new() { Text = text.Resolve(MessageKeys.TimelineMarkAllReadAction) };
         markAllReadButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             await sprintWorkspace.Timeline.MarkAllReadAsync(CancellationToken.None).ConfigureAwait(true);
             RenderTimelineItems(sprintWorkspace.Timeline.SetFilter(SelectedFilterOrNull()));
         });
+        ClearContentFocusWhenFocused(markAllReadButton);
         rewindReasonEntry.Unfocused += (_, _) => _ = RunAsync(async () =>
         {
             // PR #99 review finding 10: previously fire-and-forget with the result discarded, which
@@ -789,6 +905,11 @@ public partial class WorkspaceShellPage
                 messageResult.Text = Message(text.Resolve(MessageKeys.TimelineMessageDraftSaveFailed), saveResult.DiagnosticCode);
             }
         });
+        // PR #110 review finding 3: this is the exact scenario ClearContentFocusWhenFocused's own
+        // remarks describe -- tabbing from a tracked ContextualActionHost control (e.g. the finalize
+        // button) into this composer must not leave that stale key ready to be wrongly restored the
+        // next time the user's own Send click below triggers RefreshAllAsync.
+        ClearContentFocusWhenFocused(messageEntry);
         Button sendMessageButton = new() { Text = text.Resolve(MessageKeys.TimelineMessageSendAction) };
         sendMessageButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
@@ -808,6 +929,7 @@ public partial class WorkspaceShellPage
             await RefreshAllAsync().ConfigureAwait(true);
             messageResult.Text = message;
         });
+        ClearContentFocusWhenFocused(sendMessageButton);
 
         ContentHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineTitle), FontAttributes = FontAttributes.Bold }));
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { filterPicker, markAllReadButton } });
@@ -826,6 +948,8 @@ public partial class WorkspaceShellPage
         Button pollRawEvents = new() { Text = text.Resolve(MessageKeys.EventsPollAction) };
         pollRawEvents.Clicked += (_, _) => _ = RunAsync(async () =>
             rawEventsResult.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));
+        // PR #110 review finding 3: see ClearContentFocusWhenFocused's own remarks.
+        ClearContentFocusWhenFocused(pollRawEvents);
         ContentHost.Children.Add(pollRawEvents);
         ContentHost.Children.Add(rawEventsResult);
 

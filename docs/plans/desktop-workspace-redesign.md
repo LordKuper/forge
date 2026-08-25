@@ -650,11 +650,28 @@ prior behavior or an equivalent mutation.
       another cataloged project's), including a distinct "stale" state once that reading is older
       than a fixed threshold.
 - [ ] All actions are keyboard reachable, screen-reader named, focus-stable after refresh, usable
-      at supported text scaling, and never communicate status by color alone. *(Partial: accessible
-      names are real, wired, and tested throughout. No mechanism or test exists yet for keyboard
-      reachability, focus stability after a refresh, or text scaling — these concepts don't appear
-      anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
-      at all today, not because of an enforced rule.)*
+      at supported text scaling, and never communicate status by color alone. *(Partial, narrowed
+      from the prior sweep: accessible names are real, wired, and tested throughout (unchanged).
+      Keyboard reachability is verified, not merely assumed — every interactive control in
+      `WorkspaceShellPage*.xaml`/`.cs` is a real, natively focusable MAUI control (`Button`/`Entry`/
+      `Picker`/`Switch`/`CheckBox`); no gesture-only fake button existed to fix, and
+      `WorkspaceShellAccessibilityTests` now pins that down mechanically. Text scaling is likewise
+      verified: no `FontAutoScalingEnabled="False"` and no fixed `HeightRequest` on any
+      text-bearing control exist in the shell (the XAML's one `HeightRequest` is the 1px section-
+      divider `BoxView`, not text), so MAUI's default auto-scaling already applies everywhere here;
+      the same test file pins this down too. Focus stability after a refresh now has a real,
+      partial mechanism (`FocusKeyTracker` in `Forge.Desktop.Presentation`, unit-tested, plus
+      `WorkspaceShellPage`'s `TrackSidebarFocus`/`RestoreSidebarFocus` and
+      `TrackContentFocus`/`RestoreContentFocus`): a re-render of the sidebar (add/remove a project,
+      collapse/expand) or of the sprint workspace's sticky header and action panel (every
+      lifecycle/stop/move-to-stage/gate/supersede/confirm/test-work/finalize mutation, which all go
+      through `RefreshAllAsync`) restores focus to the control with the same stable key (a project
+      id, sprint id, or action id) if one still exists after the rebuild. Not covered: a full
+      content-area rebuild via `RenderContentAsync` — Forge Settings/Project Overview/Project
+      Settings after save, discard, initialize, or recover — and the sprint timeline's per-item
+      detail/copy buttons (rebuilt on load-more, filter change, mark-all-read, or the periodic poll)
+      still drop focus to the top of the page. "Never color alone" is unchanged: true only because
+      no surface uses color coding at all today, not because of an enforced rule.)*
 - [ ] English and Russian surfaces contain no missing or machine-only user-facing strings. *(Partial:
       key-set parity (365/365) and value parity are both enforced by automated tests
       (`LocalizationCatalogTests`): every key present in both `Messages.resx`/`Messages.ru.resx` must
@@ -715,6 +732,12 @@ hold under adversarial review). They originally fell into three groups; two are 
    (`AnAbruptHostProcessKillLeavesNoOrphanedProviderProcess`) but stays skipped: this codebase still
    has no process-group/job-object containment for it to verify, pending
    `feature/process-group-containment`.
+4. **Partial focus preservation** — the sidebar and the sprint workspace's sticky header/action panel
+   restore keyboard focus after their own re-renders (`FocusKeyTracker`,
+   `TrackSidebarFocus`/`RestoreSidebarFocus`, `TrackContentFocus`/`RestoreContentFocus`), but a full
+   content-area rebuild (Forge Settings/Project Overview/Project Settings after save, discard,
+   initialize, or recover) and the sprint timeline's per-item buttons (rebuilt on load-more, filter
+   change, mark-all-read, or poll) do not yet restore focus.
 
 These are tracked as follow-up work rather than blocking this final slice's merge.
 
