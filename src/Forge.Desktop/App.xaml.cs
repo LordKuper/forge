@@ -14,6 +14,13 @@ public partial class App : Microsoft.Maui.Controls.Application
     private readonly ProjectCatalogStore projectCatalog;
     private readonly ProviderCatalog providerCatalog;
     private readonly Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations;
+    /// <summary>Process-lifetime shared instance (plan 12.6's Host-connectivity status-row
+    /// indicator): the same monitor is threaded into <see cref="HostMutationsFactory.CreateResolver"/>
+    /// (so every real mutation attempt reports into it) and into <see cref="WorkspaceShellPage"/>'s
+    /// sidebar (so the status row reads its last-observed reading) -- see
+    /// <see cref="Forge.Application.IHostConnectivityMonitor"/>'s own remarks for why this is never a
+    /// fresh probe.</summary>
+    private readonly IHostConnectivityMonitor connectivityMonitor = new HostConnectivityMonitor();
     private readonly IRestartTokenService restartTokens;
     private readonly IUpdateTargetDetector targetDetector;
     private readonly string? restartToken;
@@ -39,7 +46,8 @@ public partial class App : Microsoft.Maui.Controls.Application
             registry,
             paths,
             application,
-            typeof(App).Assembly.GetName().Version!.ToString(3));
+            typeof(App).Assembly.GetName().Version!.ToString(3),
+            connectivityMonitor);
         this.restartTokens = restartTokens;
         this.targetDetector = targetDetector;
         StartupArguments arguments = StartupArguments.Parse(Environment.GetCommandLineArgs().Skip(1).ToArray());
@@ -64,7 +72,8 @@ public partial class App : Microsoft.Maui.Controls.Application
         // time PickFolderAsync's own (always later, always async) call sees the real window.
         Window? window = null;
         WindowsFolderPicker folderPicker = new(() => window);
-        WorkspaceShellPage page = new(text, application, projectCatalog, providerCatalog, resolveMutations, folderPicker);
+        WorkspaceShellPage page =
+            new(text, application, projectCatalog, providerCatalog, resolveMutations, folderPicker, connectivityMonitor);
         window = new(page) { Title = text.Resolve(MessageKeys.AppTitle) };
 
         if (restartToken is not null)

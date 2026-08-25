@@ -19,7 +19,14 @@ namespace Forge.Application;
 /// post-release timeline gap closure) is a PARALLEL field for the message composer's own draft, not
 /// a reuse of <see cref="SprintDrafts"/> -- that field is specific to the rewind-reason input (one
 /// draft slot per sprint already), and a sprint can have an in-progress rewind reason and an
-/// in-progress message at the same time.
+/// in-progress message at the same time. <see cref="SprintListCollapsed"/> (plan 12.1 final-sweep
+/// gap 1) is the sidebar's per-project active-sprint-list disclosure state -- unlike the
+/// whole-sidebar rail (a Desktop-instance-level preference in user configuration), this is scoped to
+/// one project's catalog row, so it lives here rather than as a configuration key; defaults to
+/// <see langword="false"/> (expanded) so an entry added before this field existed renders exactly as
+/// it always has. <see cref="SprintScrollPositions"/> (gap 2) is the sprint workspace's last scroll
+/// offset per sprint, keyed the same "D" way as every other per-sprint dictionary here -- restores
+/// that in-session-only behavior across an app restart too.
 /// </summary>
 public sealed record ProjectCatalogEntry(
     Guid ProjectId,
@@ -30,7 +37,9 @@ public sealed record ProjectCatalogEntry(
     string? LastRoute,
     IReadOnlyDictionary<string, long>? TimelineReadWatermarks = null,
     IReadOnlyDictionary<string, string>? SprintDrafts = null,
-    IReadOnlyDictionary<string, string>? MessageDrafts = null);
+    IReadOnlyDictionary<string, string>? MessageDrafts = null,
+    bool SprintListCollapsed = false,
+    IReadOnlyDictionary<string, double>? SprintScrollPositions = null);
 
 public sealed record ProjectCatalogResult(bool Succeeded, ProjectCatalogEntry? Entry, string DiagnosticCode)
 {
@@ -397,6 +406,55 @@ public sealed class ProjectCatalogStore(
             }
 
             return entry with { MessageDrafts = drafts };
+        }, cancellationToken);
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 1: persists the sidebar's per-project active-sprint-list
+    /// disclosure state so it survives an app restart, the same local write every other catalog
+    /// mutation here already uses -- never a project Host round-trip (the whole-sidebar rail is the
+    /// only sibling preference stored in user configuration instead; see
+    /// <see cref="ProjectCatalogEntry.SprintListCollapsed"/>'s own remarks for why this one is not).
+    /// </summary>
+    public Task<ProjectCatalogResult> SetSprintListCollapsedAsync(
+        Guid projectId, bool collapsed, CancellationToken cancellationToken) =>
+        MutateEntryAsync(projectId, entry => entry with { SprintListCollapsed = collapsed }, cancellationToken);
+
+    /// <summary>Plan 12.1 final-sweep gap 2: persists the sprint workspace's last scroll offset for
+    /// one sprint so it survives an app restart -- previously held only in an in-memory field on the
+    /// page instance (<c>WorkspaceShellPage.SprintWorkspace.cs</c>'s
+    /// <c>Forge.Desktop.Presentation.ScrollPositionPersistCoordinator</c>). PR #105 review findings
+    /// 3/4: this method itself is a plain unordered write, same as every sibling mutation here -- the
+    /// caller now debounces by elapsed time rather than scroll distance, and sequence-stamps each call
+    /// so a stale, late-completing call can never be allowed to overwrite a fresher one that already
+    /// landed (see that coordinator's own remarks for where that guarantee actually lives). A
+    /// non-positive <paramref name="position"/> clears the entry, matching every other per-sprint
+    /// dictionary's own empty-clears convention (there is nothing to restore below the top). NaN/
+    /// infinite values are rejected outright -- <see cref="System.Text.Json.JsonSerializer"/> cannot
+    /// round-trip either, and no legitimate scroll offset is ever one.</summary>
+    public Task<ProjectCatalogResult> SetSprintScrollPositionAsync(
+        Guid projectId, Guid sprintId, double position, CancellationToken cancellationToken)
+    {
+        if (double.IsNaN(position) || double.IsInfinity(position))
+        {
+            return Task.FromResult(ProjectCatalogResult.Fail(DiagnosticCodes.ProjectCatalogScrollPositionInvalid));
+        }
+
+        return MutateEntryAsync(projectId, entry =>
+        {
+            string key = sprintId.ToString("D");
+            Dictionary<string, double> positions = entry.SprintScrollPositions is { } existing
+                ? new(existing, StringComparer.Ordinal)
+                : new(StringComparer.Ordinal);
+            if (position <= 0)
+            {
+                positions.Remove(key);
+            }
+            else
+            {
+                positions[key] = position;
+            }
+
+            return entry with { SprintScrollPositions = positions };
         }, cancellationToken);
     }
 

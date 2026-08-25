@@ -29,10 +29,77 @@ public partial class WorkspaceShellPage
     /// anything sooner (plan 10: "bounded interval").</summary>
     private static readonly TimeSpan TimelinePollInterval = TimeSpan.FromSeconds(15);
 
-    private readonly Dictionary<Guid, double> sprintScrollPositions = [];
+    /// <summary>PR #105 review findings 3/4: the debounce/ordering/success-guarantee logic itself now
+    /// lives in this neutral, unit-testable class (see its own remarks) -- this page only wires MAUI's
+    /// <c>ScrollView.Scrolled</c> event and <see cref="scrollPersistDebounceTimer"/>'s
+    /// <c>IDispatcherTimer</c> scheduling to it. Constructed once in the main constructor
+    /// (<c>WorkspaceShellPage.xaml.cs</c>) with a delegate that always calls through the current
+    /// <see cref="sprintWorkspace"/> field, so a language-change rebuild of that field (see
+    /// <c>text.Changed</c> in the constructor) never leaves this coordinator pointing at a stale
+    /// instance.</summary>
+    private readonly ScrollPositionPersistCoordinator scrollPersistCoordinator;
+
+    /// <summary>How long the sprint workspace waits after the most recent <c>ScrollView.Scrolled</c>
+    /// event before flushing to the durable catalog -- restarted on every event (review finding 3),
+    /// so only the position at rest is ever persisted, never a mid-scroll sample. A single-shot timer
+    /// (<c>IsRepeating = false</c>): each restart is a fresh one-time countdown, not a recurring tick.
+    /// </summary>
+    private static readonly TimeSpan ScrollPositionPersistDebounce = TimeSpan.FromMilliseconds(500);
+
     private IDispatcherTimer? timelinePollTimer;
+    private IDispatcherTimer? scrollPersistDebounceTimer;
     private Guid scrollTrackedSprintId;
+    private Guid scrollTrackedProjectId;
     private bool scrollHandlerAttached;
+
+    /// <summary>Review finding 3's "flush-on-navigate-away": persists whatever is pending for the
+    /// sprint workspace currently being left, immediately, without waiting for
+    /// <see cref="scrollPersistDebounceTimer"/> to fire on its own. Called from
+    /// <c>RenderContentAsync</c> (route change to a different page) and <see cref="OnDisappearing"/>
+    /// (the whole page closing) -- both are "leaving the sprint workspace" in the sense plan 12.1
+    /// asks the resting position to survive.</summary>
+    private async Task FlushPendingScrollPositionAsync()
+    {
+        scrollPersistDebounceTimer?.Stop();
+        if (scrollTrackedSprintId == Guid.Empty)
+        {
+            return;
+        }
+
+        await FlushScrollPositionAsync(scrollTrackedProjectId, scrollTrackedSprintId).ConfigureAwait(true);
+    }
+
+    private async Task FlushScrollPositionAsync(Guid projectId, Guid sprintId)
+    {
+        ScrollPersistOutcome outcome = await scrollPersistCoordinator
+            .FlushAsync(projectId, sprintId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (!outcome.Applied || outcome.Succeeded)
+        {
+            // Round 2 review finding 4: a successful flush -- by far the common case, since this runs
+            // on every debounced scroll-to-rest -- has nothing to report, so it must not touch the
+            // render gate at all; it used to unconditionally request a render (even with an empty
+            // notice string), which is exactly what let it collide with PollTimelineAsync's own
+            // request below.
+            return;
+        }
+
+        // Round 2 review finding 3: this can fire from the debounce timer while still on the sprint
+        // workspace, from the navigate-away flush inside RenderContentAsync (BEFORE ContentHost is
+        // cleared -- see that method's own remarks), or from OnDisappearing as the page closes. A
+        // content-host-scoped label reached only through a render requested here was unreachable in
+        // the navigate-away/close paths: RenderContentAsync clears ContentHost and rebuilds the
+        // destination route before ShellRenderGate ever flushes a render deferred while its mutation
+        // guard was held, so the label was never in the tree by the time its text was set, and the
+        // very next sprint-workspace render throws the message away by resetting it to empty. Routing
+        // through `sidebarNotice` instead uses this shell's own established "notice that survives a
+        // content rebuild" precedent (see that field's remarks, PR #98/#103 review finding 3/1) --
+        // SidebarHost is never touched by a content-only render, and RequestSidebarRender defers
+        // through its own independent pending-render slot, so it can never collide with
+        // PollTimelineAsync's RequestRender call below either (round 2 finding 4).
+        sidebarNotice = Message(text.Resolve(MessageKeys.SprintScrollPositionSaveFailed), outcome.DiagnosticCode);
+        renderGate.RequestSidebarRender();
+    }
 
     private void StopTimelinePoll()
     {
@@ -887,15 +954,28 @@ public partial class WorkspaceShellPage
         ContentHost.Children.Add(rawEventsResult);
 
         scrollTrackedSprintId = sprintId;
+        scrollTrackedProjectId = workspace.Route.ProjectId!.Value;
         if (ContentHost.Parent is ScrollView scrollView)
         {
             // The ScrollView itself is a fixed XAML element that survives every render (only its
             // child's Children are rebuilt), so this handler is attached exactly once per page
             // instance -- not once per navigation -- and always reads the *current*
-            // scrollTrackedSprintId rather than closing over a stale one.
+            // scrollTrackedSprintId/scrollTrackedProjectId rather than closing over stale ones.
             if (!scrollHandlerAttached)
             {
                 scrollHandlerAttached = true;
+                scrollPersistDebounceTimer = Dispatcher.CreateTimer();
+                scrollPersistDebounceTimer.Interval = ScrollPositionPersistDebounce;
+                scrollPersistDebounceTimer.IsRepeating = false;
+                scrollPersistDebounceTimer.Tick += (_, _) =>
+                {
+                    if (scrollTrackedSprintId == Guid.Empty)
+                    {
+                        return;
+                    }
+
+                    _ = FlushScrollPositionAsync(scrollTrackedProjectId, scrollTrackedSprintId);
+                };
                 // PR #99 review finding 11: scrollTrackedSprintId is reset to Guid.Empty by
                 // RenderContentAsync whenever a non-sprint-workspace route renders (see
                 // WorkspaceShellPage.xaml.cs), so scrolling the project overview/settings/Forge
@@ -904,16 +984,34 @@ public partial class WorkspaceShellPage
                 // is the active route is ever recorded.
                 scrollView.Scrolled += (_, args) =>
                 {
-                    if (scrollTrackedSprintId != Guid.Empty)
+                    if (scrollTrackedSprintId == Guid.Empty)
                     {
-                        sprintScrollPositions[scrollTrackedSprintId] = args.ScrollY;
+                        return;
                     }
+
+                    // PR #105 review finding 3: records the in-memory value on every event (cheap),
+                    // but the durable write is time-debounced -- restarting this single-shot timer on
+                    // every event means it only ever fires once the scroll has actually come to rest,
+                    // not on a mid-scroll sample. A single mouse-wheel notch, let alone a drag/fling,
+                    // no longer triggers a full catalog.json read-modify-write per event.
+                    scrollPersistCoordinator.RecordScroll(scrollTrackedSprintId, args.ScrollY);
+                    scrollPersistDebounceTimer.Stop();
+                    scrollPersistDebounceTimer.Start();
                 };
             }
 
-            if (sprintScrollPositions.TryGetValue(sprintId, out double previousScrollY) && previousScrollY > 0)
+            // In-session navigation reads the in-memory cache first (unchanged from before this gap
+            // was closed); only the first render of a sprint since the app started -- nothing cached
+            // yet -- falls back to the catalog's durably persisted value.
+            double? previousScrollY = scrollPersistCoordinator.TryGetPending(sprintId, out double cachedScrollY)
+                ? cachedScrollY
+                : await sprintWorkspace
+                    .LoadScrollPositionAsync(scrollTrackedProjectId, sprintId, CancellationToken.None)
+                    .ConfigureAwait(true);
+            if (previousScrollY is { } restoredScrollY && restoredScrollY > 0)
             {
-                _ = scrollView.ScrollToAsync(0, previousScrollY, false);
+                scrollPersistCoordinator.Seed(sprintId, restoredScrollY);
+                _ = scrollView.ScrollToAsync(0, restoredScrollY, false);
             }
             else
             {

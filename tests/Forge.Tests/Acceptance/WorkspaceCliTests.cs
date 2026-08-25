@@ -81,6 +81,45 @@ public sealed class WorkspaceCliTests
         Assert.False(string.IsNullOrWhiteSpace(output.ToString()));
     }
 
+    /// <summary>Plan section 12.3's timeline localization closure: before this, <c>WriteTimeline</c>
+    /// rendered <c>item.MessageKey</c> verbatim (the raw `workflow.*` journal key), never resolved
+    /// through the localization catalog. Proves the fix at the actual rendered CLI surface in both
+    /// registered languages, not merely that <see cref="TimelineMessageFormatter"/> resolves the key
+    /// in isolation.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintTimelineRendersLocalizedTextInsteadOfTheRawMessageKey()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+
+        StringWriter englishOutput = new(CultureInfo.InvariantCulture);
+        RootCommand englishRoot = CliApplication.CreateRootCommand(Text(), englishOutput, environment.Application);
+        await englishRoot
+            .Parse(["sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        StringWriter russianOutput = new(CultureInfo.InvariantCulture);
+        RootCommand russianRoot = CliApplication.CreateRootCommand(
+            new SurfaceText(new ResourceLocalizationCatalog(), new CultureInfo("ru-RU")),
+            russianOutput,
+            environment.Application);
+        await russianRoot
+            .Parse(["sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        string english = englishOutput.ToString();
+        string russian = russianOutput.ToString();
+        Assert.DoesNotContain(MessageKeys.WorkflowSprintCreated, english, StringComparison.Ordinal);
+        Assert.DoesNotContain(MessageKeys.WorkflowSprintCreated, russian, StringComparison.Ordinal);
+        Assert.Contains("Sprint created.", english, StringComparison.Ordinal);
+        Assert.Contains("Спринт создан.", russian, StringComparison.Ordinal);
+    }
+
     /// <summary>Plan 12.3's redaction guarantee, proven at the actual rendered CLI surface (the
     /// second, independent pass — see <c>CliApplication.WriteTimeline</c>): a raw credential-like
     /// string recorded in a human-authored supersession instruction must never reach stdout, whether

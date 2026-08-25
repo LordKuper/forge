@@ -34,6 +34,71 @@ User-facing Forge changes are listed by release, newest first.
   before navigating there. Navigating into the content pane now always clears that stale sidebar
   record first.
 
+## v0.76.0
+
+### Added
+
+- Each project in Desktop's sidebar now has its own collapse/expand chevron for its sprint list,
+  independent of the whole-sidebar collapse rail, so a project with many sprints can be tucked away
+  without hiding the others. The chosen state persists per project across app restarts and defaults to
+  expanded, matching every prior release's behavior.
+- The sprint workspace's scroll position is now remembered per sprint across app restarts, not just
+  while navigating within the same session.
+- A project's completed and cancelled sprints, listed under its sidebar history entry, are now
+  clickable and open the same read-only sprint workspace an active sprint's "open" button does —
+  previously they were plain, non-interactive text.
+
+## v0.75.0
+
+### Added
+
+- Sprint timeline entries are now shown in the user's own language on both Desktop and the CLI,
+  instead of the raw internal event key (e.g. "Sprint completed." / "Спринт завершён." instead of
+  `workflow.sprint_completed`). Entries that carry an operator- or agent-authored value -- a posted
+  message, a node's summary, a supersession instruction, a rewind's reason, or a routing decision --
+  still show that exact text inside the localized sentence. A machine-only code embedded in a few
+  entries (why a sprint is blocked, an attempt's new state, a routing outcome) is now shown as a
+  localized phrase too, instead of the raw internal code (e.g. "Sprint blocked (review
+  convergence)." instead of "Sprint blocked (review_convergence)."). `forge events` and Desktop's
+  events view render the same localized text for these keys as the timeline does.
+
+### Fixed
+
+- Added an automated check that catches an English string accidentally left untranslated in the
+  Russian surface (previously only the presence of every key was verified, not that its value was
+  actually translated). Added a second automated check that fails if any internal event key used
+  anywhere in the codebase is missing its English/Russian text, catching five keys this release had
+  left unregistered.
+- The sprint timeline no longer crashes if it encounters an internal event key with no registered
+  text (e.g. after an upgrade removes an old key, or a diagnostic redaction rewrites one) -- it now
+  falls back to showing the raw key for that one entry instead of failing the whole timeline. That
+  same fallback now also covers a mistyped or mismatched translation template, and the machine-only
+  label lookups this release added.
+
+### Security
+
+- `forge events` and Desktop's events view now redact the same rendered text the sprint timeline
+  already redacts. Localizing these two surfaces' event lines had substituted the raw, unredacted
+  posted message, agent summary, supersession instruction, or rewind reason into the rendered
+  output with no redaction pass at all, unlike the sprint timeline's three independent passes over
+  the same underlying data -- a credential-shaped value in one of those fields could have reached
+  `forge events` or Desktop even though it could never reach `forge sprint timeline`. A multi-line
+  free-text value is also now collapsed to a single line so it can no longer split one event across
+  multiple rendered lines.
+
+## v0.74.0
+
+### Added
+
+- Desktop's global status row now shows authentication readiness, model availability, Host
+  connection status, and data-freshness state, alongside the existing provider health and quota
+  indicators. Authentication reports the most urgent state across your enabled providers (ready,
+  login required, or a failed check). Model availability distinguishes "installed" from "actually
+  usable right now," since a provider can be up to date but still need authentication before it can
+  run anything. Host connectivity reports whether Forge last reached the project Host, including a
+  distinct "status is stale" state when that reading is old enough not to trust. Every new indicator
+  has both visible text and a screen-reader name, matching the existing status-row convention.
+
 ## v0.73.0
 
 ### Added
@@ -52,7 +117,6 @@ User-facing Forge changes are listed by release, newest first.
 - Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
   crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
   CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
->>>>>>> origin/main
 
 ## v0.72.0
 

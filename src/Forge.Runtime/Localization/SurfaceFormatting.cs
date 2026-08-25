@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text.Json;
 using Forge.Application;
 using Forge.Compiler;
+using Forge.Infrastructure;
 using Forge.Providers;
 
 namespace Forge.Localization;
@@ -262,7 +263,20 @@ public static class SurfaceFormatting
     }
 
     /// <summary>ADR 0005's bounded event-log projection as one ordered line list, shared by `forge
-    /// events` and the Desktop control-events view so the two can never drift.</summary>
+    /// events` and the Desktop control-events view so the two can never drift. PR #107 review
+    /// finding 6: the message key is resolved through <see cref="TimelineMessageFormatter"/> --
+    /// the same neutral formatter the sprint timeline uses -- instead of rendered as the raw
+    /// `workflow.*`/`routing.*` journal key, so this shared surface is localized too rather than
+    /// leaving a second, un-localized rendering path for the same key space.</summary>
+    /// <remarks>PR #107 round 2 review finding 1 (security regression): unlike the sprint-timeline
+    /// render path (<c>CliApplication.WriteTimeline</c>), which applies <see cref="SecretRedactor"/>
+    /// three times (twice while <c>SprintTimelinePage</c> is built, once more over the fully
+    /// formatted line), <see cref="ControlEventsReader"/> reads the journal directly and applies no
+    /// redaction at all. <see cref="TimelineMessageFormatter.Format"/> substitutes raw, unredacted
+    /// journal arguments (a posted message, an agent summary, a supersession instruction, a rewind
+    /// reason) into the rendered text, so this method must redact the fully formatted line itself --
+    /// the same belt-and-braces pass <c>WriteTimeline</c> already applies -- rather than ship a
+    /// second rendering path for the same event data with weaker protection than the first.</remarks>
     public static IReadOnlyList<string> EventLines(SurfaceText text, ControlEventsPage page)
     {
         ArgumentNullException.ThrowIfNull(text);
@@ -276,14 +290,28 @@ public static class SurfaceFormatting
 
         foreach (ControlEventRecord record in page.Events)
         {
-            lines.Add(string.Create(
+            // Round 2 review finding 2: the free text TimelineMessageFormatter substitutes in (e.g.
+            // a posted message) is bounded in length but not in newline content, so an embedded
+            // newline would otherwise split one event across multiple physical lines -- collapsed to
+            // spaces so every event still renders as exactly one entry in this ordered line list.
+            string messageText = SingleLine(
+                TimelineMessageFormatter.Format(text, record.Event.MessageKey, record.Event.Arguments));
+            string line = string.Create(
                 CultureInfo.InvariantCulture,
                 $"  {record.SprintId} {record.Event.Type} {Machine(record.Event.Aggregate.Kind)}:" +
-                    $"{record.Event.Aggregate.Id} {record.Event.MessageKey}"));
+                    $"{record.Event.Aggregate.Id} {messageText}");
+            lines.Add(SecretRedactor.Redact(line));
         }
 
         return lines;
     }
+
+    /// <summary>Collapses every line break to a single space so a free-text value can never split
+    /// one rendered event across multiple physical lines (PR #107 round 2 review finding 2).</summary>
+    private static string SingleLine(string value) =>
+        value.Replace("\r\n", " ", StringComparison.Ordinal)
+            .Replace('\r', ' ')
+            .Replace('\n', ' ');
 
     private static void AppendNodeTree(SurfaceText text, List<string> lines, SprintDetails details)
     {
