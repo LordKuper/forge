@@ -591,8 +591,18 @@ public sealed class ProcessRunnerTests
 
     private static async Task<int> ReadPidAsync(string path)
     {
-        string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-        return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+        for (int attempt = 0; ; attempt++)
+        {
+            try
+            {
+                string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+                return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+            }
+            catch (IOException) when (attempt < 19)
+            {
+                await Task.Delay(50, TestContext.Current.CancellationToken);
+            }
+        }
     }
 
     private static bool IsProcessAlive(int processId)

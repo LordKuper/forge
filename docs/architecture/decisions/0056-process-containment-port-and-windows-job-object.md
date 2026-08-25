@@ -1,4 +1,4 @@
-# ADR 0055: Process containment port and Windows Job Object adapter
+# ADR 0056: Process containment port and Windows Job Object adapter
 
 - Status: Accepted
 - Date: 2026-08-25

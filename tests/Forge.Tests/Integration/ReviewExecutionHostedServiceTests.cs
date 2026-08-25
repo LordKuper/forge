@@ -83,14 +83,26 @@ public sealed class ReviewExecutionHostedServiceTests
 
     [Fact]
     [Trait("Category", "Integration")]
-    public async Task AChangesRequestedVerdictLeavesTheNodeRunningAndAccumulatesFurtherIterations()
+    public async Task AChangesRequestedVerdictLeavesTheNodeRunningForTheNextIteration()
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         FakeWorktreeManager worktrees = new();
+        TaskCompletionSource secondInvocationStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int invocationCount = 0;
         FakeRunnableLlmProvider provider = new(
             new ProviderId("fake"),
-            (_, _, _, _) => Task.FromResult(ProviderRunResult.Success(
-                [], new ProviderTerminalResult("Needs work.\nCHANGES_REQUESTED"))));
+            async (_, _, providerCancellationToken, _) =>
+            {
+                if (Interlocked.Increment(ref invocationCount) == 1)
+                {
+                    return ProviderRunResult.Success(
+                        [], new ProviderTerminalResult("Needs work.\nCHANGES_REQUESTED"));
+                }
+
+                secondInvocationStarted.SetResult();
+                await Task.Delay(Timeout.InfiniteTimeSpan, providerCancellationToken);
+                return ProviderRunResult.Success([], new ProviderTerminalResult("APPROVED"));
+            });
         using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
         Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
 
@@ -103,24 +115,21 @@ public sealed class ReviewExecutionHostedServiceTests
         await service.StartAsync(cancellationToken);
         try
         {
-            // A repeated identical (empty) finding set converges after its second occurrence
-            // (ReviewConvergencePolicy.HasRepeatedExternalFindingSet), so wait for exactly the
-            // second iteration to prove the node stays open for at least one full extra cycle
-            // before that gate would fire, distinguishing "genuinely not converged yet" from
-            // "already blocked."
-            await WaitForIterationCountAsync(scheduler, environment, sprintId, 2, cancellationToken);
+            await secondInvocationStarted.Task.WaitAsync(cancellationToken);
+
+            SprintWorkflowState state =
+                (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+            NodeSnapshot reviewNode = state.Nodes[ReviewNodeId];
+            Assert.Equal(NodeState.Running, reviewNode.State);
+            Assert.Equal(1, reviewNode.AttemptCount);
+            Assert.Single(await scheduler.GetReviewIterationsAsync(
+                environment.ProjectRoot, sprintId, cancellationToken));
+            Assert.Empty(await ReviewResultsAsync(store, environment, sprintId, cancellationToken));
         }
         finally
         {
             await service.StopAsync(cancellationToken);
         }
-
-        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
-        // Two iterations in and the node has neither succeeded nor failed -- MaxAutomaticRetries (2)
-        // would have already exhausted an ordinary Work node's attempt budget by now if this
-        // executor mistakenly routed ChangesRequested through the generic failure path.
-        Assert.Equal(NodeState.Running, state.Nodes[ReviewNodeId].State);
-        Assert.Empty(await ReviewResultsAsync(store, environment, sprintId, cancellationToken));
     }
 
     // ADR 0006's repeated-finding-set convergence gate: two consecutive ChangesRequested verdicts
@@ -476,29 +485,6 @@ public sealed class ReviewExecutionHostedServiceTests
         Assert.Fail(
             $"The review node of sprint {sprintId.Value:D} never reached terminal failure " +
             $"(last observed state={observed?.State}, attemptCount={observed?.AttemptCount}).");
-    }
-
-    private static async Task WaitForIterationCountAsync(
-        SprintScheduler scheduler,
-        TestEnvironment environment,
-        SprintId sprintId,
-        int expected,
-        CancellationToken cancellationToken)
-    {
-        Stopwatch stopwatch = Stopwatch.StartNew();
-        int observed = 0;
-        while (stopwatch.Elapsed < PollTimeout)
-        {
-            observed = (await scheduler.GetReviewIterationsAsync(environment.ProjectRoot, sprintId, cancellationToken)).Count;
-            if (observed >= expected)
-            {
-                return;
-            }
-
-            await Task.Delay(PollInterval, cancellationToken);
-        }
-
-        Assert.Fail($"Sprint {sprintId.Value:D} only recorded {observed} review iterations, expected {expected}.");
     }
 
     private static async Task<RouteDecision> WaitForDeferredRouteDecisionAsync(
