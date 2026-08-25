@@ -192,9 +192,13 @@
   <data name="SidebarExpandAction" xml:space="preserve"><value>Развернуть боковую панель</value></data>
   <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Настройки Forge</value></data>
   <data name="SidebarHistoryLabel" xml:space="preserve"><value>История</value></data>
+  <data name="SidebarProjectCollapseSprintsAction" xml:space="preserve"><value>Свернуть спринты</value></data>
+  <data name="SidebarProjectExpandSprintsAction" xml:space="preserve"><value>Развернуть спринты</value></data>
+  <data name="SidebarProjectSprintsSaveFailed" xml:space="preserve"><value>Не удалось сохранить состояние списка спринтов проекта.</value></data>
   <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Удалить из списка</value></data>
   <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Добавьте проект, чтобы начать.</value></data>
   <data name="SidebarCollapseSaveFailed" xml:space="preserve"><value>Не удалось сохранить состояние свёрнутой панели.</value></data>
+  <data name="SprintScrollPositionSaveFailed" xml:space="preserve"><value>Не удалось сохранить позицию прокрутки рабочей области спринта.</value></data>
   <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>Проект ещё не выбран.</value></data>
   <data name="ProjectOverviewTitle" xml:space="preserve"><value>Обзор проекта</value></data>
   <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Активные спринты</value></data>

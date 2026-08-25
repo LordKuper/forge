@@ -192,9 +192,13 @@
   <data name="SidebarExpandAction" xml:space="preserve"><value>Expand sidebar</value></data>
   <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Forge settings</value></data>
   <data name="SidebarHistoryLabel" xml:space="preserve"><value>History</value></data>
+  <data name="SidebarProjectCollapseSprintsAction" xml:space="preserve"><value>Collapse sprints</value></data>
+  <data name="SidebarProjectExpandSprintsAction" xml:space="preserve"><value>Expand sprints</value></data>
+  <data name="SidebarProjectSprintsSaveFailed" xml:space="preserve"><value>Could not save the project's sprint list state.</value></data>
   <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Remove from list</value></data>
   <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Add a project to get started.</value></data>
   <data name="SidebarCollapseSaveFailed" xml:space="preserve"><value>Could not save the sidebar's collapsed state.</value></data>
+  <data name="SprintScrollPositionSaveFailed" xml:space="preserve"><value>Could not save the sprint workspace's scroll position.</value></data>
   <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>No project selected yet.</value></data>
   <data name="ProjectOverviewTitle" xml:space="preserve"><value>Project overview</value></data>
   <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Active sprints</value></data>

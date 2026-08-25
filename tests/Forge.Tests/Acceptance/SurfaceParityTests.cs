@@ -572,6 +572,74 @@ public sealed class SurfaceParityTests
         Assert.DoesNotContain(", true, CancellationToken.None)", source, StringComparison.Ordinal);
     }
 
+    /// <summary>PR #105 review finding 3: a 4.0 device-independent-unit DISTANCE gate was not a
+    /// throttle -- a single mouse-wheel notch exceeds it, so essentially every scroll event issued a
+    /// full <c>catalog.json</c> read-modify-write with no rest detection at all. The fix replaces it
+    /// with a TIME-based debounce: a single-shot <c>IDispatcherTimer</c> (<c>IsRepeating = false</c>)
+    /// restarted (<c>Stop</c> then <c>Start</c>) on every <c>ScrollView.Scrolled</c> event, so only
+    /// the position at rest -- once the timer is finally left alone long enough to fire -- is ever
+    /// written. No MAUI control can be instantiated headlessly in this suite, so this pins the
+    /// mechanism directly in the source: the old distance-gate constant must be gone, and the
+    /// debounce restart must appear inside the <c>Scrolled</c> handler itself.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void ScrollPositionPersistenceDebouncesByElapsedTimeNotScrollDistance()
+    {
+        string source = DesktopSourceText();
+
+        Assert.DoesNotContain("ScrollPositionPersistThreshold", source, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.IsRepeating = false;", source, StringComparison.Ordinal);
+
+        string scrolledHandler = BracedBlockAfter(source, "scrollView.Scrolled += (_, args) =>");
+        Assert.Contains("scrollPersistCoordinator.RecordScroll(", scrolledHandler, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.Stop();", scrolledHandler, StringComparison.Ordinal);
+        Assert.Contains("scrollPersistDebounceTimer.Start();", scrolledHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 round-1 review finding 4(c): the debounced scroll-position write used to be
+    /// fire-and-forget with its <c>ProjectCatalogResult</c> silently discarded -- the only catalog/
+    /// config write in this shell with no failure notice at all, unlike every sibling write (e.g.
+    /// <c>SidebarProjectSprintsSaveFailed</c>). That round-1 fix only asserted the message key was
+    /// referenced somewhere in the file -- it did not prove the notice ever reached a user. Round-2
+    /// finding 3 caught exactly that gap: the notice was routed through a content-host-scoped label
+    /// reachable only via <c>ShellRenderGate.RequestRender</c>, which is unreachable on the
+    /// navigate-away/page-close paths (<c>RenderContentAsync</c> clears <c>ContentHost</c> and
+    /// rebuilds the destination route before a render deferred while the mutation guard was held ever
+    /// runs, and the very next sprint-workspace render resets the label back to empty before it could
+    /// ever be seen). No MAUI control can be instantiated headlessly in this suite, so this pins the
+    /// fix's actual routing rather than just the message key: the notice goes through
+    /// <c>sidebarNotice</c> -- this shell's own established "notice that survives a content rebuild"
+    /// precedent (see that field's remarks, PR #98/#103 review finding 3/1) -- via
+    /// <c>RequestSidebarRender</c>, guarded so a successful/no-op flush never touches it, and never
+    /// through the content-only <c>RequestRender</c> that <c>PollTimelineAsync</c>'s own timeline
+    /// refresh already owns (round-2 finding 4's collision).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void AFailedScrollPositionWriteSurfacesANoticeInsteadOfBeingDiscarded()
+    {
+        string method =
+            SprintWorkspaceBody("private async Task FlushScrollPositionAsync(Guid projectId, Guid sprintId)");
+
+        Assert.Contains("MessageKeys.SprintScrollPositionSaveFailed", method, StringComparison.Ordinal);
+
+        Assert.Contains("renderGate.RequestSidebarRender();", method, StringComparison.Ordinal);
+
+        int noSuccessGuardIndex =
+            method.IndexOf("if (!outcome.Applied || outcome.Succeeded)", StringComparison.Ordinal);
+        int noticeIndex = method.IndexOf("sidebarNotice = Message(", StringComparison.Ordinal);
+        Assert.True(noSuccessGuardIndex >= 0, "A successful/no-op flush must return before reporting anything.");
+        Assert.True(noticeIndex >= 0, "The failure notice must be routed through sidebarNotice.");
+        Assert.True(
+            noSuccessGuardIndex < noticeIndex,
+            "The success/no-op guard must run before the notice is ever set, so a routine flush never reports anything.");
+
+        // Never routed through the content-only slot PollTimelineAsync's own render request already
+        // owns (round-2 finding 4) -- a content-host-scoped label was also round-2 finding 3's own
+        // unreachability bug.
+        Assert.DoesNotContain("renderGate.RequestRender(", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("scrollPersistNoticeLabel", method, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// PR #99 review finding 5: every gated action above (gate/supersede/confirm/test-work/finalize/
     /// stop/stage-move) aborts before touching the Host when its own confirmation dialog is declined
@@ -691,6 +759,46 @@ public sealed class SurfaceParityTests
         Assert.Contains("bool nowCollapsed = !collapsed;", toggleHandler, StringComparison.Ordinal);
         Assert.DoesNotContain("nowCollapsed = collapsed;", toggleHandler, StringComparison.Ordinal);
         Assert.DoesNotContain("if (result.Succeeded)", toggleHandler, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 review finding 2: the per-project chevron's own accessible name promises
+    /// "Collapse sprints" (the whole per-project block), but the fix that shipped in that PR gated
+    /// only the active-sprint loop on <c>project.SprintListExpanded</c> -- the history label and its
+    /// (up to 10) navigable buttons rendered unconditionally underneath, so a collapsed project could
+    /// still show more sprint rows than it hid. No MAUI control can be instantiated headlessly in
+    /// this suite, so this pins the fix directly in the source: both the active-sprint loop AND the
+    /// history block must sit inside the SAME <c>if (project.SprintListExpanded)</c> braced block,
+    /// proven by brace-matching (<see cref="BracedBlockAfter"/>) rather than a line-position guess
+    /// that formatting could invalidate.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void CollapsingAProjectsSprintListHidesBothActiveSprintsAndHistory()
+    {
+        string expandedBlock = BracedBlockAfter(DesktopSourceText(), "if (project.SprintListExpanded)");
+
+        Assert.Contains(
+            "foreach (SidebarSprintItem sprint in project.ActiveSprints)", expandedBlock, StringComparison.Ordinal);
+        Assert.Contains(
+            "foreach (SidebarHistoryItem historyItem in project.History)", expandedBlock, StringComparison.Ordinal);
+    }
+
+    /// <summary>PR #105 review finding 1: the sidebar's "History (n)" label used to read
+    /// <c>project.History.Count</c> -- capped at <see cref="SidebarViewModel.MaxSidebarHistory"/> --
+    /// instead of the uncapped total, silently under-reporting for any project with more than 10
+    /// terminal sprints. <see cref="SidebarViewModelTests.LoadAsyncCapsHistoryAtTheDocumentedBoundOrderedNewestFirst"/>
+    /// proves <c>SidebarProjectItem.HistoryTotalCount</c> itself carries the true total; this pins the
+    /// desktop label actually reading that field instead of the capped list length (no MAUI control
+    /// can be instantiated headlessly in this suite).</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarHistoryLabelReadsTheUncappedTotalNotTheCappedListLength()
+    {
+        string source = DesktopSourceText();
+
+        Assert.Contains(
+            "$\"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})\"",
+            source, StringComparison.Ordinal);
+        Assert.DoesNotContain("SidebarHistoryLabel)} ({project.History.Count})", source, StringComparison.Ordinal);
     }
 
     /// <summary>PR #98 review round 1 finding 2: <c>LabeledRow</c> used to discard its label

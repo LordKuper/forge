@@ -174,6 +174,56 @@ public sealed class ShellRenderGateTests
         Assert.Equal(1, renders);
     }
 
+    /// <summary>
+    /// PR #105 round-2 review finding 4: <c>WorkspaceShellPage.SprintWorkspace.cs</c>'s
+    /// <c>PollTimelineAsync</c> already used <see cref="ShellRenderGate.RequestRender"/> for its own
+    /// timeline refresh; a second, unrelated caller (the scroll-position-save failure notice) briefly
+    /// used that same method too, and since <see cref="ShellRenderGate.RequestRender"/> deliberately
+    /// coalesces same-caller repeats into one last-request-wins slot, two DIFFERENT callers sharing it
+    /// evicted each other -- a routine timeline poll tick could silently drop a pending scroll-notice
+    /// render, or vice versa. The actual fix moved the scroll-notice off
+    /// <see cref="ShellRenderGate.RequestRender"/> onto <see cref="ShellRenderGate.RequestSidebarRender"/>
+    /// -- its own independent pending slot (see
+    /// <see cref="ASidebarRenderRequestedDuringAnInFlightMutationStillRendersOnceAfterwards"/>) -- so
+    /// this reproduces exactly that combination: a content render queued through
+    /// <see cref="ShellRenderGate.RequestRender"/> (the timeline poll) and a sidebar render queued
+    /// through <see cref="ShellRenderGate.RequestSidebarRender"/> (the notice) during the same
+    /// in-flight mutation must both survive, neither one silently discarding the other.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATimelineRenderRequestAndASidebarNoticeRenderRequestBothSurviveTogether()
+    {
+        int timelineRenders = 0;
+        int sidebarRenders = 0;
+        TaskCompletionSource mutationReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ShellRenderGate gate = new(
+            renderSidebarAsync: () =>
+            {
+                sidebarRenders++;
+                return Task.CompletedTask;
+            },
+            renderContentAsync: () => Task.CompletedTask);
+
+        Task mutation = gate.RunAsync(async () =>
+        {
+            // PollTimelineAsync's own render step, arriving while this unrelated mutation still holds
+            // the guard.
+            gate.RequestRender(() => timelineRenders++);
+            // The scroll-position-save failure notice, arriving in the same window.
+            gate.RequestSidebarRender();
+            Assert.Equal(0, timelineRenders);
+            Assert.Equal(0, sidebarRenders);
+            await mutationReleased.Task;
+        });
+
+        mutationReleased.SetResult();
+        await mutation;
+
+        Assert.Equal(1, timelineRenders);
+        Assert.Equal(1, sidebarRenders);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public void ARequestRenderWhileIdleRunsImmediately()

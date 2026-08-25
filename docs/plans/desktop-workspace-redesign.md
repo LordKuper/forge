@@ -530,15 +530,16 @@ prior behavior or an equivalent mutation.
       availability today is accessible-name-only — the sidebar's visible project row carries no
       glyph/color/suffix; it only becomes visible once Project Overview is opened.)*
 - [x] Selecting a project, sprint, Forge settings, or project settings opens the matching page.
-- [ ] The last valid route, sidebar expansion, timeline position, and unsent draft survive restart.
-      *(Partial: route and draft persist via the catalog. Sidebar expand/collapse state does not
-      exist anywhere yet — every project's sprints always render fully expanded. Timeline scroll
-      position is held in an in-memory dictionary on the page instance and is lost on restart,
-      though it survives in-session navigation.)*
-- [ ] Completed and cancelled sprints remain reachable without crowding the active list. *(Partial:
-      not-crowding is satisfied — a capped, separate history list exists. Reachable is not: history
-      entries render as plain non-interactive labels with no navigation, unlike active sprint cards'
-      "open" button.)*
+- [x] The last valid route, sidebar expansion, timeline position, and unsent draft survive restart.
+      Route and draft persist via the catalog. Each project's active-sprint-list disclosure state
+      (per-project, distinct from the whole-sidebar collapse rail) is a chevron next to the project
+      row, persisted per project in the catalog and defaulting to expanded. The sprint workspace's
+      scroll position is persisted per sprint in the catalog too (mirrored from the page's in-session
+      cache, throttled rather than written on every scroll delta) and restored on the first render
+      after a restart, falling back to the in-session cache on ordinary in-app navigation.
+- [x] Completed and cancelled sprints remain reachable without crowding the active list. A project's
+      sidebar row shows its capped, separate history list, and each entry is now a real navigable
+      button — like an active sprint's "open" button — that opens the same read-only sprint workspace.
 
 ### 12.2 Settings
 
@@ -697,10 +698,10 @@ prior behavior or an equivalent mutation.
 The items left unchecked above are genuine, honestly-assessed gaps found during Slice 7's
 release-hardening sweep (PR #100) rather than silently-passed boxes. None block the redesign's core
 correctness guarantees (workflow state machines, stop/rewind crash-recovery sagas, and redaction all
-hold under adversarial review). They fall into three groups:
+hold under adversarial review). They originally fell into three groups; two are now fully closed:
 
-1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
-   completed/cancelled sprint navigability are UI-only additions not yet built.
+1. **Missing persistence/navigation** — closed in v0.76.0: sidebar expand/collapse state, timeline
+   scroll position, and completed/cancelled sprint navigability are all built.
 2. **Missing data/localization** — closed: the sticky header's provider/model field (v0.73.0),
    timeline item content localization (v0.75.0), and the global status row's authentication,
    model-availability, and Host-connectivity indicators (v0.74.0) are all now real — see 12.3/12.6

@@ -21,9 +21,24 @@ public sealed record SidebarSprintItem(
     bool HasActiveOperation,
     string AccessibleName);
 
-/// <summary>One sidebar project row. <see cref="ActiveSprints"/> is already ordered by
-/// <see cref="SprintOrderingRank"/>; <see cref="HistoryCount"/> is every terminal sprint, reachable
-/// through a separate history entry rather than crowding this list (plan 12.1).</summary>
+/// <summary>One navigable row in a project's capped sprint history (plan 12.1 final-sweep gap 3):
+/// a terminal (completed/cancelled) sprint, distinct from <see cref="SidebarSprintItem"/> only in
+/// that it never carries attention/progress/active-operation fields no terminal sprint can have.
+/// </summary>
+public sealed record SidebarHistoryItem(Guid SprintId, int CreationSequence, string StateText, string AccessibleName);
+
+/// <summary>One sidebar project row. <see cref="ActiveSprints"/> and <see cref="History"/> are both
+/// shown only while <see cref="SprintListExpanded"/> (plan 12.1 final-sweep gap 1; default
+/// <see langword="true"/> so an upgrading user sees exactly what every prior release always
+/// rendered) -- PR #105 review finding 2: the chevron governs the whole per-project sprint block, not
+/// only the active list, matching its own "Collapse sprints" accessible name and the changelog's
+/// "tucked away without hiding the others" claim (the "others" being other projects' rows, not the
+/// same project's own history). <see cref="ActiveSprints"/> is already ordered by
+/// <see cref="SprintOrderingRank"/>. <see cref="History"/> is every terminal sprint, newest first,
+/// capped at <see cref="SidebarViewModel.MaxSidebarHistory"/> rows so it never crowds
+/// <see cref="ActiveSprints"/> (plan 12.1 final-sweep gap 3) -- but <see cref="HistoryTotalCount"/> is
+/// the true, uncapped total of terminal sprints (PR #105 review finding 1: the label must report how
+/// many terminal sprints the project actually has, not how many rows are reachable).</summary>
 public sealed record SidebarProjectItem(
     Guid ProjectId,
     string Root,
@@ -31,7 +46,9 @@ public sealed record SidebarProjectItem(
     bool Available,
     bool Initialized,
     IReadOnlyList<SidebarSprintItem> ActiveSprints,
-    int HistoryCount,
+    bool SprintListExpanded,
+    IReadOnlyList<SidebarHistoryItem> History,
+    int HistoryTotalCount,
     string AccessibleName);
 
 /// <summary>Plan section 4.1's bottom status row, distinguishing every state plan 12.6 requires:
@@ -79,8 +96,8 @@ public sealed record SidebarStatusRow(
 
 /// <summary>ADR 0050 addendum: <see cref="Collapsed"/> is the workspace shell's whole-sidebar
 /// collapse state -- a Desktop-instance-level UI preference (<see cref="ConfigurationKeys.SidebarCollapsed"/>,
-/// User scope), never tied to any one project, distinct from a future per-project sprint-list
-/// disclosure.</summary>
+/// User scope), never tied to any one project, distinct from each <see cref="SidebarProjectItem"/>'s
+/// own <see cref="SidebarProjectItem.SprintListExpanded"/> (plan 12.1 final-sweep gap 1).</summary>
 public sealed record SidebarSnapshot(
     IReadOnlyList<SidebarProjectItem> Projects,
     SidebarStatusRow Status,
@@ -133,6 +150,12 @@ public sealed class SidebarViewModel(
         connectivityMonitor ?? throw new ArgumentNullException(nameof(connectivityMonitor));
     private readonly IClock clock = clock ?? new SystemClock();
 
+    /// <summary>Plan 12.1 final-sweep gap 3's history cap -- matches
+    /// <see cref="ProjectOverviewViewModel.MaxRecentHistory"/>'s own bound so the sidebar and the
+    /// project overview page never disagree about how many recent terminal sprints "reachable
+    /// without crowding" means.</summary>
+    public const int MaxSidebarHistory = 10;
+
     /// <summary>Loads the sidebar snapshot. <paramref name="selectedProjectId"/> is the workspace
     /// shell's currently routed project (<c>WorkspaceRoute.ProjectId</c>), if any -- PR #106 review
     /// finding 5: <see cref="connectivityMonitor"/> tracks a reading per project (Forge Hosts are
@@ -171,13 +194,22 @@ public sealed class SidebarViewModel(
             ProjectSnapshot snapshot = await application
                 .GetProjectSnapshotAsync(entry.Root, cancellationToken)
                 .ConfigureAwait(false);
-            int historyCount = snapshot.Sprints.Count(sprint => WorkflowStateMachines.IsTerminal(sprint.State));
             string displayName = ProjectDisplayName.Resolve(entry.Root, entry.Alias);
             List<SidebarSprintItem> sprints =
             [
                 .. summary.ActiveSprints
                     .OrderBySidebarRule(sprint => sprint.State, sprint => sprint.CreationSequence)
                     .Select(sprint => ToSprintItem(displayName, sprint)),
+            ];
+            List<SprintStatus> terminalSprints =
+            [
+                .. snapshot.Sprints
+                    .Where(sprint => WorkflowStateMachines.IsTerminal(sprint.State))
+                    .OrderByDescending(sprint => sprint.CreationSequence),
+            ];
+            List<SidebarHistoryItem> history =
+            [
+                .. terminalSprints.Take(MaxSidebarHistory).Select(sprint => ToHistoryItem(displayName, sprint)),
             ];
             projects.Add(new(
                 entry.ProjectId,
@@ -186,7 +218,9 @@ public sealed class SidebarViewModel(
                 summary.Available,
                 summary.Initialized,
                 sprints,
-                historyCount,
+                !entry.SprintListCollapsed,
+                history,
+                terminalSprints.Count,
                 AccessibleProjectName(displayName, summary)));
         }
 
@@ -217,6 +251,15 @@ public sealed class SidebarViewModel(
             view.Values.FirstOrDefault(item => item.Key == ConfigurationKeys.SidebarCollapsed);
         return value?.Value.ValueKind == JsonValueKind.True;
     }
+
+    /// <summary>Plan 12.1 final-sweep gap 1: persists one project's active-sprint-list disclosure
+    /// state through the local catalog (never a project Host round-trip -- see
+    /// <see cref="ProjectCatalogEntry.SprintListCollapsed"/>'s own remarks for why this is catalog
+    /// state rather than a configuration key like <see cref="SetCollapsedAsync"/>'s whole-sidebar
+    /// rail).</summary>
+    public Task<ProjectCatalogResult> SetProjectSprintsExpandedAsync(
+        Guid projectId, bool expanded, CancellationToken cancellationToken) =>
+        catalog.SetSprintListCollapsedAsync(projectId, !expanded, cancellationToken);
 
     public async Task<AddProjectResult> AddProjectAsync(string? manualPath, CancellationToken cancellationToken)
     {
@@ -261,6 +304,18 @@ public sealed class SidebarViewModel(
             sprint.StagesTotal,
             sprint.HasActiveOperation,
             accessible);
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint's sidebar-history row. Never carries
+    /// an attention suffix -- <see cref="SprintOrderingRank.RequiresHumanAttention"/> is only ever
+    /// true for a non-terminal state, so a terminal sprint can never need it.</summary>
+    private SidebarHistoryItem ToHistoryItem(string projectDisplayName, SprintStatus sprint)
+    {
+        string stateText = SurfaceFormatting.Machine(sprint.State);
+        string accessible = string.Create(
+            System.Globalization.CultureInfo.InvariantCulture,
+            $"{projectDisplayName}, {text.Resolve(MessageKeys.SprintIdLabel)} {sprint.CreationSequence}, {stateText}");
+        return new(sprint.Id, sprint.CreationSequence, stateText, accessible);
     }
 
     internal static string AttentionReasonKey(SprintState state) => state switch

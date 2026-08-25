@@ -2,6 +2,20 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.76.0
+
+### Added
+
+- Each project in Desktop's sidebar now has its own collapse/expand chevron for its sprint list,
+  independent of the whole-sidebar collapse rail, so a project with many sprints can be tucked away
+  without hiding the others. The chosen state persists per project across app restarts and defaults to
+  expanded, matching every prior release's behavior.
+- The sprint workspace's scroll position is now remembered per sprint across app restarts, not just
+  while navigating within the same session.
+- A project's completed and cancelled sprints, listed under its sidebar history entry, are now
+  clickable and open the same read-only sprint workspace an active sprint's "open" button does —
+  previously they were plain, non-interactive text.
+
 ## v0.75.0
 
 ### Added
