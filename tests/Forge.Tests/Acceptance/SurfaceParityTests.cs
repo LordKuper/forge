@@ -1507,8 +1507,15 @@ public sealed class SurfaceParityTests
         Assert.Equal(cliTarget, desktopAssessment.TargetStageId);
         Assert.Equal(cliDirection, desktopAssessment.Direction);
         Assert.Equal(cliAllowed, desktopAssessment.Allowed);
-        Assert.Contains(cliSource, desktopPrompt, StringComparison.Ordinal);
-        Assert.Contains(cliTarget, desktopPrompt, StringComparison.Ordinal);
+        // Round 2 review of PR #109: bare `Assert.Contains(cliSource/cliTarget, ...)` is vacuous with
+        // this fixture's single-character stage ids -- "a" matches inside "Current st**a**ge" and "b"
+        // matches inside "**b**locked"/"**b**udget" regardless of whether MovePrompt ever interpolates
+        // the actual source/target id at all. Asserting the labelled line instead pins this to the
+        // real semantic-parity claim -- it fails if the id is ever dropped from Desktop's rendering.
+        Assert.Contains(
+            $"{text.Resolve(MessageKeys.MoveToStageSourceLabel)} {cliSource}", desktopPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{text.Resolve(MessageKeys.MoveToStageTargetLabel)} {cliTarget}", desktopPrompt, StringComparison.Ordinal);
         // SurfaceFormatting.Machine is the exact shared production formatter MovePrompt's own
         // Direction line uses -- reusing it here (rather than hardcoding a casing assumption) proves
         // Desktop's rendering carries the same direction CLI reported, not a test-authored guess.

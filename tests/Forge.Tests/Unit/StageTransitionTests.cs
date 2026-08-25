@@ -1308,13 +1308,27 @@ public sealed class StageTransitionTests
     /// <see cref="SprintScheduler.AdvanceGraphAsync"/> call already ran) but before the durable
     /// convergence marker (<see cref="ISprintStore.AppendStageTransitionConvergedAsync"/>) landed --
     /// the exact window round 1 review of PR #96 (finding 4) found missing for this same call.
-    /// Simulates the crash by calling <c>AdvanceGraphAsync</c> directly, bypassing the coordinator
-    /// entirely, so no convergence marker is ever recorded for this attempt. A fresh <c>MoveAsync</c>
-    /// call (a new idempotency key) must still recognize the target as reachable (direction
-    /// re-derives as <c>Advance</c> again, since a merely-<c>Ready</c> target is never mistaken for
-    /// the sprint's own "current" stage -- unlike the rewind saga, no durable marker is needed here
-    /// because this re-derivation is itself stable across every step boundary) and durably record
-    /// convergence, without disturbing the already-`Ready` target a second time.</summary>
+    /// <para>Round 2 review of PR #109 found the prior version of this test a proven no-op: since
+    /// <c>CompleteAttemptAsync</c> already calls <c>AdvanceGraphAsync</c> itself
+    /// (<c>SprintScheduler.cs:583</c>), "b" was already <c>Ready</c> by the time the prior test's own
+    /// direct <c>AdvanceGraphAsync</c> call ran, and that call changed nothing observable (node
+    /// version and journal sequence unchanged) -- it reduced to
+    /// <see cref="AdvanceDoesNotRequireConfirmationMatchingItsOwnAssessment"/> plus two already-true
+    /// assertions.</para>
+    /// <para>This version constructs a genuine crash instead of asserting around one: a
+    /// <see cref="FlakySprintStore"/>-backed coordinator runs the real, complete
+    /// <c>CommitAdvanceAsync</c> saga -- predecessor skip loop (a no-op here), the real
+    /// <c>AdvanceGraphAsync</c> promotion, then the marker append -- and a hook on that last append
+    /// throws, standing in for a Host process dying at exactly that instant, after every prior step's
+    /// own durable mutation already landed but before this one did. The hook's own invocation is
+    /// asserted directly (proving this call really reached and executed that step, not skipped or
+    /// no-op'd it), the state right after is asserted unmarked (no convergence recorded for this
+    /// attempt's key), and only then does a fresh <c>MoveAsync</c> call (a new idempotency key,
+    /// exactly like a restarted client would use) resume: it must still recognize the target as
+    /// reachable (direction re-derives as <c>Advance</c> again, since a merely-<c>Ready</c> target is
+    /// never mistaken for the sprint's own "current" stage) and durably record convergence, without
+    /// disturbing the already-<c>Ready</c> target a second time (its node version stays exactly what
+    /// it was right after the crashed attempt).</para></summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task ACrashAfterAdvanceGraphPromotesTheTargetButBeforeTheConvergenceMarkerConvergesOnResumeForAnAdvance()
@@ -1329,34 +1343,71 @@ public sealed class StageTransitionTests
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
         await CompleteWorkNodeAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
 
-        // Simulates the crash: exactly CommitAdvanceAsync's own AdvanceGraphAsync call, invoked
-        // directly rather than through the coordinator, so its own final convergence-marker append
-        // never runs.
-        await scheduler.AdvanceGraphAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        SprintWorkflowState beforeCrash = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        Assert.Equal(NodeState.Ready, beforeCrash.Nodes["b"].State);
+        long bVersionBeforeCrash = beforeCrash.Nodes["b"].Version;
+
+        StageTransitionAssessment firstAssessment =
+            await assessor.AssessAsync(environment.ProjectRoot, sprintId, "b", cancellationToken);
+        Assert.Equal(StageTransitionDirection.Advance, firstAssessment.Direction);
+        Assert.True(firstAssessment.Allowed);
+
+        // Injects the crash deterministically: the very next AppendStageTransitionConvergedAsync
+        // call this FlakySprintStore-backed coordinator makes throws instead of landing -- standing
+        // in for a Host process dying at exactly that instant, after CommitAdvanceAsync's own
+        // AdvanceGraphAsync promotion has already committed for real (production code, not
+        // simulated) but before its final marker append does.
+        FlakySprintStore flakyStore = new(store);
+        bool hookInvoked = false;
+        flakyStore.BeforeAppendStageTransitionConverged = _ =>
+        {
+            hookInvoked = true;
+            throw new InvalidOperationException("simulated Host crash before the convergence marker lands");
+        };
+        StageTransitionCoordinator crashingCoordinator = new(
+            flakyStore,
+            environment.Resolve<SprintScheduler>(),
+            environment.Resolve<StageTransitionAssessor>(),
+            environment.Resolve<StopOperationCoordinator>(),
+            environment.Resolve<ActiveOperationRegistry>(),
+            environment.Resolve<IConfigurationRegistry>(),
+            environment.Resolve<IClock>());
+
+        Guid crashedIdempotencyKey = Guid.NewGuid();
+        await Assert.ThrowsAsync<InvalidOperationException>(() => crashingCoordinator.MoveAsync(
+            environment.ProjectRoot, sprintId, "b", firstAssessment.ExpectedStateVersion,
+            firstAssessment.AssessmentToken, null, true, crashedIdempotencyKey, cancellationToken));
+        Assert.True(hookInvoked, "The crash hook must actually have been reached for this to prove anything.");
+
         SprintWorkflowState wedged = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(NodeState.Ready, wedged.Nodes["b"].State);
-        Assert.Equal(0, wedged.Nodes["b"].AttemptCount);
-
-        Guid idempotencyKey = Guid.NewGuid();
+        Assert.Equal(bVersionBeforeCrash, wedged.Nodes["b"].Version);
         Assert.Null(await store.TryGetConvergedStageTransitionAsync(
-            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+            environment.ProjectRoot, sprintId, crashedIdempotencyKey, cancellationToken));
 
-        StageTransitionAssessment assessment =
+        // The very next MoveAsync call (through the normal, unconflicted resume path, a fresh
+        // idempotency key exactly like a restarted client would use) must finish what the crashed
+        // attempt could not: recognize "b" as already reachable, not re-promote it, and durably
+        // record convergence.
+        Guid resumedIdempotencyKey = Guid.NewGuid();
+        StageTransitionAssessment resumedAssessment =
             await assessor.AssessAsync(environment.ProjectRoot, sprintId, "b", cancellationToken);
-        Assert.Equal(StageTransitionDirection.Advance, assessment.Direction);
-        Assert.True(assessment.Allowed);
+        Assert.Equal(StageTransitionDirection.Advance, resumedAssessment.Direction);
+        Assert.True(resumedAssessment.Allowed);
 
         MoveStageResult result = await coordinator.MoveAsync(
-            environment.ProjectRoot, sprintId, "b", assessment.ExpectedStateVersion, assessment.AssessmentToken,
-            null, true, idempotencyKey, cancellationToken);
+            environment.ProjectRoot, sprintId, "b", resumedAssessment.ExpectedStateVersion,
+            resumedAssessment.AssessmentToken, null, true, resumedIdempotencyKey, cancellationToken);
 
         Assert.True(result.Succeeded, $"diag={result.DiagnosticCode}");
         Assert.Equal(NodeState.Ready, result.TargetNode!.State);
         SprintWorkflowState final = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Assert.Equal(NodeState.Ready, final.Nodes["b"].State);
-        Assert.Equal(0, final.Nodes["b"].AttemptCount);
+        // "b" must never be re-promoted by the resumed call -- its version is unchanged from right
+        // after the crashed attempt.
+        Assert.Equal(bVersionBeforeCrash, final.Nodes["b"].Version);
         Assert.NotNull(await store.TryGetConvergedStageTransitionAsync(
-            environment.ProjectRoot, sprintId, idempotencyKey, cancellationToken));
+            environment.ProjectRoot, sprintId, resumedIdempotencyKey, cancellationToken));
     }
 
     /// <summary>Plan ~605-609: <c>StagePrerequisiteIds.NoActiveOperation</c> is already checked inside
@@ -1415,9 +1466,15 @@ public sealed class StageTransitionTests
         Assert.Equal(StageTransitionDirection.Advance, assessment.Direction);
         Assert.True(assessment.ActiveOperation.HasActiveOperation);
         Assert.False(assessment.Allowed);
-        Assert.Contains(
-            assessment.UnsatisfiedPrerequisites,
-            prerequisite => prerequisite.Id == StagePrerequisiteIds.NoActiveOperation);
+        // Round 2 review of PR #109: `Assert.Contains(..., NoActiveOperation)` alone does not pin
+        // this test's own claim ("NoActiveOperation is the only thing standing between this
+        // assessment and Allowed") -- `StageTransitionAssessor` adds several more Advance-only
+        // prerequisites unconditionally (NoBlockingFindings, ProviderModelPolicy, GitIsolation,
+        // RetryBudget, plus conditional ones), any of which could independently be unsatisfied while
+        // this assertion still passes. Pinning the unsatisfied set to exactly one entry, and that one
+        // entry's id specifically, makes the doc comment's claim actually load-bearing.
+        StagePrerequisite onlyUnsatisfied = Assert.Single(assessment.UnsatisfiedPrerequisites);
+        Assert.Equal(StagePrerequisiteIds.NoActiveOperation, onlyUnsatisfied.Id);
         // Every predecessor-based prerequisite is already satisfied -- NoActiveOperation is the only
         // reason this Advance is blocked.
         Assert.DoesNotContain(

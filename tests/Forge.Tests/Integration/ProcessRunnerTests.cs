@@ -327,14 +327,24 @@ public sealed class ProcessRunnerTests
     /// scenario; as of this test's own branch point, no such containment code exists anywhere on
     /// `main` (confirmed by searching for job-object/process-group primitives across the codebase).
     /// Kept skipped as a ready-to-activate placeholder -- once containment lands, remove the
-    /// <c>Skip</c> argument; the fixture and assertions below already exercise the exact scenario the
-    /// containment must survive, reusing this file's own tree-spawning fixture
-    /// (<see cref="TreeSpawningCommand"/>) rather than a fresh one. The immediate child spawned via
-    /// <see cref="ProcessRunner"/> stands in for "the Host process" here: this test process (the
-    /// xunit host) plays the role of whatever supervises the real Host, and forcibly killing only
-    /// that immediate child -- never cancelling <see cref="ProcessRunner.RunAsync"/>'s own token --
-    /// is what makes this an *abrupt*, uncooperative kill rather than the graceful shutdown the
-    /// existing cancellation test already covers.</summary>
+    /// <c>Skip</c> argument.
+    /// <para>Round 2 review of PR #109 found the prior version of this fixture killed the wrong
+    /// process: in production, <see cref="ProcessRunner"/> runs *inside* the Host and the process it
+    /// spawns *is* the provider, so any containment <c>ProcessRunner.RunAsync</c> gains would enclose
+    /// the process it directly starts -- never some further descendant spawned outside Forge's own
+    /// code entirely. The prior fixture reused <see cref="TreeSpawningCommand"/>, killed its "child",
+    /// and checked its "grandchild" -- but that grandchild is spawned by the child's own shell
+    /// script, never through <see cref="ProcessRunner"/>, so no containment scheme could ever have
+    /// reclaimed it that way; the fixture could not have passed once containment landed.</para>
+    /// <para>This version launches <c>Forge.ProcessContainmentProbe</c>
+    /// (tests/Forge.ProcessContainmentProbe/Program.cs) as a genuinely separate helper process that
+    /// itself calls the real <see cref="ProcessRunner"/> to spawn a "provider" stand-in and blocks on
+    /// it -- the helper plays "the Host" (production's role for whatever process embeds
+    /// <see cref="ProcessRunner"/>), this xunit test process plays "whatever supervises the real
+    /// Host" (an OS service manager in production), and only the helper is ever killed abruptly --
+    /// never the provider directly, and never through <see cref="ProcessRunner.RunAsync"/>'s own
+    /// cooperative cancellation path. Once containment lands inside <c>ProcessRunner</c>, killing the
+    /// helper this way must still reclaim the provider it spawned.</para></summary>
     [Fact(Skip =
         "Pending feature/process-group-containment (plan ~588-593): no job-object/process-group " +
         "containment exists on main yet, so an abrupt Host kill cannot yet be proven to avoid " +
@@ -345,48 +355,65 @@ public sealed class ProcessRunnerTests
         string directory = CreateTestDirectory();
         try
         {
-            string childPidPath = Path.Combine(directory, "child.pid");
-            string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
+            string providerPidPath = Path.Combine(directory, "provider.pid");
             string readyPath = Path.Combine(directory, "ready");
-            (string fileName, string[] arguments) = TreeSpawningCommand(
-                directory, childPidPath, grandchildPidPath, readyPath, sleepSeconds: 30);
+            string probePath = ResolveProcessContainmentProbeDllPath();
 
-            ProcessRunner runner = new();
-            using CancellationTokenSource cancellation = new();
-            Task<ProcessResult> run = runner.RunAsync(new(fileName, arguments, directory), null, cancellation.Token);
+            using System.Diagnostics.Process helper = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "dotnet",
+                ArgumentList = { probePath, providerPidPath, readyPath, "30" },
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+            })!;
 
             await WaitForFileAsync(readyPath);
-            int childPid = await ReadPidAsync(childPidPath);
-            int grandchildPid = await ReadPidAsync(grandchildPidPath);
-            Assert.True(IsProcessAlive(childPid), "The child (stand-in Host) process should still be running.");
-            Assert.True(
-                IsProcessAlive(grandchildPid), "The grandchild (stand-in provider) process should still be running.");
-            DateTime grandchildStartedAt = GetProcessStartTimeUtc(grandchildPid);
+            int providerPid = await ReadPidAsync(providerPidPath);
+            // Sanity guard mirroring the sibling tree-spawning tests' own
+            // `Assert.NotEqual(childPid, grandchildPid)`: the helper's own pid (from .NET's own
+            // Process.Id) and the provider's pid (read back from the file the provider itself wrote)
+            // come from two independently-derived sources -- if they ever coincided, the kill/assert
+            // pair below would pass having exercised nothing.
+            Assert.NotEqual(helper.Id, providerPid);
+            Assert.False(helper.HasExited, "The helper (stand-in Host) process should still be running.");
+            Assert.True(IsProcessAlive(providerPid), "The provider process should still be running.");
+            DateTime providerStartedAt = GetProcessStartTimeUtc(providerPid);
 
-            // The abrupt, uncooperative kill: only the immediate child dies, and never through
-            // ProcessRunner's own cancellation path -- containment (once it exists), not cooperative
-            // cleanup code, is what must reclaim the grandchild here.
-            using (System.Diagnostics.Process killTarget = System.Diagnostics.Process.GetProcessById(childPid))
-            {
-                killTarget.Kill(entireProcessTree: false);
-            }
+            // The abrupt, uncooperative kill: only the helper dies, and never through the helper's
+            // own ProcessRunner.RunAsync cancellation path -- containment (once it exists), not
+            // cooperative cleanup code, is what must reclaim the provider here.
+            helper.Kill(entireProcessTree: false);
 
-            await AssertProcessDiesAsync(grandchildPid, grandchildStartedAt);
-
-            cancellation.Cancel();
-            try
-            {
-                await run;
-            }
-            catch (Exception)
-            {
-                // The child's own abrupt death already makes RunAsync's outcome moot for this test.
-            }
+            await AssertProcessDiesAsync(providerPid, providerStartedAt);
         }
         finally
         {
             await DeleteDirectoryAsync(directory);
         }
+    }
+
+    /// <summary>Locates the build output of <c>Forge.ProcessContainmentProbe</c>
+    /// (tests/Forge.ProcessContainmentProbe), a sibling helper-process project this file launches as
+    /// a genuinely separate process to stand in for "the Host" -- reusing whatever configuration this
+    /// test assembly itself was built with, so the probe is found regardless of Debug/Release.</summary>
+    private static string ResolveProcessContainmentProbeDllPath()
+    {
+        DirectoryInfo tfmDirectory = new(AppContext.BaseDirectory);
+        string configurationName = tfmDirectory.Parent!.Name;
+        DirectoryInfo testsDirectory = tfmDirectory.Parent!.Parent!.Parent!.Parent!;
+        string path = Path.Combine(
+            testsDirectory.FullName, "Forge.ProcessContainmentProbe", "bin", configurationName, "net10.0",
+            "Forge.ProcessContainmentProbe.dll");
+        if (!File.Exists(path))
+        {
+            throw new FileNotFoundException(
+                "Forge.ProcessContainmentProbe was not built at the expected path -- build the solution first.",
+                path);
+        }
+
+        return path;
     }
 
     private static string CreateTestDirectory()
