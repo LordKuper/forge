@@ -40,6 +40,19 @@ User-facing Forge changes are listed by release, newest first.
   free-text value is also now collapsed to a single line so it can no longer split one event across
   multiple rendered lines.
 
+## v0.74.0
+
+### Added
+
+- Desktop's global status row now shows authentication readiness, model availability, Host
+  connection status, and data-freshness state, alongside the existing provider health and quota
+  indicators. Authentication reports the most urgent state across your enabled providers (ready,
+  login required, or a failed check). Model availability distinguishes "installed" from "actually
+  usable right now," since a provider can be up to date but still need authentication before it can
+  run anything. Host connectivity reports whether Forge last reached the project Host, including a
+  distinct "status is stale" state when that reading is old enough not to trust. Every new indicator
+  has both visible text and a screen-reader name, matching the existing status-row convention.
+
 ## v0.73.0
 
 ### Added

@@ -50,7 +50,8 @@ public partial class WorkspaceShellPage : ContentPage
         ProjectCatalogStore catalog,
         ProviderCatalog providerCatalog,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        IFolderPickerPort folderPicker)
+        IFolderPickerPort folderPicker,
+        IHostConnectivityMonitor connectivityMonitor)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
@@ -58,6 +59,7 @@ public partial class WorkspaceShellPage : ContentPage
         ArgumentNullException.ThrowIfNull(providerCatalog);
         ArgumentNullException.ThrowIfNull(resolveMutations);
         ArgumentNullException.ThrowIfNull(folderPicker);
+        ArgumentNullException.ThrowIfNull(connectivityMonitor);
         InitializeComponent();
         this.text = text;
         this.application = application;
@@ -65,7 +67,7 @@ public partial class WorkspaceShellPage : ContentPage
         this.providerCatalog = providerCatalog;
         this.resolveMutations = resolveMutations;
         workspace = new(catalog, application);
-        sidebar = new(catalog, application, folderPicker, text);
+        sidebar = new(catalog, application, folderPicker, text, connectivityMonitor: connectivityMonitor);
         forgeSettings = new(application, providerCatalog, text);
         (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
         renderGate = new(RenderSidebarAsync, RenderContentAsync);
@@ -73,7 +75,52 @@ public partial class WorkspaceShellPage : ContentPage
         // very click handler whose own mutation guard is still held, so the render this triggers
         // must not go through that same guard directly -- ShellRenderGate.RequestContentRender
         // records it instead and flushes it the moment the guard releases (see its own remarks).
-        workspace.RouteChanged += (_, _) => renderGate.RequestContentRender();
+        // PR #106 review finding 5: the sidebar's Host-connectivity indicator now names the CURRENTLY
+        // SELECTED project (see RenderSidebarAsync below), so a route change -- which is exactly what
+        // changes which project is selected -- must also re-render the sidebar, not only the content
+        // pane, or the indicator would keep showing whichever project was selected at the last
+        // sidebar render instead of the one the user just navigated to.
+        //
+        // PR #106 round-2 review finding 2: the first cut of that fix called RequestSidebarRender()
+        // here, which routes through RenderSidebarAsync -> SidebarViewModel.LoadAsync's full
+        // per-project catalog scan (GetWorkspaceSummaryAsync + GetProjectSnapshotAsync per cataloged
+        // project) just to refresh one label -- on EVERY navigation click, while holding the
+        // mutation guard. That paid for a redundant full reload on top of the one
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync already run themselves, made app
+        // launch load the sidebar twice (RestoreAsync raises this event from inside OnAppearing's own
+        // guard, and OnAppearing's own explicit RenderSidebarAsync call runs again), and made removing
+        // a project load it three times -- the exact "no refetch for a render that changes no domain
+        // data" cost PR #99/#100/#103 already pushed back on elsewhere in this file (see
+        // BuildSidebarToggleButton's own remarks). A route change never changes any cataloged
+        // project's own data, only which project is selected, so this now re-renders the already
+        // -loaded lastSidebarSnapshot with just the Host-connectivity pair recomputed for the newly
+        // selected project via ShellRenderGate.RequestRender's cheap, synchronous path -- the same
+        // lastSidebarSnapshot/RenderSidebarFromSnapshot mechanism the toggle already uses for the
+        // same reason. Nothing loaded yet (this fires from RestoreAsync before OnAppearing's own
+        // first render, or before the sidebar has ever rendered) is a deliberate no-op: whichever real
+        // render already runs shortly after -- OnAppearing's own explicit call, or
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync's own sidebar.LoadAsync -- reports
+        // this same route's connectivity correctly on its own.
+        workspace.RouteChanged += (_, _) =>
+        {
+            renderGate.RequestRender(() =>
+            {
+                if (lastSidebarSnapshot is { } snapshot)
+                {
+                    (string hostText, string hostAccessible) = sidebar.HostConnectivityFor(workspace.Route.ProjectId);
+                    RenderSidebarFromSnapshot(
+                        snapshot with
+                        {
+                            Status = snapshot.Status with
+                            {
+                                HostConnectivityText = hostText,
+                                HostConnectivityAccessibleText = hostAccessible,
+                            },
+                        });
+                }
+            });
+            renderGate.RequestContentRender();
+        };
         // Plan 5.1/12.2: a UI-language save applies without restart -- every legacy-backed
         // view-model wraps a MainPageViewModel bound to one fixed SurfaceText snapshot, so a
         // language change rebuilds all of them against the newly current text before re-rendering.
@@ -145,7 +192,11 @@ public partial class WorkspaceShellPage : ContentPage
 
     private async Task RenderSidebarAsync()
     {
-        SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        // PR #106 review finding 5: the status row's Host-connectivity text names the CURRENTLY
+        // SELECTED project (workspace.Route.ProjectId), never a process-global "whichever project was
+        // last mutated" reading -- see SidebarViewModel.LoadAsync's own remarks.
+        SidebarSnapshot snapshot =
+            await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
         RenderSidebarFromSnapshot(snapshot);
     }
 
@@ -199,12 +250,35 @@ public partial class WorkspaceShellPage : ContentPage
             await workspace.NavigateAsync(WorkspaceRoute.ToForgeSettings(), CancellationToken.None).ConfigureAwait(true));
         SidebarHost.Children.Add(forgeSettingsButton);
 
+        // Plan 12.6: the status row distinguishes provider health, authentication, model
+        // availability, quota (known and unknown), and Host connectivity (including stale data) --
+        // each its own text/accessible-name pair, per this file's established convention. Never
+        // color alone: every state is named in text, not merely implied by a color or icon.
         Label status = new() { Text = snapshot.Status.ProviderSummaryText };
         SemanticProperties.SetDescription(status, snapshot.Status.ProviderAccessibleText);
         SidebarHost.Children.Add(status);
+        Label authentication = new() { Text = snapshot.Status.AuthenticationStatusText };
+        SemanticProperties.SetDescription(authentication, snapshot.Status.AuthenticationAccessibleText);
+        SidebarHost.Children.Add(authentication);
+        // PR #106 review finding 1: AnyModelUnavailable used to be computed and never read by any
+        // UI -- the exact "dead field" defect it was supposed to supersede
+        // (see SidebarStatusRow's own remarks). Bold is a non-color-only emphasis (plan 12.6: "color
+        // is never the only carrier") that draws attention to the label when at least one enabled
+        // provider is not yet usable for model work, without hiding the state behind color alone --
+        // the text itself already names the shortfall, this only makes it harder to miss.
+        Label modelAvailability = new()
+        {
+            Text = snapshot.Status.ModelAvailabilityText,
+            FontAttributes = snapshot.Status.AnyModelUnavailable ? FontAttributes.Bold : FontAttributes.None,
+        };
+        SemanticProperties.SetDescription(modelAvailability, snapshot.Status.ModelAvailabilityAccessibleText);
+        SidebarHost.Children.Add(modelAvailability);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
         SemanticProperties.SetDescription(quota, snapshot.Status.QuotaAccessibleText);
         SidebarHost.Children.Add(quota);
+        Label hostConnectivity = new() { Text = snapshot.Status.HostConnectivityText };
+        SemanticProperties.SetDescription(hostConnectivity, snapshot.Status.HostConnectivityAccessibleText);
+        SidebarHost.Children.Add(hostConnectivity);
         // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an
         // invalid root, an already-cataloged entry, a catalog write failure) completely silent.
         // `sidebarNotice` is set by the add/remove handlers just before they trigger this render, so
@@ -257,8 +331,8 @@ public partial class WorkspaceShellPage : ContentPage
             // configuration read just to flip a column width -- the exact "unnecessary work holding
             // the mutation guard" pattern PR #99 review finding 1 and PR #100 review finding 1 both
             // already pushed back on in this same surface.
-            SidebarSnapshot snapshot =
-                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            SidebarSnapshot snapshot = lastSidebarSnapshot ??
+                await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
             RenderSidebarFromSnapshot(snapshot with { Collapsed = nowCollapsed });
         });
         return toggle;

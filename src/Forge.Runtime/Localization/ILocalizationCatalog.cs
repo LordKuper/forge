@@ -563,4 +563,31 @@ public static class MessageKeys
     public const string RoutingOutcomeBudgetExhausted = "RoutingOutcomeBudgetExhausted";
     public const string RoutingOutcomeExcluded = "RoutingOutcomeExcluded";
     public const string RoutingOutcomeDeferred = "RoutingOutcomeDeferred";
+
+    // Plan 12.6 status-row closure: authentication, model availability, and Host connectivity
+    // (SidebarViewModel.BuildStatusRow). Mirrors QuotaStatus*'s own worst-case-across-many shape.
+    public const string AuthenticationStatusUnknown = "AuthenticationStatusUnknown";
+    public const string AuthenticationStatusUnknownAccessible = "AuthenticationStatusUnknownAccessible";
+    public const string AuthenticationStatusReady = "AuthenticationStatusReady";
+    public const string AuthenticationStatusReadyAccessible = "AuthenticationStatusReadyAccessible";
+    public const string AuthenticationStatusRequired = "AuthenticationStatusRequired";
+    public const string AuthenticationStatusRequiredAccessible = "AuthenticationStatusRequiredAccessible";
+    public const string AuthenticationStatusCheckFailed = "AuthenticationStatusCheckFailed";
+    public const string AuthenticationStatusCheckFailedAccessible = "AuthenticationStatusCheckFailedAccessible";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?)"/> template
+    /// taking the model-available provider count then the enabled provider count, e.g. "{0}/{1}
+    /// models available" -- mirrors <see cref="SidebarProvidersReadyStatus"/>'s own shape but counts
+    /// toolchain-ready AND authenticated providers (see <c>SidebarViewModel.ModelAvailabilitySummary</c>).</summary>
+    public const string SidebarModelsAvailableStatus = "SidebarModelsAvailableStatus";
+    public const string SidebarModelsAvailableAccessible = "SidebarModelsAvailableAccessible";
+
+    public const string HostConnectivityUnknown = "HostConnectivityUnknown";
+    public const string HostConnectivityUnknownAccessible = "HostConnectivityUnknownAccessible";
+    public const string HostConnectivityConnected = "HostConnectivityConnected";
+    public const string HostConnectivityConnectedAccessible = "HostConnectivityConnectedAccessible";
+    public const string HostConnectivityDisconnected = "HostConnectivityDisconnected";
+    public const string HostConnectivityDisconnectedAccessible = "HostConnectivityDisconnectedAccessible";
+    public const string HostConnectivityStale = "HostConnectivityStale";
+    public const string HostConnectivityStaleAccessible = "HostConnectivityStaleAccessible";
 }

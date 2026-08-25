@@ -27,15 +27,16 @@ public static class HostMutationsFactory
         IConfigurationRegistry registry,
         IEnvironmentPaths paths,
         ForgeApplication application,
-        string clientVersion)
+        string clientVersion,
+        IHostConnectivityMonitor? connectivityMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(rootResolver);
         ArgumentNullException.ThrowIfNull(registry);
         ArgumentNullException.ThrowIfNull(paths);
         ArgumentNullException.ThrowIfNull(application);
         ArgumentException.ThrowIfNullOrEmpty(clientVersion);
-        return (projectRoot, cancellationToken) =>
-            CreateAsync(rootResolver, registry, paths, application, clientVersion, projectRoot, cancellationToken);
+        return (projectRoot, cancellationToken) => CreateAsync(
+            rootResolver, registry, paths, application, clientVersion, projectRoot, cancellationToken, connectivityMonitor);
     }
 
     public static async Task<IForgeMutations> CreateAsync(
@@ -45,7 +46,8 @@ public static class HostMutationsFactory
         ForgeApplication application,
         string clientVersion,
         string? projectRoot,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        IHostConnectivityMonitor? connectivityMonitor = null)
     {
         ArgumentNullException.ThrowIfNull(rootResolver);
         ArgumentNullException.ThrowIfNull(registry);
@@ -91,6 +93,7 @@ public static class HostMutationsFactory
             client,
             async ct => await ForgeHostLauncher
                 .StartAsync(hostExecutablePath, status.Root, paths.InstanceId, ct)
-                .ConfigureAwait(false));
+                .ConfigureAwait(false),
+            connectivityMonitor);
     }
 }
