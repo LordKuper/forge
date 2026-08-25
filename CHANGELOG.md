@@ -13,6 +13,14 @@ User-facing Forge changes are listed by release, newest first.
   currently running, a stop has been requested but not yet converged, the running step never
   involves a model (intake, confirmation, finalization), or the attempt predates this change.
 
+## v0.72.1
+
+### Changed
+
+- Extended automated test coverage for the desktop-workspace redesign's remaining known gaps:
+  crash-recovery for the stage-advance saga, the active-operation guard on stage advance, and
+  CLI-vs-Desktop parity for stop/stage-assessment/stage-move results. No functional change.
+
 ## v0.72.0
 
 ### Added

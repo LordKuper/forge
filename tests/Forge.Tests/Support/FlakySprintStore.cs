@@ -176,9 +176,24 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
         inner.TryGetConvergedStageTransitionAsync(projectRoot, sprintId, idempotencyKey, cancellationToken);
 
-    public Task AppendStageTransitionConvergedAsync(
-        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken) =>
-        inner.AppendStageTransitionConvergedAsync(projectRoot, sprintId, idempotencyKey, cancellationToken);
+    /// <summary>Optional side effect run immediately before delegating an
+    /// <see cref="AppendStageTransitionConvergedAsync"/> call to the wrapped store -- lets a test
+    /// simulate a Host crash between a stage transition's own durable state mutation (already landed
+    /// by this point) and its convergence marker landing, by throwing from this hook instead of
+    /// letting the call reach the store.</summary>
+    public Func<CancellationToken, Task>? BeforeAppendStageTransitionConverged { get; set; }
+
+    public async Task AppendStageTransitionConvergedAsync(
+        string projectRoot, SprintId sprintId, Guid idempotencyKey, CancellationToken cancellationToken)
+    {
+        if (BeforeAppendStageTransitionConverged is { } hook)
+        {
+            await hook(cancellationToken).ConfigureAwait(false);
+        }
+
+        await inner.AppendStageTransitionConvergedAsync(projectRoot, sprintId, idempotencyKey, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     public Task<AppendOutcome> AppendStageRevisionRecordedAsync(
         string projectRoot, SprintId sprintId, string targetStageId, string reason, StageRevision newRevision,
