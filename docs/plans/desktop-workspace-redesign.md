@@ -557,11 +557,14 @@ prior behavior or an equivalent mutation.
       attempt's own creation event (the routed `ExecutionProfile`) and rendered by the header once
       known, falling back to the existing "not yet available" placeholder only when nothing is
       currently running, the running role is not model-bearing, or the attempt predates this field.
-- [ ] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
-      *(Partial: ordering, cursor paging, and restart-survival are all real and tested. Localization
-      is not — an item's rendered message is its raw `workflow.*` journal key verbatim; none of the
-      ~30 such keys are registered in `Messages.resx`, so only the surrounding chrome, not the
-      timeline content itself, is localized.)*
+- [x] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
+      Every `workflow.*`/`routing.*` journal message key (41 total) is registered in
+      `Messages.resx`/`Messages.ru.resx` with real English and Russian text, resolved through the
+      neutral `TimelineMessageFormatter` on both Desktop (`SprintTimelineViewModel.ToView`) and the
+      CLI (`CliApplication.WriteTimeline`) instead of shown as the raw key. Keys carrying a durable,
+      operator- or agent-authored argument (a posted message, a node summary, a supersession
+      instruction, a rewind reason, a routing decision) substitute that exact value into the
+      resolved template.
 - [x] New items appear without manual refresh while the sprint page is visible.
 - [x] Raw provider streams, credentials, full environments, and unredacted sensitive paths never
       enter the timeline contract, persistent store, logs, or rendered details. *(Verified via two
@@ -652,10 +655,23 @@ prior behavior or an equivalent mutation.
       anywhere in the codebase. "Never color alone" holds only because no surface uses color coding
       at all today, not because of an enforced rule.)*
 - [ ] English and Russian surfaces contain no missing or machine-only user-facing strings. *(Partial:
-      key-set parity (291/291) is enforced by an automated test and currently holds — spot-checked
-      manually for translation quality. That test checks key sets only, not that values are actually
-      translated, so a future regression copying an English value into `Messages.ru.resx` would not
-      be caught.)*
+      key-set parity (365/365) and value parity are both enforced by automated tests
+      (`LocalizationCatalogTests`): every key present in both `Messages.resx`/`Messages.ru.resx` must
+      have a byte-different English/Russian value, unless it is on a documented, individually
+      justified allow-list (currently one entry: `AppTitle`, the product's own brand name). A future
+      regression that copies an English value into `Messages.ru.resx` now fails that test instead of
+      passing silently. A third automated test scans every `.cs` file in the repository for a
+      `workflow.`/`routing.` journal message key literal and fails if any is missing from either resx
+      file, so the 41-key closure PR #107 first shipped cannot silently regress. `SurfaceFormatting.EventLines`
+      (shared by `forge events` and Desktop's events view) resolves the same keys through
+      `TimelineMessageFormatter`, so no second raw-key rendering path remains for this key space
+      (PR #107 review finding 6). Machine-only argument values embedded in a few templates (the
+      blocked reason, the attempt's to-state, the routing outcome) are likewise mapped to a localized
+      label before substitution rather than interpolated raw (PR #107 review findings 3-5). Not
+      satisfied: `forge sprint assess-stage` still prints the eleven raw `stage_transition.*` keys
+      verbatim -- ADR 0051 explicitly retains that specific deferral ("What stays deferred") as
+      separable content work, not a Slice 6/timeline regression, so this box stays open until those
+      keys are registered too.)*
 - [x] CLI and Desktop invoke the same Host commands and render semantically identical results for
       stop, stage assessment, stage move, configuration, and existing workflow operations. *(Genuine
       output-equality parity tests exist for sprint tree/detail, events, startup checks, providers,
@@ -685,10 +701,10 @@ hold under adversarial review). They fall into three groups:
 
 1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
    completed/cancelled sprint navigability are UI-only additions not yet built.
-2. **Missing data/localization** — timeline item content has no localized rendering yet (the sticky
-   header's provider/model field is now real, closed in v0.73.0; the global status row's own
-   authentication, model-availability, and Host-connectivity gap is closed in v0.74.0 — see 12.6
-   above).
+2. **Missing data/localization** — closed: the sticky header's provider/model field (v0.73.0),
+   timeline item content localization (v0.75.0), and the global status row's authentication,
+   model-availability, and Host-connectivity indicators (v0.74.0) are all now real — see 12.3/12.6
+   above.
 3. **Missing test coverage** (not missing behavior) — three of the four sub-gaps here are now closed:
    the advance-path crash saga and the active-operation-blocks-advance prerequisite each have real,
    mutation-tested regression coverage (12.5 above), and Desktop-vs-CLI result parity for
