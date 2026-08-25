@@ -1345,6 +1345,277 @@ public sealed class SurfaceParityTests
         Assert.Equal(text.Resolve(MessageKeys.SprintCancelled), desktop);
     }
 
+    private static readonly string SampleDigest = "sha256:" + new string('0', 64);
+
+    /// <summary>Plan ~643-649's Known-gaps bucket 3 sub-item: `forge attempt stop`
+    /// (<c>CliApplication.CreateAttemptStopCommand</c>) and <see cref="SprintActionsViewModel.StopAsync"/>
+    /// both resolve to the same fixed success text (<c>MessageKeys.AttemptStopped</c>) -- unlike
+    /// stage assessment (below), stop's success shape is a single fixed sentence on both surfaces, so
+    /// this compares literal output exactly like <see cref="DesktopAndCliRenderTheSameSprintCancelMessageForOneSnapshot"/>
+    /// does for cancel's own fixed text.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameStopResultForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        (SprintId cliSprintId, Guid cliAttemptId) = await CreateRunningAttemptAsync(cliEnvironment, cancellationToken);
+        (SprintId desktopSprintId, _) = await CreateRunningAttemptAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(
+                text, cliOutput, cliEnvironment.Application, diagnostics, isInteractive: () => true)
+            .Parse([
+                "attempt", "stop", cliAttemptId.ToString(), "--sprint", cliSprintId.Value.ToString(), "--yes",
+                "--project-root", cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+
+        SprintActionsViewModel desktopActions = new(
+            desktopEnvironment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(desktopEnvironment.Application),
+            text);
+        IReadOnlyList<AvailableAction> actions = await desktopActions
+            .LoadAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value, cancellationToken);
+        AvailableAction stopAction = Assert.Single(
+            actions, action => action.ActionId == AvailableActionProjector.StopCurrentOperationActionId);
+        string desktop = await desktopActions
+            .StopAsync(desktopEnvironment.ProjectRoot, stopAction, true, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        Assert.Equal(text.Resolve(MessageKeys.AttemptStopped), desktop);
+    }
+
+    /// <summary>Plan ~643-649's Known-gaps bucket 3 sub-item: `forge sprint move-stage`
+    /// (<c>CliApplication.CreateSprintMoveStageCommand</c>) and <see cref="SprintActionsViewModel.MoveAsync"/>
+    /// both resolve to the same fixed success text (<c>MessageKeys.SprintStageMoved</c>) on a
+    /// successful Advance -- compared literally, matching the stop/cancel/resume message tests'
+    /// established shape.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameStageMoveResultForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId cliSprintId = await CreateReadyToAdvanceSprintAsync(cliEnvironment, cancellationToken);
+        SprintId desktopSprintId = await CreateReadyToAdvanceSprintAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(
+                text, cliOutput, cliEnvironment.Application, diagnostics, isInteractive: () => true)
+            .Parse([
+                "sprint", "move-stage", cliSprintId.Value.ToString(), "--target-stage", "b", "--yes",
+                "--project-root", cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+
+        SprintActionsViewModel desktopActions = new(
+            desktopEnvironment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(desktopEnvironment.Application),
+            text);
+        StageTransitionAssessment assessment = await desktopActions
+            .AssessMoveAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value, "b", cancellationToken);
+        string desktop = await desktopActions
+            .MoveAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value, assessment, null, true, cancellationToken);
+
+        Assert.Equal(cliOutput.ToString().TrimEnd(), desktop);
+        Assert.Empty(diagnostics.ToString());
+        Assert.Equal(text.Resolve(MessageKeys.SprintStageMoved), desktop);
+    }
+
+    /// <summary>Plan ~643-649's Known-gaps bucket 3 sub-item, for `forge sprint assess-stage`
+    /// (<c>CliApplication.CreateSprintAssessStageCommand</c>) vs. <see cref="SprintActionsViewModel.MovePrompt"/>.
+    /// Unlike stop/move-stage's own fixed success sentence, these two renderings are deliberately
+    /// different *shapes* by design -- the CLI's is a compact, single-purpose query line
+    /// (<c>"{source} -&gt; {target}: {Direction}, allowed={Allowed}"</c> plus one <c>"  blocked: ..."</c>
+    /// line per unsatisfied prerequisite) while Desktop's is a labeled, human-facing confirmation
+    /// prompt (source/target/direction/satisfied/unsatisfied/consequences lines) -- so a literal
+    /// string-equality assertion would fail by construction, not by drift, and would test something
+    /// false about the agreed behavior. Both are still built from the exact same
+    /// <see cref="StageTransitionAssessment"/> (`AssessStageTransitionAsync`), so "semantically
+    /// identical" here means every fact the CLI's own text reports -- source, target, direction,
+    /// allowed, and each unsatisfied prerequisite's id/message-key pair -- must also be present,
+    /// unaltered, in Desktop's own rendering. The fixture pins a genuinely mixed result (one
+    /// satisfied predecessor, one unsatisfied `NoBlockingFindings`) so both the "allowed" and
+    /// "blocked" halves of this comparison are exercised, not trivially vacuous.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task DesktopAndCliRenderTheSameStageAssessmentSemanticsForOneSnapshot()
+    {
+        using TestEnvironment cliEnvironment = new();
+        using TestEnvironment desktopEnvironment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId cliSprintId = await CreateAdvanceBlockedByAnOpenFindingSprintAsync(cliEnvironment, cancellationToken);
+        SprintId desktopSprintId =
+            await CreateAdvanceBlockedByAnOpenFindingSprintAsync(desktopEnvironment, cancellationToken);
+        SurfaceText text = new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
+        StringWriter cliOutput = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+
+        Assert.Equal(0, await CliApplication
+            .CreateRootCommand(text, cliOutput, cliEnvironment.Application, diagnostics)
+            .Parse([
+                "sprint", "assess-stage", cliSprintId.Value.ToString(), "--target-stage", "b",
+                "--project-root", cliEnvironment.ProjectRoot,
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken));
+
+        SprintActionsViewModel desktopActions = new(
+            desktopEnvironment.Application,
+            (_, _) => Task.FromResult<IForgeMutations>(desktopEnvironment.Application),
+            text);
+        StageTransitionAssessment desktopAssessment = await desktopActions
+            .AssessMoveAsync(desktopEnvironment.ProjectRoot, desktopSprintId.Value, "b", cancellationToken);
+        string desktopPrompt = desktopActions.MovePrompt(desktopAssessment);
+
+        string[] lines = cliOutput.ToString().Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.TrimEnd('\r')).ToArray();
+        Match summary = Regex.Match(
+            lines[0], @"^(?<source>\S+) -> (?<target>\S+): (?<direction>\w+), allowed=(?<allowed>True|False)$");
+        Assert.True(summary.Success, $"Could not parse assess-stage summary line: '{lines[0]}'");
+        string cliSource = summary.Groups["source"].Value;
+        string cliTarget = summary.Groups["target"].Value;
+        StageTransitionDirection cliDirection =
+            Enum.Parse<StageTransitionDirection>(summary.Groups["direction"].Value);
+        bool cliAllowed = bool.Parse(summary.Groups["allowed"].Value);
+        List<(string Id, string MessageKey)> cliBlocked = [];
+        foreach (string line in lines.Skip(1))
+        {
+            Match blocked = Regex.Match(line, @"^\s*blocked: (?<id>\S+) \((?<key>\S+)\)$");
+            if (blocked.Success)
+            {
+                cliBlocked.Add((blocked.Groups["id"].Value, blocked.Groups["key"].Value));
+            }
+        }
+
+        // Pins that the fixture actually exercises both the "allowed" determination and at least one
+        // unsatisfied prerequisite -- otherwise this comparison would trivially pass regardless of
+        // whether either surface actually surfaces a blocker.
+        Assert.False(cliAllowed);
+        Assert.NotEmpty(cliBlocked);
+
+        Assert.Equal(cliSource, desktopAssessment.SourceStageId);
+        Assert.Equal(cliTarget, desktopAssessment.TargetStageId);
+        Assert.Equal(cliDirection, desktopAssessment.Direction);
+        Assert.Equal(cliAllowed, desktopAssessment.Allowed);
+        // Round 2 review of PR #109: bare `Assert.Contains(cliSource/cliTarget, ...)` is vacuous with
+        // this fixture's single-character stage ids -- "a" matches inside "Current st**a**ge" and "b"
+        // matches inside "**b**locked"/"**b**udget" regardless of whether MovePrompt ever interpolates
+        // the actual source/target id at all. Asserting the labelled line instead pins this to the
+        // real semantic-parity claim -- it fails if the id is ever dropped from Desktop's rendering.
+        Assert.Contains(
+            $"{text.Resolve(MessageKeys.MoveToStageSourceLabel)} {cliSource}", desktopPrompt, StringComparison.Ordinal);
+        Assert.Contains(
+            $"{text.Resolve(MessageKeys.MoveToStageTargetLabel)} {cliTarget}", desktopPrompt, StringComparison.Ordinal);
+        // SurfaceFormatting.Machine is the exact shared production formatter MovePrompt's own
+        // Direction line uses -- reusing it here (rather than hardcoding a casing assumption) proves
+        // Desktop's rendering carries the same direction CLI reported, not a test-authored guess.
+        Assert.Contains(SurfaceFormatting.Machine(cliDirection), desktopPrompt, StringComparison.Ordinal);
+        Assert.Contains(text.Resolve(MessageKeys.MoveToStageBlockedCannotProceed), desktopPrompt, StringComparison.Ordinal);
+        foreach ((string id, string messageKey) in cliBlocked)
+        {
+            Assert.Contains(
+                string.Create(CultureInfo.InvariantCulture, $"{id} ({messageKey})"),
+                desktopPrompt,
+                StringComparison.Ordinal);
+        }
+    }
+
+    private static async Task<(SprintId SprintId, Guid AttemptId)> CreateRunningAttemptAsync(
+        TestEnvironment environment, CancellationToken cancellationToken)
+    {
+        Assert.True((await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: SprintManageParityGraph),
+            cancellationToken)).SprintId!;
+        await RunSprintToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        long version = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!
+            .Nodes["a"].Version;
+        StartAttemptResult started = await scheduler
+            .StartAttemptAsync(environment.ProjectRoot, sprintId, "a", version, cancellationToken);
+        Assert.True(started.Succeeded);
+        return (sprintId, started.AttemptId!.Value);
+    }
+
+    private static readonly IReadOnlyList<NodeDefinition> StageMoveParityGraph =
+        [new("a", NodeKind.Work, []), new("b", NodeKind.Work, ["a"])];
+
+    private static async Task<SprintId> CreateReadyToAdvanceSprintAsync(
+        TestEnvironment environment, CancellationToken cancellationToken)
+    {
+        Assert.True((await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken)).Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: StageMoveParityGraph),
+            cancellationToken)).SprintId!;
+        await RunSprintToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await CompleteWorkNodeDirectlyAsync(scheduler, store, environment.ProjectRoot, sprintId, "a", cancellationToken);
+        return sprintId;
+    }
+
+    private static async Task<SprintId> CreateAdvanceBlockedByAnOpenFindingSprintAsync(
+        TestEnvironment environment, CancellationToken cancellationToken)
+    {
+        SprintId sprintId = await CreateReadyToAdvanceSprintAsync(environment, cancellationToken);
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        Assert.True((await scheduler.RecordFindingAsync(
+            environment.ProjectRoot,
+            sprintId,
+            FindingSeverity.High,
+            "finding.example",
+            new Dictionary<string, string?>(),
+            ["src/Foo.cs:1"],
+            null,
+            null,
+            cancellationToken)).Succeeded);
+        return sprintId;
+    }
+
+    private static async Task CompleteWorkNodeDirectlyAsync(
+        SprintScheduler scheduler,
+        ISprintStore store,
+        string root,
+        SprintId sprintId,
+        string nodeId,
+        CancellationToken cancellationToken)
+    {
+        long version = (await store.LoadAsync(root, sprintId, cancellationToken))!.Nodes[nodeId].Version;
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(root, sprintId, nodeId, version, cancellationToken);
+        Assert.True(started.Succeeded);
+        CompleteAttemptResult completed = await scheduler.CompleteAttemptAsync(
+            root, sprintId, nodeId, started.AttemptId!, true, SampleDigest, [], [], cancellationToken);
+        Assert.True(completed.Succeeded);
+    }
+
+    private static async Task RunSprintToRunningAsync(
+        SprintOrchestrator orchestrator, string root, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(root, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(root, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(root, sprintId, toReady.Sprint!.Version, SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+    }
+
     private static readonly IReadOnlyList<NodeDefinition> SprintManageParityGraph = [new("a", NodeKind.Work, [])];
 
     private static readonly IReadOnlyList<NodeDefinition> SprintManageGateGraph =
