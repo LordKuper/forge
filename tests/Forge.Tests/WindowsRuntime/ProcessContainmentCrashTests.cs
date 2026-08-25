@@ -39,6 +39,8 @@ public sealed class ProcessContainmentCrashTests
         string childPidPath = Path.Combine(directory, "child.pid");
         string grandchildPidPath = Path.Combine(directory, "grandchild.pid");
         Process? harness = null;
+        Process? child = null;
+        Process? grandchild = null;
         try
         {
             harness = Process.Start(new ProcessStartInfo(probePath)
@@ -50,15 +52,14 @@ public sealed class ProcessContainmentCrashTests
             Assert.NotNull(harness);
 
             int childPid = await ReadPidOnceWrittenAsync(childPidPath);
-            Assert.True(IsProcessAlive(childPid), "The contained child should be running before the crash.");
+            child = Process.GetProcessById(childPid);
+            Assert.False(child.HasExited, "The contained child should be running before the crash.");
 
-            // Written well after the child's own Attach has already landed (it sleeps afterward),
-            // so this deliberately does not touch the sub-millisecond Attach-after-Start race the
-            // class doc comment on WindowsJobObjectProcessContainment already accepts as a known,
-            // narrow gap -- this is the ordinary, non-racy descendant case outside that window.
+            // The child waits for the harness's explicit post-Attach marker before spawning this
+            // process, so this is the ordinary inheritance case outside the accepted race window.
             int grandchildPid = await ReadPidOnceWrittenAsync(grandchildPidPath);
-            Assert.True(
-                IsProcessAlive(grandchildPid), "The contained grandchild should be running before the crash.");
+            grandchild = Process.GetProcessById(grandchildPid);
+            Assert.False(grandchild.HasExited, "The contained grandchild should be running before the crash.");
 
             // Not Kill(true): an ungraceful kill of ONLY the harness itself, exactly simulating an
             // abrupt Forge Host crash that never runs any of its own graceful-shutdown/tree-kill
@@ -68,8 +69,8 @@ public sealed class ProcessContainmentCrashTests
             harness.Kill();
             Assert.True(harness.WaitForExit((int)TimeSpan.FromSeconds(15).TotalMilliseconds));
 
-            await AssertProcessDiesAsync(childPid);
-            await AssertProcessDiesAsync(grandchildPid);
+            await AssertProcessDiesAsync(child);
+            await AssertProcessDiesAsync(grandchild);
         }
         finally
         {
@@ -87,8 +88,10 @@ public sealed class ProcessContainmentCrashTests
                 }
 
                 harness?.Dispose();
-                TryKillByPidFile(childPidPath);
-                TryKillByPidFile(grandchildPidPath);
+                TryKill(child);
+                TryKill(grandchild);
+                child?.Dispose();
+                grandchild?.Dispose();
                 await DeleteDirectoryAsync(directory);
             }
             catch (Exception error)
@@ -105,83 +108,61 @@ public sealed class ProcessContainmentCrashTests
 
     private static async Task<int> ReadPidOnceWrittenAsync(string path)
     {
-        // 200 * 50ms = 10s: generous enough for the harness/child process pair to actually get
-        // scheduled and start under a loaded machine, not just an idle one.
-        for (int attempt = 0; attempt < 200 && !File.Exists(path); attempt++)
-        {
-            await Task.Delay(50, TestContext.Current.CancellationToken);
-        }
-
-        Assert.True(File.Exists(path), $"'{path}' was never created -- the harness never reported a live child.");
-
-        // File.Exists just returned true, but the writer's own handle (or a transient share
-        // violation, e.g. a security scanner momentarily holding the just-created file) can still
-        // make an immediate read fail -- observed in practice under a machine busy running the rest
-        // of this suite in parallel. A short bounded retry closes that TOCTOU window without masking
-        // a genuine, persistent failure: 20 * 50ms = 1s, far shorter than the 10s existence wait
-        // above, since a real writer-side lock here is expected to clear in milliseconds.
-        for (int attempt = 0; ; attempt++)
+        string? observed = null;
+        for (int attempt = 0; attempt < 200; attempt++)
         {
             try
             {
-                string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-                return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                if (File.Exists(path))
+                {
+                    observed = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
+                    if (int.TryParse(
+                        observed.Trim(), System.Globalization.CultureInfo.InvariantCulture, out int processId))
+                    {
+                        return processId;
+                    }
+                }
             }
-            catch (IOException) when (attempt < 19)
+            catch (IOException)
             {
-                await Task.Delay(50, TestContext.Current.CancellationToken);
+                // The writer or a scanner may still hold the newly published file.
             }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
         }
+
+        Assert.Fail($"'{path}' did not contain a complete process id within 10 seconds (last value: '{observed}').");
+        return 0;
     }
 
-    private static bool IsProcessAlive(int processId)
+    private static async Task AssertProcessDiesAsync(Process process)
     {
-        try
-        {
-            using Process process = Process.GetProcessById(processId);
-            return !process.HasExited;
-        }
-        catch (Exception error) when (
-            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception)
-        {
-            return false;
-        }
-    }
-
-    private static async Task AssertProcessDiesAsync(int processId)
-    {
-        // 200 * 50ms = 10s, matching ReadPidOnceWrittenAsync's own budget.
-        for (int attempt = 0; attempt < 200 && IsProcessAlive(processId); attempt++)
+        for (int attempt = 0; attempt < 200 && !process.HasExited; attempt++)
         {
             await Task.Delay(50, TestContext.Current.CancellationToken);
         }
 
-        Assert.False(IsProcessAlive(processId), $"Process {processId} should no longer be running.");
+        Assert.True(process.HasExited, $"Process {process.Id} should no longer be running.");
     }
 
-    /// <summary>Best-effort cleanup only, for a failed assertion above that leaves the grandchild
-    /// running: never itself part of what the test proves.</summary>
-    private static void TryKillByPidFile(string path)
+    private static void TryKill(Process? process)
     {
-        if (!File.Exists(path))
+        if (process is null)
         {
             return;
         }
 
         try
         {
-            int pid = int.Parse(File.ReadAllText(path).Trim(), System.Globalization.CultureInfo.InvariantCulture);
-            using Process process = Process.GetProcessById(pid);
-            process.Kill();
+            if (!process.HasExited)
+            {
+                process.Kill();
+            }
         }
         catch (Exception error) when (
-            error is ArgumentException or InvalidOperationException or System.ComponentModel.Win32Exception
-                or FormatException or OverflowException or IOException or UnauthorizedAccessException)
+            error is InvalidOperationException or System.ComponentModel.Win32Exception)
         {
-            // Best-effort only (see the doc comment above): a transient share violation reading the
-            // pid file (e.g. a security scanner momentarily holding it) must never replace whatever
-            // exception the try block above was already propagating -- a throw here would silently
-            // swap the real test failure for this unrelated cleanup failure.
+            // Best-effort cleanup must not replace the real assertion failure.
         }
     }
 

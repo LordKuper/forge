@@ -453,12 +453,21 @@ public sealed class ProcessRunnerTests
             try
             {
                 string text = await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken);
-                return int.Parse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture);
+                if (int.TryParse(text.Trim(), System.Globalization.CultureInfo.InvariantCulture, out int processId))
+                {
+                    return processId;
+                }
             }
             catch (IOException) when (attempt < 19)
             {
-                await Task.Delay(50, TestContext.Current.CancellationToken);
             }
+
+            if (attempt >= 19)
+            {
+                Assert.Fail($"'{path}' did not contain a complete process id.");
+            }
+
+            await Task.Delay(50, TestContext.Current.CancellationToken);
         }
     }
 

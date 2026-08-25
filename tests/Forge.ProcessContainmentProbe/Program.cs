@@ -17,11 +17,10 @@ using Forge.Runtime.Windows;
 //     Forge.Host.Windows/Forge.Cli.Windows/Forge.Desktop install at startup -- then blocks forever
 //     so an external caller can kill this harness process itself.
 //   Forge.ProcessContainmentProbe child <directory> <sleepSeconds>
-//     Writes its own process id to <directory>/child.pid, spawns itself again in "grandchild" mode
-//     through a PLAIN, uncontained ProcessRunner (no WindowsJobObjectProcessContainment.Attach call
-//     of its own), then sleeps. The grandchild's only route into any job is therefore the OS's
-//     automatic job-membership inheritance from this process -- not a second, independent
-//     containment layer -- so its death after the harness is killed actually proves inheritance.
+//     Writes its own process id to <directory>/child.pid, waits until the harness confirms Attach has
+//     returned, then spawns itself again in "grandchild" mode through a PLAIN, uncontained
+//     ProcessRunner. The grandchild's only route into any job is therefore the OS's automatic
+//     job-membership inheritance from this process -- not a second containment layer.
 //   Forge.ProcessContainmentProbe grandchild <directory> <sleepSeconds>
 //     Writes its own process id to <directory>/grandchild.pid, then sleeps.
 if (args.Length != 3 ||
@@ -38,7 +37,7 @@ string directory = args[1];
 
 if (mode == "grandchild")
 {
-    await File.WriteAllTextAsync(
+    await WriteFileAtomicallyAsync(
         Path.Combine(directory, "grandchild.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
     await Task.Delay(TimeSpan.FromSeconds(sleepSeconds));
     return 0;
@@ -53,16 +52,24 @@ if (selfPath is null)
 
 if (mode == "child")
 {
-    await File.WriteAllTextAsync(
+    await WriteFileAtomicallyAsync(
         Path.Combine(directory, "child.pid"), Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
 
-    // Spawned well after Attach has already landed on this process (the non-racy descendant case,
-    // outside WindowsJobObjectProcessContainment's own accepted Attach-after-Start race window),
-    // through a PLAIN ProcessRunner with no containment of its own (NullProcessContainment, the
-    // default): the grandchild's only route into any job is therefore the OS's automatic
-    // job-membership inheritance from this process, not a second, independent job object. If it were
-    // spawned through its own WindowsJobObjectProcessContainment instead, the grandchild would die
-    // when ITS OWN job closes regardless of whether inheritance works at all, proving nothing.
+    string attachedPath = Path.Combine(directory, "attached");
+    for (int attempt = 0; attempt < 200 && !File.Exists(attachedPath); attempt++)
+    {
+        await Task.Delay(50);
+    }
+
+    if (!File.Exists(attachedPath))
+    {
+        Console.Error.WriteLine("The harness did not confirm process-containment attachment.");
+        return 1;
+    }
+
+    // The marker is written only after the harness's RunAsync call has returned control, whose
+    // synchronous prefix includes Attach. The grandchild therefore starts outside the accepted
+    // Attach-after-Start race window, through a plain ProcessRunner with no containment of its own.
     ProcessRunner grandchildRunner = new();
     Task<ProcessResult> grandchildTask = grandchildRunner.RunAsync(
         new ProcessRequest(
@@ -87,6 +94,7 @@ Task<ProcessResult> runTask = runner.RunAsync(
         selfPath, ["child", directory, sleepSeconds.ToString(CultureInfo.InvariantCulture)], directory),
     null,
     CancellationToken.None);
+await WriteFileAtomicallyAsync(Path.Combine(directory, "attached"), "attached");
 // Observed, never awaited to completion here (the child sleeps far longer than this harness's own
 // startup): a faulted spawn must be visible on stderr rather than silently leaving no child.pid for
 // the test to wait on forever.
@@ -100,3 +108,10 @@ _ = runTask.ContinueWith(
 // crash, then checks whether the child (and grandchild) spawned above survived as an orphan.
 await Task.Delay(Timeout.InfiniteTimeSpan);
 return 0;
+
+static async Task WriteFileAtomicallyAsync(string path, string contents)
+{
+    string temporaryPath = path + ".tmp";
+    await File.WriteAllTextAsync(temporaryPath, contents);
+    File.Move(temporaryPath, path);
+}
