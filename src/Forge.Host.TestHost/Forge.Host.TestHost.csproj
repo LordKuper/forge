@@ -1,13 +1,20 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <!-- Not itself an OS-specific adapter; this composition root selects between adapters at
-         runtime by OS (see Program.cs), the same "OS detection to select an adapter" carve-out
-         PlatformUpdateStrategyResolver uses (AGENTS.md Portability). Marked ForgeOsAdapter so the
-         architecture tests treat it like every other composition root (Forge.Cli.Windows,
-         Forge.Host.Windows, Forge.Desktop): exempt from the neutral/no-adapter-reference rule,
-         since a composition root's whole purpose is wiring adapters together. -->
-    <ForgeOsAdapter>true</ForgeOsAdapter>
+    <!-- Not itself an OS-specific adapter, and deliberately NOT marked ForgeOsAdapter: unlike the
+         other composition roots (Forge.Cli.Windows, Forge.Host.Windows, Forge.Desktop), which are
+         Windows-only executables where losing every neutral architecture rule costs nothing, this
+         project is the cross-platform stand-in .github/scripts/test-portable.ps1 builds and tests on
+         ubuntu-24.04 and macos-14, so it must keep being caught by
+         ArchitectureTests.NeutralProjectsDoNotTargetAnOsSpecificFramework if a future change ever
+         adds a Windows-only TFM or a Forge.Runtime.Windows reference here. It still needs to
+         reference the Forge.Runtime.Posix adapter below (selecting between adapters at runtime by OS,
+         see Program.cs, the same "OS detection to select an adapter" carve-out
+         PlatformUpdateStrategyResolver uses, per AGENTS.md Portability), so
+         ArchitectureTests.NeutralProjectsDoNotReferenceAnOsAdapter carries a narrow,
+         IsCompositionRoot-only exemption instead of the blanket ForgeOsAdapter one: a composition
+         root's whole purpose is wiring adapters together, but that alone should not also exempt it
+         from the OS-specific-TFM and leaf-adapter rules it has no reason to need. -->
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Forge.Host.Runtime\Forge.Host.Runtime.csproj" />

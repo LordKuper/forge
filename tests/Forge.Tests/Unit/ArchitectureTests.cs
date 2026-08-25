@@ -12,8 +12,14 @@ public sealed class ArchitectureTests
     {
         foreach (SourceProject project in SourceProjects())
         {
-            if (project.IsOsAdapter)
+            if (project.IsOsAdapter || project.IsCompositionRoot)
             {
+                // A composition root's whole purpose is wiring adapters together (e.g.
+                // Forge.Host.TestHost referencing Forge.Runtime.Posix to select it at runtime by
+                // OS -- see that project's own csproj comment). Deliberately narrower than the
+                // IsOsAdapter skip above: unlike ForgeOsAdapter, this exemption does NOT also skip
+                // NeutralProjectsDoNotTargetAnOsSpecificFramework below, so a composition root that
+                // is not itself an OS adapter (Forge.Host.TestHost) stays covered by that rule.
                 continue;
             }
 
