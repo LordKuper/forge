@@ -10,7 +10,8 @@ public partial class WorkspaceShellPage
 {
     private async Task RenderProjectSettingsAsync(Guid projectId, string root)
     {
-        SidebarSnapshot sidebarSnapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        SidebarSnapshot sidebarSnapshot =
+            await sidebar.LoadAsync(CancellationToken.None, projectId).ConfigureAwait(true);
         string? alias = sidebarSnapshot.Projects.FirstOrDefault(project => project.ProjectId == projectId)
             is { } project && project.DisplayName != System.IO.Path.GetFileName(root.TrimEnd('/', '\\'))
                 ? project.DisplayName
