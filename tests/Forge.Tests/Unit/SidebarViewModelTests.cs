@@ -123,7 +123,7 @@ public sealed class SidebarViewModelTests
 
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -148,7 +148,7 @@ public sealed class SidebarViewModelTests
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel first = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel first = new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         SidebarSnapshot beforeToggle = await first.LoadAsync(cancellationToken);
         Assert.True(Assert.Single(beforeToggle.Projects).SprintListExpanded);
@@ -157,7 +157,7 @@ public sealed class SidebarViewModelTests
             await first.SetProjectSprintsExpandedAsync(added.Entry!.ProjectId, false, cancellationToken);
         Assert.True(result.Succeeded);
 
-        SidebarViewModel second = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel second = new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
         SidebarSnapshot afterRestart = await second.LoadAsync(cancellationToken);
         Assert.False(Assert.Single(afterRestart.Projects).SprintListExpanded);
     }
