@@ -2,7 +2,7 @@
 
 User-facing Forge changes are listed by release, newest first.
 
-## v0.73.0
+## v0.74.0
 
 ### Added
 
@@ -14,6 +14,17 @@ User-facing Forge changes are listed by release, newest first.
   run anything. Host connectivity reports whether Forge last reached the project Host, including a
   distinct "status is stale" state when that reading is old enough not to trust. Every new indicator
   has both visible text and a screen-reader name, matching the existing status-row convention.
+
+## v0.73.0
+
+### Added
+
+- The sprint workspace's sticky status header now shows which provider and model are actually
+  running the sprint's current attempt (e.g. "claude_code / claude-sonnet-4-5") instead of an
+  always-on "not yet available" placeholder. This also covers an attempt started as a
+  human-requested replacement (supersession). The placeholder still appears when nothing is
+  currently running, a stop has been requested but not yet converged, the running step never
+  involves a model (intake, confirmation, finalization), or the attempt predates this change.
 
 ## v0.72.1
 

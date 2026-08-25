@@ -551,11 +551,12 @@ prior behavior or an equivalent mutation.
 
 ### 12.3 Sprint status and timeline
 
-- [ ] The sticky header shows project, sprint, lifecycle state, current stage, progress, activity,
-      findings, routing budget, and applicable provider/model information. *(Partial: every field
-      renders from real data except provider/model, which always shows a "not yet available"
-      placeholder — `AttemptSnapshot` has no provider/model field anywhere in the domain model, so
-      this is a structural gap, not a wiring bug.)*
+- [x] The sticky header shows project, sprint, lifecycle state, current stage, progress, activity,
+      findings, routing budget, and applicable provider/model information. Every field renders from
+      real data, including provider/model: `AttemptSnapshot.Provider`/`.Model` are recorded on the
+      attempt's own creation event (the routed `ExecutionProfile`) and rendered by the header once
+      known, falling back to the existing "not yet available" placeholder only when nothing is
+      currently running, the running role is not model-bearing, or the attempt predates this field.
 - [ ] Timeline items are durably ordered, cursor-pageable, localized, and restored after restart.
       *(Partial: ordering, cursor paging, and restart-survival are all real and tested. Localization
       is not — an item's rendered message is its raw `workflow.*` journal key verbatim; none of the
@@ -684,9 +685,10 @@ hold under adversarial review). They fall into three groups:
 
 1. **Missing persistence/navigation** — sidebar expand/collapse state, timeline scroll position, and
    completed/cancelled sprint navigability are UI-only additions not yet built.
-2. **Missing data/localization** — the sticky header's provider/model field and timeline item content
-   have no real data source or localized rendering yet. (The global status row's own authentication,
-   model-availability, and Host-connectivity gap is closed — see 12.6 above.)
+2. **Missing data/localization** — timeline item content has no localized rendering yet (the sticky
+   header's provider/model field is now real, closed in v0.73.0; the global status row's own
+   authentication, model-availability, and Host-connectivity gap is closed in v0.74.0 — see 12.6
+   above).
 3. **Missing test coverage** (not missing behavior) — three of the four sub-gaps here are now closed:
    the advance-path crash saga and the active-operation-blocks-advance prerequisite each have real,
    mutation-tested regression coverage (12.5 above), and Desktop-vs-CLI result parity for

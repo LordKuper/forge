@@ -244,6 +244,7 @@
   <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Progress</value></data>
   <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Last activity</value></data>
   <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Active provider/model is not yet available.</value></data>
+  <data name="SprintStatusHeaderProviderModelText" xml:space="preserve"><value>{0} / {1}</value></data>
   <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Resume not before</value></data>
   <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Details</value></data>
   <data name="TimelineTitle" xml:space="preserve"><value>Timeline</value></data>
