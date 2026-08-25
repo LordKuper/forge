@@ -50,7 +50,6 @@ public partial class WorkspaceShellPage
     private IDispatcherTimer? scrollPersistDebounceTimer;
     private Guid scrollTrackedSprintId;
     private Guid scrollTrackedProjectId;
-    private readonly Label scrollPersistNoticeLabel = new();
     private bool scrollHandlerAttached;
 
     /// <summary>Review finding 3's "flush-on-navigate-away": persists whatever is pending for the
@@ -75,19 +74,31 @@ public partial class WorkspaceShellPage
         ScrollPersistOutcome outcome = await scrollPersistCoordinator
             .FlushAsync(projectId, sprintId, CancellationToken.None)
             .ConfigureAwait(true);
-        if (!outcome.Applied)
+        if (!outcome.Applied || outcome.Succeeded)
         {
+            // Round 2 review finding 4: a successful flush -- by far the common case, since this runs
+            // on every debounced scroll-to-rest -- has nothing to report, so it must not touch the
+            // render gate at all; it used to unconditionally request a render (even with an empty
+            // notice string), which is exactly what let it collide with PollTimelineAsync's own
+            // request below.
             return;
         }
 
-        string noticeText = outcome.Succeeded
-            ? string.Empty
-            : Message(text.Resolve(MessageKeys.SprintScrollPositionSaveFailed), outcome.DiagnosticCode);
-        // Same background-tick pattern PollTimelineAsync already uses below: this can fire from the
-        // debounce timer or from a navigate-away flush, neither of which is a user gesture holding
-        // ShellRenderGate's mutation guard, so the label update goes through RequestRender rather than
-        // RunAsync.
-        renderGate.RequestRender(() => scrollPersistNoticeLabel.Text = noticeText);
+        // Round 2 review finding 3: this can fire from the debounce timer while still on the sprint
+        // workspace, from the navigate-away flush inside RenderContentAsync (BEFORE ContentHost is
+        // cleared -- see that method's own remarks), or from OnDisappearing as the page closes. A
+        // content-host-scoped label reached only through a render requested here was unreachable in
+        // the navigate-away/close paths: RenderContentAsync clears ContentHost and rebuilds the
+        // destination route before ShellRenderGate ever flushes a render deferred while its mutation
+        // guard was held, so the label was never in the tree by the time its text was set, and the
+        // very next sprint-workspace render throws the message away by resetting it to empty. Routing
+        // through `sidebarNotice` instead uses this shell's own established "notice that survives a
+        // content rebuild" precedent (see that field's remarks, PR #98/#103 review finding 3/1) --
+        // SidebarHost is never touched by a content-only render, and RequestSidebarRender defers
+        // through its own independent pending-render slot, so it can never collide with
+        // PollTimelineAsync's RequestRender call below either (round 2 finding 4).
+        sidebarNotice = Message(text.Resolve(MessageKeys.SprintScrollPositionSaveFailed), outcome.DiagnosticCode);
+        renderGate.RequestSidebarRender();
     }
 
     private void StopTimelinePoll()
@@ -817,8 +828,6 @@ public partial class WorkspaceShellPage
             rawEventsResult.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));
         ContentHost.Children.Add(pollRawEvents);
         ContentHost.Children.Add(rawEventsResult);
-        scrollPersistNoticeLabel.Text = string.Empty;
-        ContentHost.Children.Add(scrollPersistNoticeLabel);
 
         scrollTrackedSprintId = sprintId;
         scrollTrackedProjectId = workspace.Route.ProjectId!.Value;

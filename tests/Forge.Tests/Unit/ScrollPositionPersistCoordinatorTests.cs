@@ -1,12 +1,13 @@
 using Forge.Application;
 using Forge.Desktop.Presentation;
+using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
 
-/// <summary>PR #105 review findings 3/4: <see cref="ScrollPositionPersistCoordinator"/> carries the
-/// debounce/ordering/success-guarantee logic for the sprint workspace's scroll-position persistence,
-/// factored out of <c>WorkspaceShellPage.SprintWorkspace.cs</c> -- a MAUI page this suite cannot
-/// instantiate (see <c>SurfaceParityTests</c>'s own remarks on why Desktop UI code is pinned via
+/// <summary>PR #105 review findings 3/4 (round 1) and 1/2 (round 2): <see cref="ScrollPositionPersistCoordinator"/>
+/// carries the debounce/ordering/success-guarantee logic for the sprint workspace's scroll-position
+/// persistence, factored out of <c>WorkspaceShellPage.SprintWorkspace.cs</c> -- a MAUI page this suite
+/// cannot instantiate (see <c>SurfaceParityTests</c>'s own remarks on why Desktop UI code is pinned via
 /// source-text assertions instead) -- specifically so this logic is unit-testable.</summary>
 public sealed class ScrollPositionPersistCoordinatorTests
 {
@@ -156,5 +157,107 @@ public sealed class ScrollPositionPersistCoordinatorTests
             await coordinator.FlushAsync(projectId, sprintId, TestContext.Current.CancellationToken);
         Assert.False(unchangedOutcome.Applied);
         Assert.Equal(0, saveCallCount);
+    }
+
+    /// <summary>Round 2 review finding 1: <see cref="AStaleLateCompletingWriteCannotClobberANewerPersistedValue"/>
+    /// above only proves the in-memory bookkeeping resists a stale, late-completing write -- its fake
+    /// <c>saveAsync</c> records nothing about disk order. The stamp comparison alone never stopped the
+    /// stale write's own underlying store call from physically landing on disk AFTER the fresher one,
+    /// since <see cref="ProjectCatalogStore"/>'s write semaphore makes no FIFO promise (its own
+    /// remarks). This drives a REAL <see cref="ProjectCatalogStore"/> and forces exactly that
+    /// out-of-order disk completion -- the stale write's own store call is held open until after the
+    /// fresh write's store call has already written to disk -- then reads `catalog.json` back through
+    /// the same store instance (a plain read-modify-write with no caching of its own, so this is a
+    /// genuine file read, not memory) to confirm the fresher value survives on disk regardless of
+    /// which write's I/O finished last.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AStaleWriteThatPhysicallyCompletesLastOnDiskIsCorrectedRatherThanLeftAsTheFinalValue()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore store = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await store.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintId = Guid.NewGuid();
+        const double StaleValue = 10;
+        const double FreshValue = 999;
+
+        TaskCompletionSource releaseStaleWrite = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        ScrollPositionPersistCoordinator coordinator = new(async (pid, sid, position, ct) =>
+        {
+            if (position == StaleValue)
+            {
+                // Held open until the fresh write below has already completed its own real store
+                // call -- reproducing "the underlying store's write semaphore makes no FIFO promise"
+                // letting this write's disk I/O land last even though it was issued first.
+                await releaseStaleWrite.Task;
+            }
+
+            return await store.SetSprintScrollPositionAsync(pid, sid, position, ct);
+        });
+
+        coordinator.RecordScroll(sprintId, StaleValue);
+        Task<ScrollPersistOutcome> staleFlush = coordinator.FlushAsync(projectId, sprintId, cancellationToken);
+
+        coordinator.RecordScroll(sprintId, FreshValue);
+        ScrollPersistOutcome freshOutcome = await coordinator.FlushAsync(projectId, sprintId, cancellationToken);
+        Assert.True(freshOutcome.Applied);
+
+        // Only now let the stale write's real store call proceed, so it physically writes to disk
+        // AFTER the fresh value already did.
+        releaseStaleWrite.SetResult();
+        ScrollPersistOutcome staleOutcome = await staleFlush;
+        Assert.False(staleOutcome.Applied);
+
+        ProjectCatalogListing listing = await store.ListAsync(cancellationToken);
+        ProjectCatalogEntry entry = Assert.Single(listing.Entries);
+        Assert.Equal(FreshValue, entry.SprintScrollPositions![sprintId.ToString("D")]);
+    }
+
+    /// <summary>Round 2 review finding 2: the four dictionaries backing this coordinator are mutated
+    /// both from the caller's UI thread (<see cref="ScrollPositionPersistCoordinator.RecordScroll"/>/
+    /// <see cref="ScrollPositionPersistCoordinator.TryGetPending"/>) and from thread-pool
+    /// continuations after <see cref="ScrollPositionPersistCoordinator.FlushAsync"/>'s
+    /// <c>ConfigureAwait(false)</c> save call -- concurrent flushes for the same sprint are the exact
+    /// case this type exists to handle, not a rare edge case. This exercises genuine concurrent
+    /// access -- many overlapping flushes plus many overlapping scroll recordings for one sprint, run
+    /// via <see cref="Task.WhenAll(IEnumerable{Task})"/> so they actually interleave on the thread
+    /// pool -- and requires it to complete without an unhandled exception (an unsynchronized
+    /// <see cref="Dictionary{TKey,TValue}"/> insert race can tear the table's internal structure,
+    /// throwing or corrupting it) and without ending up with a corrupted/negative pending-write count.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ConcurrentFlushesAndScrollRecordingsForTheSameSprintNeverCorruptTheCoordinatorsState()
+    {
+        Guid projectId = Guid.NewGuid();
+        Guid sprintId = Guid.NewGuid();
+        ScrollPositionPersistCoordinator coordinator = new(async (_, _, position, ct) =>
+        {
+            // A tiny real await forces the continuation below (which touches the dictionaries) onto
+            // a genuine thread-pool thread rather than completing synchronously.
+            await Task.Delay(1, ct).ConfigureAwait(false);
+            return Ok();
+        });
+
+        IEnumerable<Task> flushes = Enumerable.Range(0, 50).Select(index => Task.Run(async () =>
+        {
+            coordinator.RecordScroll(sprintId, index);
+            await coordinator.FlushAsync(projectId, sprintId, TestContext.Current.CancellationToken);
+        }));
+        IEnumerable<Task> reads = Enumerable.Range(0, 50).Select(index => Task.Run(() =>
+        {
+            coordinator.TryGetPending(sprintId, out _);
+            _ = coordinator.LastPersistedPositions;
+        }));
+
+        // Must complete without throwing (a torn Dictionary can throw from an unrelated later
+        // lookup, not necessarily from the racing insert itself) and without hanging.
+        await Task.WhenAll(flushes.Concat(reads));
+
+        Assert.True(coordinator.TryGetPending(sprintId, out double finalPending));
+        Assert.InRange(finalPending, 0, 49);
     }
 }

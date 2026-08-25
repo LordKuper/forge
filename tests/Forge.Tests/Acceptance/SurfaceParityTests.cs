@@ -596,20 +596,48 @@ public sealed class SurfaceParityTests
         Assert.Contains("scrollPersistDebounceTimer.Start();", scrolledHandler, StringComparison.Ordinal);
     }
 
-    /// <summary>PR #105 review finding 4(c): the debounced scroll-position write used to be
+    /// <summary>PR #105 round-1 review finding 4(c): the debounced scroll-position write used to be
     /// fire-and-forget with its <c>ProjectCatalogResult</c> silently discarded -- the only catalog/
     /// config write in this shell with no failure notice at all, unlike every sibling write (e.g.
-    /// <c>SidebarProjectSprintsSaveFailed</c>). No MAUI control can be instantiated headlessly in this
-    /// suite, so this pins the fix directly in the source: a failed write must resolve
-    /// <c>MessageKeys.SprintScrollPositionSaveFailed</c> somewhere in this file.</summary>
+    /// <c>SidebarProjectSprintsSaveFailed</c>). That round-1 fix only asserted the message key was
+    /// referenced somewhere in the file -- it did not prove the notice ever reached a user. Round-2
+    /// finding 3 caught exactly that gap: the notice was routed through a content-host-scoped label
+    /// reachable only via <c>ShellRenderGate.RequestRender</c>, which is unreachable on the
+    /// navigate-away/page-close paths (<c>RenderContentAsync</c> clears <c>ContentHost</c> and
+    /// rebuilds the destination route before a render deferred while the mutation guard was held ever
+    /// runs, and the very next sprint-workspace render resets the label back to empty before it could
+    /// ever be seen). No MAUI control can be instantiated headlessly in this suite, so this pins the
+    /// fix's actual routing rather than just the message key: the notice goes through
+    /// <c>sidebarNotice</c> -- this shell's own established "notice that survives a content rebuild"
+    /// precedent (see that field's remarks, PR #98/#103 review finding 3/1) -- via
+    /// <c>RequestSidebarRender</c>, guarded so a successful/no-op flush never touches it, and never
+    /// through the content-only <c>RequestRender</c> that <c>PollTimelineAsync</c>'s own timeline
+    /// refresh already owns (round-2 finding 4's collision).</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public void AFailedScrollPositionWriteSurfacesANoticeInsteadOfBeingDiscarded()
     {
-        string source = File.ReadAllText(
-            Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
+        string method =
+            SprintWorkspaceBody("private async Task FlushScrollPositionAsync(Guid projectId, Guid sprintId)");
 
-        Assert.Contains("MessageKeys.SprintScrollPositionSaveFailed", source, StringComparison.Ordinal);
+        Assert.Contains("MessageKeys.SprintScrollPositionSaveFailed", method, StringComparison.Ordinal);
+
+        Assert.Contains("renderGate.RequestSidebarRender();", method, StringComparison.Ordinal);
+
+        int noSuccessGuardIndex =
+            method.IndexOf("if (!outcome.Applied || outcome.Succeeded)", StringComparison.Ordinal);
+        int noticeIndex = method.IndexOf("sidebarNotice = Message(", StringComparison.Ordinal);
+        Assert.True(noSuccessGuardIndex >= 0, "A successful/no-op flush must return before reporting anything.");
+        Assert.True(noticeIndex >= 0, "The failure notice must be routed through sidebarNotice.");
+        Assert.True(
+            noSuccessGuardIndex < noticeIndex,
+            "The success/no-op guard must run before the notice is ever set, so a routine flush never reports anything.");
+
+        // Never routed through the content-only slot PollTimelineAsync's own render request already
+        // owns (round-2 finding 4) -- a content-host-scoped label was also round-2 finding 3's own
+        // unreachability bug.
+        Assert.DoesNotContain("renderGate.RequestRender(", method, StringComparison.Ordinal);
+        Assert.DoesNotContain("scrollPersistNoticeLabel", method, StringComparison.Ordinal);
     }
 
     /// <summary>
