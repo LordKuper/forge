@@ -75,7 +75,16 @@ public partial class WorkspaceShellPage : ContentPage
         // very click handler whose own mutation guard is still held, so the render this triggers
         // must not go through that same guard directly -- ShellRenderGate.RequestContentRender
         // records it instead and flushes it the moment the guard releases (see its own remarks).
-        workspace.RouteChanged += (_, _) => renderGate.RequestContentRender();
+        // PR #106 review finding 5: the sidebar's Host-connectivity indicator now names the CURRENTLY
+        // SELECTED project (see RenderSidebarAsync below), so a route change -- which is exactly what
+        // changes which project is selected -- must also re-render the sidebar, not only the content
+        // pane, or the indicator would keep showing whichever project was selected at the last
+        // sidebar render instead of the one the user just navigated to.
+        workspace.RouteChanged += (_, _) =>
+        {
+            renderGate.RequestSidebarRender();
+            renderGate.RequestContentRender();
+        };
         // Plan 5.1/12.2: a UI-language save applies without restart -- every legacy-backed
         // view-model wraps a MainPageViewModel bound to one fixed SurfaceText snapshot, so a
         // language change rebuilds all of them against the newly current text before re-rendering.
@@ -147,7 +156,11 @@ public partial class WorkspaceShellPage : ContentPage
 
     private async Task RenderSidebarAsync()
     {
-        SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        // PR #106 review finding 5: the status row's Host-connectivity text names the CURRENTLY
+        // SELECTED project (workspace.Route.ProjectId), never a process-global "whichever project was
+        // last mutated" reading -- see SidebarViewModel.LoadAsync's own remarks.
+        SidebarSnapshot snapshot =
+            await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
         RenderSidebarFromSnapshot(snapshot);
     }
 
@@ -211,7 +224,17 @@ public partial class WorkspaceShellPage : ContentPage
         Label authentication = new() { Text = snapshot.Status.AuthenticationStatusText };
         SemanticProperties.SetDescription(authentication, snapshot.Status.AuthenticationAccessibleText);
         SidebarHost.Children.Add(authentication);
-        Label modelAvailability = new() { Text = snapshot.Status.ModelAvailabilityText };
+        // PR #106 review finding 1: AnyModelUnavailable used to be computed and never read by any
+        // UI -- the exact "dead field" defect it was supposed to supersede
+        // (see SidebarStatusRow's own remarks). Bold is a non-color-only emphasis (plan 12.6: "color
+        // is never the only carrier") that draws attention to the label when at least one enabled
+        // provider is not yet usable for model work, without hiding the state behind color alone --
+        // the text itself already names the shortfall, this only makes it harder to miss.
+        Label modelAvailability = new()
+        {
+            Text = snapshot.Status.ModelAvailabilityText,
+            FontAttributes = snapshot.Status.AnyModelUnavailable ? FontAttributes.Bold : FontAttributes.None,
+        };
         SemanticProperties.SetDescription(modelAvailability, snapshot.Status.ModelAvailabilityAccessibleText);
         SidebarHost.Children.Add(modelAvailability);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
@@ -272,8 +295,8 @@ public partial class WorkspaceShellPage : ContentPage
             // configuration read just to flip a column width -- the exact "unnecessary work holding
             // the mutation guard" pattern PR #99 review finding 1 and PR #100 review finding 1 both
             // already pushed back on in this same surface.
-            SidebarSnapshot snapshot =
-                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            SidebarSnapshot snapshot = lastSidebarSnapshot ??
+                await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
             RenderSidebarFromSnapshot(snapshot with { Collapsed = nowCollapsed });
         });
         return toggle;

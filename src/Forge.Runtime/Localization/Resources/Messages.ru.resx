@@ -311,8 +311,8 @@
   <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Статус аутентификации: требуется аутентификация как минимум для одного провайдера.</value></data>
   <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>Проверка аутентификации не удалась как минимум для одного провайдера.</value></data>
   <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Статус аутентификации: проверка не удалась как минимум для одного провайдера.</value></data>
-  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} моделей доступно</value></data>
-  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} из {1} включённых провайдеров имеют доступную для работы модель</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>Готово провайдеров для работы с моделями: {0}/{1}</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>Готово к работе с моделями {0} из {1} включённых провайдеров</value></data>
   <data name="HostConnectivityUnknown" xml:space="preserve"><value>Статус подключения к Host ещё не проверен.</value></data>
   <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Подключение к Host: ещё не проверено.</value></data>
   <data name="HostConnectivityConnected" xml:space="preserve"><value>Подключено к Host.</value></data>

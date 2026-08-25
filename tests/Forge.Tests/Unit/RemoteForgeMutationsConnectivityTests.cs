@@ -22,13 +22,14 @@ public sealed class RemoteForgeMutationsConnectivityTests
     {
         SucceedingConnection connection = new();
         HostConnectivityMonitor monitor = new();
-        await using RemoteForgeMutations mutations = CreateMutations(connection, monitor);
+        Guid projectId = Guid.NewGuid();
+        await using RemoteForgeMutations mutations = CreateMutations(connection, monitor, projectId);
 
         await mutations.SetConfigurationAsync(
             ConfigurationScope.Project, "root", "some.key", "value", TestContext.Current.CancellationToken);
 
-        Assert.NotNull(monitor.LastObserved);
-        Assert.True(monitor.LastObserved!.Value.Connected);
+        Assert.NotNull(monitor.LastObserved(projectId));
+        Assert.True(monitor.LastObserved(projectId)!.Connected);
     }
 
     [Fact]
@@ -36,16 +37,43 @@ public sealed class RemoteForgeMutationsConnectivityTests
     public async Task ReportsDisconnectedIntoTheMonitorWhenTheHostIsUnreachable()
     {
         HostConnectivityMonitor monitor = new();
+        Guid projectId = Guid.NewGuid();
         ForgeHostClient client = new(
             new UnreachableTransport(),
-            new ForgeHostClientOptions(Guid.NewGuid(), "test-instance", "1.0.0-test"));
+            new ForgeHostClientOptions(projectId, "test-instance", "1.0.0-test"));
         await using RemoteForgeMutations mutations = new(client, connectivityMonitor: monitor);
 
         await mutations.SetConfigurationAsync(
             ConfigurationScope.Project, "root", "some.key", "value", TestContext.Current.CancellationToken);
 
-        Assert.NotNull(monitor.LastObserved);
-        Assert.False(monitor.LastObserved!.Value.Connected);
+        Assert.NotNull(monitor.LastObserved(projectId));
+        Assert.False(monitor.LastObserved(projectId)!.Connected);
+    }
+
+    /// <summary>PR #106 review finding 3 (regression test): a framing/timeout failure on the SECOND
+    /// request -- the actual mutation, sent after a successful connect/handshake -- used to bypass
+    /// connectivity reporting entirely. <see cref="ForgeHostClient.SendAsync"/> drops the connection
+    /// and rethrows a <see cref="ControlProtocolException"/>, and the pre-fix
+    /// <see cref="RemoteForgeMutations.SetConfigurationAsync"/> caught that exception and returned
+    /// without ever reporting into the monitor -- leaving it holding the earlier "connected" reading
+    /// from <c>EnsureConnectedAsync</c>, so the status row would keep showing "Connected to Host." for
+    /// up to the staleness window after the connection had actually died. This proves the fix: even
+    /// though the connect/handshake itself succeeds, a subsequent send failure must still report
+    /// <see langword="false"/>.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReportsDisconnectedIntoTheMonitorWhenTheConnectionDropsMidRequest()
+    {
+        FailingSendConnection connection = new();
+        HostConnectivityMonitor monitor = new();
+        Guid projectId = Guid.NewGuid();
+        await using RemoteForgeMutations mutations = CreateMutations(connection, monitor, projectId);
+
+        await mutations.SetConfigurationAsync(
+            ConfigurationScope.Project, "root", "some.key", "value", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(monitor.LastObserved(projectId));
+        Assert.False(monitor.LastObserved(projectId)!.Connected);
     }
 
     [Fact]
@@ -56,7 +84,7 @@ public sealed class RemoteForgeMutationsConnectivityTests
         // a caller that does not care about connectivity reporting (e.g. the CLI) must keep working
         // exactly as before.
         SucceedingConnection connection = new();
-        await using RemoteForgeMutations mutations = CreateMutations(connection, connectivityMonitor: null);
+        await using RemoteForgeMutations mutations = CreateMutations(connection, connectivityMonitor: null, Guid.NewGuid());
 
         ConfigurationWriteResult result = await mutations.SetConfigurationAsync(
             ConfigurationScope.Project, "root", "some.key", "value", TestContext.Current.CancellationToken);
@@ -65,11 +93,11 @@ public sealed class RemoteForgeMutationsConnectivityTests
     }
 
     private static RemoteForgeMutations CreateMutations(
-        SucceedingConnection connection, IHostConnectivityMonitor? connectivityMonitor)
+        ILocalControlConnection connection, IHostConnectivityMonitor? connectivityMonitor, Guid projectId)
     {
         ForgeHostClient client = new(
             new FakeControlTransport(connection),
-            new ForgeHostClientOptions(Guid.NewGuid(), "test-instance", "1.0.0-test"));
+            new ForgeHostClientOptions(projectId, "test-instance", "1.0.0-test"));
         return new RemoteForgeMutations(client, connectivityMonitor: connectivityMonitor);
     }
 
@@ -106,6 +134,40 @@ public sealed class RemoteForgeMutationsConnectivityTests
                         new ConfigurationWriteResult(true, DiagnosticCodes.None), ControlProtocol.JsonOptions)),
                 ControlProtocol.JsonOptions);
             return Task.CompletedTask;
+        }
+
+        public Task<byte[]> ReceiveAsync(TimeSpan deadline, CancellationToken cancellationToken) =>
+            Task.FromResult(pendingResponseBytes ??
+                throw new InvalidOperationException("No request was sent before receiving."));
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    /// <summary>Answers the handshake advertising every capability -- same as
+    /// <see cref="SucceedingConnection"/> -- but throws a <see cref="ControlProtocolException"/> on
+    /// the SECOND request (the actual mutation), simulating a framing/timeout failure mid-request
+    /// (PR #106 review finding 3): the connection was genuinely usable a moment ago, then drops.</summary>
+    private sealed class FailingSendConnection : ILocalControlConnection
+    {
+        private byte[]? pendingResponseBytes;
+        private bool handshaked;
+
+        public Task SendAsync(ReadOnlyMemory<byte> message, TimeSpan deadline, CancellationToken cancellationToken)
+        {
+            if (!handshaked)
+            {
+                ControlHandshakeRequest request =
+                    JsonSerializer.Deserialize<ControlHandshakeRequest>(message.Span, ControlProtocol.JsonOptions)!;
+                pendingResponseBytes = JsonSerializer.SerializeToUtf8Bytes(
+                    new ControlHandshakeResponse(
+                        ControlProtocol.Version, "1.0.0-test", CapabilityIds.Implemented, ControlDiagnostic.None,
+                        request.CorrelationId),
+                    ControlProtocol.JsonOptions);
+                handshaked = true;
+                return Task.CompletedTask;
+            }
+
+            throw new ControlProtocolException(ControlDiagnosticCode.Timeout, "Simulated mid-request connection drop.");
         }
 
         public Task<byte[]> ReceiveAsync(TimeSpan deadline, CancellationToken cancellationToken) =>

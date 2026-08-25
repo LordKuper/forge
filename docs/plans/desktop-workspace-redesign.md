@@ -630,10 +630,12 @@ prior behavior or an equivalent mutation.
       (toolchain-ready AND authenticated — the old, unread `AnyKnownProviderUnavailable` field is
       superseded by `AnyModelUnavailable`, computed from both signals instead of toolchain state
       alone), quota and unknown quota (unchanged, already distinguished), and Host connectivity
-      (sourced from `ForgeHostClient.IsConnected` via a process-lifetime `HostConnectivityMonitor`
-      that `RemoteForgeMutations` reports into after every real connection attempt — never a probe
-      issued just to render the sidebar), including a distinct "stale" state once that reading is
-      older than a fixed threshold.
+      (sourced from `ForgeHostClient.IsConnected` via a process-lifetime `HostConnectivityMonitor`,
+      keyed per project id since Forge Hosts are per-project, that `RemoteForgeMutations` reports
+      into after every real connection attempt — success or failure — never a probe issued just to
+      render the sidebar; the status row names the currently selected project's own reading, never
+      another cataloged project's), including a distinct "stale" state once that reading is older
+      than a fixed threshold.
 - [ ] All actions are keyboard reachable, screen-reader named, focus-stable after refresh, usable
       at supported text scaling, and never communicate status by color alone. *(Partial: accessible
       names are real, wired, and tested throughout. No mechanism or test exists yet for keyboard

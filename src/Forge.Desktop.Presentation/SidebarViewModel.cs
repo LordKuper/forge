@@ -54,8 +54,9 @@ public sealed record SidebarProjectItem(
 /// provider integration in this codebase exposes a verified quota signal, so today this always
 /// resolves to the "unknown" text -- a truthful report, never a fabricated number (plan: "render...
 /// unknown, never inferred"). <see cref="HostConnectivityText"/>/<see cref="HostConnectivityAccessibleText"/>
-/// report the most recently observed <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved"/>
-/// reading (never a fresh probe -- see that type's own remarks), including a distinct "stale" state
+/// report the selected project's most recently observed
+/// <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved(System.Guid)"/> reading (never
+/// a fresh probe -- see that type's own remarks), including a distinct "stale" state
 /// when that reading is older than <see cref="SidebarViewModel.HostConnectivityStaleAfter"/>.</summary>
 public sealed record SidebarStatusRow(
     string ProviderSummaryText,
@@ -98,11 +99,11 @@ public sealed class SidebarViewModel(
     ForgeApplication application,
     IFolderPickerPort folderPicker,
     SurfaceTextProvider text,
-    IClock? clock = null,
-    IHostConnectivityMonitor? connectivityMonitor = null)
+    IHostConnectivityMonitor connectivityMonitor,
+    IClock? clock = null)
 {
-    /// <summary>A <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved"/> reading older
-    /// than this is reported as the status row's distinct "stale" Host-connectivity state (plan
+    /// <summary>A <see cref="Forge.Application.IHostConnectivityMonitor.LastObserved(System.Guid)"/>
+    /// reading older than this is reported as the status row's distinct "stale" Host-connectivity state (plan
     /// 12.6) rather than trusted as current -- the sidebar itself has no fixed refresh cadence (it
     /// reloads on demand: route change, add/remove project, collapse toggle -- see
     /// <c>WorkspaceShellPage</c>'s own remarks), so a reading from well before "now" may no longer
@@ -113,10 +114,28 @@ public sealed class SidebarViewModel(
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
     private readonly IFolderPickerPort folderPicker = folderPicker ?? throw new ArgumentNullException(nameof(folderPicker));
     private readonly SurfaceTextProvider text = text ?? throw new ArgumentNullException(nameof(text));
+    // PR #106 review finding 4: this used to default to a silently-constructed private
+    // HostConnectivityMonitor when omitted or mis-wired -- unlike catalog/application/folderPicker/
+    // text above, all four of which throw on a missing dependency. That silent fallback turned a
+    // wiring mistake into a monitor no RemoteForgeMutations instance would ever Report into, so
+    // LastObserved stayed null forever and the Host-connectivity indicator rendered "not yet
+    // checked" permanently -- indistinguishable from a genuinely healthy, merely-unchecked state,
+    // with no exception, log, or test failure to reveal the mistake. Required now, like every other
+    // sibling dependency, so a future composition-root refactor that drops this argument is a
+    // compile error instead of a silently degraded feature.
+    private readonly IHostConnectivityMonitor connectivityMonitor =
+        connectivityMonitor ?? throw new ArgumentNullException(nameof(connectivityMonitor));
     private readonly IClock clock = clock ?? new SystemClock();
-    private readonly IHostConnectivityMonitor connectivityMonitor = connectivityMonitor ?? new HostConnectivityMonitor();
 
-    public async Task<SidebarSnapshot> LoadAsync(CancellationToken cancellationToken)
+    /// <summary>Loads the sidebar snapshot. <paramref name="selectedProjectId"/> is the workspace
+    /// shell's currently routed project (<c>WorkspaceRoute.ProjectId</c>), if any -- PR #106 review
+    /// finding 5: <see cref="connectivityMonitor"/> tracks a reading per project (Forge Hosts are
+    /// per-project, one pipe per <c>InstanceIdentity.ComputePipeName(instanceId, projectId)</c>), so
+    /// the status row's Host-connectivity text must name THIS project's own last-observed reading,
+    /// never an arbitrary other cataloged project's. <see langword="null"/> (nothing routed yet, or
+    /// the Forge-settings page, which names no single project) reports the same honest "not yet
+    /// checked" state as a project with no reading at all.</summary>
+    public async Task<SidebarSnapshot> LoadAsync(CancellationToken cancellationToken, Guid? selectedProjectId = null)
     {
         ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
         List<SidebarProjectItem> projects = new(listing.Entries.Count);
@@ -161,7 +180,8 @@ public sealed class SidebarViewModel(
         IReadOnlyList<ProviderQuotaSnapshot> quota = application.ProjectProviderQuota(knownProviders.Values);
         ConfigurationView userConfiguration =
             await application.GetUserConfigurationAsync(cancellationToken).ConfigureAwait(false);
-        return new(projects, BuildStatusRow(knownProviders.Values, quota), IsCollapsed(userConfiguration));
+        return new(
+            projects, BuildStatusRow(knownProviders.Values, quota, selectedProjectId), IsCollapsed(userConfiguration));
     }
 
     /// <summary>Persists the workspace shell's whole-sidebar collapse state (ADR 0050 addendum) so
@@ -248,7 +268,7 @@ public sealed class SidebarViewModel(
     /// status-row text and its accessible name are now resolved templates instead of hardcoded
     /// English literals.</summary>
     private SidebarStatusRow BuildStatusRow(
-        IEnumerable<ProviderHealthEntry> providers, IReadOnlyList<ProviderQuotaSnapshot> quota)
+        IEnumerable<ProviderHealthEntry> providers, IReadOnlyList<ProviderQuotaSnapshot> quota, Guid? selectedProjectId)
     {
         List<ProviderHealthEntry> known = [.. providers];
         int ready = known.Count(provider => provider.Enabled && provider.State == ProviderState.Ready);
@@ -266,7 +286,7 @@ public sealed class SidebarViewModel(
         (string authenticationText, string authenticationAccessible) = AuthenticationStatusSummary(known);
         (string modelText, string modelAccessible, bool anyModelUnavailable) = ModelAvailabilitySummary(known, enabled);
         (string quotaText, string quotaAccessible) = SurfaceFormatting.QuotaStatusSummary(text.Current, quota);
-        (string hostText, string hostAccessible) = HostConnectivitySummary();
+        (string hostText, string hostAccessible) = HostConnectivitySummary(selectedProjectId);
         return new(
             summaryText,
             accessible,
@@ -354,18 +374,25 @@ public sealed class SidebarViewModel(
     }
 
     /// <summary>The Host-connectivity status-row indicator (plan 12.6), read from
-    /// <see cref="connectivityMonitor"/>'s last actually-observed reading -- never a fresh probe (see
-    /// <see cref="IHostConnectivityMonitor"/>'s own remarks). A reading older than
+    /// <see cref="connectivityMonitor"/>'s last actually-observed reading for
+    /// <paramref name="selectedProjectId"/> -- never a fresh probe (see
+    /// <see cref="IHostConnectivityMonitor"/>'s own remarks) and never another project's reading
+    /// (PR #106 review finding 5): Forge Hosts are per-project, so a reading from a different
+    /// cataloged project would misreport THIS one's actual reachability. No project selected (nothing
+    /// routed yet, or the Forge-settings page) reports the same honest "not yet checked" state as a
+    /// selected project with no reading at all. A reading older than
     /// <see cref="HostConnectivityStaleAfter"/> is reported as the distinct "stale" state rather than
     /// trusted as current, satisfying plan 12.6's "stale data" indicator honestly instead of
     /// fabricating freshness for a value this codebase cannot actually keep live without forcing a
     /// Host launch just to render a status row.</summary>
-    private (string Text, string Accessible) HostConnectivitySummary()
+    private (string Text, string Accessible) HostConnectivitySummary(Guid? selectedProjectId)
     {
-        (string textKey, string accessibleKey) = connectivityMonitor.LastObserved switch
+        HostConnectivityReading? observed =
+            selectedProjectId is { } projectId ? connectivityMonitor.LastObserved(projectId) : null;
+        (string textKey, string accessibleKey) = observed switch
         {
             null => (MessageKeys.HostConnectivityUnknown, MessageKeys.HostConnectivityUnknownAccessible),
-            { } observed when clock.UtcNow - observed.ObservedAt > HostConnectivityStaleAfter =>
+            { } reading when clock.UtcNow - reading.ObservedAt > HostConnectivityStaleAfter =>
                 (MessageKeys.HostConnectivityStale, MessageKeys.HostConnectivityStaleAccessible),
             { Connected: true } => (MessageKeys.HostConnectivityConnected, MessageKeys.HostConnectivityConnectedAccessible),
             { Connected: false } =>

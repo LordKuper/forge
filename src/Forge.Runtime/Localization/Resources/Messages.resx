@@ -311,8 +311,8 @@
   <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Authentication status: authentication is required for at least one provider.</value></data>
   <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>An authentication check failed for at least one provider.</value></data>
   <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Authentication status: an authentication check failed for at least one provider.</value></data>
-  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} models available</value></data>
-  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} of {1} enabled providers have a model available for work</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} providers ready for model work</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} of {1} enabled providers are ready for model work</value></data>
   <data name="HostConnectivityUnknown" xml:space="preserve"><value>Host connection status not yet checked.</value></data>
   <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Host connectivity: not yet checked.</value></data>
   <data name="HostConnectivityConnected" xml:space="preserve"><value>Connected to Host.</value></data>

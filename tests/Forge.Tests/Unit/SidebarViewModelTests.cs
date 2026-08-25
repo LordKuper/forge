@@ -35,7 +35,8 @@ public sealed class SidebarViewModelTests
 
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel viewModel = new(catalog, application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel =
+            new(catalog, application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -72,7 +73,8 @@ public sealed class SidebarViewModelTests
             cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -89,8 +91,12 @@ public sealed class SidebarViewModelTests
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
         FakeFolderPicker picker = new();
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, picker, Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            picker,
+            Text(),
+            new HostConnectivityMonitor());
 
         AddProjectResult result = await viewModel.AddProjectAsync(environment.ProjectRoot, cancellationToken);
 
@@ -106,8 +112,12 @@ public sealed class SidebarViewModelTests
         using TestEnvironment environment = new();
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
         FakeFolderPicker picker = new(environment.ProjectRoot);
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, picker, Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            picker,
+            Text(),
+            new HostConnectivityMonitor());
 
         AddProjectResult result = await viewModel.AddProjectAsync(null, cancellationToken);
 
@@ -121,8 +131,12 @@ public sealed class SidebarViewModelTests
     {
         using TestEnvironment environment = new();
         FakeFolderPicker picker = new(nextResult: null);
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, picker, Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            picker,
+            Text(),
+            new HostConnectivityMonitor());
 
         AddProjectResult result = await viewModel.AddProjectAsync(null, TestContext.Current.CancellationToken);
 
@@ -138,7 +152,8 @@ public sealed class SidebarViewModelTests
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         string diagnosticCode = await viewModel.RemoveProjectAsync(added.Entry!.ProjectId, cancellationToken);
 
@@ -159,7 +174,8 @@ public sealed class SidebarViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         SurfaceTextProvider ru = TextRu();
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), ru);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), ru, new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -189,7 +205,8 @@ public sealed class SidebarViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         SurfaceTextProvider en = Text();
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -206,8 +223,12 @@ public sealed class SidebarViewModelTests
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            new FakeFolderPicker(),
+            Text(),
+            new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -225,14 +246,22 @@ public sealed class SidebarViewModelTests
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
-        SidebarViewModel first =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel first = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            new FakeFolderPicker(),
+            Text(),
+            new HostConnectivityMonitor());
 
         ConfigurationWriteResult result = await first.SetCollapsedAsync(true, cancellationToken);
 
         Assert.True(result.Succeeded);
-        SidebarViewModel second =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel second = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            new FakeFolderPicker(),
+            Text(),
+            new HostConnectivityMonitor());
         SidebarSnapshot snapshot = await second.LoadAsync(cancellationToken);
         Assert.True(snapshot.Collapsed);
     }
@@ -245,8 +274,12 @@ public sealed class SidebarViewModelTests
     {
         CancellationToken cancellationToken = TestContext.Current.CancellationToken;
         using TestEnvironment environment = new();
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            new FakeFolderPicker(),
+            Text(),
+            new HostConnectivityMonitor());
         await viewModel.SetCollapsedAsync(true, cancellationToken);
 
         await viewModel.SetCollapsedAsync(false, cancellationToken);
@@ -273,8 +306,12 @@ public sealed class SidebarViewModelTests
         string path = ConfigurationStoreFactory.UserPath(environment);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         await File.WriteAllTextAsync(path, "not json", cancellationToken);
-        SidebarViewModel viewModel =
-            new(environment.Resolve<ProjectCatalogStore>(), environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel = new(
+            environment.Resolve<ProjectCatalogStore>(),
+            environment.Application,
+            new FakeFolderPicker(),
+            Text(),
+            new HostConnectivityMonitor());
 
         ConfigurationWriteResult result = await viewModel.SetCollapsedAsync(true, cancellationToken);
 
@@ -302,7 +339,8 @@ public sealed class SidebarViewModelTests
         await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), Text());
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), Text(), new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -330,7 +368,8 @@ public sealed class SidebarViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         SurfaceTextProvider en = Text();
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -362,7 +401,8 @@ public sealed class SidebarViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         SurfaceTextProvider en = Text();
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -393,7 +433,8 @@ public sealed class SidebarViewModelTests
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
         SurfaceTextProvider en = Text();
-        SidebarViewModel viewModel = new(catalog, environment.Application, new FakeFolderPicker(), en);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
 
         SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
 
@@ -401,7 +442,7 @@ public sealed class SidebarViewModelTests
     }
 
     /// <summary>Plan 12.6: the status row must have a Host-connectivity indicator. Before any
-    /// mutation has been attempted this process, <see cref="IHostConnectivityMonitor.LastObserved"/>
+    /// mutation has been attempted this process, <see cref="IHostConnectivityMonitor.LastObserved(Guid)"/>
     /// is <see langword="null"/> -- the sidebar must report that honestly as "not yet checked," never
     /// fabricate a connected/disconnected guess (the same "unknown, never inferred" discipline plan
     /// 12.6 already requires of quota).</summary>
@@ -423,10 +464,14 @@ public sealed class SidebarViewModelTests
     }
 
     /// <summary>Wires <c>ForgeHostClient.IsConnected</c>'s real outcome (via
-    /// <see cref="IHostConnectivityMonitor.Report"/>, the same call <c>RemoteForgeMutations</c> makes
+    /// <see cref="IHostConnectivityMonitor.Report(Guid, bool, DateTimeOffset)"/>, the same call <c>RemoteForgeMutations</c> makes
     /// after a real mutation attempt -- see its own remarks) through to the status row's real, load
     /// -bearing text: a connected reading and a disconnected reading must render as different,
-    /// distinguishable states.</summary>
+    /// distinguishable states. PR #106 review finding 5 changed <see cref="IHostConnectivityMonitor"/>
+    /// to key readings by project id, so this now reports and reads back the SAME project's reading
+    /// (<c>selectedProjectId</c> below) -- see
+    /// <see cref="LoadAsyncScopesHostConnectivityToTheSelectedProjectNotToAnyOtherCatalogedProject"/>
+    /// for the actual cross-project isolation this scoping exists to guarantee.</summary>
     [Theory]
     [Trait("Category", "Unit")]
     [InlineData(true, MessageKeys.HostConnectivityConnected, MessageKeys.HostConnectivityConnectedAccessible)]
@@ -438,15 +483,50 @@ public sealed class SidebarViewModelTests
         using TestEnvironment environment = new();
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         SurfaceTextProvider en = Text();
+        Guid selectedProjectId = Guid.NewGuid();
         HostConnectivityMonitor monitor = new();
-        monitor.Report(connected, DateTimeOffset.UtcNow);
+        monitor.Report(selectedProjectId, connected, DateTimeOffset.UtcNow);
         SidebarViewModel viewModel =
             new(catalog, environment.Application, new FakeFolderPicker(), en, connectivityMonitor: monitor);
 
-        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken, selectedProjectId);
 
         Assert.Equal(en.Resolve(expectedTextKey), snapshot.Status.HostConnectivityText);
         Assert.Equal(en.Resolve(expectedAccessibleKey), snapshot.Status.HostConnectivityAccessibleText);
+    }
+
+    /// <summary>PR #106 review finding 5: a process-global "last mutation from any project" reading
+    /// let a successful mutation against project A's Host render "Connected to Host." while project
+    /// B's Host might be unreachable, never started, or crashed -- a materially misleading status
+    /// indicator whenever more than one project is cataloged. <see cref="IHostConnectivityMonitor"/>
+    /// now keys readings by project id (matching <c>ForgeHostClient</c>'s own per-project pipe
+    /// scoping), and <see cref="SidebarViewModel.LoadAsync"/> takes the CURRENTLY SELECTED project's
+    /// id and must render only that project's own reading. This is the regression test: project A is
+    /// disconnected, project B is connected, and each load must show only the project it was asked
+    /// about, never the other's (or "whichever was reported last," the pre-fix behavior).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncScopesHostConnectivityToTheSelectedProjectNotToAnyOtherCatalogedProject()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        SurfaceTextProvider en = Text();
+        Guid projectA = Guid.NewGuid();
+        Guid projectB = Guid.NewGuid();
+        HostConnectivityMonitor monitor = new();
+        // Project B reported LAST -- a last-writer-wins global field would show B's "connected" for
+        // both projects, including when project A is the one actually selected.
+        monitor.Report(projectA, false, DateTimeOffset.UtcNow);
+        monitor.Report(projectB, true, DateTimeOffset.UtcNow);
+        SidebarViewModel viewModel =
+            new(catalog, environment.Application, new FakeFolderPicker(), en, connectivityMonitor: monitor);
+
+        SidebarSnapshot snapshotForA = await viewModel.LoadAsync(cancellationToken, projectA);
+        SidebarSnapshot snapshotForB = await viewModel.LoadAsync(cancellationToken, projectB);
+
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityDisconnected), snapshotForA.Status.HostConnectivityText);
+        Assert.Equal(en.Resolve(MessageKeys.HostConnectivityConnected), snapshotForB.Status.HostConnectivityText);
     }
 
     /// <summary>Plan 12.6's "stale data" indicator: a Host-connectivity reading old enough that it
@@ -461,14 +541,15 @@ public sealed class SidebarViewModelTests
         using TestEnvironment environment = new();
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         SurfaceTextProvider en = Text();
+        Guid selectedProjectId = Guid.NewGuid();
         DateTimeOffset observedAt = DateTimeOffset.UtcNow;
         HostConnectivityMonitor monitor = new();
-        monitor.Report(true, observedAt);
+        monitor.Report(selectedProjectId, true, observedAt);
         FixedClock clock = new(observedAt + SidebarViewModel.HostConnectivityStaleAfter + TimeSpan.FromSeconds(1));
         SidebarViewModel viewModel = new(
             catalog, environment.Application, new FakeFolderPicker(), en, clock: clock, connectivityMonitor: monitor);
 
-        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken, selectedProjectId);
 
         Assert.Equal(en.Resolve(MessageKeys.HostConnectivityStale), snapshot.Status.HostConnectivityText);
         Assert.Equal(en.Resolve(MessageKeys.HostConnectivityStaleAccessible), snapshot.Status.HostConnectivityAccessibleText);
@@ -485,14 +566,15 @@ public sealed class SidebarViewModelTests
         using TestEnvironment environment = new();
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         SurfaceTextProvider en = Text();
+        Guid selectedProjectId = Guid.NewGuid();
         DateTimeOffset observedAt = DateTimeOffset.UtcNow;
         HostConnectivityMonitor monitor = new();
-        monitor.Report(true, observedAt);
+        monitor.Report(selectedProjectId, true, observedAt);
         FixedClock clock = new(observedAt + SidebarViewModel.HostConnectivityStaleAfter - TimeSpan.FromSeconds(1));
         SidebarViewModel viewModel = new(
             catalog, environment.Application, new FakeFolderPicker(), en, clock: clock, connectivityMonitor: monitor);
 
-        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken, selectedProjectId);
 
         Assert.Equal(en.Resolve(MessageKeys.HostConnectivityConnected), snapshot.Status.HostConnectivityText);
     }
