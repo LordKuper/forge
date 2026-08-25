@@ -333,13 +333,23 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             attemptId = candidateId;
         }
 
-        // Populated only on the fresh-attempt path below, from the same routed decision -- carried
-        // onto the attempt's own creation event so `AttemptSnapshot.Provider`/`.Model` answer "which
-        // provider/model is this attempt actually running with" from durable state (plan section
-        // 12.3), without a resumed call re-deciding (and potentially re-routing) work a prior,
-        // possibly-crashed call already committed to.
-        string? routedProvider = null;
-        string? routedModel = null;
+        // Provider/model is a pure function of this node's role and the sprint's frozen
+        // `ExecutionProfiles` (set once at sprint creation and never re-resolved — `RoutingLedger
+        // .DecideAsync` below only accepts or rejects that fixed key, it never picks an
+        // alternative provider), so it is looked up here unconditionally — including on the
+        // `nodeAlreadyRunning` resume path — rather than only on the fresh-attempt path. Carried
+        // onto the attempt's own creation event below so `AttemptSnapshot.Provider`/`.Model`
+        // answer "which provider/model is this attempt actually running with" from durable state
+        // (plan section 12.3) for every path that reaches that append, not just the fresh one.
+        // Only a model-bearing role (ADR 0014's Planning/Implementation/Review) has a frozen
+        // execution profile to route by — every other Work role (intake, confirmation, test-work's
+        // own eligibility gate, finalization) invokes no provider at all.
+        ExecutionPhase? modelPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
+        ExecutionProfile? modelProfile = modelPhase is { } phase
+            ? definition.ExecutionProfiles.GetValueOrDefault(phase)
+            : null;
+        string? routedProvider = modelProfile?.Provider;
+        string? routedModel = modelProfile?.Model;
         if (!nodeAlreadyRunning)
         {
             if (node.Version != expectedNodeVersion || node.State != NodeState.Ready)
@@ -347,18 +357,17 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 return new(false, null, DiagnosticCodes.WorkflowEventConflict);
             }
 
-            // Only a model-bearing role (ADR 0014's Planning/Implementation/Review) has a frozen
-            // execution profile to route by — every other Work role (intake, confirmation,
-            // test-work's own eligibility gate, finalization) invokes no provider and is never
-            // subject to ADR 0006's rate-limit/circuit-breaker/budget policy at all. Every routed
-            // decision here is later refunded by `CompleteAttemptAsync` on success (see there) so
-            // the shared budget bounds only genuinely unresolved retry/deferral/failure loops, not
-            // ordinary one-pass progress through however many model-bearing nodes and review
-            // iterations a sprint happens to have.
-            ExecutionPhase? modelPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
+            // The routing DECISION itself (`RoutingLedger.DecideAsync`, which is subject to ADR
+            // 0006's rate-limit/circuit-breaker/budget policy and consumes a shared budget unit)
+            // still runs only on this fresh-attempt path — never re-run merely to resume, so a
+            // resumed call never re-decides (and potentially re-routes) work a prior,
+            // possibly-crashed call already committed to. Every routed decision here is later
+            // refunded by `CompleteAttemptAsync` on success (see there) so the shared budget
+            // bounds only genuinely unresolved retry/deferral/failure loops, not ordinary one-pass
+            // progress through however many model-bearing nodes and review iterations a sprint
+            // happens to have.
             RouteDecision? routedDecision = null;
-            if (modelPhase is { } phase &&
-                definition.ExecutionProfiles.TryGetValue(phase, out ExecutionProfile? profile))
+            if (modelProfile is { } profile)
             {
                 HealthKey key = new(profile.Provider, profile.Model, RoutingSurface);
                 RouteDecision decision = await routingLedger
@@ -370,8 +379,6 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
                 }
 
                 routedDecision = decision;
-                routedProvider = profile.Provider;
-                routedModel = profile.Model;
             }
 
             AppendOutcome nodeOutcome = await store.AppendTransitionAsync(
@@ -866,22 +873,29 @@ public sealed class SprintScheduler(ISprintStore store, IClock clock)
             }
 
             // Carried forward here, not left for `StartAttemptAsync` to record when it later picks
-            // this replacement up: this node's role — and therefore the frozen `ExecutionProfile`
-            // `StartAttemptAsync` would route it to — never changes across a supersession, so the
-            // superseded attempt's own recorded provider/model already equals whatever a later
-            // routing decision would (re)compute. That later append matters for its own reasons
-            // (refreshing `LastActivityAt`/state) but always lands as a version conflict against
-            // the aggregate this call just created and is swallowed as the benign-resume case — so
-            // if provider/model are not captured on this event, the one the aggregate actually
-            // keeps, they are lost permanently rather than merely delayed.
-            if (attempt.Provider is { } supersededProvider)
+            // this replacement up: that later append always lands as a version conflict against the
+            // aggregate this call just created and is swallowed as the benign-resume case — so if
+            // provider/model are not captured on this event, the one the aggregate actually keeps,
+            // they are lost permanently rather than merely delayed.
+            //
+            // Derived from `definedNode.Role`'s frozen `ExecutionProfile` — the same source
+            // `StartAttemptAsync` itself routes from — rather than copied from `attempt.Provider`/
+            // `.Model`. This node's role never changes across a supersession, so that frozen profile
+            // already equals whatever a later routing decision would (re)compute, and unlike the
+            // superseded attempt's own recorded fields it cannot be null: a pre-upgrade legacy
+            // attempt recorded neither argument, and an attempt hitting the `nodeAlreadyRunning`
+            // resume path in `StartAttemptAsync` recorded them only as of the fix above — both would
+            // otherwise carry a `null` cached copy forward into this brand-new replacement and every
+            // attempt superseding it thereafter, even though the real routing decision was never in
+            // question.
+            ExecutionPhase? supersededPhase = ExecutionProfilePolicy.PhaseFor(definedNode.Role);
+            ExecutionProfile? supersededProfile = supersededPhase is { } phase
+                ? definition.ExecutionProfiles.GetValueOrDefault(phase)
+                : null;
+            if (supersededProfile is { } profile)
             {
-                creationArguments[WorkflowEvent.ProviderArgument] = supersededProvider;
-            }
-
-            if (attempt.Model is { } supersededModel)
-            {
-                creationArguments[WorkflowEvent.ModelArgument] = supersededModel;
+                creationArguments[WorkflowEvent.ProviderArgument] = profile.Provider;
+                creationArguments[WorkflowEvent.ModelArgument] = profile.Model;
             }
 
             AppendOutcome creationOutcome = await store.AppendTransitionAsync(
