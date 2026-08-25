@@ -592,13 +592,26 @@ prior behavior or an equivalent mutation.
       `IProcessRunner` assigns every spawned process to a Windows Job Object configured with
       `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (`WindowsJobObjectProcessContainment`), and a
       crash-simulation test (`ProcessContainmentCrashTests`) forcibly kills a real spawning process
-      and confirms its contained child does not survive as an orphan. Linux/macOS get only a
-      best-effort process-group primitive (`Forge.Runtime.Posix.PosixProcessGroupContainment`) with
-      no reaper installed, so an abrupt Host crash there still leaves a live provider child running
-      until something else reaps it — honest infrastructure for a future reaper, not a guarantee, and
-      not exercised by an equivalent crash test on this Windows-only CI matrix. In practice this gap
-      was Windows-only anyway: provider adapters (Codex, Claude) are Windows-only in this codebase, so
-      Linux/macOS never ran a real long-lived provider child before this change either.)*
+      and confirms both its directly contained child and that child's own grandchild do not survive
+      as orphans. A fail-open failure to attach containment (e.g. a Host already confined to a
+      restrictive job) is now logged once rather than silent.
+      Linux/macOS: round 2 review's investigation found `PosixProcessGroupContainment`'s `setpgid`
+      call does NOT currently take effect at all, on any currently supported .NET version — not
+      merely "best-effort" as first documented. .NET's Unix process-launch implementation
+      synchronously waits, inside the native `Process.Start` call itself, for the spawned child to
+      reach `execve` before returning control to managed code, so by the time `Attach` runs the child
+      has, by construction, already exec'd; POSIX specifies `setpgid` fails with `EACCES` once a
+      target child has already exec'd. This is now confirmed by a real test on the portable CI matrix
+      (`PosixProcessGroupContainmentTests`, ubuntu-24.04/macos-14) asserting the failure is logged,
+      and the failure itself is observable in production rather than silently discarded. Making it
+      actually work would require running code inside the child between `fork` and `exec` — a self
+      `setpgid(0, 0)` — which `System.Diagnostics.Process.Start` has no hook for; reaching it means
+      bypassing `Process.Start` with a bespoke fork/exec/`posix_spawn` wrapper, out of scope for this
+      change. So on Linux/macOS this remains inert scaffolding, not a mitigation: an abrupt Host crash
+      there leaves a live provider child (and its descendants) running as an orphan exactly as if no
+      containment adapter were installed at all. In practice this gap was Windows-only anyway:
+      provider adapters (Codex, Claude) are Windows-only in this codebase, so Linux/macOS never ran a
+      real long-lived provider child before this change either.)*
 - [x] Desktop distinguishes Stop operation, Supersede attempt, and Cancel sprint by label,
       explanation, confirmation, and result.
 
