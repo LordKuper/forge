@@ -146,7 +146,19 @@ public sealed record NodeSnapshot(
 /// re-armed to `Ready` but before the sprint itself paused, and nothing else revisits the node once
 /// it leaves `Running` on its own. This is the durable signal that stops that check from re-firing
 /// forever once the saga genuinely finished, even after an unrelated later `resume_sprint` puts the
-/// sprint back in `Running`.</summary>
+/// sprint back in `Running`.
+///
+/// <paramref name="Provider"/>/<paramref name="Model"/> are the frozen
+/// <see cref="ExecutionProfile.Provider"/>/<see cref="ExecutionProfile.Model"/> this attempt was
+/// actually routed to (<see cref="Forge.Application.SprintScheduler.StartAttemptAsync"/>'s own
+/// `RouteDecision`), carried on the attempt's creation event -- plain strings, matching
+/// <see cref="ExecutionProfile"/>'s own shape, never a core-owned provider enum or identifier type
+/// (ADR 0008: "the core contains no provider enum, concrete provider identifier"). Both are
+/// <see langword="null"/> for a non-model-bearing role (intake, confirmation, finalization; no
+/// routed decision exists to record) and for any attempt recorded before this field existed --
+/// folding an older journal must never throw or fabricate a value, only report "not yet
+/// available" honestly, the same additive-field posture <see cref="BaseCommit"/> already
+/// established.</summary>
 public sealed record AttemptSnapshot(
     AttemptId Id,
     AttemptState State,
@@ -159,4 +171,6 @@ public sealed record AttemptSnapshot(
     string? BaseCommit = null,
     AttemptId? SupersedesAttemptId = null,
     DateTimeOffset? StopRequestedAt = null,
-    DateTimeOffset? StopConvergedAt = null);
+    DateTimeOffset? StopConvergedAt = null,
+    string? Provider = null,
+    string? Model = null);

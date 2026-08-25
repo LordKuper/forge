@@ -38,6 +38,14 @@ public partial class WorkspaceShellPage : ContentPage
     /// flip a column width. Refreshed by every <see cref="RenderSidebarAsync"/> call and by the
     /// toggle itself; never read for anything that needs current data.</summary>
     private SidebarSnapshot? lastSidebarSnapshot;
+    /// <summary>Plan 12.6 ("focus-stable after refresh"): the neutral half of the sidebar's focus-
+    /// preservation mechanism -- see <see cref="FocusKeyTracker"/>'s own remarks. Paired with
+    /// <see cref="sidebarFocusRegistry"/>, which maps those same keys to a live control instance (see
+    /// <see cref="FocusControlRegistry{TControl}"/>'s own remarks for why that mapping itself stays
+    /// generic/testable even though only a live MAUI visual tree ever actually populates it here).
+    /// </summary>
+    private readonly FocusKeyTracker sidebarFocusTracker = new();
+    private readonly FocusControlRegistry<VisualElement> sidebarFocusRegistry = new();
     private MainPageViewModel legacy;
     private ProjectOverviewViewModel projectOverview;
     private ProjectSettingsViewModel projectSettings;
@@ -50,7 +58,8 @@ public partial class WorkspaceShellPage : ContentPage
         ProjectCatalogStore catalog,
         ProviderCatalog providerCatalog,
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations,
-        IFolderPickerPort folderPicker)
+        IFolderPickerPort folderPicker,
+        IHostConnectivityMonitor connectivityMonitor)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(application);
@@ -58,6 +67,7 @@ public partial class WorkspaceShellPage : ContentPage
         ArgumentNullException.ThrowIfNull(providerCatalog);
         ArgumentNullException.ThrowIfNull(resolveMutations);
         ArgumentNullException.ThrowIfNull(folderPicker);
+        ArgumentNullException.ThrowIfNull(connectivityMonitor);
         InitializeComponent();
         this.text = text;
         this.application = application;
@@ -65,15 +75,66 @@ public partial class WorkspaceShellPage : ContentPage
         this.providerCatalog = providerCatalog;
         this.resolveMutations = resolveMutations;
         workspace = new(catalog, application);
-        sidebar = new(catalog, application, folderPicker, text);
+        sidebar = new(catalog, application, folderPicker, text, connectivityMonitor: connectivityMonitor);
         forgeSettings = new(application, providerCatalog, text);
         (legacy, projectOverview, projectSettings, sprintWorkspace) = BuildLegacyDependents(folderPicker);
+        // Always calls through the *current* sprintWorkspace field (never captured once as a fixed
+        // reference) so a language-change rebuild of that field above never leaves this coordinator
+        // pointing at a stale instance -- see its own field remarks in
+        // WorkspaceShellPage.SprintWorkspace.cs.
+        scrollPersistCoordinator = new((projectId, sprintId, position, cancellationToken) =>
+            sprintWorkspace.SaveScrollPositionAsync(projectId, sprintId, position, cancellationToken));
         renderGate = new(RenderSidebarAsync, RenderContentAsync);
         // PR #98 review finding 1: NavigateAsync raises RouteChanged synchronously from inside the
         // very click handler whose own mutation guard is still held, so the render this triggers
         // must not go through that same guard directly -- ShellRenderGate.RequestContentRender
         // records it instead and flushes it the moment the guard releases (see its own remarks).
-        workspace.RouteChanged += (_, _) => renderGate.RequestContentRender();
+        // PR #106 review finding 5: the sidebar's Host-connectivity indicator now names the CURRENTLY
+        // SELECTED project (see RenderSidebarAsync below), so a route change -- which is exactly what
+        // changes which project is selected -- must also re-render the sidebar, not only the content
+        // pane, or the indicator would keep showing whichever project was selected at the last
+        // sidebar render instead of the one the user just navigated to.
+        //
+        // PR #106 round-2 review finding 2: the first cut of that fix called RequestSidebarRender()
+        // here, which routes through RenderSidebarAsync -> SidebarViewModel.LoadAsync's full
+        // per-project catalog scan (GetWorkspaceSummaryAsync + GetProjectSnapshotAsync per cataloged
+        // project) just to refresh one label -- on EVERY navigation click, while holding the
+        // mutation guard. That paid for a redundant full reload on top of the one
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync already run themselves, made app
+        // launch load the sidebar twice (RestoreAsync raises this event from inside OnAppearing's own
+        // guard, and OnAppearing's own explicit RenderSidebarAsync call runs again), and made removing
+        // a project load it three times -- the exact "no refetch for a render that changes no domain
+        // data" cost PR #99/#100/#103 already pushed back on elsewhere in this file (see
+        // BuildSidebarToggleButton's own remarks). A route change never changes any cataloged
+        // project's own data, only which project is selected, so this now re-renders the already
+        // -loaded lastSidebarSnapshot with just the Host-connectivity pair recomputed for the newly
+        // selected project via ShellRenderGate.RequestRender's cheap, synchronous path -- the same
+        // lastSidebarSnapshot/RenderSidebarFromSnapshot mechanism the toggle already uses for the
+        // same reason. Nothing loaded yet (this fires from RestoreAsync before OnAppearing's own
+        // first render, or before the sidebar has ever rendered) is a deliberate no-op: whichever real
+        // render already runs shortly after -- OnAppearing's own explicit call, or
+        // RenderProjectOverviewAsync/RenderProjectSettingsAsync's own sidebar.LoadAsync -- reports
+        // this same route's connectivity correctly on its own.
+        workspace.RouteChanged += (_, _) =>
+        {
+            renderGate.RequestRender(() =>
+            {
+                if (lastSidebarSnapshot is { } snapshot)
+                {
+                    (string hostText, string hostAccessible) = sidebar.HostConnectivityFor(workspace.Route.ProjectId);
+                    RenderSidebarFromSnapshot(
+                        snapshot with
+                        {
+                            Status = snapshot.Status with
+                            {
+                                HostConnectivityText = hostText,
+                                HostConnectivityAccessibleText = hostAccessible,
+                            },
+                        });
+                }
+            });
+            renderGate.RequestContentRender();
+        };
         // Plan 5.1/12.2: a UI-language save applies without restart -- every legacy-backed
         // view-model wraps a MainPageViewModel bound to one fixed SurfaceText snapshot, so a
         // language change rebuilds all of them against the newly current text before re-rendering.
@@ -118,6 +179,11 @@ public partial class WorkspaceShellPage : ContentPage
     {
         base.OnDisappearing();
         StopTimelinePoll();
+        // PR #105 review finding 3's flush-on-navigate-away, for the whole page closing (not just an
+        // in-app route change, which RenderContentAsync already covers) -- best-effort: OnDisappearing
+        // is not async-capable, so a page closing mid-write cannot itself be awaited, but this still
+        // issues the flush instead of leaving a pending debounced value unwritten.
+        _ = FlushPendingScrollPositionAsync();
     }
 
     /// <summary>Serializes shell-driven mutations so a second click cannot re-enter one while the
@@ -145,7 +211,11 @@ public partial class WorkspaceShellPage : ContentPage
 
     private async Task RenderSidebarAsync()
     {
-        SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        // PR #106 review finding 5: the status row's Host-connectivity text names the CURRENTLY
+        // SELECTED project (workspace.Route.ProjectId), never a process-global "whichever project was
+        // last mutated" reading -- see SidebarViewModel.LoadAsync's own remarks.
+        SidebarSnapshot snapshot =
+            await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
         RenderSidebarFromSnapshot(snapshot);
     }
 
@@ -157,10 +227,15 @@ public partial class WorkspaceShellPage : ContentPage
     private void RenderSidebarFromSnapshot(SidebarSnapshot snapshot)
     {
         lastSidebarSnapshot = snapshot;
+        // Plan 12.6: every control this render creates below is re-registered under its own stable key
+        // (see TrackSidebarFocus's own remarks) -- clearing first means a project/sprint removed since
+        // the last render leaves no stale entry behind for RestoreSidebarFocus to (harmlessly, but
+        // pointlessly) try to focus.
+        sidebarFocusRegistry.Clear();
         SidebarHost.Children.Clear();
         ShellGrid.ColumnDefinitions[0].Width =
             snapshot.Collapsed ? GridLength.Auto : new GridLength(SidebarExpandedWidth);
-        SidebarHost.Children.Add(BuildSidebarToggleButton(snapshot.Collapsed));
+        SidebarHost.Children.Add(TrackSidebarFocus("sidebar-toggle", BuildSidebarToggleButton(snapshot.Collapsed)));
         // PR #103 review finding 1 (iteration 2): this used to sit after the collapsed early return
         // below, so a notice set by a failed expand attempt -- the write fails while the rail is
         // still collapsed -- was built and then immediately discarded by that return, leaving the
@@ -180,6 +255,7 @@ public partial class WorkspaceShellPage : ContentPage
             // and any pending failure notice above stay visible, matching plan 12.6 ("state conveyed
             // by an icon/text change, not merely a width change") since the toggle's own accessible
             // name already flips with it.
+            RestoreSidebarFocus();
             return;
         }
 
@@ -197,20 +273,70 @@ public partial class WorkspaceShellPage : ContentPage
         Button forgeSettingsButton = new() { Text = text.Resolve(MessageKeys.SidebarForgeSettingsAction) };
         forgeSettingsButton.Clicked += (_, _) => _ = RunAsync(async () =>
             await workspace.NavigateAsync(WorkspaceRoute.ToForgeSettings(), CancellationToken.None).ConfigureAwait(true));
-        SidebarHost.Children.Add(forgeSettingsButton);
+        SidebarHost.Children.Add(TrackSidebarFocus("forge-settings", forgeSettingsButton));
 
+        // Plan 12.6: the status row distinguishes provider health, authentication, model
+        // availability, quota (known and unknown), and Host connectivity (including stale data) --
+        // each its own text/accessible-name pair, per this file's established convention. Never
+        // color alone: every state is named in text, not merely implied by a color or icon.
         Label status = new() { Text = snapshot.Status.ProviderSummaryText };
         SemanticProperties.SetDescription(status, snapshot.Status.ProviderAccessibleText);
         SidebarHost.Children.Add(status);
+        Label authentication = new() { Text = snapshot.Status.AuthenticationStatusText };
+        SemanticProperties.SetDescription(authentication, snapshot.Status.AuthenticationAccessibleText);
+        SidebarHost.Children.Add(authentication);
+        // PR #106 review finding 1: AnyModelUnavailable used to be computed and never read by any
+        // UI -- the exact "dead field" defect it was supposed to supersede
+        // (see SidebarStatusRow's own remarks). Bold is a non-color-only emphasis (plan 12.6: "color
+        // is never the only carrier") that draws attention to the label when at least one enabled
+        // provider is not yet usable for model work, without hiding the state behind color alone --
+        // the text itself already names the shortfall, this only makes it harder to miss.
+        Label modelAvailability = new()
+        {
+            Text = snapshot.Status.ModelAvailabilityText,
+            FontAttributes = snapshot.Status.AnyModelUnavailable ? FontAttributes.Bold : FontAttributes.None,
+        };
+        SemanticProperties.SetDescription(modelAvailability, snapshot.Status.ModelAvailabilityAccessibleText);
+        SidebarHost.Children.Add(modelAvailability);
         Label quota = new() { Text = snapshot.Status.QuotaStatusText };
         SemanticProperties.SetDescription(quota, snapshot.Status.QuotaAccessibleText);
         SidebarHost.Children.Add(quota);
+        Label hostConnectivity = new() { Text = snapshot.Status.HostConnectivityText };
+        SemanticProperties.SetDescription(hostConnectivity, snapshot.Status.HostConnectivityAccessibleText);
+        SidebarHost.Children.Add(hostConnectivity);
         // PR #98 review finding 3: add/remove-project results were discarded, leaving a failure (an
         // invalid root, an already-cataloged entry, a catalog write failure) completely silent.
         // `sidebarNotice` is set by the add/remove handlers just before they trigger this render, so
         // it survives the rebuild instead of being wiped by it -- now rendered once, above, right
         // after the toggle button, so it is also visible in the collapsed layout (see that block's
         // own remarks, PR #103 review finding 1 iteration 2).
+        RestoreSidebarFocus();
+    }
+
+    /// <summary>Registers <paramref name="control"/>'s stable <paramref name="key"/> in
+    /// <see cref="sidebarFocusRegistry"/> and wires its <c>Focused</c> event into
+    /// <see cref="sidebarFocusTracker"/>, so a later <see cref="RestoreSidebarFocus"/> call -- once this
+    /// render's replacement subtree is fully built -- can find and refocus whichever new control now
+    /// occupies the same logical slot as the one that had focus before the rebuild (plan 12.6:
+    /// "focus-stable after refresh"). <paramref name="key"/> is always derived from a domain identifier
+    /// (a project id, a sprint id) or a fixed name for a singleton control, never a raw instance
+    /// reference, which cannot survive the rebuild.</summary>
+    private T TrackSidebarFocus<T>(string key, T control) where T : VisualElement
+    {
+        sidebarFocusRegistry.Register(key, control);
+        control.Focused += (_, _) => sidebarFocusTracker.Capture(key);
+        return control;
+    }
+
+    /// <summary>Restores focus to whichever freshly built sidebar control has the same stable key the
+    /// previously focused control had, if any -- a no-op when nothing in the sidebar was focused, or
+    /// when that key no longer exists in this snapshot (e.g. its project was just removed).</summary>
+    private void RestoreSidebarFocus()
+    {
+        if (sidebarFocusTracker.Consume() is { } key && sidebarFocusRegistry.TryResolve(key, out VisualElement? control))
+        {
+            control.Focus();
+        }
     }
 
     /// <summary>The whole-sidebar collapse/expand toggle (ADR 0050 addendum): always the sidebar's
@@ -257,8 +383,8 @@ public partial class WorkspaceShellPage : ContentPage
             // configuration read just to flip a column width -- the exact "unnecessary work holding
             // the mutation guard" pattern PR #99 review finding 1 and PR #100 review finding 1 both
             // already pushed back on in this same surface.
-            SidebarSnapshot snapshot =
-                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            SidebarSnapshot snapshot = lastSidebarSnapshot ??
+                await sidebar.LoadAsync(CancellationToken.None, workspace.Route.ProjectId).ConfigureAwait(true);
             RenderSidebarFromSnapshot(snapshot with { Collapsed = nowCollapsed });
         });
         return toggle;
@@ -285,45 +411,137 @@ public partial class WorkspaceShellPage : ContentPage
 
             await RenderSidebarAsync().ConfigureAwait(true);
         });
-        return new VerticalStackLayout { Children = { pathEntry, addButton } };
+        return new VerticalStackLayout
+        {
+            Children =
+            {
+                TrackSidebarFocus("add-project-path", pathEntry),
+                TrackSidebarFocus("add-project-button", addButton),
+            },
+        };
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 1's per-project chevron: hides/shows the WHOLE per-project
+    /// sprint block -- both <see cref="SidebarProjectItem.ActiveSprints"/> and
+    /// <see cref="SidebarProjectItem.History"/> (PR #105 review finding 2; the toggle's own
+    /// "Collapse sprints" accessible name promised the whole block, not only the active list) --
+    /// mirroring the whole-sidebar rail toggle's own "render straight from the snapshot already in
+    /// hand" optimization (PR #103 review finding 3) -- flipping one row's disclosure changes no
+    /// domain data, so it never re-fetches <see cref="SidebarViewModel.LoadAsync"/>'s full per-project
+    /// workspace summary.</summary>
+    private Button BuildProjectSprintsToggleButton(SidebarProjectItem project)
+    {
+        Button toggle = new()
+        {
+            Text = project.SprintListExpanded ? "v" : ">",
+            MinimumWidthRequest = SidebarCollapsedToggleMinimumWidth,
+        };
+        SemanticProperties.SetDescription(
+            toggle,
+            text.Resolve(project.SprintListExpanded
+                ? MessageKeys.SidebarProjectCollapseSprintsAction
+                : MessageKeys.SidebarProjectExpandSprintsAction));
+        toggle.Clicked += (_, _) => _ = RunAsync(async () =>
+        {
+            bool nowExpanded = !project.SprintListExpanded;
+            ProjectCatalogResult result = await sidebar
+                .SetProjectSprintsExpandedAsync(project.ProjectId, nowExpanded, CancellationToken.None)
+                .ConfigureAwait(true);
+            if (!result.Succeeded)
+            {
+                sidebarNotice = Message(
+                    text.Resolve(MessageKeys.SidebarProjectSprintsSaveFailed), result.DiagnosticCode);
+            }
+
+            SidebarSnapshot snapshot =
+                lastSidebarSnapshot ?? await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            SidebarSnapshot updated = snapshot with
+            {
+                Projects =
+                [
+                    .. snapshot.Projects.Select(item => item.ProjectId == project.ProjectId
+                        ? item with { SprintListExpanded = nowExpanded }
+                        : item),
+                ],
+            };
+            RenderSidebarFromSnapshot(updated);
+        });
+        return toggle;
     }
 
     private VerticalStackLayout BuildProjectRow(SidebarProjectItem project)
     {
         VerticalStackLayout column = new();
+        HorizontalStackLayout header = new() { Children = { BuildProjectSprintsToggleButton(project) } };
         Button projectButton = new() { Text = project.DisplayName };
         SemanticProperties.SetDescription(projectButton, project.AccessibleName);
         projectButton.Clicked += (_, _) => _ = RunAsync(async () =>
             await workspace
                 .NavigateAsync(WorkspaceRoute.ToProjectOverview(project.ProjectId, project.Root), CancellationToken.None)
                 .ConfigureAwait(true));
-        column.Children.Add(projectButton);
+        header.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project:{project.ProjectId:D}"),
+            projectButton));
+        column.Children.Add(header);
 
-        foreach (SidebarSprintItem sprint in project.ActiveSprints)
+        // PR #105 review finding 2: both loops below live inside this single gate now -- collapsing a
+        // project must hide its whole sprint block (active AND history), matching the toggle's own
+        // "Collapse sprints" accessible name and the changelog's "tucked away without hiding the
+        // others" claim (see SidebarProjectItem's own remarks).
+        if (project.SprintListExpanded)
         {
-            Button sprintButton = new()
+            foreach (SidebarSprintItem sprint in project.ActiveSprints)
             {
-                Text = string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture, $"  {sprint.CreationSequence}. {sprint.StateText}"),
-            };
-            SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
-            sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
-                await workspace
-                    .NavigateAsync(
-                        WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
-                        CancellationToken.None)
-                    .ConfigureAwait(true));
-            column.Children.Add(sprintButton);
-        }
+                Button sprintButton = new()
+                {
+                    Text = string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture, $"  {sprint.CreationSequence}. {sprint.StateText}"),
+                };
+                SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
+                sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
+                    await workspace
+                        .NavigateAsync(
+                            WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
+                            CancellationToken.None)
+                        .ConfigureAwait(true));
+                column.Children.Add(TrackSidebarFocus(
+                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"sprint:{sprint.SprintId:D}"),
+                    sprintButton));
+            }
 
-        if (project.HistoryCount > 0)
-        {
-            column.Children.Add(new Label
+            if (project.History.Count > 0)
             {
-                Text = string.Create(
-                    System.Globalization.CultureInfo.InvariantCulture,
-                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryCount})"),
-            });
+                column.Children.Add(new Label
+                {
+                    Text = string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        // PR #105 review finding 1: HistoryTotalCount is the true, uncapped count of
+                        // terminal sprints -- History.Count is capped at MaxSidebarHistory and would
+                        // silently under-report once a project passes that bound.
+                        $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})"),
+                });
+                // Plan 12.1 final-sweep gap 3: every history entry is now navigable, the same "open"
+                // affordance active sprints get above -- reusing the same sprint-workspace route, which
+                // already renders a terminal sprint read-only (no lifecycle/stage-transition action is
+                // ever offered for one; plan 13 excludes editing raw sprint state).
+                foreach (SidebarHistoryItem historyItem in project.History)
+                {
+                    Button historyButton = new()
+                    {
+                        Text = string.Create(
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            $"  {historyItem.CreationSequence}. {historyItem.StateText}"),
+                    };
+                    SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
+                    historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
+                        await workspace
+                            .NavigateAsync(
+                                WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
+                                CancellationToken.None)
+                            .ConfigureAwait(true));
+                    column.Children.Add(historyButton);
+                }
+            }
         }
 
         Button settingsButton = new() { Text = "..." };
@@ -332,7 +550,9 @@ public partial class WorkspaceShellPage : ContentPage
             await workspace
                 .NavigateAsync(WorkspaceRoute.ToProjectSettings(project.ProjectId, project.Root), CancellationToken.None)
                 .ConfigureAwait(true));
-        column.Children.Add(settingsButton);
+        column.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project-settings:{project.ProjectId:D}"),
+            settingsButton));
 
         Button removeButton = new() { Text = text.Resolve(MessageKeys.SidebarRemoveProjectAction) };
         removeButton.Clicked += (_, _) => _ = RunAsync(async () =>
@@ -354,7 +574,9 @@ public partial class WorkspaceShellPage : ContentPage
 
             await RenderSidebarAsync().ConfigureAwait(true);
         });
-        column.Children.Add(removeButton);
+        column.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project-remove:{project.ProjectId:D}"),
+            removeButton));
         return column;
     }
 
@@ -362,6 +584,27 @@ public partial class WorkspaceShellPage : ContentPage
     {
         WorkspaceRoute route = workspace.Route;
         StopTimelinePoll();
+        // PR #110 review round 2 finding 2: mirrors ClearContentFocusWhenFocused's own discipline for
+        // the content half (WorkspaceShellPage.SprintWorkspace.cs) -- rendering the content pane means
+        // the content pane, not the sidebar, is now what the user is looking at, so any key
+        // sidebarFocusTracker is still holding from before this render is no longer a meaningful
+        // restoration target for a LATER, unrelated sidebar-only rebuild (add/remove project, the
+        // collapse toggle, or a UI-language save's RequestSidebarRender). Without this, that later
+        // rebuild's RestoreSidebarFocus can still resolve the stale key against the freshly rebuilt
+        // sidebar and yank focus away from wherever the user has since moved it in the content pane --
+        // concretely: focus the sidebar's Forge Settings button, which navigates here (this method
+        // runs and, with this fix, clears the captured "forge-settings" key immediately); the user then
+        // edits and saves a UI-language change from the content pane, which raises
+        // SurfaceTextProvider.Changed and requests a sidebar re-render -- RestoreSidebarFocus finds
+        // nothing captured and leaves focus alone, instead of stealing it back into the sidebar.
+        sidebarFocusTracker.Clear();
+        // PR #105 review finding 3's flush-on-navigate-away: persists whatever is pending for the
+        // sprint workspace being left -- BEFORE scrollTrackedSprintId is reset below -- so a route
+        // change away from a sprint workspace never leaves a debounced scroll position unwritten.
+        // FlushPendingScrollPositionAsync reads workspace.Route.ProjectId's OLD value captured at
+        // render time (scrollTrackedProjectId), not this method's own now-current `route`, which
+        // already reflects the destination the user is navigating TO.
+        await FlushPendingScrollPositionAsync().ConfigureAwait(true);
         // PR #99 review finding 11: scrollTrackedSprintId is only ever set to a real sprint id by
         // RenderSprintWorkspaceAsync itself (see WorkspaceShellPage.SprintWorkspace.cs) -- resetting
         // it here for every render means a scroll on any other route is never attributed to the

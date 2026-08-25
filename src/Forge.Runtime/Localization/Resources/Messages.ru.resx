@@ -192,9 +192,13 @@
   <data name="SidebarExpandAction" xml:space="preserve"><value>Развернуть боковую панель</value></data>
   <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Настройки Forge</value></data>
   <data name="SidebarHistoryLabel" xml:space="preserve"><value>История</value></data>
+  <data name="SidebarProjectCollapseSprintsAction" xml:space="preserve"><value>Свернуть спринты</value></data>
+  <data name="SidebarProjectExpandSprintsAction" xml:space="preserve"><value>Развернуть спринты</value></data>
+  <data name="SidebarProjectSprintsSaveFailed" xml:space="preserve"><value>Не удалось сохранить состояние списка спринтов проекта.</value></data>
   <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Удалить из списка</value></data>
   <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Добавьте проект, чтобы начать.</value></data>
   <data name="SidebarCollapseSaveFailed" xml:space="preserve"><value>Не удалось сохранить состояние свёрнутой панели.</value></data>
+  <data name="SprintScrollPositionSaveFailed" xml:space="preserve"><value>Не удалось сохранить позицию прокрутки рабочей области спринта.</value></data>
   <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>Проект ещё не выбран.</value></data>
   <data name="ProjectOverviewTitle" xml:space="preserve"><value>Обзор проекта</value></data>
   <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Активные спринты</value></data>
@@ -244,6 +248,7 @@
   <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Прогресс</value></data>
   <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Последняя активность</value></data>
   <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Активный провайдер/модель пока недоступны.</value></data>
+  <data name="SprintStatusHeaderProviderModelText" xml:space="preserve"><value>{0} / {1}</value></data>
   <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Возобновление не раньше</value></data>
   <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Подробности</value></data>
   <data name="TimelineTitle" xml:space="preserve"><value>Хронология</value></data>
@@ -303,4 +308,88 @@
   <data name="QuotaStatusStale" xml:space="preserve"><value>Данные о квоте устарели.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Статус квоты: данные устарели.</value></data>
   <data name="CapabilityNotSupported" xml:space="preserve"><value>Этот Host пока не поддерживает эту операцию. Обновите Forge на Host этого проекта, чтобы использовать её.</value></data>
+  <data name="workflow.sprint_created" xml:space="preserve"><value>Спринт создан.</value></data>
+  <data name="workflow.sprint_advanced" xml:space="preserve"><value>Запуск спринта начат.</value></data>
+  <data name="workflow.sprint_cancelled" xml:space="preserve"><value>Спринт отменён.</value></data>
+  <data name="workflow.sprint_resumed" xml:space="preserve"><value>Спринт возобновлён.</value></data>
+  <data name="workflow.sprint_ready" xml:space="preserve"><value>Спринт готов к запуску.</value></data>
+  <data name="workflow.sprint_ready_to_finalize" xml:space="preserve"><value>Спринт готов к завершению.</value></data>
+  <data name="workflow.sprint_blocked" xml:space="preserve"><value>Спринт заблокирован ({0}).</value></data>
+  <data name="workflow.sprint_completed" xml:space="preserve"><value>Спринт завершён.</value></data>
+  <data name="workflow.sprint_running" xml:space="preserve"><value>Спринт выполняется.</value></data>
+  <data name="workflow.sprint_awaiting_human" xml:space="preserve"><value>Спринт ожидает проверки человеком.</value></data>
+  <data name="workflow.sprint_gate_resumed" xml:space="preserve"><value>Спринт возобновлён после разрешения контрольной точки.</value></data>
+  <data name="workflow.sprint_paused" xml:space="preserve"><value>Спринт приостановлен.</value></data>
+  <data name="workflow.node_created" xml:space="preserve"><value>Узел создан.</value></data>
+  <data name="workflow.node_ready" xml:space="preserve"><value>Узел готов к выполнению.</value></data>
+  <data name="workflow.node_running" xml:space="preserve"><value>Узел начал выполнение.</value></data>
+  <data name="workflow.node_succeeded" xml:space="preserve"><value>Узел успешно выполнен.</value></data>
+  <data name="workflow.node_failed" xml:space="preserve"><value>Узел завершился ошибкой.</value></data>
+  <data name="workflow.node_rejected" xml:space="preserve"><value>Узел был отклонён.</value></data>
+  <data name="workflow.node_skipped" xml:space="preserve"><value>Узел пропущен.</value></data>
+  <data name="workflow.node_retrying" xml:space="preserve"><value>Узел повторяет попытку.</value></data>
+  <data name="workflow.node_retried" xml:space="preserve"><value>Узел был перезапущен.</value></data>
+  <data name="workflow.node_awaiting_human" xml:space="preserve"><value>Узел ожидает проверки человеком.</value></data>
+  <data name="workflow.node_superseded" xml:space="preserve"><value>Попытка узла заменена новой попыткой.</value></data>
+  <data name="workflow.node_stopped" xml:space="preserve"><value>Узел остановлен по запросу оператора.</value></data>
+  <data name="workflow.node_rearmed" xml:space="preserve"><value>Узел подготовлен к новой попытке.</value></data>
+  <data name="workflow.node_reopened" xml:space="preserve"><value>Узел повторно открыт для редакции {0}.</value></data>
+  <data name="workflow.node_invalidated" xml:space="preserve"><value>Узел признан недействительным для редакции {0}.</value></data>
+  <data name="workflow.node_rewind_interrupted" xml:space="preserve"><value>Узел прерван откатом.</value></data>
+  <data name="workflow.attempt_created" xml:space="preserve"><value>Попытка создана.</value></data>
+  <data name="workflow.attempt_transitioned" xml:space="preserve"><value>Попытка перешла в состояние «{0}».</value></data>
+  <data name="workflow.attempt_stopped" xml:space="preserve"><value>Попытка остановлена по запросу оператора.</value></data>
+  <data name="workflow.attempt_superseded" xml:space="preserve"><value>Попытка отменена из-за замены.</value></data>
+  <data name="workflow.attempt_superseded_instruction" xml:space="preserve"><value>Инструкция оператора для новой попытки: {0}</value></data>
+  <data name="workflow.attempt_activity" xml:space="preserve"><value>Зафиксирована активность попытки.</value></data>
+  <data name="workflow.attempt_stop_requested" xml:space="preserve"><value>Запрошена остановка попытки.</value></data>
+  <data name="workflow.attempt_stop_converged" xml:space="preserve"><value>Остановка попытки завершена.</value></data>
+  <data name="workflow.stage_revision_recorded" xml:space="preserve"><value>Зафиксирован откат к этапу «{0}» (редакция {2}): {1}</value></data>
+  <data name="workflow.stage_transition_converged" xml:space="preserve"><value>Переход между этапами завершён.</value></data>
+  <data name="workflow.user_message_posted" xml:space="preserve"><value>Сообщение: {0}</value></data>
+  <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Итог: {0}</value></data>
+  <data name="routing.decision_recorded" xml:space="preserve"><value>Маршрутизировано на {0}/{1}: {2}.</value></data>
+  <data name="workflow.sprint_failed" xml:space="preserve"><value>Спринт завершился ошибкой.</value></data>
+  <data name="workflow.attempt_preparing" xml:space="preserve"><value>Попытка готовится к выполнению.</value></data>
+  <data name="workflow.attempt_running" xml:space="preserve"><value>Попытка выполняется.</value></data>
+  <data name="workflow.attempt_validating" xml:space="preserve"><value>Попытка проверяется.</value></data>
+  <data name="workflow.attempt_cancelled" xml:space="preserve"><value>Попытка отменена.</value></data>
+  <data name="SprintBlockedReasonNode" xml:space="preserve"><value>требуется внимание к узлу</value></data>
+  <data name="SprintBlockedReasonFinding" xml:space="preserve"><value>открытое замечание</value></data>
+  <data name="SprintBlockedReasonGate" xml:space="preserve"><value>ожидание контрольной точки</value></data>
+  <data name="SprintBlockedReasonConfirmation" xml:space="preserve"><value>ожидание подтверждения</value></data>
+  <data name="SprintBlockedReasonReviewConvergence" xml:space="preserve"><value>сведение результатов проверки</value></data>
+  <data name="SprintBlockedReasonRewind" xml:space="preserve"><value>незавершённый откат</value></data>
+  <data name="AttemptStateCreated" xml:space="preserve"><value>Создано</value></data>
+  <data name="AttemptStatePreparing" xml:space="preserve"><value>Подготовка</value></data>
+  <data name="AttemptStateRunning" xml:space="preserve"><value>Выполняется</value></data>
+  <data name="AttemptStateValidating" xml:space="preserve"><value>Проверяется</value></data>
+  <data name="AttemptStateSucceeded" xml:space="preserve"><value>Успешно</value></data>
+  <data name="AttemptStateFailed" xml:space="preserve"><value>Ошибка</value></data>
+  <data name="AttemptStateCancelled" xml:space="preserve"><value>Отменено</value></data>
+  <data name="RoutingOutcomeRouted" xml:space="preserve"><value>маршрутизировано</value></data>
+  <data name="RoutingOutcomeSucceeded" xml:space="preserve"><value>успешно</value></data>
+  <data name="RoutingOutcomeFailed" xml:space="preserve"><value>ошибка</value></data>
+  <data name="RoutingOutcomeCircuitOpen" xml:space="preserve"><value>цепь разорвана</value></data>
+  <data name="RoutingOutcomeBudgetExhausted" xml:space="preserve"><value>бюджет исчерпан</value></data>
+  <data name="RoutingOutcomeExcluded" xml:space="preserve"><value>исключено</value></data>
+  <data name="RoutingOutcomeDeferred" xml:space="preserve"><value>отложено</value></data>
+  <data name="AuthenticationStatusUnknown" xml:space="preserve"><value>Статус аутентификации ещё не проверен.</value></data>
+  <data name="AuthenticationStatusUnknownAccessible" xml:space="preserve"><value>Статус аутентификации: ещё не проверен.</value></data>
+  <data name="AuthenticationStatusReady" xml:space="preserve"><value>Все включённые провайдеры аутентифицированы.</value></data>
+  <data name="AuthenticationStatusReadyAccessible" xml:space="preserve"><value>Статус аутентификации: все включённые провайдеры аутентифицированы.</value></data>
+  <data name="AuthenticationStatusRequired" xml:space="preserve"><value>Требуется аутентификация как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Статус аутентификации: требуется аутентификация как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>Проверка аутентификации не удалась как минимум для одного провайдера.</value></data>
+  <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Статус аутентификации: проверка не удалась как минимум для одного провайдера.</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>Готово провайдеров для работы с моделями: {0}/{1}</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>Готово к работе с моделями {0} из {1} включённых провайдеров</value></data>
+  <data name="HostConnectivityUnknown" xml:space="preserve"><value>Статус подключения к Host ещё не проверен.</value></data>
+  <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Подключение к Host: ещё не проверено.</value></data>
+  <data name="HostConnectivityConnected" xml:space="preserve"><value>Подключено к Host.</value></data>
+  <data name="HostConnectivityConnectedAccessible" xml:space="preserve"><value>Подключение к Host: подключено.</value></data>
+  <data name="HostConnectivityDisconnected" xml:space="preserve"><value>Нет подключения к Host.</value></data>
+  <data name="HostConnectivityDisconnectedAccessible" xml:space="preserve"><value>Подключение к Host: нет подключения.</value></data>
+  <data name="HostConnectivityStale" xml:space="preserve"><value>Статус подключения к Host устарел.</value></data>
+  <data name="HostConnectivityStaleAccessible" xml:space="preserve"><value>Подключение к Host: статус устарел.</value></data>
 </root>

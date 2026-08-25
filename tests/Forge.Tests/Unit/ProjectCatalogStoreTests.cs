@@ -350,4 +350,107 @@ public sealed class ProjectCatalogStoreTests
         Assert.False(tooLong.Succeeded);
         Assert.Equal(DiagnosticCodes.ProjectCatalogDraftTooLong, tooLong.DiagnosticCode);
     }
+
+    /// <summary>Plan 12.1 final-sweep gap 1: the sidebar's per-project sprint-list disclosure state
+    /// defaults to expanded (an entry added before this field existed has no persisted value at all)
+    /// and toggles independently of every other catalog field.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintListCollapsedDefaultsToFalseAndIsReversible()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Assert.False(added.Entry.SprintListCollapsed);
+
+        ProjectCatalogResult collapsed = await catalog.SetSprintListCollapsedAsync(projectId, true, cancellationToken);
+        Assert.True(collapsed.Succeeded);
+        Assert.True(collapsed.Entry!.SprintListCollapsed);
+
+        ProjectCatalogResult expanded = await catalog.SetSprintListCollapsedAsync(projectId, false, cancellationToken);
+        Assert.True(expanded.Succeeded);
+        Assert.False(expanded.Entry!.SprintListCollapsed);
+    }
+
+    /// <summary>Plan 12.1 final-sweep gap 2: the sprint workspace's persisted scroll offset is set,
+    /// independent per sprint, cleared by a non-positive value (nothing to restore below the top),
+    /// and rejects a value that cannot round-trip through JSON.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintScrollPositionIsSetPerSprintClearedByZeroAndRejectsNonFiniteValues()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintA = Guid.NewGuid();
+        Guid sprintB = Guid.NewGuid();
+
+        ProjectCatalogResult first = await catalog.SetSprintScrollPositionAsync(projectId, sprintA, 512.25, cancellationToken);
+        Assert.True(first.Succeeded);
+        Assert.Equal(512.25, first.Entry!.SprintScrollPositions![sprintA.ToString("D")]);
+
+        // A second sprint's scroll position is independent of the first's.
+        ProjectCatalogResult other = await catalog.SetSprintScrollPositionAsync(projectId, sprintB, 10, cancellationToken);
+        Assert.True(other.Succeeded);
+        Assert.Equal(512.25, other.Entry!.SprintScrollPositions![sprintA.ToString("D")]);
+        Assert.Equal(10, other.Entry.SprintScrollPositions[sprintB.ToString("D")]);
+
+        ProjectCatalogResult cleared = await catalog.SetSprintScrollPositionAsync(projectId, sprintA, 0, cancellationToken);
+        Assert.True(cleared.Succeeded);
+        Assert.False(cleared.Entry!.SprintScrollPositions!.ContainsKey(sprintA.ToString("D")));
+
+        ProjectCatalogResult rejected =
+            await catalog.SetSprintScrollPositionAsync(projectId, sprintA, double.NaN, cancellationToken);
+        Assert.False(rejected.Succeeded);
+        Assert.Equal(DiagnosticCodes.ProjectCatalogScrollPositionInvalid, rejected.DiagnosticCode);
+    }
+
+    /// <summary>PR #105 review finding 5: <see cref="ProjectCatalogStore.AddAsync"/> always writes both
+    /// <c>sprint_list_collapsed</c> and <c>sprint_scroll_positions</c> (the additive-field pattern's
+    /// own convention), so every existing test up to this one only ever exercises a catalog where
+    /// those keys are present -- never a real pre-0.73 <c>catalog.json</c> where they are simply
+    /// absent. <see cref="ProjectCatalogStore.ContractVersion"/> deliberately stays <c>"1.0.0"</c> for
+    /// exactly this reason (AGENTS.md: "keep migrations and persisted formats backward-compatible"),
+    /// so a catalog hand-written in the pre-0.73 shape -- schema_version "1.0.0", no trace of either
+    /// new key -- must still load without throwing, default both new fields sensibly, and accept a
+    /// subsequent write of the new fields normally.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyCatalogMissingTheTwoNewSprintListFieldsLoadsWithSensibleDefaults()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        string path = ProjectCatalogStore.CatalogPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            """
+            {"schema_version":"1.0.0","entries":[{"project_id":"22222222-2222-2222-2222-222222222222",
+            "root":"C:\\legacy","alias":null,"last_opened_at":"2026-01-01T00:00:00+00:00",
+            "last_selected_sprint_id":null,"last_route":null}]}
+            """,
+            cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        Guid projectId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+
+        ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, listing.DiagnosticCode);
+        ProjectCatalogEntry entry = Assert.Single(listing.Entries);
+        Assert.Equal(projectId, entry.ProjectId);
+        Assert.False(entry.SprintListCollapsed);
+        Assert.Null(entry.SprintScrollPositions);
+
+        Guid sprintId = Guid.NewGuid();
+        ProjectCatalogResult scrollResult =
+            await catalog.SetSprintScrollPositionAsync(projectId, sprintId, 42, cancellationToken);
+        Assert.True(scrollResult.Succeeded);
+        Assert.Equal(42, scrollResult.Entry!.SprintScrollPositions![sprintId.ToString("D")]);
+    }
 }

@@ -29,10 +29,77 @@ public partial class WorkspaceShellPage
     /// anything sooner (plan 10: "bounded interval").</summary>
     private static readonly TimeSpan TimelinePollInterval = TimeSpan.FromSeconds(15);
 
-    private readonly Dictionary<Guid, double> sprintScrollPositions = [];
+    /// <summary>PR #105 review findings 3/4: the debounce/ordering/success-guarantee logic itself now
+    /// lives in this neutral, unit-testable class (see its own remarks) -- this page only wires MAUI's
+    /// <c>ScrollView.Scrolled</c> event and <see cref="scrollPersistDebounceTimer"/>'s
+    /// <c>IDispatcherTimer</c> scheduling to it. Constructed once in the main constructor
+    /// (<c>WorkspaceShellPage.xaml.cs</c>) with a delegate that always calls through the current
+    /// <see cref="sprintWorkspace"/> field, so a language-change rebuild of that field (see
+    /// <c>text.Changed</c> in the constructor) never leaves this coordinator pointing at a stale
+    /// instance.</summary>
+    private readonly ScrollPositionPersistCoordinator scrollPersistCoordinator;
+
+    /// <summary>How long the sprint workspace waits after the most recent <c>ScrollView.Scrolled</c>
+    /// event before flushing to the durable catalog -- restarted on every event (review finding 3),
+    /// so only the position at rest is ever persisted, never a mid-scroll sample. A single-shot timer
+    /// (<c>IsRepeating = false</c>): each restart is a fresh one-time countdown, not a recurring tick.
+    /// </summary>
+    private static readonly TimeSpan ScrollPositionPersistDebounce = TimeSpan.FromMilliseconds(500);
+
     private IDispatcherTimer? timelinePollTimer;
+    private IDispatcherTimer? scrollPersistDebounceTimer;
     private Guid scrollTrackedSprintId;
+    private Guid scrollTrackedProjectId;
     private bool scrollHandlerAttached;
+
+    /// <summary>Review finding 3's "flush-on-navigate-away": persists whatever is pending for the
+    /// sprint workspace currently being left, immediately, without waiting for
+    /// <see cref="scrollPersistDebounceTimer"/> to fire on its own. Called from
+    /// <c>RenderContentAsync</c> (route change to a different page) and <see cref="OnDisappearing"/>
+    /// (the whole page closing) -- both are "leaving the sprint workspace" in the sense plan 12.1
+    /// asks the resting position to survive.</summary>
+    private async Task FlushPendingScrollPositionAsync()
+    {
+        scrollPersistDebounceTimer?.Stop();
+        if (scrollTrackedSprintId == Guid.Empty)
+        {
+            return;
+        }
+
+        await FlushScrollPositionAsync(scrollTrackedProjectId, scrollTrackedSprintId).ConfigureAwait(true);
+    }
+
+    private async Task FlushScrollPositionAsync(Guid projectId, Guid sprintId)
+    {
+        ScrollPersistOutcome outcome = await scrollPersistCoordinator
+            .FlushAsync(projectId, sprintId, CancellationToken.None)
+            .ConfigureAwait(true);
+        if (!outcome.Applied || outcome.Succeeded)
+        {
+            // Round 2 review finding 4: a successful flush -- by far the common case, since this runs
+            // on every debounced scroll-to-rest -- has nothing to report, so it must not touch the
+            // render gate at all; it used to unconditionally request a render (even with an empty
+            // notice string), which is exactly what let it collide with PollTimelineAsync's own
+            // request below.
+            return;
+        }
+
+        // Round 2 review finding 3: this can fire from the debounce timer while still on the sprint
+        // workspace, from the navigate-away flush inside RenderContentAsync (BEFORE ContentHost is
+        // cleared -- see that method's own remarks), or from OnDisappearing as the page closes. A
+        // content-host-scoped label reached only through a render requested here was unreachable in
+        // the navigate-away/close paths: RenderContentAsync clears ContentHost and rebuilds the
+        // destination route before ShellRenderGate ever flushes a render deferred while its mutation
+        // guard was held, so the label was never in the tree by the time its text was set, and the
+        // very next sprint-workspace render throws the message away by resetting it to empty. Routing
+        // through `sidebarNotice` instead uses this shell's own established "notice that survives a
+        // content rebuild" precedent (see that field's remarks, PR #98/#103 review finding 3/1) --
+        // SidebarHost is never touched by a content-only render, and RequestSidebarRender defers
+        // through its own independent pending-render slot, so it can never collide with
+        // PollTimelineAsync's RequestRender call below either (round 2 finding 4).
+        sidebarNotice = Message(text.Resolve(MessageKeys.SprintScrollPositionSaveFailed), outcome.DiagnosticCode);
+        renderGate.RequestSidebarRender();
+    }
 
     private void StopTimelinePoll()
     {
@@ -85,6 +152,61 @@ public partial class WorkspaceShellPage
         // one-shot "not initialized yet" check that could never be false once the handler existed.
         bool suppressFilterChanged = false;
 
+        // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
+        // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
+        // confirm/test-work/finalize mutation -- the highest-frequency re-render in this page, since
+        // every one of those actions calls it. TrackContentFocus/RestoreContentFocus are this render's
+        // own local instance of the same mechanism RenderSidebarFromSnapshot uses (see
+        // WorkspaceShellPage.xaml.cs's TrackSidebarFocus/RestoreSidebarFocus and FocusKeyTracker's own
+        // remarks) -- scoped here rather than promoted to a field because these two hosts are rebuilt
+        // together only within this method's own closures.
+        FocusKeyTracker contentFocusTracker = new();
+        FocusControlRegistry<VisualElement> contentFocusRegistry = new();
+
+        T TrackContentFocus<T>(string key, T control) where T : VisualElement
+        {
+            contentFocusRegistry.Register(key, control);
+            // PR #110 review round 2 finding 1: the five hoisted Entry fields (rewindReasonEntry et
+            // al.) pass through here again on every RefreshActionsAsync call -- MarkWiredOnce guards
+            // the Focused subscription so a control already wired by an earlier call in this same
+            // navigation's lifetime (its own field declaration onward) never gets a second, third, ...
+            // Nth handler stacked on top of the first, while a freshly built control (every dynamic
+            // move/gate/lifecycle button) still gets its own handler exactly once, the only time it is
+            // ever seen. See FocusControlRegistry.MarkWiredOnce's own remarks.
+            if (contentFocusRegistry.MarkWiredOnce(control))
+            {
+                control.Focused += (_, _) => contentFocusTracker.Capture(key);
+            }
+
+            return control;
+        }
+
+        void RestoreContentFocus()
+        {
+            if (contentFocusTracker.Consume() is { } key &&
+                contentFocusRegistry.TryResolve(key, out VisualElement? control))
+            {
+                control.Focus();
+            }
+        }
+
+        // PR #110 review finding 3: a control never registered by TrackContentFocus is, by
+        // construction, outside the tracked focus region -- ContentHost hosts several of these
+        // (the timeline filter/load-more/mark-all-read/detail/copy controls, the message composer and
+        // its send button, the raw-events poll button) alongside the tracked ContextualActionHost/
+        // StickyHeaderHost controls. Without this, tabbing from a tracked control (e.g. the finalize
+        // button) into one of these leaves contentFocusTracker still holding the old key, and the next
+        // RefreshAllAsync -> RestoreContentFocus wrongly yanks focus back onto the stale control the
+        // user already tabbed away from. Wiring Focused here (not Unfocused) is deliberate: Focused
+        // only fires for a control genuinely live in the visual tree that is really receiving focus, so
+        // a control a rebuild tears down -- which never receives a Focused event -- cannot spuriously
+        // clear a key the very next RestoreContentFocus call still needs.
+        T ClearContentFocusWhenFocused<T>(T control) where T : VisualElement
+        {
+            control.Focused += (_, _) => contentFocusTracker.Clear();
+            return control;
+        }
+
         async Task RefreshHeaderAsync()
         {
             (SprintStatusHeaderData header, ProjectSnapshot snapshot) = await sprintWorkspace
@@ -134,7 +256,7 @@ public partial class WorkspaceShellPage
                 Describe(detailsLabel);
                 detailsLabel.IsVisible = !detailsLabel.IsVisible;
             };
-            StickyHeaderHost.Children.Add(detailsToggle);
+            StickyHeaderHost.Children.Add(TrackContentFocus("header:details-toggle", detailsToggle));
             StickyHeaderHost.Children.Add(detailsLabel);
         }
 
@@ -175,7 +297,10 @@ public partial class WorkspaceShellPage
                     await Clipboard.Default.SetTextAsync(item.CopyText).ConfigureAwait(true);
                     copyNoticeLabel.Text = text.Resolve(MessageKeys.TimelineCopiedNotice);
                 });
-                row.Children.Add(new HorizontalStackLayout { Children = { detailsButton, copyButton } });
+                row.Children.Add(new HorizontalStackLayout
+                {
+                    Children = { ClearContentFocusWhenFocused(detailsButton), ClearContentFocusWhenFocused(copyButton) },
+                });
                 row.Children.Add(technicalDetail);
                 timelineItemsHost.Children.Add(row);
             }
@@ -299,7 +424,8 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     stopResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(stopButton);
+                ContextualActionHost.Children.Add(
+                    TrackContentFocus($"action:{AvailableActionProjector.StopCurrentOperationActionId}", stopButton));
                 ContextualActionHost.Children.Add(BuildRationale(stop));
             }
 
@@ -321,7 +447,13 @@ public partial class WorkspaceShellPage
                     rewindReasonEntry.MaxLength = maxReasonLength;
                 }
 
-                ContextualActionHost.Children.Add(rewindReasonEntry);
+                // PR #110 review finding 2: this Entry is hoisted (see its own field declaration's
+                // remarks) so the *instance* -- and whatever the user already typed into it -- survives
+                // RefreshActionsAsync, but it is still removed from ContextualActionHost and re-added on
+                // every rebuild, which disconnects the handler and drops focus exactly as it would for a
+                // freshly built button. Tracking it here is what lets RestoreContentFocus bring focus
+                // back mid-edit instead of only ever restoring buttons.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:move:rewind-reason", rewindReasonEntry));
                 foreach (AvailableAction moveAction in moveActions)
                 {
                     string targetStageId = moveAction.Target.StageId!;
@@ -333,7 +465,8 @@ public partial class WorkspaceShellPage
                     };
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
-                    ContextualActionHost.Children.Add(moveButton);
+                    ContextualActionHost.Children.Add(TrackContentFocus(
+                        string.Create(CultureInfo.InvariantCulture, $"action:move:{targetStageId}"), moveButton));
                     ContextualActionHost.Children.Add(BuildRationale(moveAction));
                     if (!moveAction.Enabled && moveAction.Blockers.Count > 0)
                     {
@@ -356,7 +489,14 @@ public partial class WorkspaceShellPage
                 Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction) };
                 approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
                 reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false));
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { approve, reject } });
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:gate:approve", approve),
+                        TrackContentFocus("action:gate:reject", reject),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(gateResult);
@@ -401,8 +541,9 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     supersedeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(instructionEntry);
-                ContextualActionHost.Children.Add(supersede);
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:attempt:instruction", instructionEntry));
+                ContextualActionHost.Children.Add(TrackContentFocus("action:attempt:supersede", supersede));
             }
 
             ContextualActionHost.Children.Add(supersedeResult);
@@ -454,10 +595,23 @@ public partial class WorkspaceShellPage
 
                 confirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.Confirmed));
                 notConfirmed.Clicked += (_, _) => _ = RunAsync(() => ConfirmAsync(ConfirmationOutcome.NotConfirmed));
-                ContextualActionHost.Children.Add(definitionOfDoneEntry);
-                ContextualActionHost.Children.Add(evidenceEntry);
-                ContextualActionHost.Children.Add(evidenceKind);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { confirmed, notConfirmed } });
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:definition-of-done", definitionOfDoneEntry));
+                ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:evidence", evidenceEntry));
+                // PR #110 review finding 3: evidenceKind is rebuilt fresh (not hoisted) on every
+                // RefreshActionsAsync call, so unlike the two Entry fields above it is never a
+                // meaningful restoration target and is deliberately left out of TrackContentFocus. But
+                // it is still a real, focusable control the user can tab into -- see
+                // ClearContentFocusWhenFocused's own remarks for why that still requires wiring.
+                ContextualActionHost.Children.Add(ClearContentFocusWhenFocused(evidenceKind));
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:confirm:confirmed", confirmed),
+                        TrackContentFocus("action:confirm:not-confirmed", notConfirmed),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(confirmResult);
@@ -503,8 +657,16 @@ public partial class WorkspaceShellPage
 
                 added.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.TestsAdded));
                 noNewTests.Clicked += (_, _) => _ = RunAsync(() => TestWorkAsync(TestWorkOutcome.NoNewTestsJustified));
-                ContextualActionHost.Children.Add(justificationEntry);
-                ContextualActionHost.Children.Add(new HorizontalStackLayout { Children = { added, noNewTests } });
+                // PR #110 review finding 2: see rewindReasonEntry's own tracking remarks above.
+                ContextualActionHost.Children.Add(TrackContentFocus("action:test-work:justification", justificationEntry));
+                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                {
+                    Children =
+                    {
+                        TrackContentFocus("action:test-work:added", added),
+                        TrackContentFocus("action:test-work:no-new-tests", noNewTests),
+                    },
+                });
             }
 
             ContextualActionHost.Children.Add(testWorkResult);
@@ -530,7 +692,7 @@ public partial class WorkspaceShellPage
                     await RefreshAllAsync().ConfigureAwait(true);
                     finalizeResult.Text = message;
                 });
-                ContextualActionHost.Children.Add(finalize);
+                ContextualActionHost.Children.Add(TrackContentFocus("action:finalize", finalize));
             }
 
             ContextualActionHost.Children.Add(finalizeResult);
@@ -547,7 +709,8 @@ public partial class WorkspaceShellPage
 
             Button button = new() { Text = label, IsEnabled = action.Enabled };
             button.Clicked += (_, _) => _ = RunAsync(execute);
-            ContextualActionHost.Children.Add(button);
+            ContextualActionHost.Children.Add(
+                TrackContentFocus(string.Create(CultureInfo.InvariantCulture, $"action:{actionId}"), button));
             ContextualActionHost.Children.Add(BuildRationale(action));
         }
 
@@ -650,6 +813,17 @@ public partial class WorkspaceShellPage
 
         async Task RefreshAllAsync(bool resetTimeline = false)
         {
+            // PR #110 review finding 1: mirrors RenderSidebarFromSnapshot's own
+            // sidebarFocusRegistry.Clear() discipline -- every control the two refreshes below create
+            // is re-registered under its own stable key, so clearing first means a control that no
+            // longer renders (a resolved gate, a move target whose legal set changed) leaves no stale
+            // entry behind for RestoreContentFocus to resolve to a now-detached instance. This spans
+            // both RefreshHeaderAsync and RefreshActionsAsync, so it belongs here rather than in either
+            // individually -- matching where RestoreContentFocus itself already sits, below, once both
+            // have finished. The initial three-call render at the end of RenderSprintWorkspaceAsync
+            // does not need this: contentFocusRegistry is declared empty immediately above and nothing
+            // has populated it yet by the time that render runs.
+            contentFocusRegistry.Clear();
             await RefreshHeaderAsync().ConfigureAwait(true);
             if (resetTimeline)
             {
@@ -670,6 +844,11 @@ public partial class WorkspaceShellPage
             }
 
             await RefreshActionsAsync().ConfigureAwait(true);
+            // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
+            // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
+            // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
+            // own remarks).
+            RestoreContentFocus();
         }
 
         await RefreshHeaderAsync().ConfigureAwait(true);
@@ -691,14 +870,18 @@ public partial class WorkspaceShellPage
 
             RenderTimelineItems(sprintWorkspace.Timeline.SetFilter(SelectedFilterOrNull()));
         };
+        // PR #110 review finding 3: see ClearContentFocusWhenFocused's own remarks.
+        ClearContentFocusWhenFocused(filterPicker);
         loadMoreButton.Clicked += (_, _) => _ = RunAsync(async () =>
             RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true)));
+        ClearContentFocusWhenFocused(loadMoreButton);
         Button markAllReadButton = new() { Text = text.Resolve(MessageKeys.TimelineMarkAllReadAction) };
         markAllReadButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             await sprintWorkspace.Timeline.MarkAllReadAsync(CancellationToken.None).ConfigureAwait(true);
             RenderTimelineItems(sprintWorkspace.Timeline.SetFilter(SelectedFilterOrNull()));
         });
+        ClearContentFocusWhenFocused(markAllReadButton);
         rewindReasonEntry.Unfocused += (_, _) => _ = RunAsync(async () =>
         {
             // PR #99 review finding 10: previously fire-and-forget with the result discarded, which
@@ -722,6 +905,11 @@ public partial class WorkspaceShellPage
                 messageResult.Text = Message(text.Resolve(MessageKeys.TimelineMessageDraftSaveFailed), saveResult.DiagnosticCode);
             }
         });
+        // PR #110 review finding 3: this is the exact scenario ClearContentFocusWhenFocused's own
+        // remarks describe -- tabbing from a tracked ContextualActionHost control (e.g. the finalize
+        // button) into this composer must not leave that stale key ready to be wrongly restored the
+        // next time the user's own Send click below triggers RefreshAllAsync.
+        ClearContentFocusWhenFocused(messageEntry);
         Button sendMessageButton = new() { Text = text.Resolve(MessageKeys.TimelineMessageSendAction) };
         sendMessageButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
@@ -741,6 +929,7 @@ public partial class WorkspaceShellPage
             await RefreshAllAsync().ConfigureAwait(true);
             messageResult.Text = message;
         });
+        ClearContentFocusWhenFocused(sendMessageButton);
 
         ContentHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineTitle), FontAttributes = FontAttributes.Bold }));
         ContentHost.Children.Add(new HorizontalStackLayout { Children = { filterPicker, markAllReadButton } });
@@ -759,19 +948,34 @@ public partial class WorkspaceShellPage
         Button pollRawEvents = new() { Text = text.Resolve(MessageKeys.EventsPollAction) };
         pollRawEvents.Clicked += (_, _) => _ = RunAsync(async () =>
             rawEventsResult.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));
+        // PR #110 review finding 3: see ClearContentFocusWhenFocused's own remarks.
+        ClearContentFocusWhenFocused(pollRawEvents);
         ContentHost.Children.Add(pollRawEvents);
         ContentHost.Children.Add(rawEventsResult);
 
         scrollTrackedSprintId = sprintId;
+        scrollTrackedProjectId = workspace.Route.ProjectId!.Value;
         if (ContentHost.Parent is ScrollView scrollView)
         {
             // The ScrollView itself is a fixed XAML element that survives every render (only its
             // child's Children are rebuilt), so this handler is attached exactly once per page
             // instance -- not once per navigation -- and always reads the *current*
-            // scrollTrackedSprintId rather than closing over a stale one.
+            // scrollTrackedSprintId/scrollTrackedProjectId rather than closing over stale ones.
             if (!scrollHandlerAttached)
             {
                 scrollHandlerAttached = true;
+                scrollPersistDebounceTimer = Dispatcher.CreateTimer();
+                scrollPersistDebounceTimer.Interval = ScrollPositionPersistDebounce;
+                scrollPersistDebounceTimer.IsRepeating = false;
+                scrollPersistDebounceTimer.Tick += (_, _) =>
+                {
+                    if (scrollTrackedSprintId == Guid.Empty)
+                    {
+                        return;
+                    }
+
+                    _ = FlushScrollPositionAsync(scrollTrackedProjectId, scrollTrackedSprintId);
+                };
                 // PR #99 review finding 11: scrollTrackedSprintId is reset to Guid.Empty by
                 // RenderContentAsync whenever a non-sprint-workspace route renders (see
                 // WorkspaceShellPage.xaml.cs), so scrolling the project overview/settings/Forge
@@ -780,16 +984,34 @@ public partial class WorkspaceShellPage
                 // is the active route is ever recorded.
                 scrollView.Scrolled += (_, args) =>
                 {
-                    if (scrollTrackedSprintId != Guid.Empty)
+                    if (scrollTrackedSprintId == Guid.Empty)
                     {
-                        sprintScrollPositions[scrollTrackedSprintId] = args.ScrollY;
+                        return;
                     }
+
+                    // PR #105 review finding 3: records the in-memory value on every event (cheap),
+                    // but the durable write is time-debounced -- restarting this single-shot timer on
+                    // every event means it only ever fires once the scroll has actually come to rest,
+                    // not on a mid-scroll sample. A single mouse-wheel notch, let alone a drag/fling,
+                    // no longer triggers a full catalog.json read-modify-write per event.
+                    scrollPersistCoordinator.RecordScroll(scrollTrackedSprintId, args.ScrollY);
+                    scrollPersistDebounceTimer.Stop();
+                    scrollPersistDebounceTimer.Start();
                 };
             }
 
-            if (sprintScrollPositions.TryGetValue(sprintId, out double previousScrollY) && previousScrollY > 0)
+            // In-session navigation reads the in-memory cache first (unchanged from before this gap
+            // was closed); only the first render of a sprint since the app started -- nothing cached
+            // yet -- falls back to the catalog's durably persisted value.
+            double? previousScrollY = scrollPersistCoordinator.TryGetPending(sprintId, out double cachedScrollY)
+                ? cachedScrollY
+                : await sprintWorkspace
+                    .LoadScrollPositionAsync(scrollTrackedProjectId, sprintId, CancellationToken.None)
+                    .ConfigureAwait(true);
+            if (previousScrollY is { } restoredScrollY && restoredScrollY > 0)
             {
-                _ = scrollView.ScrollToAsync(0, previousScrollY, false);
+                scrollPersistCoordinator.Seed(sprintId, restoredScrollY);
+                _ = scrollView.ScrollToAsync(0, restoredScrollY, false);
             }
             else
             {

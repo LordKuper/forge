@@ -12,7 +12,8 @@ public partial class WorkspaceShellPage
 {
     private async Task RenderProjectOverviewAsync(Guid projectId, string root)
     {
-        SidebarSnapshot sidebarSnapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
+        SidebarSnapshot sidebarSnapshot =
+            await sidebar.LoadAsync(CancellationToken.None, projectId).ConfigureAwait(true);
         string? alias = sidebarSnapshot.Projects
             .FirstOrDefault(project => project.ProjectId == projectId)?.DisplayName;
         ProjectOverviewSnapshot snapshot =

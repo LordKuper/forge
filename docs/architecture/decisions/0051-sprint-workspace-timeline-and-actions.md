@@ -159,18 +159,14 @@ the Host offered, and typed free text for the reason, never a raw id.
 
 ## What stays deferred
 
-- Real per-attempt provider/model data for the status header: no durable field exists anywhere in
-  this codebase today (`AttemptSnapshot` carries none), so `ActiveProviderModelText` always renders
-  the honest "not yet available" placeholder — the same posture Slice 5/7 already apply to account
-  quota. Introducing this would need a new durable field and its own ADR, not a Slice 6 UI
-  workaround.
-- Localized prose for the timeline's own `SprintTimelineItem.MessageKey` and a stage assessment's
-  `StagePrerequisite.MessageKey`: both are rendered as the same raw machine text
-  `CliApplication.WriteTimeline`/`forge sprint assess-stage` already print (parity, plan 12.6). None
-  of the roughly thirty `workflow.*`/`stage_transition.*` keys the journal and assessor actually emit
-  are registered in `Messages.resx` today; authoring localized prose for all of them is a separable
-  content task, not blocking this slice, and would need revisiting anyway once a real user-message/
-  agent-summary artifact type (ADR 0049's own deferred item) exists.
+- Localized prose for a stage assessment's `StagePrerequisite.MessageKey`: still rendered as the
+  same raw machine text `forge sprint assess-stage` prints (parity, plan 12.6). None of the eleven
+  `stage_transition.*` keys the assessor emits are registered in `Messages.resx` today; authoring
+  localized prose for them is a separable content task, not blocking this slice. (The timeline's own
+  `SprintTimelineItem.MessageKey` half of this deferral closed in PR #107: every `workflow.*`/
+  `routing.*` key the journal emits is now registered and resolved through
+  `TimelineMessageFormatter` on both surfaces, including `SurfaceFormatting.EventLines`, and a static
+  test fails if a future producing key is ever added without a matching resx entry.)
 - Promoting `workflow.stop_operation`/`workflow.assess_stage_transition`/`sprint.move_stage`/
   `workspace.summary`/`sprint.timeline`/`workspace.available_actions` from reserved to
   `CapabilityIds.Implemented`, following ADR 0047/0048/0049/0050's own repeated precedent: doing so
@@ -234,3 +230,5 @@ the Host offered, and typed free text for the reason, never a raw id.
   structural)
 - ADR 0050 (the shell and confirmation-dialog discipline this slice extends; the exact
   confirmation-bypass bug class this ADR's own tests guard against again)
+- ADR 0055 (records the per-attempt provider/model field this ADR's "What stays deferred" section
+  originally called out; `ActiveProviderModelText` now renders the real routed value once known)

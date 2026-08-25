@@ -130,4 +130,46 @@ public sealed class SprintWorkspaceViewModelTests
 
         Assert.Contains(sprintId.ToString("D"), prompt, StringComparison.Ordinal);
     }
+
+    /// <summary>Plan 12.1 final-sweep gap 2: the sprint workspace's scroll position must round-trip
+    /// through the same durable catalog every other per-sprint preference here already uses, so it
+    /// survives a fresh view-model instance standing in for an app restart -- not just the page's own
+    /// in-memory dictionary, which is lost on process exit.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SaveScrollPositionAsyncPersistsAcrossAFreshViewModelInstanceSimulatingARestart()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        Guid projectId = added.Entry!.ProjectId;
+        Guid sprintId = Guid.NewGuid();
+        SprintWorkspaceViewModel first = BuildViewModel(environment, new FakeForgeMutations());
+
+        ProjectCatalogResult saved = await first.SaveScrollPositionAsync(projectId, sprintId, 842.5, cancellationToken);
+
+        Assert.True(saved.Succeeded);
+        SprintWorkspaceViewModel second = BuildViewModel(environment, new FakeForgeMutations());
+        double? restored = await second.LoadScrollPositionAsync(projectId, sprintId, cancellationToken);
+        Assert.Equal(842.5, restored);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadScrollPositionAsyncReturnsNullWhenNothingWasEverSaved()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogResult added = await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SprintWorkspaceViewModel viewModel = BuildViewModel(environment, new FakeForgeMutations());
+
+        double? restored =
+            await viewModel.LoadScrollPositionAsync(added.Entry!.ProjectId, Guid.NewGuid(), cancellationToken);
+
+        Assert.Null(restored);
+    }
 }

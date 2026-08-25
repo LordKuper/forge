@@ -68,10 +68,12 @@ public sealed record TimelineState(
 /// another concurrent fetch, and is discarded without touching any field -- the caller simply
 /// receives whatever the winning call (or the newer sprint) already established.
 /// </remarks>
-public sealed class SprintTimelineViewModel(ForgeApplication application, ProjectCatalogStore catalog) : IDisposable
+public sealed class SprintTimelineViewModel(ForgeApplication application, ProjectCatalogStore catalog, SurfaceText text)
+    : IDisposable
 {
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
     private readonly ProjectCatalogStore catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
+    private readonly SurfaceText text = text ?? throw new ArgumentNullException(nameof(text));
     private readonly List<SprintTimelineItem> loaded = [];
     private readonly SemaphoreSlim gate = new(1, 1);
     private Guid projectId;
@@ -309,14 +311,10 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
     private TimelineItemView ToView(SprintTimelineItem item)
     {
         string actorText = SurfaceFormatting.Machine(item.Actor);
-        // Matches CliApplication.WriteTimeline exactly (plan 12.6 parity): the message key is
-        // rendered as the same raw machine text on both surfaces, never resolved through
-        // SurfaceText.Resolve. None of the ~30 workflow.* message keys the journal actually emits
-        // are registered in Messages.resx today -- resolving one would throw
-        // MissingManifestResourceException, and authoring localized prose for every workflow event
-        // type is a separable content task (see this slice's ADR), not something Desktop can silently
-        // diverge from the CLI to work around.
-        string messageText = item.MessageKey;
+        // Plan 12.3/12.6: resolved through the same neutral TimelineMessageFormatter CliApplication.
+        // WriteTimeline also calls, so both surfaces render identical localized text for the same
+        // event (parity) instead of either one showing the raw `workflow.*`/`routing.*` journal key.
+        string messageText = TimelineMessageFormatter.Format(text, item.MessageKey, item.Arguments);
         bool unread = item.Sequence > readWatermarkSequence;
         string copyText = string.Create(
             CultureInfo.InvariantCulture,

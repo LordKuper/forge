@@ -28,7 +28,7 @@ public sealed class SprintWorkspaceViewModel(
     private readonly MainPageViewModel legacy = legacy ?? throw new ArgumentNullException(nameof(legacy));
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
 
-    public SprintTimelineViewModel Timeline { get; } = new(application, catalog);
+    public SprintTimelineViewModel Timeline { get; } = new(application, catalog, text);
 
     public SprintActionsViewModel Actions { get; } = new(application, resolveMutations, text);
 
@@ -140,4 +140,21 @@ public sealed class SprintWorkspaceViewModel(
     public Task<string> CancelSprintAsync(
         string? projectRoot, Guid sprintId, bool confirmed, CancellationToken cancellationToken) =>
         legacy.CancelSprintAsync(projectRoot, Id(sprintId), confirmed, cancellationToken);
+
+    /// <summary>Plan 12.1 final-sweep gap 2: the sprint workspace's last scroll offset, restored on
+    /// route entry when the page's own in-session cache (<c>WorkspaceShellPage.SprintWorkspace.cs</c>'s
+    /// <see cref="Forge.Desktop.Presentation.ScrollPositionPersistCoordinator"/>) has nothing pending
+    /// for this sprint yet -- i.e. the first render after an app restart. <see langword="null"/> when
+    /// nothing was ever persisted, in which case the caller scrolls to the top exactly like before
+    /// this gap was closed.</summary>
+    public async Task<double?> LoadScrollPositionAsync(Guid projectId, Guid sprintId, CancellationToken cancellationToken)
+    {
+        ProjectCatalogListing listing = await catalog.ListAsync(cancellationToken).ConfigureAwait(false);
+        ProjectCatalogEntry? entry = listing.Entries.FirstOrDefault(candidate => candidate.ProjectId == projectId);
+        return entry?.SprintScrollPositions?.TryGetValue(Id(sprintId), out double value) == true ? value : null;
+    }
+
+    public Task<ProjectCatalogResult> SaveScrollPositionAsync(
+        Guid projectId, Guid sprintId, double position, CancellationToken cancellationToken) =>
+        catalog.SetSprintScrollPositionAsync(projectId, sprintId, position, cancellationToken);
 }

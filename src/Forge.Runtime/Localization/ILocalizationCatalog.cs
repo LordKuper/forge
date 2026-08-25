@@ -1,4 +1,5 @@
 using System.Globalization;
+using Forge.Domain;
 
 namespace Forge.Localization;
 
@@ -254,12 +255,29 @@ public static class MessageKeys
     public const string SidebarRemoveProjectAction = "SidebarRemoveProjectAction";
     public const string SidebarNoProjectsHint = "SidebarNoProjectsHint";
 
+    /// <summary>Plan 12.1 final-sweep gap 1: accessible name for the per-project chevron that
+    /// hides/shows that project's active-sprint list -- distinct from
+    /// <see cref="SidebarCollapseAction"/>/<see cref="SidebarExpandAction"/>, which govern the whole
+    /// sidebar rail instead.</summary>
+    public const string SidebarProjectCollapseSprintsAction = "SidebarProjectCollapseSprintsAction";
+    public const string SidebarProjectExpandSprintsAction = "SidebarProjectExpandSprintsAction";
+
+    /// <summary>Same shape as <see cref="SidebarCollapseSaveFailed"/>, for a failed write of one
+    /// project's own sprint-list disclosure state instead of the whole sidebar's.</summary>
+    public const string SidebarProjectSprintsSaveFailed = "SidebarProjectSprintsSaveFailed";
+
     /// <summary>PR #103 review finding 1: the collapse/expand toggle discarded
     /// <c>Forge.Application.ConfigurationWriteResult</c> and silently re-rendered the unchanged
     /// (pre-toggle) state on a failed write. Same shape as <see cref="ProjectAddFailed"/>/
     /// <see cref="ProjectRemoveFailed"/> -- resolved through <c>WorkspaceShellPage.Message</c> with
     /// the write's <c>DiagnosticCode</c> appended.</summary>
     public const string SidebarCollapseSaveFailed = "SidebarCollapseSaveFailed";
+
+    /// <summary>PR #105 review finding 4c: the sprint workspace's debounced scroll-position write
+    /// used to be fire-and-forget with its <c>ProjectCatalogResult</c> silently discarded -- the only
+    /// catalog/config write in this shell with no failure notice at all. Same shape as
+    /// <see cref="SidebarProjectSprintsSaveFailed"/>/<see cref="SidebarCollapseSaveFailed"/>.</summary>
+    public const string SprintScrollPositionSaveFailed = "SprintScrollPositionSaveFailed";
     public const string WorkspaceEmptyStateTitle = "WorkspaceEmptyStateTitle";
     public const string ProjectOverviewTitle = "ProjectOverviewTitle";
     public const string ProjectOverviewActiveSprintsTitle = "ProjectOverviewActiveSprintsTitle";
@@ -324,6 +342,12 @@ public static class MessageKeys
     public const string SprintStatusHeaderProgressLabel = "SprintStatusHeaderProgressLabel";
     public const string SprintStatusHeaderLastActivityLabel = "SprintStatusHeaderLastActivityLabel";
     public const string SprintStatusHeaderProviderModelUnavailable = "SprintStatusHeaderProviderModelUnavailable";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?)"/> template
+    /// taking the active attempt's provider id then its model, e.g. "{0} / {1}" -- resolved only
+    /// once <see cref="Forge.Domain.AttemptSnapshot.Provider"/>/<c>.Model</c> are both known;
+    /// <see cref="SprintStatusHeaderProviderModelUnavailable"/> is used otherwise.</summary>
+    public const string SprintStatusHeaderProviderModelText = "SprintStatusHeaderProviderModelText";
     public const string SprintStatusHeaderResumeNotBeforeLabel = "SprintStatusHeaderResumeNotBeforeLabel";
     public const string SprintStatusHeaderDetailsAction = "SprintStatusHeaderDetailsAction";
     public const string TimelineTitle = "TimelineTitle";
@@ -415,4 +439,172 @@ public static class MessageKeys
     /// Host's handshake-advertised capability set is missing the one the request needed -- ADR
     /// 0053's client-side capability gate rejected it before it ever reached the wire.</summary>
     public const string CapabilityNotSupported = "CapabilityNotSupported";
+
+    // Plan section 12.3/12.6 closure: localized timeline item text. Each constant's value is the
+    // exact durable `workflow.*`/`routing.*` journal message key it resolves (see
+    // WorkflowEvent.MessageKey producing call sites in FileSprintEventLog/SprintScheduler/
+    // SprintOrchestrator/StageTransitionCoordinator/StopOperationCoordinator) -- reused verbatim as
+    // the resx key itself, matching the existing `next.*`/`workspace_action.*` rationale-key
+    // convention above rather than inventing a parallel naming scheme. Resolved through
+    // TimelineMessageFormatter.Format, never text.Resolve directly, since a few of these carry a
+    // durable argument the raw key alone would lose (see that type's own remarks).
+    public const string WorkflowSprintCreated = "workflow.sprint_created";
+    public const string WorkflowSprintAdvanced = "workflow.sprint_advanced";
+    public const string WorkflowSprintCancelled = "workflow.sprint_cancelled";
+    public const string WorkflowSprintResumed = "workflow.sprint_resumed";
+    public const string WorkflowSprintReady = "workflow.sprint_ready";
+    public const string WorkflowSprintReadyToFinalize = "workflow.sprint_ready_to_finalize";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// blocked reason code ("node"/"finding"/"gate"/"confirmation"/"review_convergence"/"rewind" --
+    /// see SprintScheduler/StageTransitionCoordinator's own <c>BlockedBy*</c> constants), resolved to
+    /// a localized label by <see cref="TimelineMessageFormatter.Format"/> before substitution (PR
+    /// #107 review finding 3) rather than interpolated as the raw machine code.</summary>
+    public const string WorkflowSprintBlocked = "workflow.sprint_blocked";
+
+    /// <summary>PR #107 review finding 2: not emitted by any producing call site today, but a
+    /// literal `messageKey` argument this test suite already exercises against
+    /// <c>ISprintStore.AppendTransitionAsync</c> (<c>NotificationProjectorTests.cs</c>) -- since that
+    /// parameter accepts an arbitrary string with no closed-set validation (see the finding 1 crash
+    /// this PR fixes), a future producing call site could use it without warning unless it is
+    /// already registered.</summary>
+    public const string WorkflowSprintFailed = "workflow.sprint_failed";
+
+    public const string WorkflowSprintCompleted = "workflow.sprint_completed";
+    public const string WorkflowSprintRunning = "workflow.sprint_running";
+    public const string WorkflowSprintAwaitingHuman = "workflow.sprint_awaiting_human";
+    public const string WorkflowSprintGateResumed = "workflow.sprint_gate_resumed";
+    public const string WorkflowSprintPaused = "workflow.sprint_paused";
+    public const string WorkflowNodeCreated = "workflow.node_created";
+    public const string WorkflowNodeReady = "workflow.node_ready";
+    public const string WorkflowNodeRunning = "workflow.node_running";
+    public const string WorkflowNodeSucceeded = "workflow.node_succeeded";
+    public const string WorkflowNodeFailed = "workflow.node_failed";
+    public const string WorkflowNodeRejected = "workflow.node_rejected";
+    public const string WorkflowNodeSkipped = "workflow.node_skipped";
+    public const string WorkflowNodeRetrying = "workflow.node_retrying";
+    public const string WorkflowNodeRetried = "workflow.node_retried";
+    public const string WorkflowNodeAwaitingHuman = "workflow.node_awaiting_human";
+    public const string WorkflowNodeSuperseded = "workflow.node_superseded";
+    public const string WorkflowNodeStopped = "workflow.node_stopped";
+    public const string WorkflowNodeRearmed = "workflow.node_rearmed";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// stage revision number (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowNodeReopened = "workflow.node_reopened";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// stage revision number (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowNodeInvalidated = "workflow.node_invalidated";
+    public const string WorkflowNodeRewindInterrupted = "workflow.node_rewind_interrupted";
+    public const string WorkflowAttemptCreated = "workflow.attempt_created";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// attempt's target state (<see cref="WorkflowEvent.ToStateArgument"/>), resolved to a localized
+    /// <see cref="Domain.AttemptState"/> label by <see cref="TimelineMessageFormatter.Format"/> before
+    /// substitution (PR #107 review finding 4) rather than interpolated as the raw snake_case
+    /// value.</summary>
+    public const string WorkflowAttemptTransitioned = "workflow.attempt_transitioned";
+
+    // PR #107 review finding 2: same "not emitted today, but a literal messageKey argument the test
+    // suite already exercises against ISprintStore.AppendTransitionAsync directly
+    // (SprintEventStoreTests.cs)" reasoning as WorkflowSprintFailed above.
+    public const string WorkflowAttemptCancelled = "workflow.attempt_cancelled";
+
+    public const string WorkflowAttemptPreparing = "workflow.attempt_preparing";
+    public const string WorkflowAttemptRunning = "workflow.attempt_running";
+    public const string WorkflowAttemptValidating = "workflow.attempt_validating";
+    public const string WorkflowAttemptStopped = "workflow.attempt_stopped";
+    public const string WorkflowAttemptSuperseded = "workflow.attempt_superseded";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// operator's bounded free-text supersession instruction
+    /// (<see cref="WorkflowEvent.SupersessionInstructionArgument"/>).</summary>
+    public const string WorkflowAttemptSupersededInstruction = "workflow.attempt_superseded_instruction";
+    public const string WorkflowAttemptActivity = "workflow.attempt_activity";
+    public const string WorkflowAttemptStopRequested = "workflow.attempt_stop_requested";
+    public const string WorkflowAttemptStopConverged = "workflow.attempt_stop_converged";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the rewind's target stage id
+    /// (<see cref="WorkflowEvent.TargetStageIdArgument"/>), the operator's bounded free-text reason
+    /// (<see cref="WorkflowEvent.RewindReasonArgument"/>), then the new revision number
+    /// (<see cref="WorkflowEvent.RevisionArgument"/>).</summary>
+    public const string WorkflowStageRevisionRecorded = "workflow.stage_revision_recorded";
+    public const string WorkflowStageTransitionConverged = "workflow.stage_transition_converged";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// user's bounded free-text message (<see cref="WorkflowEvent.UserMessageTextArgument"/>).
+    /// </summary>
+    public const string WorkflowUserMessagePosted = "workflow.user_message_posted";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
+    /// agent's summary text (<see cref="WorkflowEvent.AgentSummaryTextArgument"/>).</summary>
+    public const string WorkflowAgentSummaryRecorded = "workflow.agent_summary_recorded";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the routed provider id, model id verbatim (proper identifiers, never
+    /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by
+    /// <see cref="TimelineMessageFormatter.Format"/> before substitution (PR #107 review finding 5)
+    /// rather than the raw snake_case outcome.</summary>
+    public const string RoutingDecisionRecorded = "routing.decision_recorded";
+
+    // PR #107 review finding 3: localized labels for workflow.sprint_blocked's blocked_reason
+    // argument (SprintScheduler/StageTransitionCoordinator's own BlockedBy* constants) -- see
+    // TimelineMessageFormatter.BlockedReasonLabel.
+    public const string SprintBlockedReasonNode = "SprintBlockedReasonNode";
+    public const string SprintBlockedReasonFinding = "SprintBlockedReasonFinding";
+    public const string SprintBlockedReasonGate = "SprintBlockedReasonGate";
+    public const string SprintBlockedReasonConfirmation = "SprintBlockedReasonConfirmation";
+    public const string SprintBlockedReasonReviewConvergence = "SprintBlockedReasonReviewConvergence";
+    public const string SprintBlockedReasonRewind = "SprintBlockedReasonRewind";
+
+    // PR #107 review finding 4: localized labels for workflow.attempt_transitioned's to_state
+    // argument (Domain.AttemptState) -- see TimelineMessageFormatter.AttemptStateLabel. Distinct
+    // from the not-yet-used SprintStatePaused-style family above (SprintState and AttemptState are
+    // different enums with different member sets).
+    public const string AttemptStateCreated = "AttemptStateCreated";
+    public const string AttemptStatePreparing = "AttemptStatePreparing";
+    public const string AttemptStateRunning = "AttemptStateRunning";
+    public const string AttemptStateValidating = "AttemptStateValidating";
+    public const string AttemptStateSucceeded = "AttemptStateSucceeded";
+    public const string AttemptStateFailed = "AttemptStateFailed";
+    public const string AttemptStateCancelled = "AttemptStateCancelled";
+
+    // PR #107 review finding 5: localized labels for routing.decision_recorded's outcome argument
+    // (Domain.RouteOutcome) -- see TimelineMessageFormatter.RoutingOutcomeLabel.
+    public const string RoutingOutcomeRouted = "RoutingOutcomeRouted";
+    public const string RoutingOutcomeSucceeded = "RoutingOutcomeSucceeded";
+    public const string RoutingOutcomeFailed = "RoutingOutcomeFailed";
+    public const string RoutingOutcomeCircuitOpen = "RoutingOutcomeCircuitOpen";
+    public const string RoutingOutcomeBudgetExhausted = "RoutingOutcomeBudgetExhausted";
+    public const string RoutingOutcomeExcluded = "RoutingOutcomeExcluded";
+    public const string RoutingOutcomeDeferred = "RoutingOutcomeDeferred";
+
+    // Plan 12.6 status-row closure: authentication, model availability, and Host connectivity
+    // (SidebarViewModel.BuildStatusRow). Mirrors QuotaStatus*'s own worst-case-across-many shape.
+    public const string AuthenticationStatusUnknown = "AuthenticationStatusUnknown";
+    public const string AuthenticationStatusUnknownAccessible = "AuthenticationStatusUnknownAccessible";
+    public const string AuthenticationStatusReady = "AuthenticationStatusReady";
+    public const string AuthenticationStatusReadyAccessible = "AuthenticationStatusReadyAccessible";
+    public const string AuthenticationStatusRequired = "AuthenticationStatusRequired";
+    public const string AuthenticationStatusRequiredAccessible = "AuthenticationStatusRequiredAccessible";
+    public const string AuthenticationStatusCheckFailed = "AuthenticationStatusCheckFailed";
+    public const string AuthenticationStatusCheckFailedAccessible = "AuthenticationStatusCheckFailedAccessible";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?)"/> template
+    /// taking the model-available provider count then the enabled provider count, e.g. "{0}/{1}
+    /// models available" -- mirrors <see cref="SidebarProvidersReadyStatus"/>'s own shape but counts
+    /// toolchain-ready AND authenticated providers (see <c>SidebarViewModel.ModelAvailabilitySummary</c>).</summary>
+    public const string SidebarModelsAvailableStatus = "SidebarModelsAvailableStatus";
+    public const string SidebarModelsAvailableAccessible = "SidebarModelsAvailableAccessible";
+
+    public const string HostConnectivityUnknown = "HostConnectivityUnknown";
+    public const string HostConnectivityUnknownAccessible = "HostConnectivityUnknownAccessible";
+    public const string HostConnectivityConnected = "HostConnectivityConnected";
+    public const string HostConnectivityConnectedAccessible = "HostConnectivityConnectedAccessible";
+    public const string HostConnectivityDisconnected = "HostConnectivityDisconnected";
+    public const string HostConnectivityDisconnectedAccessible = "HostConnectivityDisconnectedAccessible";
+    public const string HostConnectivityStale = "HostConnectivityStale";
+    public const string HostConnectivityStaleAccessible = "HostConnectivityStaleAccessible";
 }

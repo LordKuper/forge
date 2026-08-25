@@ -192,9 +192,13 @@
   <data name="SidebarExpandAction" xml:space="preserve"><value>Expand sidebar</value></data>
   <data name="SidebarForgeSettingsAction" xml:space="preserve"><value>Forge settings</value></data>
   <data name="SidebarHistoryLabel" xml:space="preserve"><value>History</value></data>
+  <data name="SidebarProjectCollapseSprintsAction" xml:space="preserve"><value>Collapse sprints</value></data>
+  <data name="SidebarProjectExpandSprintsAction" xml:space="preserve"><value>Expand sprints</value></data>
+  <data name="SidebarProjectSprintsSaveFailed" xml:space="preserve"><value>Could not save the project's sprint list state.</value></data>
   <data name="SidebarRemoveProjectAction" xml:space="preserve"><value>Remove from list</value></data>
   <data name="SidebarNoProjectsHint" xml:space="preserve"><value>Add a project to get started.</value></data>
   <data name="SidebarCollapseSaveFailed" xml:space="preserve"><value>Could not save the sidebar's collapsed state.</value></data>
+  <data name="SprintScrollPositionSaveFailed" xml:space="preserve"><value>Could not save the sprint workspace's scroll position.</value></data>
   <data name="WorkspaceEmptyStateTitle" xml:space="preserve"><value>No project selected yet.</value></data>
   <data name="ProjectOverviewTitle" xml:space="preserve"><value>Project overview</value></data>
   <data name="ProjectOverviewActiveSprintsTitle" xml:space="preserve"><value>Active sprints</value></data>
@@ -244,6 +248,7 @@
   <data name="SprintStatusHeaderProgressLabel" xml:space="preserve"><value>Progress</value></data>
   <data name="SprintStatusHeaderLastActivityLabel" xml:space="preserve"><value>Last activity</value></data>
   <data name="SprintStatusHeaderProviderModelUnavailable" xml:space="preserve"><value>Active provider/model is not yet available.</value></data>
+  <data name="SprintStatusHeaderProviderModelText" xml:space="preserve"><value>{0} / {1}</value></data>
   <data name="SprintStatusHeaderResumeNotBeforeLabel" xml:space="preserve"><value>Resume not before</value></data>
   <data name="SprintStatusHeaderDetailsAction" xml:space="preserve"><value>Details</value></data>
   <data name="TimelineTitle" xml:space="preserve"><value>Timeline</value></data>
@@ -303,4 +308,88 @@
   <data name="QuotaStatusStale" xml:space="preserve"><value>Provider quota data is stale.</value></data>
   <data name="QuotaStatusStaleAccessible" xml:space="preserve"><value>Quota status: data is stale.</value></data>
   <data name="CapabilityNotSupported" xml:space="preserve"><value>This Host does not yet support this operation. Upgrade Forge on this project's Host to use it.</value></data>
+  <data name="workflow.sprint_created" xml:space="preserve"><value>Sprint created.</value></data>
+  <data name="workflow.sprint_advanced" xml:space="preserve"><value>Sprint run started.</value></data>
+  <data name="workflow.sprint_cancelled" xml:space="preserve"><value>Sprint cancelled.</value></data>
+  <data name="workflow.sprint_resumed" xml:space="preserve"><value>Sprint resumed.</value></data>
+  <data name="workflow.sprint_ready" xml:space="preserve"><value>Sprint is ready to run.</value></data>
+  <data name="workflow.sprint_ready_to_finalize" xml:space="preserve"><value>Sprint is ready to finalize.</value></data>
+  <data name="workflow.sprint_blocked" xml:space="preserve"><value>Sprint blocked ({0}).</value></data>
+  <data name="workflow.sprint_completed" xml:space="preserve"><value>Sprint completed.</value></data>
+  <data name="workflow.sprint_running" xml:space="preserve"><value>Sprint is running.</value></data>
+  <data name="workflow.sprint_awaiting_human" xml:space="preserve"><value>Sprint is awaiting human review.</value></data>
+  <data name="workflow.sprint_gate_resumed" xml:space="preserve"><value>Sprint resumed after a gate was resolved.</value></data>
+  <data name="workflow.sprint_paused" xml:space="preserve"><value>Sprint paused.</value></data>
+  <data name="workflow.node_created" xml:space="preserve"><value>Node created.</value></data>
+  <data name="workflow.node_ready" xml:space="preserve"><value>Node is ready to run.</value></data>
+  <data name="workflow.node_running" xml:space="preserve"><value>Node started running.</value></data>
+  <data name="workflow.node_succeeded" xml:space="preserve"><value>Node succeeded.</value></data>
+  <data name="workflow.node_failed" xml:space="preserve"><value>Node failed.</value></data>
+  <data name="workflow.node_rejected" xml:space="preserve"><value>Node was rejected.</value></data>
+  <data name="workflow.node_skipped" xml:space="preserve"><value>Node skipped.</value></data>
+  <data name="workflow.node_retrying" xml:space="preserve"><value>Node is retrying.</value></data>
+  <data name="workflow.node_retried" xml:space="preserve"><value>Node was retried.</value></data>
+  <data name="workflow.node_awaiting_human" xml:space="preserve"><value>Node is awaiting human review.</value></data>
+  <data name="workflow.node_superseded" xml:space="preserve"><value>Node's attempt was superseded by a replacement.</value></data>
+  <data name="workflow.node_stopped" xml:space="preserve"><value>Node stopped by operator request.</value></data>
+  <data name="workflow.node_rearmed" xml:space="preserve"><value>Node re-armed for a new attempt.</value></data>
+  <data name="workflow.node_reopened" xml:space="preserve"><value>Node reopened for revision {0}.</value></data>
+  <data name="workflow.node_invalidated" xml:space="preserve"><value>Node invalidated for revision {0}.</value></data>
+  <data name="workflow.node_rewind_interrupted" xml:space="preserve"><value>Node interrupted by a rewind.</value></data>
+  <data name="workflow.attempt_created" xml:space="preserve"><value>Attempt created.</value></data>
+  <data name="workflow.attempt_transitioned" xml:space="preserve"><value>Attempt transitioned to "{0}".</value></data>
+  <data name="workflow.attempt_stopped" xml:space="preserve"><value>Attempt stopped by operator request.</value></data>
+  <data name="workflow.attempt_superseded" xml:space="preserve"><value>Attempt cancelled due to supersession.</value></data>
+  <data name="workflow.attempt_superseded_instruction" xml:space="preserve"><value>Operator instruction for the replacement attempt: {0}</value></data>
+  <data name="workflow.attempt_activity" xml:space="preserve"><value>Attempt activity recorded.</value></data>
+  <data name="workflow.attempt_stop_requested" xml:space="preserve"><value>Attempt stop requested.</value></data>
+  <data name="workflow.attempt_stop_converged" xml:space="preserve"><value>Attempt stop completed.</value></data>
+  <data name="workflow.stage_revision_recorded" xml:space="preserve"><value>Rewind to stage "{0}" recorded (revision {2}): {1}</value></data>
+  <data name="workflow.stage_transition_converged" xml:space="preserve"><value>Stage transition completed.</value></data>
+  <data name="workflow.user_message_posted" xml:space="preserve"><value>Message: {0}</value></data>
+  <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Summary: {0}</value></data>
+  <data name="routing.decision_recorded" xml:space="preserve"><value>Routed to {0}/{1}: {2}.</value></data>
+  <data name="workflow.sprint_failed" xml:space="preserve"><value>Sprint failed.</value></data>
+  <data name="workflow.attempt_preparing" xml:space="preserve"><value>Attempt is preparing to run.</value></data>
+  <data name="workflow.attempt_running" xml:space="preserve"><value>Attempt is running.</value></data>
+  <data name="workflow.attempt_validating" xml:space="preserve"><value>Attempt is being validated.</value></data>
+  <data name="workflow.attempt_cancelled" xml:space="preserve"><value>Attempt cancelled.</value></data>
+  <data name="SprintBlockedReasonNode" xml:space="preserve"><value>a node requires attention</value></data>
+  <data name="SprintBlockedReasonFinding" xml:space="preserve"><value>an open finding</value></data>
+  <data name="SprintBlockedReasonGate" xml:space="preserve"><value>a pending gate</value></data>
+  <data name="SprintBlockedReasonConfirmation" xml:space="preserve"><value>a pending confirmation</value></data>
+  <data name="SprintBlockedReasonReviewConvergence" xml:space="preserve"><value>review convergence</value></data>
+  <data name="SprintBlockedReasonRewind" xml:space="preserve"><value>an unconverged rewind</value></data>
+  <data name="AttemptStateCreated" xml:space="preserve"><value>Created</value></data>
+  <data name="AttemptStatePreparing" xml:space="preserve"><value>Preparing</value></data>
+  <data name="AttemptStateRunning" xml:space="preserve"><value>Running</value></data>
+  <data name="AttemptStateValidating" xml:space="preserve"><value>Validating</value></data>
+  <data name="AttemptStateSucceeded" xml:space="preserve"><value>Succeeded</value></data>
+  <data name="AttemptStateFailed" xml:space="preserve"><value>Failed</value></data>
+  <data name="AttemptStateCancelled" xml:space="preserve"><value>Cancelled</value></data>
+  <data name="RoutingOutcomeRouted" xml:space="preserve"><value>routed</value></data>
+  <data name="RoutingOutcomeSucceeded" xml:space="preserve"><value>succeeded</value></data>
+  <data name="RoutingOutcomeFailed" xml:space="preserve"><value>failed</value></data>
+  <data name="RoutingOutcomeCircuitOpen" xml:space="preserve"><value>circuit open</value></data>
+  <data name="RoutingOutcomeBudgetExhausted" xml:space="preserve"><value>budget exhausted</value></data>
+  <data name="RoutingOutcomeExcluded" xml:space="preserve"><value>excluded</value></data>
+  <data name="RoutingOutcomeDeferred" xml:space="preserve"><value>deferred</value></data>
+  <data name="AuthenticationStatusUnknown" xml:space="preserve"><value>Authentication status not yet checked.</value></data>
+  <data name="AuthenticationStatusUnknownAccessible" xml:space="preserve"><value>Authentication status: not yet checked.</value></data>
+  <data name="AuthenticationStatusReady" xml:space="preserve"><value>All enabled providers are authenticated.</value></data>
+  <data name="AuthenticationStatusReadyAccessible" xml:space="preserve"><value>Authentication status: all enabled providers are authenticated.</value></data>
+  <data name="AuthenticationStatusRequired" xml:space="preserve"><value>Authentication is required for at least one provider.</value></data>
+  <data name="AuthenticationStatusRequiredAccessible" xml:space="preserve"><value>Authentication status: authentication is required for at least one provider.</value></data>
+  <data name="AuthenticationStatusCheckFailed" xml:space="preserve"><value>An authentication check failed for at least one provider.</value></data>
+  <data name="AuthenticationStatusCheckFailedAccessible" xml:space="preserve"><value>Authentication status: an authentication check failed for at least one provider.</value></data>
+  <data name="SidebarModelsAvailableStatus" xml:space="preserve"><value>{0}/{1} providers ready for model work</value></data>
+  <data name="SidebarModelsAvailableAccessible" xml:space="preserve"><value>{0} of {1} enabled providers are ready for model work</value></data>
+  <data name="HostConnectivityUnknown" xml:space="preserve"><value>Host connection status not yet checked.</value></data>
+  <data name="HostConnectivityUnknownAccessible" xml:space="preserve"><value>Host connectivity: not yet checked.</value></data>
+  <data name="HostConnectivityConnected" xml:space="preserve"><value>Connected to Host.</value></data>
+  <data name="HostConnectivityConnectedAccessible" xml:space="preserve"><value>Host connectivity: connected.</value></data>
+  <data name="HostConnectivityDisconnected" xml:space="preserve"><value>Not connected to Host.</value></data>
+  <data name="HostConnectivityDisconnectedAccessible" xml:space="preserve"><value>Host connectivity: not connected.</value></data>
+  <data name="HostConnectivityStale" xml:space="preserve"><value>Host connection status is stale.</value></data>
+  <data name="HostConnectivityStaleAccessible" xml:space="preserve"><value>Host connectivity: status is stale.</value></data>
 </root>
