@@ -40,10 +40,12 @@ public partial class WorkspaceShellPage : ContentPage
     private SidebarSnapshot? lastSidebarSnapshot;
     /// <summary>Plan 12.6 ("focus-stable after refresh"): the neutral half of the sidebar's focus-
     /// preservation mechanism -- see <see cref="FocusKeyTracker"/>'s own remarks. Paired with
-    /// <see cref="sidebarFocusRegistry"/>, which is the MAUI-specific half (a live control needs a
-    /// live visual tree, so it cannot move to Forge.Desktop.Presentation).</summary>
+    /// <see cref="sidebarFocusRegistry"/>, which maps those same keys to a live control instance (see
+    /// <see cref="FocusControlRegistry{TControl}"/>'s own remarks for why that mapping itself stays
+    /// generic/testable even though only a live MAUI visual tree ever actually populates it here).
+    /// </summary>
     private readonly FocusKeyTracker sidebarFocusTracker = new();
-    private readonly Dictionary<string, VisualElement> sidebarFocusRegistry = [];
+    private readonly FocusControlRegistry<VisualElement> sidebarFocusRegistry = new();
     private MainPageViewModel legacy;
     private ProjectOverviewViewModel projectOverview;
     private ProjectSettingsViewModel projectSettings;
@@ -236,7 +238,7 @@ public partial class WorkspaceShellPage : ContentPage
     /// reference, which cannot survive the rebuild.</summary>
     private T TrackSidebarFocus<T>(string key, T control) where T : VisualElement
     {
-        sidebarFocusRegistry[key] = control;
+        sidebarFocusRegistry.Register(key, control);
         control.Focused += (_, _) => sidebarFocusTracker.Capture(key);
         return control;
     }
@@ -246,7 +248,7 @@ public partial class WorkspaceShellPage : ContentPage
     /// when that key no longer exists in this snapshot (e.g. its project was just removed).</summary>
     private void RestoreSidebarFocus()
     {
-        if (sidebarFocusTracker.Consume() is { } key && sidebarFocusRegistry.TryGetValue(key, out VisualElement? control))
+        if (sidebarFocusTracker.Consume() is { } key && sidebarFocusRegistry.TryResolve(key, out VisualElement? control))
         {
             control.Focus();
         }
