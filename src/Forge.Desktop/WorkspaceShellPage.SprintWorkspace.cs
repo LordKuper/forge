@@ -287,7 +287,7 @@ public partial class WorkspaceShellPage
                 Spacing = 5,
                 Children =
                 {
-                    new Label { Text = glyph, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 },
+                    DecorativeGlyph(new Label { Text = glyph, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 }),
                     new VerticalStackLayout
                     {
                         Spacing = 1,
@@ -327,7 +327,10 @@ public partial class WorkspaceShellPage
                 Spacing = 5,
                 Children =
                 {
-                    new Label { Text = IconGlyphs.Cpu, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 },
+                    DecorativeGlyph(new Label
+                    {
+                        Text = IconGlyphs.Cpu, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11,
+                    }),
                     Describe(new Label { Text = header.ActiveProviderModelText, Style = ThemeStyle("MonoLabelStyle") }),
                 },
             });
@@ -473,13 +476,13 @@ public partial class WorkspaceShellPage
                         Spacing = 10,
                         Children =
                         {
-                            new Label
+                            DecorativeGlyph(new Label
                             {
                                 Text = IconGlyphs.Sparkle,
                                 Style = ThemeStyle("IconGlyphStyle"),
                                 TextColor = ThemeColor("ColorAccent"),
                                 VerticalOptions = LayoutOptions.Start,
-                            },
+                            }),
                             row,
                         },
                     };
@@ -491,12 +494,12 @@ public partial class WorkspaceShellPage
                         Spacing = 10,
                         Children =
                         {
-                            new Label
+                            DecorativeGlyph(new Label
                             {
                                 Text = TimelineIconFor(item),
                                 Style = ThemeStyle("IconGlyphStyle"),
                                 VerticalOptions = LayoutOptions.Start,
-                            },
+                            }),
                             row,
                         },
                     };
@@ -721,11 +724,11 @@ public partial class WorkspaceShellPage
                         Spacing = 8,
                         Children =
                         {
-                            new Label
+                            DecorativeGlyph(new Label
                             {
                                 Text = IconGlyphs.ShieldCheck, Style = ThemeStyle("IconGlyphStyle"),
                                 TextColor = ThemeColor("ColorStatusAmber"),
-                            },
+                            }),
                             TrackContentFocus("action:gate:approve", approve),
                             TrackContentFocus("action:gate:reject", reject),
                         },

@@ -430,9 +430,10 @@ public partial class WorkspaceShellPage : ContentPage
 
     /// <summary>Nocturne's small "brand mark + version" header (the mockup's <c>&lt;aside&gt;</c>'s
     /// very first row) -- purely decorative: no click handler, no domain data, so unlike every other
-    /// control this file builds it needs neither a <see cref="TrackSidebarFocus{T}"/> registration nor
-    /// an <see cref="AutomationProperties"/>/<see cref="SemanticProperties"/> override (a Label with no
-    /// interaction and no information beyond its own visible text needs no separate accessible name).
+    /// control this file builds it needs no <see cref="TrackSidebarFocus{T}"/> registration. The
+    /// wordmark and version Labels need no accessible name of their own either (their visible text is
+    /// already their name); the brand mark is a bare glyph, so it goes through
+    /// <see cref="DecorativeGlyph"/> instead (PR #112 review round 2 finding 4).
     /// The version string reuses the exact same assembly-version reflection
     /// <see cref="App"/>'s own constructor already calls for the update handshake, so this can never
     /// drift from the real build the way a hand-maintained literal could.
@@ -456,13 +457,13 @@ public partial class WorkspaceShellPage : ContentPage
             ColumnSpacing = ThemeSpace("Space2"),
             Padding = new Thickness(2, 0, 2, ThemeSpace("Space2")),
         };
-        Label mark = new()
+        Label mark = DecorativeGlyph(new Label
         {
             Text = IconGlyphs.Sparkle,
             Style = ThemeStyle("IconGlyphStyle"),
             TextColor = ThemeColor("ColorAccent"),
             FontSize = 13,
-        };
+        });
         Label wordmark = new()
         {
             Text = text.Resolve(MessageKeys.AppTitle),
@@ -718,9 +719,15 @@ public partial class WorkspaceShellPage : ContentPage
                 // Mockup's "Archived sprints" summary row: an Archive glyph ahead of the exact same
                 // localized label text the pre-restyle version already rendered, via
                 // Label.FormattedString the same way SidebarStatusLine does below for the bottom
-                // status row -- this Label is purely informational (no click handler), so it needs
-                // neither TrackSidebarFocus nor an extra AutomationProperties override.
-                column.Children.Add(new Label
+                // status row -- this Label is purely informational (no click handler), so it needs no
+                // TrackSidebarFocus registration.
+                // PR #105 review finding 1: HistoryTotalCount is the true, uncapped count of terminal
+                // sprints -- History.Count is capped at MaxSidebarHistory and would silently
+                // under-report once a project passes that bound.
+                string historyText = string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})");
+                Label historyLabel = new()
                 {
                     FormattedText = new FormattedString
                     {
@@ -733,22 +740,22 @@ public partial class WorkspaceShellPage : ContentPage
                                 TextColor = ThemeColor("ColorNeutral700"),
                                 FontSize = 11,
                             },
-                            new Span
-                            {
-                                // PR #105 review finding 1: HistoryTotalCount is the true, uncapped
-                                // count of terminal sprints -- History.Count is capped at
-                                // MaxSidebarHistory and would silently under-report once a project
-                                // passes that bound.
-                                Text = string.Create(
-                                    System.Globalization.CultureInfo.InvariantCulture,
-                                    $"  {text.Resolve(MessageKeys.SidebarHistoryLabel)} ({project.HistoryTotalCount})"),
-                                TextColor = ThemeColor("ColorNeutral600"),
-                            },
+                            new Span { Text = historyText, TextColor = ThemeColor("ColorNeutral600") },
                         },
                     },
                     FontSize = 12,
                     Padding = new Thickness(2, ThemeSpace("Space1")),
-                });
+                };
+                // PR #112 review round 2 finding 4: a FormattedString Label's spoken name is the
+                // concatenation of its Spans, so the decorative Archive glyph would prepend an
+                // unmapped private-use codepoint to the whole row's announcement. Excluding the Span
+                // itself would not help (a Span is not its own accessible node); naming the Label is
+                // what actually replaces the spoken text, and it is the exact same localized string
+                // the glyph decorates -- the only site of the six where the glyph shares a node with
+                // real text instead of being one. TrimStart drops only the two spaces that visually
+                // separate the text from the glyph, which the glyph's own absence makes meaningless.
+                SemanticProperties.SetDescription(historyLabel, historyText.TrimStart());
+                column.Children.Add(historyLabel);
                 // Plan 12.1 final-sweep gap 3: every history entry is now navigable, the same "open"
                 // affordance active sprints get above -- reusing the same sprint-workspace route, which
                 // already renders a terminal sprint read-only (no lifecycle/stage-transition action is
@@ -1031,5 +1038,22 @@ public partial class WorkspaceShellPage : ContentPage
     {
         SemanticProperties.SetDescription(label, label.Text);
         return label;
+    }
+
+    /// <summary>PR #112 review round 2 finding 4: a <see cref="Label"/>'s UIA name is its own
+    /// <see cref="Label.Text"/>, so a bare Phosphor glyph enters the accessible tree as an extra stop
+    /// named by an unmapped private-use codepoint -- worse than announcing nothing. Every glyph this
+    /// shell renders through this helper is purely decorative (the meaning it depicts is already
+    /// carried as real text by the sibling label, summary, or button it sits next to), so it is
+    /// excluded from the tree outright rather than given an invented name that would duplicate that
+    /// text. The counterpart for an icon that genuinely carries meaning is
+    /// <see cref="SemanticProperties.SetDescription"/>, which every icon-bearing Button here uses.
+    /// Neither property is scanned by WorkspaceShellAccessibilityTests' IsTabStop/InputTransparent
+    /// opt-out guard: a Label is not keyboard-focusable to begin with, so nothing is made
+    /// unreachable.</summary>
+    private static Label DecorativeGlyph(Label glyph)
+    {
+        AutomationProperties.SetIsInAccessibleTree(glyph, false);
+        return glyph;
     }
 }

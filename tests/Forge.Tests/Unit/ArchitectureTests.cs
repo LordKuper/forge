@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Forge.Configuration;
 
@@ -193,6 +194,67 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void EveryFontRegisteredByMauiProgramIsPackagedAsAMauiFontItem()
+    {
+        // PR #112 review round 2 finding 2: ConfigureFonts only names a file, it never proves the
+        // file is packaged. The original defect (no MauiFont item at all, so every glyph silently
+        // fell back to the platform font) passed the full build, every test, and lint -- it took a
+        // hand-run `dotnet msbuild -getItem:MauiFont` to see it. This pins both directions: a font
+        // MauiProgram registers but the csproj does not package, and a font the csproj packages but
+        // MauiProgram never registers.
+        string desktopRoot = Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop");
+        string[] registeredFonts = AddFontPattern
+            .Matches(File.ReadAllText(Path.Combine(desktopRoot, "MauiProgram.cs")))
+            .Select(match => match.Groups["file"].Value)
+            .ToArray();
+        Assert.NotEmpty(registeredFonts);
+
+        foreach (string font in registeredFonts)
+        {
+            Assert.True(
+                File.Exists(Path.Combine(desktopRoot, "Resources", "Fonts", font)),
+                $"MauiProgram registers the font '{font}', but src/Forge.Desktop/Resources/Fonts/{font} does not exist.");
+        }
+
+        string[] packagedFonts = XDocument.Load(Path.Combine(desktopRoot, "Forge.Desktop.csproj"))
+            .Descendants("MauiFont")
+            .Select(item => (string)(item.Attribute("Include") ?? item.Attribute("Update"))!)
+            .SelectMany(include => ExpandProjectItemGlob(desktopRoot, include))
+            .ToArray();
+
+        Assert.Equal(
+            registeredFonts.OrderBy(font => font, StringComparer.OrdinalIgnoreCase).ToArray(),
+            packagedFonts.OrderBy(font => font, StringComparer.OrdinalIgnoreCase).ToArray());
+    }
+
+    // Evaluates one MSBuild item Include against the real directory listing -- enough for the flat
+    // `Resources\Fonts\*.ttf` shape this project uses (and a `**` prefix, should a future glob grow
+    // one) without dragging full MSBuild evaluation into a unit test.
+    private static IEnumerable<string> ExpandProjectItemGlob(string projectDirectory, string include)
+    {
+        string normalized = include.Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+        string pattern = Path.GetFileName(normalized);
+        string relativeDirectory = Path.GetDirectoryName(normalized) ?? string.Empty;
+        bool recursive = relativeDirectory.Contains("**", StringComparison.Ordinal);
+        if (recursive)
+        {
+            relativeDirectory = relativeDirectory[..relativeDirectory.IndexOf("**", StringComparison.Ordinal)];
+        }
+
+        string directory = Path.Combine(projectDirectory, relativeDirectory);
+        return Directory.Exists(directory)
+            ? Directory
+                .EnumerateFiles(
+                    directory,
+                    pattern,
+                    recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly)
+                .Select(path => Path.GetFileName(path))
+            : [];
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void ArtifactVersionMatchesCanonicalVersion()
     {
         string expected = $"{File.ReadAllText(Path.Combine(RepositoryRoot.Find(), "VERSION")).Trim()}.0";
@@ -210,6 +272,11 @@ public sealed class ArchitectureTests
     // genuinely new OS family should pick its own moniker and extend this list then, when a real
     // adapter's actual naming is known, instead of this test guessing it in advance.
     private static readonly string[] RecognizedOsAdapterMonikers = ["Windows"];
+
+    // fonts.AddFont("<file>", "<alias>") -- only the file name matters here; the alias is what XAML
+    // binds to and is already covered by the theme's own FontFamily resources.
+    private static readonly Regex AddFontPattern =
+        new(@"AddFont\(\s*""(?<file>[^""]+)""", RegexOptions.Compiled);
 
     // The source tree does not change within a test run, and every [Fact] above needs the full project list, so
     // it is parsed once and shared instead of re-walking/re-parsing src/*.csproj per assertion.
