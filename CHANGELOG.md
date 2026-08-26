@@ -2,6 +2,17 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.79.0
+
+### Changed
+
+- The Desktop workspace now has a dark visual theme ("Nocturne") in place of the prior unstyled
+  default appearance: Inter typography, Phosphor icons, and a consistent purple accent with
+  color-coded status indicators (running, waiting, blocked, review, done) across the sidebar, the
+  sprint workspace's status header/timeline/action bar, and the Forge/Project settings and Project
+  Overview pages. No navigation, control behavior, keyboard/screen-reader accessibility, or
+  localization changed -- only appearance.
+
 ## v0.78.0
 
 ### Security

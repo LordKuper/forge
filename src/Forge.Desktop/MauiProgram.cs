@@ -15,7 +15,13 @@ public static class MauiProgram
     {
         ForgeRuntimeWindowsAdapter.Install();
         MauiAppBuilder builder = MauiApp.CreateBuilder()
-            .UseMauiApp<App>();
+            .UseMauiApp<App>()
+            .ConfigureFonts(fonts =>
+            {
+                fonts.AddFont("Inter-Regular.ttf", "InterRegular");
+                fonts.AddFont("Inter-Medium.ttf", "InterMedium");
+                fonts.AddFont("Phosphor.ttf", "Phosphor");
+            });
         builder.Services.AddForgeCore();
         builder.Services.AddForgeRuntimeWindowsProcessContainment();
         builder.Services.AddForgeWindowsUpdater();

@@ -22,29 +22,37 @@ public partial class WorkspaceShellPage
         // PR #98 review finding 7: DisplayName/Root/Initialized/StartupReady/Providers were already
         // computed on the snapshot but never bound -- plan 4.2 and CHANGELOG.md both claim the
         // overview shows startup/repository readiness and provider status.
-        Label header = new() { Text = snapshot.DisplayName };
+        //
+        // No mockup screen covers this page (it is not one of the three screens the Nocturne mockup
+        // renders) -- styling here is by analogy with the mockup's general system (surface-filled
+        // cards, muted secondary text, semantic status color for a real typed boolean/enum, never
+        // for text parsed out of a localized display string -- see ProviderStatusColor's own
+        // remarks).
+        Label header = Styled(new Label { Text = snapshot.DisplayName }, "HeadingLabelStyle");
         SemanticProperties.SetHeadingLevel(header, SemanticHeadingLevel.Level1);
         ContentHost.Children.Add(header);
-        ContentHost.Children.Add(new Label
+        ContentHost.Children.Add(Styled(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"{text.Resolve(MessageKeys.ProjectRootLabel)} {snapshot.Root}"),
-        });
+        }, "MonoLabelStyle"));
         ContentHost.Children.Add(new Label
         {
             Text = text.Resolve(
                 snapshot.Initialized ? MessageKeys.ProjectInitialized : MessageKeys.ProjectNotInitialized),
+            TextColor = ResColor(snapshot.Initialized ? "ColorStatusGreenText" : "ColorStatusAmberText"),
         });
         ContentHost.Children.Add(new Label
         {
             Text = text.Resolve(snapshot.StartupReady ? MessageKeys.StartupReady : MessageKeys.StartupFailed),
+            TextColor = ResColor(snapshot.StartupReady ? "ColorStatusGreenText" : "ColorStatusRedText"),
         });
 
-        Label result = new();
+        Label result = Styled(new Label(), "MutedLabelStyle");
         if (snapshot.InitializeEnabled)
         {
-            Button initialize = new() { Text = text.Resolve(MessageKeys.InitializeAction) };
+            Button initialize = Styled(new Button { Text = text.Resolve(MessageKeys.InitializeAction) }, "PrimaryButtonStyle");
             initialize.Clicked += (_, _) => _ = RunAsync(async () =>
             {
                 ProjectSnapshot projectSnapshot =
@@ -70,7 +78,7 @@ public partial class WorkspaceShellPage
 
         if (snapshot.RecoverEnabled)
         {
-            Button recover = new() { Text = text.Resolve(MessageKeys.RecoverAction) };
+            Button recover = Styled(new Button { Text = text.Resolve(MessageKeys.RecoverAction) }, "SecondaryButtonStyle");
             recover.Clicked += (_, _) => _ = RunAsync(async () =>
             {
                 string action = text.Resolve(MessageKeys.RecoverAction);
@@ -83,7 +91,7 @@ public partial class WorkspaceShellPage
             ContentHost.Children.Add(recover);
         }
 
-        Button createSprint = new() { Text = text.Resolve(MessageKeys.SprintCreateAction) };
+        Button createSprint = Styled(new Button { Text = text.Resolve(MessageKeys.SprintCreateAction) }, "PrimaryButtonStyle");
         createSprint.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             result.Text = await projectOverview.CreateSprintAsync(root, CancellationToken.None).ConfigureAwait(true);
@@ -91,6 +99,7 @@ public partial class WorkspaceShellPage
         });
         ContentHost.Children.Add(createSprint);
 
+        ContentHost.Children.Add(SectionDivider());
         ContentHost.Children.Add(GroupTitle(MessageKeys.ProjectOverviewActiveSprintsTitle));
         foreach (ProjectOverviewSprintCard card in snapshot.ActiveSprints)
         {
@@ -99,21 +108,23 @@ public partial class WorkspaceShellPage
 
         if (snapshot.RecentHistory.Count > 0)
         {
+            ContentHost.Children.Add(SectionDivider());
             ContentHost.Children.Add(GroupTitle(MessageKeys.ProjectOverviewHistoryTitle));
             foreach (ProjectOverviewSprintCard card in snapshot.RecentHistory)
             {
-                Label historyLine = new()
+                Label historyLine = Styled(new Label
                 {
                     Text = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
                         $"{card.CreationSequence}. {card.StateText}"),
-                };
+                }, "MutedLabelStyle");
                 ContentHost.Children.Add(historyLine);
             }
         }
 
         if (snapshot.SuggestedActions.Count > 0)
         {
+            ContentHost.Children.Add(SectionDivider());
             ContentHost.Children.Add(GroupTitle(MessageKeys.SuggestedActionsTitle));
             foreach (AvailableAction action in snapshot.SuggestedActions)
             {
@@ -122,6 +133,10 @@ public partial class WorkspaceShellPage
                     Text = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
                         $"{action.ActionId} ({(action.Enabled ? "enabled" : "blocked")})"),
+                    // Semantic status color from the already-typed AvailableAction.Enabled bool
+                    // (never parsed out of the localized ActionId), matching this pass's
+                    // "blocked"-is-red convention.
+                    TextColor = ResColor(action.Enabled ? "ColorText" : "ColorStatusRedText"),
                 });
             }
         }
@@ -132,24 +147,33 @@ public partial class WorkspaceShellPage
             // Reuses SurfaceFormatting.ProviderRow -- the same already-tested, parity-checked
             // per-provider projection `forge models` and the Forge settings page's own provider
             // section rely on -- rather than a new ad hoc rendering.
+            ContentHost.Children.Add(SectionDivider());
             ContentHost.Children.Add(GroupTitle(MessageKeys.ProjectOverviewProvidersTitle));
             foreach (ProviderHealthEntry provider in snapshot.Providers)
             {
-                ContentHost.Children.Add(new Label { Text = SurfaceFormatting.ProviderRow(provider) });
+                ContentHost.Children.Add(new Label
+                {
+                    Text = SurfaceFormatting.ProviderRow(provider),
+                    TextColor = ProviderStatusColor(provider),
+                });
             }
         }
 
         ContentHost.Children.Add(result);
     }
 
-    private VerticalStackLayout BuildSprintCard(string root, ProjectOverviewSprintCard card, Label result)
+    private Border BuildSprintCard(string root, ProjectOverviewSprintCard card, Label result)
     {
-        VerticalStackLayout column = new();
-        Label header = new()
+        VerticalStackLayout column = new() { Spacing = 6 };
+        Label header = Styled(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture, $"{card.CreationSequence}. {card.StateText}"),
-        };
+            // A sprint needing human attention is the one case this card's own typed data (not a
+            // parsed status string) already flags -- amber, matching this pass's
+            // "waiting for input"/"paused" convention.
+            TextColor = ResColor(card.RequiresHumanAttention ? "ColorStatusAmberText" : "ColorText"),
+        }, "HeadingLabelStyle");
         if (card.RequiresHumanAttention && card.AttentionReasonKey is { } reasonKey)
         {
             SemanticProperties.SetDescription(
@@ -160,7 +184,7 @@ public partial class WorkspaceShellPage
         }
 
         column.Children.Add(header);
-        Button run = new() { Text = text.Resolve(MessageKeys.SprintRunAction) };
+        Button run = Styled(new Button { Text = text.Resolve(MessageKeys.SprintRunAction) }, "PrimaryButtonStyle");
         run.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             result.Text = await projectOverview
@@ -168,7 +192,7 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         });
-        Button resume = new() { Text = text.Resolve(MessageKeys.SprintResumeAction) };
+        Button resume = Styled(new Button { Text = text.Resolve(MessageKeys.SprintResumeAction) }, "SecondaryButtonStyle");
         resume.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             result.Text = await projectOverview
@@ -176,7 +200,7 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         });
-        Button cancel = new() { Text = text.Resolve(MessageKeys.SprintCancelAction) };
+        Button cancel = Styled(new Button { Text = text.Resolve(MessageKeys.SprintCancelAction) }, "SecondaryButtonStyle");
         cancel.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.SprintCancelAction);
@@ -189,7 +213,7 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         });
-        Button open = new() { Text = text.Resolve(MessageKeys.SprintIdLabel) };
+        Button open = Styled(new Button { Text = text.Resolve(MessageKeys.SprintIdLabel) }, "SecondaryButtonStyle");
         open.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             SidebarSnapshot snapshot = await sidebar.LoadAsync(CancellationToken.None).ConfigureAwait(true);
@@ -202,7 +226,10 @@ public partial class WorkspaceShellPage
                     .ConfigureAwait(true);
             }
         });
-        column.Children.Add(new HorizontalStackLayout { Children = { open, run, resume, cancel } });
-        return column;
+        column.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { open, run, resume, cancel } });
+        // Mockup's surface-filled card pattern (App.xaml's CardStyle), applied by analogy since no
+        // mockup screen shows this page: each active/history sprint is a discrete list item, the
+        // same shape the model rows and provider rows on the other two screens use.
+        return Styled(new Border { Content = column }, "CardStyle");
     }
 }

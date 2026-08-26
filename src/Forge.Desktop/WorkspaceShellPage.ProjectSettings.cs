@@ -19,22 +19,28 @@ public partial class WorkspaceShellPage
         ProjectSettingsSnapshot snapshot =
             await projectSettings.LoadAsync(projectId, root, alias, CancellationToken.None).ConfigureAwait(true);
 
-        ContentHost.Children.Add(new Label
+        // Mockup's "Repository" card (a read-only local-path field in a bordered section) -- the
+        // closest existing equivalent is this identity block (root path, project id, editable
+        // alias), so it gets the same OutlinedPanelStyle-derived container; Root/ProjectId use
+        // MonoLabelStyle since both are technical path/identifier text, matching the mockup's own
+        // monospace treatment of its local-path field.
+        VerticalStackLayout identityCard = new() { Spacing = 6 };
+        identityCard.Children.Add(Styled(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"{text.Resolve(MessageKeys.ProjectSettingsRootLabel)}: {snapshot.Root}"),
-        });
-        ContentHost.Children.Add(new Label
+        }, "MonoLabelStyle"));
+        identityCard.Children.Add(Styled(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"{text.Resolve(MessageKeys.ProjectSettingsProjectIdLabel)}: {snapshot.ProjectId:D}"),
-        });
+        }, "MonoLabelStyle"));
 
         Entry aliasEntry = Describe(new Entry { Text = snapshot.Alias }, text.Resolve(MessageKeys.ProjectSettingsAliasLabel));
-        Button aliasSave = new() { Text = text.Resolve(MessageKeys.SettingsSaveAction) };
-        Label result = new();
+        Button aliasSave = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "SecondaryButtonStyle");
+        Label result = Styled(new Label(), "MutedLabelStyle");
         aliasSave.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             // PR #98 review finding 4: report the alias write's real outcome instead of an
@@ -43,7 +49,10 @@ public partial class WorkspaceShellPage
             result.Text = await projectSettings.SetAliasAsync(projectId, aliasEntry.Text, CancellationToken.None)
                 .ConfigureAwait(true);
         });
-        ContentHost.Children.Add(new HorizontalStackLayout { Children = { aliasEntry, aliasSave } });
+        identityCard.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { aliasEntry, aliasSave } });
+        Border identityPanel = Styled(new Border { Content = identityCard, Padding = 11 }, "OutlinedPanelStyle");
+        identityPanel.BackgroundColor = ResColor("ColorSurface");
+        ContentHost.Children.Add(identityPanel);
 
         Entry userFacing = Describe(
             new Entry { Text = snapshot.UserFacingLanguage }, text.Resolve(MessageKeys.ProjectSettingsUserFacingLanguageLabel));
@@ -64,7 +73,7 @@ public partial class WorkspaceShellPage
         ContentHost.Children.Add(allowedModels);
         ContentHost.Children.Add(ProvenanceLabel(snapshot.AllowedModelsProvenance));
 
-        Button save = new() { Text = text.Resolve(MessageKeys.SettingsSaveAction) };
+        Button save = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "PrimaryButtonStyle");
         save.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             ProjectSettingsEdit edit = new()
@@ -97,29 +106,20 @@ public partial class WorkspaceShellPage
                 await RenderContentAsync().ConfigureAwait(true);
             }
         });
-        Button discard = new() { Text = text.Resolve(MessageKeys.SettingsDiscardAction) };
+        Button discard = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsDiscardAction) }, "SecondaryButtonStyle");
         discard.Clicked += (_, _) => _ = RunAsync(RenderContentAsync);
-        ContentHost.Children.Add(new HorizontalStackLayout { Children = { save, discard } });
+        ContentHost.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { save, discard } });
         ContentHost.Children.Add(result);
 
-        Button relink = new() { Text = text.Resolve(MessageKeys.ProjectSettingsRelinkAction) };
+        ContentHost.Children.Add(SectionDivider());
+        Button relink = Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRelinkAction) }, "SecondaryButtonStyle");
         relink.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             result.Text = await projectSettings.RelinkAsync(projectId, CancellationToken.None).ConfigureAwait(true);
         });
         ContentHost.Children.Add(relink);
 
-        Button removeFromCatalog = new() { Text = text.Resolve(MessageKeys.ProjectSettingsRemoveFromCatalogAction) };
-        removeFromCatalog.Clicked += (_, _) => _ = RunAsync(async () =>
-        {
-            await projectSettings.RemoveFromCatalogAsync(projectId, CancellationToken.None).ConfigureAwait(true);
-            await workspace.RestoreAsync(CancellationToken.None).ConfigureAwait(true);
-            await RenderSidebarAsync().ConfigureAwait(true);
-            await RenderContentAsync().ConfigureAwait(true);
-        });
-        ContentHost.Children.Add(removeFromCatalog);
-
-        Button recover = new() { Text = text.Resolve(MessageKeys.RecoverAction) };
+        Button recover = Styled(new Button { Text = text.Resolve(MessageKeys.RecoverAction) }, "SecondaryButtonStyle");
         recover.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.RecoverAction);
@@ -132,8 +132,8 @@ public partial class WorkspaceShellPage
 
         ContentHost.Children.Add(BuildIntegrationSection(root, result));
 
-        Button diagnosticBundle = new() { Text = text.Resolve(MessageKeys.ProjectSettingsDiagnosticBundleAction) };
-        Label bundleOutput = new();
+        Button diagnosticBundle = Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsDiagnosticBundleAction) }, "SecondaryButtonStyle");
+        Label bundleOutput = Styled(new Label(), "MutedLabelStyle");
         diagnosticBundle.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             bundleOutput.Text = await projectSettings.GenerateDiagnosticBundleAsync(root, CancellationToken.None)
@@ -141,17 +141,34 @@ public partial class WorkspaceShellPage
         });
         ContentHost.Children.Add(diagnosticBundle);
         ContentHost.Children.Add(bundleOutput);
+
+        // Mockup's "Danger zone" card: this build's closest equivalent to its "Remove project"
+        // action (detaches without touching the repository on disk) is RemoveFromCatalogAction --
+        // same destructive-but-recoverable semantics, so it gets the same red-tinted container and
+        // DangerButtonStyle rather than a fabricated "Danger zone" heading (that text has no
+        // localization key today; see the final report).
+        ContentHost.Children.Add(SectionDivider());
+        Button removeFromCatalog =
+            Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRemoveFromCatalogAction) }, "DangerButtonStyle");
+        removeFromCatalog.Clicked += (_, _) => _ = RunAsync(async () =>
+        {
+            await projectSettings.RemoveFromCatalogAsync(projectId, CancellationToken.None).ConfigureAwait(true);
+            await workspace.RestoreAsync(CancellationToken.None).ConfigureAwait(true);
+            await RenderSidebarAsync().ConfigureAwait(true);
+            await RenderContentAsync().ConfigureAwait(true);
+        });
+        ContentHost.Children.Add(Styled(new Border { Content = removeFromCatalog }, "DangerCardStyle"));
     }
 
     private VerticalStackLayout BuildIntegrationSection(string root, Label result)
     {
-        Label integrationPreview = new();
-        Button generate = new() { Text = text.Resolve(MessageKeys.IntegrationGenerateAction) };
+        Label integrationPreview = Styled(new Label(), "MutedLabelStyle");
+        Button generate = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationGenerateAction) }, "SecondaryButtonStyle");
         generate.Clicked += (_, _) => _ = RunAsync(async () =>
             integrationPreview.Text = await projectSettings
                 .GenerateIntegrationPreviewAsync(root, CancellationToken.None)
                 .ConfigureAwait(true));
-        Button install = new() { Text = text.Resolve(MessageKeys.IntegrationInstallAction) };
+        Button install = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationInstallAction) }, "SecondaryButtonStyle");
         install.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.IntegrationInstallAction);
@@ -160,7 +177,7 @@ public partial class WorkspaceShellPage
             result.Text = await projectSettings.InstallIntegrationAsync(root, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
         });
-        Button remove = new() { Text = text.Resolve(MessageKeys.IntegrationRemoveAction) };
+        Button remove = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationRemoveAction) }, "SecondaryButtonStyle");
         remove.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.IntegrationRemoveAction);
@@ -171,7 +188,7 @@ public partial class WorkspaceShellPage
         });
         return new VerticalStackLayout
         {
-            Children = { new HorizontalStackLayout { Children = { generate, install, remove } }, integrationPreview },
+            Children = { new HorizontalStackLayout { Spacing = 8, Children = { generate, install, remove } }, integrationPreview },
         };
     }
 
