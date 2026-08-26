@@ -119,6 +119,24 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task GitHubReleaseApiFallsBackWhenTheApiQuotaIsExhausted()
+    {
+        const string bundleName = "forge-windows-x64-portable_bundle.zip";
+        string manifest = $"{new string('A', 64)}  123  {bundleName}\n";
+        using HttpClient http = new(new RateLimitedGitHubHandler(manifest));
+
+        ReleaseApiResponse result = await new GitHubReleaseApi(http).GetReleasesAsync(
+            new ReleaseApiRequest(null),
+            TestContext.Current.CancellationToken);
+
+        ReleaseMetadata release = Assert.Single(result.Releases);
+        Assert.Equal("0.79.0", release.Version.ToString());
+        Assert.Contains(release.Assets, asset => asset.Name == bundleName && asset.Size == 123);
+        Assert.Contains(release.Assets, asset => asset.Name == "checksums.txt");
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task CurrentReleaseIsASuccessfulNoOp()
     {
         CountingReleaseClient releases = new();
@@ -381,6 +399,29 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public async Task UpdateReportsEveryLongRunningPhase()
+    {
+        RecordingProgress progress = new();
+        ForgeSelfUpdater updater = CreateUpdater(
+            new FixedTargetDetector(new UpdateTarget("windows", "x64", "portable_bundle")),
+            [new TestStrategy(true)],
+            new StaticReleaseClient(Release("1.1.0")),
+            new PassingVerifier(),
+            new PassingUpdateLock(),
+            new RestartTokenService(new TestRestartTokenStore()),
+            new CapturingRestartCoordinator());
+
+        UpdateResult result = await updater.UpdateAsync(
+            CreateRequest() with { Progress = progress },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(UpdateLifecycleState.RestartRequested, result.State);
+        Assert.Equal(Enumerable.Range(1, 7), progress.Values.Select(value => value.Step));
+        Assert.All(progress.Values, value => Assert.Equal(7, value.TotalSteps));
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public async Task PartialActivationRollsBackWithCleanupToken()
     {
         TestStrategy strategy = new(true)
@@ -497,6 +538,45 @@ public sealed class UpdaterTests
     {
         public ValueTask<ReleaseApiResponse> GetReleasesAsync(ReleaseApiRequest request, CancellationToken cancellationToken) =>
             ValueTask.FromException<ReleaseApiResponse>(new HttpRequestException());
+    }
+
+    private sealed class RateLimitedGitHubHandler(string manifest) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            HttpResponseMessage response;
+            if (request.RequestUri!.Host == "api.github.com")
+            {
+                response = new(System.Net.HttpStatusCode.Forbidden);
+            }
+            else if (request.RequestUri.AbsolutePath.EndsWith("/releases/latest", StringComparison.Ordinal))
+            {
+                response = new(System.Net.HttpStatusCode.OK)
+                {
+                    RequestMessage = new(
+                        HttpMethod.Get,
+                        "https://github.com/LordKuper/forge/releases/tag/v0.79.0"),
+                };
+            }
+            else
+            {
+                response = new(System.Net.HttpStatusCode.OK)
+                {
+                    Content = new StringContent(manifest, Encoding.UTF8),
+                };
+            }
+
+            return Task.FromResult(response);
+        }
+    }
+
+    private sealed class RecordingProgress : IProgress<UpdateProgress>
+    {
+        public List<UpdateProgress> Values { get; } = [];
+
+        public void Report(UpdateProgress value) => Values.Add(value);
     }
 
     private sealed class PassingVerifier : IReleaseVerifier

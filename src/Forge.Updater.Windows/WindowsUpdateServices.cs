@@ -51,14 +51,22 @@ public sealed class WindowsInstaller(
     private readonly IReleaseVerifier releaseVerifier = releaseVerifier ?? throw new ArgumentNullException(nameof(releaseVerifier));
     private readonly WindowsUpdateStrategy strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
 
-    async ValueTask<InstallationResult> IPlatformInstaller.InstallLatestAsync(CancellationToken cancellationToken)
+    async ValueTask<InstallationResult> IPlatformInstaller.InstallLatestAsync(
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken)
     {
-        WindowsInstallationResult result = await InstallLatestAsync(cancellationToken).ConfigureAwait(false);
+        WindowsInstallationResult result = await InstallLatestAsync(progress, cancellationToken).ConfigureAwait(false);
         return new(result.Succeeded, result.VersionDirectory, result.Diagnostic);
     }
 
-    public async ValueTask<WindowsInstallationResult> InstallLatestAsync(CancellationToken cancellationToken)
+    public ValueTask<WindowsInstallationResult> InstallLatestAsync(CancellationToken cancellationToken) =>
+        InstallLatestAsync(null, cancellationToken);
+
+    public async ValueTask<WindowsInstallationResult> InstallLatestAsync(
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken)
     {
+        progress?.Report(new(1, 6, "Detecting the installation target."));
         UpdateTarget target = targetDetector.Detect();
         if (!strategy.Supports(target))
         {
@@ -67,6 +75,7 @@ public sealed class WindowsInstaller(
                 "The release target is not supported by the Windows installer."));
         }
 
+        progress?.Report(new(2, 6, "Waiting for the installation lock."));
         UpdateLockResult lockResult = await updateLock.AcquireAsync(target, cancellationToken).ConfigureAwait(false);
         if (!lockResult.IsAcquired)
         {
@@ -75,6 +84,7 @@ public sealed class WindowsInstaller(
 
         await using IAsyncDisposable updateLease = lockResult.Lease!;
 
+        progress?.Report(new(3, 6, "Resolving the latest stable release."));
         ReleaseLookupResult lookup = await releaseClient.GetLatestStableAsync(
             SemanticVersion.Parse("0.0.0"),
             cancellationToken).ConfigureAwait(false);
@@ -83,13 +93,25 @@ public sealed class WindowsInstaller(
             return WindowsInstallationResult.Failure(lookup.Diagnostic);
         }
 
+        progress?.Report(new(4, 6, $"Downloading and verifying Forge {lookup.Release!.Version}."));
         VerificationResult verification = await releaseVerifier.VerifyAsync(
             lookup.Release!,
             target,
             cancellationToken).ConfigureAwait(false);
-        return verification.Succeeded
-            ? await strategy.InstallAsync(verification.Release!, target, cancellationToken).ConfigureAwait(false)
-            : WindowsInstallationResult.Failure(verification.Diagnostic);
+        if (!verification.Succeeded)
+        {
+            return WindowsInstallationResult.Failure(verification.Diagnostic);
+        }
+
+        progress?.Report(new(5, 6, "Downloading, extracting, and self-testing the release."));
+        WindowsInstallationResult result = await strategy.InstallAsync(
+            verification.Release!, target, cancellationToken).ConfigureAwait(false);
+        if (result.Succeeded)
+        {
+            progress?.Report(new(6, 6, "Installation activated; command, PATH, and desktop shortcut are registered."));
+        }
+
+        return result;
     }
 }
 

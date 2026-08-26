@@ -56,6 +56,7 @@ public static class CliHost
 
         IPlatformInstaller? installer = host.Services.GetService<IPlatformInstaller>();
         IForgeSelfUpdater? updater = host.Services.GetService<IForgeSelfUpdater>();
+        IProgress<UpdateProgress> updateProgress = new ConsoleUpdateProgress(Console.Out);
         ForgeApplication application = host.Services.GetRequiredService<ForgeApplication>();
         // The startup sequence resolves the UI language before any text is rendered.
         StartupStatus startup = await application.GetStartupStatusAsync(null, cancellationToken)
@@ -77,7 +78,7 @@ public static class CliHost
             Console.Out,
             application,
             Console.Error,
-            installer is null ? null : installer.InstallLatestAsync,
+            installer is null ? null : ct => installer.InstallLatestAsync(updateProgress, ct),
             updater is null
                 ? null
                 : ct => updater.UpdateAsync(
@@ -87,7 +88,8 @@ public static class CliHost
                             throw new InvalidOperationException("The Forge executable path is unavailable."),
                         ["status"],
                         Environment.CurrentDirectory,
-                        UpdateSurface.Cli),
+                        UpdateSurface.Cli,
+                        updateProgress),
                     ct),
             async (mutationRoot, ct) =>
             {
@@ -106,6 +108,15 @@ public static class CliHost
             {
                 await created.DisposeAsync().ConfigureAwait(false);
             }
+        }
+    }
+
+    private sealed class ConsoleUpdateProgress(TextWriter output) : IProgress<UpdateProgress>
+    {
+        public void Report(UpdateProgress value)
+        {
+            output.WriteLine($"[{value.Step}/{value.TotalSteps}] {value.Detail}");
+            output.Flush();
         }
     }
 }

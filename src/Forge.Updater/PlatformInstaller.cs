@@ -9,5 +9,10 @@ public sealed record InstallationResult(bool Succeeded, string? InstalledPath, U
 /// <summary>Port a composed platform adapter implements so CLI/Desktop composition roots stay OS-agnostic.</summary>
 public interface IPlatformInstaller
 {
-    ValueTask<InstallationResult> InstallLatestAsync(CancellationToken cancellationToken);
+    ValueTask<InstallationResult> InstallLatestAsync(
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken);
+
+    ValueTask<InstallationResult> InstallLatestAsync(CancellationToken cancellationToken) =>
+        InstallLatestAsync(null, cancellationToken);
 }

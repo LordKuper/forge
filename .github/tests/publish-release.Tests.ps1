@@ -156,11 +156,36 @@ try {
         } "supported only on Windows"
     }
 
-    Test-Case "Bootstrap entry point reaches release resolution in PowerShell 7" {
+    Test-Case "Bootstrap entry point falls back when GitHub API resolution fails" {
         . $installer
         function Assert-ForgeWindowsSupport {}
-        function Invoke-RestMethod { throw 'release resolution reached' }
-        Assert-Throws { Install-Forge | Out-Null } "release resolution reached"
+        function Invoke-RestMethod { throw 'API quota exhausted' }
+        function Invoke-WebRequest { throw 'fallback release resolution reached' }
+        Assert-Throws { Install-Forge | Out-Null } "fallback release resolution reached"
+    }
+
+    Test-Case "Bootstrap fallback constructs stable release asset URLs" {
+        . $installer
+        function Invoke-WebRequest {
+            [pscustomobject]@{
+                BaseResponse = [pscustomobject]@{
+                    RequestMessage = [pscustomobject]@{
+                        RequestUri = [Uri]'https://github.com/LordKuper/forge/releases/tag/v0.79.0'
+                    }
+                }
+            }
+        }
+
+        $release = Get-ForgeLatestReleaseWithoutApi 'x64' @{}
+        if ($release.tag_name -ne 'v0.79.0' -or $release.assets.Count -ne 2) {
+            throw 'The fallback did not construct the expected stable release.'
+        }
+        if (@($release.assets | Where-Object {
+            $_.name -eq 'forge-windows-x64-portable_bundle.zip' -and
+            $_.browser_download_url -eq 'https://github.com/LordKuper/forge/releases/download/v0.79.0/forge-windows-x64-portable_bundle.zip'
+        }).Count -ne 1) {
+            throw 'The fallback did not construct the expected x64 bundle URL.'
+        }
     }
 
     Test-Case "Bootstrap installer executes only a verified matching bundle" {

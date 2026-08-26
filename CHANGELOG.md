@@ -2,6 +2,16 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.79.1
+
+### Fixed
+
+- Forge installation and self-update no longer fail when GitHub's unauthenticated API quota is
+  exhausted: both the bootstrap script and the built-in updater fall back to the public latest
+  release redirect while preserving checksum verification. Installation and update commands now
+  print numbered progress stages as work happens and include the diagnostic code and actionable
+  failure detail instead of only reporting that the operation failed.
+
 ## v0.79.0
 
 ### Changed

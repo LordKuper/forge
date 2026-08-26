@@ -141,7 +141,10 @@ public sealed record UpdateRequest(
     string ExecutablePath,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
-    UpdateSurface Surface);
+    UpdateSurface Surface,
+    IProgress<UpdateProgress>? Progress = null);
+
+public sealed record UpdateProgress(int Step, int TotalSteps, string Detail);
 
 public sealed record UpdateResult(
     UpdateLifecycleState State,
