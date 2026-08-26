@@ -116,21 +116,21 @@ public partial class WorkspaceShellPage
 
         Label detailsLabel = new() { IsVisible = false };
         VerticalStackLayout timelineItemsHost = new();
-        Label timelineStatusLabel = new() { Style = (Style)Microsoft.Maui.Controls.Application.Current!.Resources["MutedLabelStyle"] };
+        Label timelineStatusLabel = new() { Style = ThemeStyle("MutedLabelStyle") };
         Picker filterPicker = new();
         SemanticProperties.SetDescription(filterPicker, text.Resolve(MessageKeys.TimelineFilterLabel));
-        Label copyNoticeLabel = new() { Style = (Style)Microsoft.Maui.Controls.Application.Current!.Resources["MutedLabelStyle"] };
+        Label copyNoticeLabel = new() { Style = ThemeStyle("MutedLabelStyle") };
         Button loadMoreButton = new()
         {
             Text = text.Resolve(MessageKeys.TimelineLoadMoreAction),
-            Style = (Style)Microsoft.Maui.Controls.Application.Current!.Resources["SecondaryButtonStyle"],
+            Style = ThemeStyle("SecondaryButtonStyle"),
         };
         // Nocturne visual pass: every *Result label below reports the outcome of a mutation this
         // panel triggers -- an arbitrary localized success/failure sentence, never a typed outcome
         // the code here could branch on to pick a success/error color without guessing at message
         // text -- so all eight share the same neutral MutedLabelStyle rather than a color this file
         // cannot honestly derive.
-        Style resultLabelStyle = (Style)Microsoft.Maui.Controls.Application.Current!.Resources["MutedLabelStyle"];
+        Style resultLabelStyle = ThemeStyle("MutedLabelStyle");
         Label gateResult = new() { Style = resultLabelStyle };
         Label supersedeResult = new() { Style = resultLabelStyle };
         Label confirmResult = new() { Style = resultLabelStyle };
@@ -163,11 +163,12 @@ public partial class WorkspaceShellPage
         // one-shot "not initialized yet" check that could never be false once the handler existed.
         bool suppressFilterChanged = false;
 
-        // Nocturne visual pass: every restyle below reads a named resource from App.xaml (never a
-        // hardcoded hex or font-family literal) through this partial class's single canonical lookup
-        // set -- ThemeColor/ThemeStyle/ThemeSpace/ThemeString/Themed in WorkspaceShellPage.xaml.cs
-        // (PR #112 review finding 3: three byte-equivalent copies of that one-line cast existed here,
-        // in WorkspaceShellPage.ForgeSettings.cs, and there).
+        // Nocturne visual pass: every restyle in this file reads a named resource from App.xaml
+        // (never a hardcoded hex or font-family literal) through this partial class's single
+        // canonical lookup set -- ThemeColor/ThemeStyle/ThemeSpace/ThemeString/Themed in
+        // WorkspaceShellPage.xaml.cs (PR #112 review finding 3: three byte-equivalent copies of that
+        // one-line cast existed here, in WorkspaceShellPage.ForgeSettings.cs, and there; round 3
+        // finding 2: four more raw casts survived above this comment, in this same method).
 
         // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
         // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
@@ -293,10 +294,16 @@ public partial class WorkspaceShellPage
                         Spacing = 1,
                         Children =
                         {
+                            // PR #112 review round 3 finding 4: ColorNeutral500 (this theme's
+                            // muted-but-readable baseline, MutedLabelStyle's own color) rather than
+                            // ColorNeutral700, which is ~2.6:1 on the page ground -- below the
+                            // 4.5:1 body-text floor, and this 9pt caption is the smallest text on
+                            // the surface. The value below stays at full ColorNeutral200 emphasis,
+                            // so the caption/value hierarchy is unchanged.
                             new Label
                             {
                                 Text = label, FontFamily = ThemeString("FontMono"), FontSize = 9,
-                                TextColor = ThemeColor("ColorNeutral700"),
+                                TextColor = ThemeColor("ColorNeutral500"),
                             },
                             new Label
                             {
@@ -397,12 +404,12 @@ public partial class WorkspaceShellPage
         // event, styled by its own Type -- never a fabricated per-kind layout.
         string TimelineIconFor(TimelineItemView item) => item.Type switch
         {
-            "AttemptActivityRecorded" => IconGlyphs.TerminalWindow,
-            "AttemptSuperseded" => IconGlyphs.GitMerge,
-            "AttemptStopRequested" or "AttemptStopConverged" => IconGlyphs.StopCircle,
-            "StageRevisionRecorded" => IconGlyphs.GitDiff,
-            "StageTransitionConverged" => IconGlyphs.FlowArrow,
-            "RouteDecisionRecorded" => IconGlyphs.Cpu,
+            WorkflowEvent.AttemptActivityRecordedType => IconGlyphs.TerminalWindow,
+            WorkflowEvent.AttemptSupersededType => IconGlyphs.GitMerge,
+            WorkflowEvent.AttemptStopRequestedType or WorkflowEvent.AttemptStopConvergedType => IconGlyphs.StopCircle,
+            WorkflowEvent.StageRevisionRecordedType => IconGlyphs.GitDiff,
+            WorkflowEvent.StageTransitionConvergedType => IconGlyphs.FlowArrow,
+            WorkflowEvent.RouteDecisionRecordedType => IconGlyphs.Cpu,
             _ => IconGlyphs.Circle,
         };
 

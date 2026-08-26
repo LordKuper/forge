@@ -141,7 +141,11 @@ public partial class WorkspaceShellPage
         ProviderState.Ready => ThemeColor("ColorStatusGreen"),
         ProviderState.Failed or ProviderState.Missing => ThemeColor("ColorStatusRed"),
         ProviderState.Installing or ProviderState.Updating or ProviderState.Rechecking => ThemeColor("ColorStatusAmber"),
-        _ => ThemeColor("ColorNeutral700"),
+        // PR #112 review round 3 finding 4: this arm is rendered as a row's TextColor, so it needs
+        // the 4.5:1 body-text floor -- ColorNeutral700 measured ~2.6:1 on the page ground.
+        // ColorNeutral500 is this theme's muted-but-readable baseline (MutedLabelStyle's own color)
+        // at ~6:1, and still reads as "no status to report" beside the three status hues above.
+        _ => ThemeColor("ColorNeutral500"),
     };
 
     private string? ResolveInheritable(string? selected) =>

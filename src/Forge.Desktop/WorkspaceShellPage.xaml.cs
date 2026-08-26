@@ -793,7 +793,11 @@ public partial class WorkspaceShellPage : ContentPage
         {
             Text = text.Resolve(MessageKeys.SidebarRemoveProjectAction),
             Style = ThemeStyle("GhostButtonStyle"),
-            TextColor = ThemeColor("ColorNeutral700"),
+            // PR #112 review round 3 finding 4: ColorNeutral700 on the sidebar ground is ~2.8:1,
+            // under both the 4.5:1 body-text and the 3:1 interactive-control floor. ColorNeutral500
+            // is this theme's muted-but-readable baseline (MutedLabelStyle's own color) at ~6.3:1,
+            // and still reads as the lowest-emphasis control in the column.
+            TextColor = ThemeColor("ColorNeutral500"),
             FontSize = 11,
             HorizontalOptions = LayoutOptions.Fill,
         };
