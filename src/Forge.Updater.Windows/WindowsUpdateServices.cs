@@ -51,6 +51,12 @@ public sealed class WindowsInstaller(
     private readonly IReleaseVerifier releaseVerifier = releaseVerifier ?? throw new ArgumentNullException(nameof(releaseVerifier));
     private readonly WindowsUpdateStrategy strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
 
+    async ValueTask<InstallationResult> IPlatformInstaller.InstallLatestAsync(CancellationToken cancellationToken)
+    {
+        WindowsInstallationResult result = await InstallLatestAsync(cancellationToken).ConfigureAwait(false);
+        return new(result.Succeeded, result.VersionDirectory, result.Diagnostic);
+    }
+
     async ValueTask<InstallationResult> IPlatformInstaller.InstallLatestAsync(
         IProgress<UpdateProgress>? progress,
         CancellationToken cancellationToken)

@@ -141,8 +141,10 @@ public sealed record UpdateRequest(
     string ExecutablePath,
     IReadOnlyList<string> Arguments,
     string WorkingDirectory,
-    UpdateSurface Surface,
-    IProgress<UpdateProgress>? Progress = null);
+    UpdateSurface Surface)
+{
+    public IProgress<UpdateProgress>? Progress { get; init; }
+}
 
 public sealed record UpdateProgress(int Step, int TotalSteps, string Detail);
 

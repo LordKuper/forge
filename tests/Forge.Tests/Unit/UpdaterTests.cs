@@ -24,6 +24,35 @@ public sealed class UpdaterTests
 
     [Fact]
     [Trait("Category", "Unit")]
+    public void UpdateRequestPreservesItsFiveValueDeconstructionContract()
+    {
+        UpdateRequest request = CreateRequest();
+
+        (SemanticVersion version, string executable, IReadOnlyList<string> arguments, string workingDirectory, UpdateSurface surface) = request;
+
+        Assert.Equal("1.0.0", version.ToString());
+        Assert.Equal("C:\\Forge\\forge.exe", executable);
+        Assert.Equal(["status"], arguments);
+        Assert.Equal("C:\\work", workingDirectory);
+        Assert.Equal(UpdateSurface.Cli, surface);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ExistingPlatformInstallerUsesTheDefaultProgressOverload()
+    {
+        LegacyPlatformInstaller installer = new();
+
+        InstallationResult result = await ((IPlatformInstaller)installer).InstallLatestAsync(
+            new RecordingProgress(),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, installer.Calls);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
     public void ResolverRejectsZeroAndMultipleStrategies()
     {
         UpdateTarget target = new("linux", "x64", "portable_bundle");
@@ -577,6 +606,17 @@ public sealed class UpdaterTests
         public List<UpdateProgress> Values { get; } = [];
 
         public void Report(UpdateProgress value) => Values.Add(value);
+    }
+
+    private sealed class LegacyPlatformInstaller : IPlatformInstaller
+    {
+        public int Calls { get; private set; }
+
+        public ValueTask<InstallationResult> InstallLatestAsync(CancellationToken cancellationToken)
+        {
+            Calls++;
+            return ValueTask.FromResult(new InstallationResult(true, "C:\\Forge", UpdateDiagnostic.None));
+        }
     }
 
     private sealed class PassingVerifier : IReleaseVerifier

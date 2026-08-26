@@ -88,8 +88,10 @@ public static class CliHost
                             throw new InvalidOperationException("The Forge executable path is unavailable."),
                         ["status"],
                         Environment.CurrentDirectory,
-                        UpdateSurface.Cli,
-                        updateProgress),
+                        UpdateSurface.Cli)
+                    {
+                        Progress = updateProgress,
+                    },
                     ct),
             async (mutationRoot, ct) =>
             {
