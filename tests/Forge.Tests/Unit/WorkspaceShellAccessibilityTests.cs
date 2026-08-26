@@ -20,8 +20,14 @@ public sealed class WorkspaceShellAccessibilityTests
     // anti-pattern and still pass, because it was never in the list to begin with. Enumerating the
     // shell's own naming prefix at test-run time means a new partial-class file is automatically in
     // scope with no allowlist edit required.
-    private static readonly Regex FixedHeightRequestPattern =
-        new(@"(?<!Minimum)(?<!Maximum)HeightRequest\s*=", RegexOptions.Compiled);
+    // PR #112 review round 2 finding 1: the second alternative is what makes this pattern see a
+    // ResourceDictionary Style at all. A Setter spells the property as a quoted *value*
+    // (<Setter Property="HeightRequest" Value="28" />), never as `HeightRequest=`, so the first
+    // alternative alone silently skipped every Style in App.xaml even once the file was in scope --
+    // exactly how the deleted IconButtonStyle's fixed height reached review. MinimumHeightRequest /
+    // MaximumHeightRequest stay excluded in both forms (the lookbehinds, and the exact-match quotes).
+    private static readonly Regex FixedHeightRequestPattern = new(
+        @"(?<!Minimum)(?<!Maximum)HeightRequest\s*=|Property\s*=\s*""HeightRequest""", RegexOptions.Compiled);
 
     // PR #110 review finding 6: IsTabStop="False"/InputTransparent="True" (XAML) or
     // IsTabStop = false/InputTransparent = true (code-behind) opt an otherwise-real, otherwise-
@@ -31,6 +37,11 @@ public sealed class WorkspaceShellAccessibilityTests
     // unflagged since it never removes reachability.
     private static readonly Regex TabReachabilityOptOutPattern = new(
         @"IsTabStop\s*=\s*""?[Ff]alse""?|InputTransparent\s*=\s*""?[Tt]rue""?", RegexOptions.Compiled);
+
+    // PR #112 review round 2 finding 1: resolves the control type a <Style> applies to, so a Setter
+    // on one of its own lines can be judged against that type rather than against its own text.
+    private static readonly Regex StyleTargetTypePattern =
+        new(@"<Style\b[^>]*\bTargetType\s*=\s*""(?<type>[^""]+)""", RegexOptions.Compiled);
 
     [Fact]
     [Trait("Category", "Architecture")]
@@ -84,16 +95,47 @@ public sealed class WorkspaceShellAccessibilityTests
     public void TheWorkspaceShellXamlNeverFixesAHeightOnATextBearingRow()
     {
         // Plan 12.6 ("usable at supported text scaling"): a fixed HeightRequest on a text-containing
-        // row clips scaled-up text instead of letting the row grow. The XAML's one legitimate
-        // HeightRequest today is the section-divider BoxView (a 1px rule, not text) --
+        // row clips scaled-up text instead of letting the row grow. The XAML's only legitimate
+        // HeightRequests today are section-divider BoxViews (a 1px rule, not text) --
         // MinimumHeightRequest is the correct alternative wherever a row's height genuinely must have
         // a floor, and FixedHeightRequestPattern (PR #110 review finding 5) excludes it from this scan
         // so that alternative is never itself blocked.
-        string xamlPath = ShellFilePaths().Single(path => path.EndsWith("WorkspaceShellPage.xaml", StringComparison.Ordinal));
-        IEnumerable<string> heightRequestLines =
-            File.ReadLines(xamlPath).Where(line => FixedHeightRequestPattern.IsMatch(line));
+        // PR #112 review round 2 finding 1: App.xaml carries the shell's presentation Styles, where a
+        // HeightRequest sits on a <Setter> line whose TargetType is on the enclosing <Style> line
+        // above it -- so a per-line "the line must mention BoxView" check would reject the legitimate
+        // DividerBoxStyle. The enclosing Style's TargetType is resolved instead, which keeps the
+        // real anti-pattern (a fixed height on a Button/Label/Entry style, e.g. the IconButtonStyle
+        // this PR's round 1 had to delete by hand) failing.
+        List<string> offendingLines = [];
+        foreach (string path in ShellFilePaths().Where(path => path.EndsWith(".xaml", StringComparison.Ordinal)))
+        {
+            string? enclosingStyleTarget = null;
+            foreach (string line in File.ReadLines(path))
+            {
+                Match styleTarget = StyleTargetTypePattern.Match(line);
+                if (styleTarget.Success)
+                {
+                    enclosingStyleTarget = styleTarget.Groups["type"].Value;
+                }
+                else if (line.Contains("</Style>", StringComparison.Ordinal))
+                {
+                    enclosingStyleTarget = null;
+                }
 
-        Assert.All(heightRequestLines, line => Assert.Contains("BoxView", line, StringComparison.Ordinal));
+                if (!FixedHeightRequestPattern.IsMatch(line) ||
+                    line.Contains("BoxView", StringComparison.Ordinal) ||
+                    string.Equals(enclosingStyleTarget, "BoxView", StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                offendingLines.Add($"{Path.GetFileName(path)}: {line.Trim()}");
+            }
+        }
+
+        Assert.True(
+            offendingLines.Count == 0,
+            $"Fixed HeightRequest(s) on a non-BoxView target:\n{string.Join('\n', offendingLines)}");
     }
 
     [Fact]
@@ -135,10 +177,21 @@ public sealed class WorkspaceShellAccessibilityTests
     private static IEnumerable<string> ShellFilePaths()
     {
         string shellDirectory = Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop");
-        return Directory.EnumerateFiles(shellDirectory, "WorkspaceShellPage*", SearchOption.AllDirectories)
+        return Directory.EnumerateFiles(shellDirectory, "*", SearchOption.AllDirectories)
             .Where(path =>
                 (path.EndsWith(".cs", StringComparison.Ordinal) || path.EndsWith(".xaml", StringComparison.Ordinal)) &&
+                IsScannedShellFile(Path.GetFileName(path)) &&
                 !path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).Any(segment => segment is "bin" or "obj"))
             .OrderBy(path => path, StringComparer.Ordinal);
     }
+
+    // PR #112 review round 2 finding 1: App.xaml belongs to the same scan as the shell's own files.
+    // The Nocturne pass moved the shell's text-bearing presentation out of the guarded code-behind
+    // and into App.xaml's resource dictionary -- the implicit Label/Entry/Editor/Picker styles and
+    // the Primary/Secondary/Ghost/Danger button styles now reach every control in the shell, so a
+    // fixed HeightRequest or FontAutoScalingEnabled="False" added to any of them clips scaled text
+    // app-wide. Scanning only WorkspaceShellPage* left that entirely unguarded.
+    private static bool IsScannedShellFile(string fileName) =>
+        fileName.StartsWith("WorkspaceShellPage", StringComparison.Ordinal) ||
+        string.Equals(fileName, "App.xaml", StringComparison.Ordinal);
 }

@@ -8,10 +8,12 @@
          is assigned in code-behind (never a XAML Text attribute) so the ArchitectureTests
          HostsDoNotContainHardCodedLabelText check keeps guaranteeing every user-facing string
          routes through SurfaceTextProvider. -->
-    <ScrollView Grid.Column="0" Grid.Row="0" Grid.RowSpan="4">
+    <ScrollView Grid.Column="0" Grid.Row="0" Grid.RowSpan="4" BackgroundColor="{StaticResource ColorSidebarBg}">
       <VerticalStackLayout x:Name="SidebarHost" Padding="12" Spacing="8" />
     </ScrollView>
-    <BoxView Grid.Column="1" Grid.Row="0" HeightRequest="1" Color="Gray" />
+    <BoxView Grid.Column="0" Grid.Row="0" Grid.RowSpan="4" HorizontalOptions="End" WidthRequest="1"
+             Color="{StaticResource ColorDivider}" />
+    <BoxView Grid.Column="1" Grid.Row="0" Style="{StaticResource DividerBoxStyle}" />
     <Label x:Name="PageStatusHeader" Grid.Column="1" Grid.Row="0" Padding="16,10" SemanticProperties.HeadingLevel="Level1" />
     <!-- Plan section 4.3's sticky sprint-workspace status header: outside the scrollable timeline
          below, so it never scrolls away. Empty (no children) on every other route. -->

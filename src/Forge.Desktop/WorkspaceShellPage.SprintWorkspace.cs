@@ -2,6 +2,7 @@ using System.Globalization;
 using Forge.Application;
 using Forge.Compiler;
 using Forge.Desktop.Presentation;
+using Forge.Desktop.Theme;
 using Forge.Domain;
 using Forge.Localization;
 
@@ -115,25 +116,35 @@ public partial class WorkspaceShellPage
 
         Label detailsLabel = new() { IsVisible = false };
         VerticalStackLayout timelineItemsHost = new();
-        Label timelineStatusLabel = new();
+        Label timelineStatusLabel = new() { Style = ThemeStyle("MutedLabelStyle") };
         Picker filterPicker = new();
         SemanticProperties.SetDescription(filterPicker, text.Resolve(MessageKeys.TimelineFilterLabel));
-        Label copyNoticeLabel = new();
-        Button loadMoreButton = new() { Text = text.Resolve(MessageKeys.TimelineLoadMoreAction) };
-        Label gateResult = new();
-        Label supersedeResult = new();
-        Label confirmResult = new();
-        Label testWorkResult = new();
-        Label finalizeResult = new();
-        Label lifecycleResult = new();
-        Label stopResult = new();
-        Label moveResult = new();
+        Label copyNoticeLabel = new() { Style = ThemeStyle("MutedLabelStyle") };
+        Button loadMoreButton = new()
+        {
+            Text = text.Resolve(MessageKeys.TimelineLoadMoreAction),
+            Style = ThemeStyle("SecondaryButtonStyle"),
+        };
+        // Nocturne visual pass: every *Result label below reports the outcome of a mutation this
+        // panel triggers -- an arbitrary localized success/failure sentence, never a typed outcome
+        // the code here could branch on to pick a success/error color without guessing at message
+        // text -- so all eight share the same neutral MutedLabelStyle rather than a color this file
+        // cannot honestly derive.
+        Style resultLabelStyle = ThemeStyle("MutedLabelStyle");
+        Label gateResult = new() { Style = resultLabelStyle };
+        Label supersedeResult = new() { Style = resultLabelStyle };
+        Label confirmResult = new() { Style = resultLabelStyle };
+        Label testWorkResult = new() { Style = resultLabelStyle };
+        Label finalizeResult = new() { Style = resultLabelStyle };
+        Label lifecycleResult = new() { Style = resultLabelStyle };
+        Label stopResult = new() { Style = resultLabelStyle };
+        Label moveResult = new() { Style = resultLabelStyle };
         Entry rewindReasonEntry = Describe(new Entry(), text.Resolve(MessageKeys.ActionRewindReasonLabel));
         // ADR 0054, post-release timeline gap closure: the message composer, hoisted here like
         // rewindReasonEntry already is for the same reason (a re-render triggered by a failed
         // mutation must reuse the same Entry instance rather than replace it with a blank one).
         Entry messageEntry = Describe(new Entry(), text.Resolve(MessageKeys.TimelineMessageLabel));
-        Label messageResult = new();
+        Label messageResult = new() { Style = resultLabelStyle };
         // PR #99 review finding 7: hoisted out of RefreshActionsAsync (like rewindReasonEntry already
         // was) so a re-render triggered by a FAILED mutation -- every mutation handler calls
         // RefreshAllAsync unconditionally on completion -- reuses the same Entry instance instead of
@@ -151,6 +162,13 @@ public partial class WorkspaceShellPage
         // This flag is the real suppression: set around exactly those two assignments, not a stale
         // one-shot "not initialized yet" check that could never be false once the handler existed.
         bool suppressFilterChanged = false;
+
+        // Nocturne visual pass: every restyle in this file reads a named resource from App.xaml
+        // (never a hardcoded hex or font-family literal) through this partial class's single
+        // canonical lookup set -- ThemeColor/ThemeStyle/ThemeSpace/ThemeString/Themed in
+        // WorkspaceShellPage.xaml.cs (PR #112 review finding 3: three byte-equivalent copies of that
+        // one-line cast existed here, in WorkspaceShellPage.ForgeSettings.cs, and there; round 3
+        // finding 2: four more raw casts survived above this comment, in this same method).
 
         // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
         // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
@@ -217,13 +235,118 @@ public partial class WorkspaceShellPage
             string stateText = header.SprintStateText == "paused"
                 ? text.Resolve(MessageKeys.SprintStatePaused)
                 : header.SprintStateText;
-            StickyHeaderHost.Children.Add(Describe(new Label
+
+            // Nocturne visual pass: maps the Host's own machine-cased sprint state onto the four
+            // shared semantic status colors (App.xaml's ColorStatus* -- see readme.md's mapping table)
+            // -- "running" reads as active/accent rather than a fifth hue, matching the mockup's own
+            // pulsing "running" pill, which uses the accent ramp, not a status color.
+            Color stateColor = header.SprintStateText switch
+            {
+                "running" => ThemeColor("ColorAccent"),
+                "blocked" or "failed" => ThemeColor("ColorStatusRed"),
+                "paused" or "awaiting_human" => ThemeColor("ColorStatusAmber"),
+                "ready_to_finalize" => ThemeColor("ColorStatusBlue"),
+                _ => ThemeColor("ColorStatusGreen"),
+            };
+
+            // PR #112 review finding 6: the visible heading drops the state (it moved into statePill
+            // below), but the heading's SPOKEN name keeps the exact pre-restyle
+            // "<project> - <sprint id> <n> - <state>" wording -- the pill is a decorative Border with
+            // no semantics of its own, so without this the state would be lost to a screen reader.
+            Label title = new()
             {
                 Text = string.Create(
                     CultureInfo.InvariantCulture,
-                    $"{header.ProjectDisplayName} - {text.Resolve(MessageKeys.SprintIdLabel)} {header.SprintSequence} - {stateText}"),
-                FontAttributes = FontAttributes.Bold,
-            }));
+                    $"{header.ProjectDisplayName} - {text.Resolve(MessageKeys.SprintIdLabel)} {header.SprintSequence}"),
+                Style = ThemeStyle("HeadingLabelStyle"),
+                LineBreakMode = LineBreakMode.TailTruncation,
+            };
+            SemanticProperties.SetDescription(
+                title, string.Create(CultureInfo.InvariantCulture, $"{title.Text} - {stateText}"));
+            Border statePill = new()
+            {
+                Style = ThemeStyle("TagAccentStyle"),
+                Stroke = stateColor,
+                StrokeThickness = 1,
+                VerticalOptions = LayoutOptions.Center,
+                Content = new Label
+                {
+                    Text = stateText,
+                    TextColor = stateColor,
+                    FontFamily = ThemeString("FontMono"),
+                    FontSize = 10,
+                },
+            };
+            StickyHeaderHost.Children.Add(new HorizontalStackLayout { Spacing = 9, Children = { title, statePill } });
+
+            // Stat strip: mirrors the mockup's worktree/model/stage/plan/elapsed/diff row for exactly
+            // the values SprintStatusHeaderData actually carries (stage, plan progress, findings,
+            // active model) -- see StatColumn's own remarks for why worktree/elapsed/diff are not
+            // reproduced here.
+            View StatColumn(string glyph, string label, string value) => new HorizontalStackLayout
+            {
+                Spacing = 5,
+                Children =
+                {
+                    DecorativeGlyph(new Label { Text = glyph, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 }),
+                    new VerticalStackLayout
+                    {
+                        Spacing = 1,
+                        Children =
+                        {
+                            // PR #112 review round 3 finding 4: ColorNeutral500 (this theme's
+                            // muted-but-readable baseline, MutedLabelStyle's own color) rather than
+                            // ColorNeutral700, which is ~2.6:1 on the page ground -- below the
+                            // 4.5:1 body-text floor, and this 9pt caption is the smallest text on
+                            // the surface. The value below stays at full ColorNeutral200 emphasis,
+                            // so the caption/value hierarchy is unchanged.
+                            new Label
+                            {
+                                Text = label, FontFamily = ThemeString("FontMono"), FontSize = 9,
+                                TextColor = ThemeColor("ColorNeutral500"),
+                            },
+                            new Label
+                            {
+                                Text = value, FontFamily = ThemeString("FontMono"), FontSize = 12,
+                                TextColor = ThemeColor("ColorNeutral200"),
+                            },
+                        },
+                    },
+                },
+            };
+            HorizontalStackLayout statStrip = new() { Spacing = 16 };
+            statStrip.Children.Add(StatColumn(
+                IconGlyphs.FlowArrow, text.Resolve(MessageKeys.SprintStatusHeaderStageLabel), header.CurrentStageId ?? "-"));
+            statStrip.Children.Add(StatColumn(
+                IconGlyphs.ListChecks, text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel),
+                string.Create(CultureInfo.InvariantCulture, $"{header.StagesCompleted}/{header.StagesTotal}")));
+            statStrip.Children.Add(StatColumn(
+                IconGlyphs.WarningCircle, text.Resolve(MessageKeys.FindingsLabel),
+                header.OpenFindingsCount.ToString(CultureInfo.InvariantCulture)));
+            StickyHeaderHost.Children.Add(statStrip);
+
+            // Not folded into a StatColumn like the three above: ActiveProviderModelText is already a
+            // full localized sentence (provider/model or the "not yet available" placeholder), not a
+            // short value a two-line icon+caption slot suits -- and no localized short "model" caption
+            // exists to pair with one without inventing new copy this visual pass is not scoped to add.
+            StickyHeaderHost.Children.Add(new HorizontalStackLayout
+            {
+                Spacing = 5,
+                Children =
+                {
+                    DecorativeGlyph(new Label
+                    {
+                        Text = IconGlyphs.Cpu, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11,
+                    }),
+                    Describe(new Label { Text = header.ActiveProviderModelText, Style = ThemeStyle("MonoLabelStyle") }),
+                },
+            });
+
+            // Kept as its own always-visible, screen-reader-described line (unchanged text/Describe
+            // call from before this visual pass) rather than folded away once the stat strip above
+            // covers the same three numbers visually: the strip's Labels carry no SemanticProperties
+            // of their own, so this is still the one reliable spoken summary of stage/progress/
+            // findings, only now styled as a compact caption instead of the page's sole status text.
             StickyHeaderHost.Children.Add(Describe(new Label
             {
                 Text = string.Create(
@@ -231,7 +354,9 @@ public partial class WorkspaceShellPage
                     $"{text.Resolve(MessageKeys.SprintStatusHeaderStageLabel)}: {header.CurrentStageId ?? "-"}  " +
                         $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)}: {header.StagesCompleted}/{header.StagesTotal}  " +
                         $"{text.Resolve(MessageKeys.FindingsLabel)}: {header.OpenFindingsCount}"),
+                Style = ThemeStyle("MonoLabelStyle"),
             }));
+
             string lastActivityText = header.LastActivityAt is { } activity
                 ? activity.ToString("O", CultureInfo.InvariantCulture)
                 : "-";
@@ -247,9 +372,14 @@ public partial class WorkspaceShellPage
                     $"{text.Resolve(MessageKeys.SprintStatusHeaderLastActivityLabel)}: {lastActivityText}  " +
                         $"{text.Resolve(MessageKeys.RoutingLabel)} retry_remaining={header.RetryRemaining}") +
                     resumeNotBeforeText,
+                Style = ThemeStyle("MutedLabelStyle"),
             }));
-            StickyHeaderHost.Children.Add(Describe(new Label { Text = header.ActiveProviderModelText }));
-            Button detailsToggle = new() { Text = text.Resolve(MessageKeys.SprintStatusHeaderDetailsAction) };
+            Button detailsToggle = new()
+            {
+                Text = text.Resolve(MessageKeys.SprintStatusHeaderDetailsAction),
+                Style = ThemeStyle("GhostButtonStyle"),
+                HorizontalOptions = LayoutOptions.Start,
+            };
             detailsToggle.Clicked += (_, _) =>
             {
                 detailsLabel.Text = header.DetailsText;
@@ -257,25 +387,57 @@ public partial class WorkspaceShellPage
                 detailsLabel.IsVisible = !detailsLabel.IsVisible;
             };
             StickyHeaderHost.Children.Add(TrackContentFocus("header:details-toggle", detailsToggle));
+            detailsLabel.Style = ThemeStyle("MonoLabelStyle");
             StickyHeaderHost.Children.Add(detailsLabel);
         }
+
+        // Nocturne visual pass: the mockup's timeline distinguishes a user-message bubble, an agent
+        // summary with a sparkle avatar, and several per-kind tool-call/diff/test/permission cards --
+        // but TimelineItemView is one flat shape for every journal event (WorkflowEvent has exactly
+        // nine ...Type consts total: RouteDecisionRecorded, AttemptActivityRecorded,
+        // AttemptSuperseded, AttemptStopRequested/Converged, StageRevisionRecorded,
+        // StageTransitionConverged, UserMessagePosted, AgentSummaryRecorded -- no distinct
+        // "read"/"edit"/"test" tool-call shape or diff/test-output structure the Host actually
+        // describes). This reproduces exactly the distinction the data supports: bubble-align
+        // "operator" (human-authored: supersede/stop/rewind/UserMessagePosted), sparkle-card "agent"
+        // (AgentSummaryRecorded), and an icon-tagged card for every other "system" (workflow-driven)
+        // event, styled by its own Type -- never a fabricated per-kind layout.
+        string TimelineIconFor(TimelineItemView item) => item.Type switch
+        {
+            WorkflowEvent.AttemptActivityRecordedType => IconGlyphs.TerminalWindow,
+            WorkflowEvent.AttemptSupersededType => IconGlyphs.GitMerge,
+            WorkflowEvent.AttemptStopRequestedType or WorkflowEvent.AttemptStopConvergedType => IconGlyphs.StopCircle,
+            WorkflowEvent.StageRevisionRecordedType => IconGlyphs.GitDiff,
+            WorkflowEvent.StageTransitionConvergedType => IconGlyphs.FlowArrow,
+            WorkflowEvent.RouteDecisionRecordedType => IconGlyphs.Cpu,
+            _ => IconGlyphs.Circle,
+        };
 
         void RenderTimelineItems(TimelineState state)
         {
             timelineItemsHost.Children.Clear();
             if (state.Items.Count == 0)
             {
-                timelineItemsHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineNoItems) }));
+                timelineItemsHost.Children.Add(Describe(new Label
+                {
+                    Text = text.Resolve(MessageKeys.TimelineNoItems),
+                    Style = ThemeStyle("MutedLabelStyle"),
+                }));
             }
 
             foreach (TimelineItemView item in state.Items)
             {
-                VerticalStackLayout row = new();
+                bool isOperator = item.ActorText == "operator";
+                bool isAgent = item.ActorText == "agent";
+                VerticalStackLayout row = new() { Spacing = 6 };
                 Label summary = Describe(new Label
                 {
                     Text = string.Create(
                         CultureInfo.InvariantCulture,
                         $"{(item.Unread ? "* " : "  ")}{item.OccurredAt:O} [{item.Type}/{item.ActorText}] {item.MessageText}"),
+                    FontFamily = ThemeString("FontMono"),
+                    FontSize = 11.5,
+                    TextColor = ThemeColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
                 });
                 row.Children.Add(summary);
                 string argumentsText = string.Join(
@@ -288,10 +450,19 @@ public partial class WorkspaceShellPage
                     Text = string.Create(
                         CultureInfo.InvariantCulture,
                         $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
+                    Style = ThemeStyle("MonoLabelStyle"),
                 });
-                Button detailsButton = new() { Text = text.Resolve(MessageKeys.TimelineDetailsAction) };
+                Button detailsButton = new()
+                {
+                    Text = text.Resolve(MessageKeys.TimelineDetailsAction),
+                    Style = ThemeStyle("GhostButtonStyle"),
+                };
                 detailsButton.Clicked += (_, _) => technicalDetail.IsVisible = !technicalDetail.IsVisible;
-                Button copyButton = new() { Text = text.Resolve(MessageKeys.TimelineCopyAction) };
+                Button copyButton = new()
+                {
+                    Text = text.Resolve(MessageKeys.TimelineCopyAction),
+                    Style = ThemeStyle("GhostButtonStyle"),
+                };
                 copyButton.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
                     await Clipboard.Default.SetTextAsync(item.CopyText).ConfigureAwait(true);
@@ -299,10 +470,56 @@ public partial class WorkspaceShellPage
                 });
                 row.Children.Add(new HorizontalStackLayout
                 {
+                    Spacing = 6,
                     Children = { ClearContentFocusWhenFocused(detailsButton), ClearContentFocusWhenFocused(copyButton) },
                 });
                 row.Children.Add(technicalDetail);
-                timelineItemsHost.Children.Add(row);
+
+                View cardContent = row;
+                if (isAgent)
+                {
+                    cardContent = new HorizontalStackLayout
+                    {
+                        Spacing = 10,
+                        Children =
+                        {
+                            DecorativeGlyph(new Label
+                            {
+                                Text = IconGlyphs.Sparkle,
+                                Style = ThemeStyle("IconGlyphStyle"),
+                                TextColor = ThemeColor("ColorAccent"),
+                                VerticalOptions = LayoutOptions.Start,
+                            }),
+                            row,
+                        },
+                    };
+                }
+                else if (!isOperator)
+                {
+                    cardContent = new HorizontalStackLayout
+                    {
+                        Spacing = 10,
+                        Children =
+                        {
+                            DecorativeGlyph(new Label
+                            {
+                                Text = TimelineIconFor(item),
+                                Style = ThemeStyle("IconGlyphStyle"),
+                                VerticalOptions = LayoutOptions.Start,
+                            }),
+                            row,
+                        },
+                    };
+                }
+
+                Border card = new()
+                {
+                    Style = ThemeStyle(isOperator ? "MessageBubbleStyle" : "OutlinedPanelStyle"),
+                    Content = cardContent,
+                    HorizontalOptions = isOperator ? LayoutOptions.End : LayoutOptions.Fill,
+                    MaximumWidthRequest = isOperator ? 620 : double.PositiveInfinity,
+                };
+                timelineItemsHost.Children.Add(card);
             }
 
             loadMoreButton.IsVisible = state.HasMore;
@@ -339,11 +556,19 @@ public partial class WorkspaceShellPage
             IReadOnlyList<AvailableAction> actions = await sprintWorkspace.Actions
                 .LoadAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
-            ContextualActionHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.ActionsTitle) }));
+            ContextualActionHost.Children.Add(Describe(new Label
+            {
+                Text = text.Resolve(MessageKeys.ActionsTitle),
+                Style = ThemeStyle("HeadingLabelStyle"),
+            }));
             if (actions.Count == 0)
             {
                 ContextualActionHost.Children.Add(
-                    Describe(new Label { Text = text.Resolve(MessageKeys.ActionsNoneAvailable) }));
+                    Describe(new Label
+                    {
+                        Text = text.Resolve(MessageKeys.ActionsNoneAvailable),
+                        Style = ThemeStyle("MutedLabelStyle"),
+                    }));
             }
 
             AddLifecycleAction(
@@ -392,7 +617,11 @@ public partial class WorkspaceShellPage
             AvailableAction? stop = SprintActionsViewModel.Find(actions, AvailableActionProjector.StopCurrentOperationActionId);
             if (stop is not null)
             {
-                Button stopButton = new() { Text = text.Resolve(MessageKeys.AttemptStopAction) };
+                Button stopButton = new()
+                {
+                    Text = text.Resolve(MessageKeys.AttemptStopAction),
+                    Style = ThemeStyle("DangerButtonStyle"),
+                };
                 stopButton.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
                     // Plan 12.4/12.5: re-validate immediately before the confirmation dialog, never
@@ -462,6 +691,7 @@ public partial class WorkspaceShellPage
                         Text = string.Create(
                             CultureInfo.InvariantCulture, $"{text.Resolve(MessageKeys.MoveToStageAction)}: {targetStageId}"),
                         IsEnabled = moveAction.Enabled,
+                        Style = ThemeStyle("SecondaryButtonStyle"),
                     };
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
@@ -475,6 +705,7 @@ public partial class WorkspaceShellPage
                             Text = string.Create(
                                 CultureInfo.InvariantCulture,
                                 $"{text.Resolve(MessageKeys.ActionsBlockedPrefix)} {string.Join(", ", moveAction.Blockers)}"),
+                            Style = ThemeStyle("MutedLabelStyle"),
                         }));
                     }
                 }
@@ -485,16 +716,29 @@ public partial class WorkspaceShellPage
             bool hasGate = SprintWorkspaceViewModel.HasPendingGate(currentDetails);
             if (hasGate)
             {
-                Button approve = new() { Text = text.Resolve(MessageKeys.GateApproveAction) };
-                Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction) };
+                // A pending gate is this shell's own closest equivalent to the mockup's amber
+                // "Permission required" card -- a human decision genuinely blocks the sprint here too
+                // -- so it gets the same AmberCardStyle treatment instead of a bare button row.
+                Button approve = new() { Text = text.Resolve(MessageKeys.GateApproveAction), Style = ThemeStyle("PrimaryButtonStyle") };
+                Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction), Style = ThemeStyle("DangerButtonStyle") };
                 approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
                 reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false));
-                ContextualActionHost.Children.Add(new HorizontalStackLayout
+                ContextualActionHost.Children.Add(new Border
                 {
-                    Children =
+                    Style = ThemeStyle("AmberCardStyle"),
+                    Content = new HorizontalStackLayout
                     {
-                        TrackContentFocus("action:gate:approve", approve),
-                        TrackContentFocus("action:gate:reject", reject),
+                        Spacing = 8,
+                        Children =
+                        {
+                            DecorativeGlyph(new Label
+                            {
+                                Text = IconGlyphs.ShieldCheck, Style = ThemeStyle("IconGlyphStyle"),
+                                TextColor = ThemeColor("ColorStatusAmber"),
+                            }),
+                            TrackContentFocus("action:gate:approve", approve),
+                            TrackContentFocus("action:gate:reject", reject),
+                        },
                     },
                 });
             }
@@ -504,7 +748,11 @@ public partial class WorkspaceShellPage
             Guid? activeAttemptId = SprintWorkspaceViewModel.FindActiveAttemptId(currentDetails);
             if (activeAttemptId is { } attemptId)
             {
-                Button supersede = new() { Text = text.Resolve(MessageKeys.AttemptSupersedeAction) };
+                Button supersede = new()
+                {
+                    Text = text.Resolve(MessageKeys.AttemptSupersedeAction),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
+                };
                 supersede.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
                     if (string.IsNullOrWhiteSpace(instructionEntry.Text))
@@ -553,8 +801,16 @@ public partial class WorkspaceShellPage
                 Picker evidenceKind = new() { ItemsSource = new List<string> { "inspection", "execution", "existing-check" } };
                 evidenceKind.SelectedIndex = 0;
                 SemanticProperties.SetDescription(evidenceKind, text.Resolve(MessageKeys.ConfirmEvidenceKindLabel));
-                Button confirmed = new() { Text = text.Resolve(MessageKeys.ConfirmConfirmedAction) };
-                Button notConfirmed = new() { Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction) };
+                Button confirmed = new()
+                {
+                    Text = text.Resolve(MessageKeys.ConfirmConfirmedAction),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
+                };
+                Button notConfirmed = new()
+                {
+                    Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
+                };
                 async Task ConfirmAsync(ConfirmationOutcome outcome)
                 {
                     if (string.IsNullOrWhiteSpace(definitionOfDoneEntry.Text) || string.IsNullOrWhiteSpace(evidenceEntry.Text))
@@ -618,8 +874,16 @@ public partial class WorkspaceShellPage
 
             if (NodeIsReady(ImplementationCriticalGraphBuilder.TestWorkNodeId))
             {
-                Button added = new() { Text = text.Resolve(MessageKeys.TestWorkAddedAction) };
-                Button noNewTests = new() { Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction) };
+                Button added = new()
+                {
+                    Text = text.Resolve(MessageKeys.TestWorkAddedAction),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
+                };
+                Button noNewTests = new()
+                {
+                    Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
+                };
                 async Task TestWorkAsync(TestWorkOutcome outcome)
                 {
                     if (string.IsNullOrWhiteSpace(justificationEntry.Text))
@@ -673,7 +937,11 @@ public partial class WorkspaceShellPage
 
             if (NodeIsReady(ImplementationCriticalGraphBuilder.FinalizationNodeId))
             {
-                Button finalize = new() { Text = text.Resolve(MessageKeys.FinalizeAction) };
+                Button finalize = new()
+                {
+                    Text = text.Resolve(MessageKeys.FinalizeAction),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
+                };
                 finalize.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
                     string action = text.Resolve(MessageKeys.FinalizeAction);
@@ -707,7 +975,16 @@ public partial class WorkspaceShellPage
                 return;
             }
 
-            Button button = new() { Text = label, IsEnabled = action.Enabled };
+            // Cancel is the one destructive lifecycle verb of the three (Run/Resume are additive
+            // forward progress) -- DangerButtonStyle red-tints it the same way the mockup's own
+            // "Deny"/destructive buttons read, Run/Resume get the ordinary forward-action treatment.
+            Button button = new()
+            {
+                Text = label,
+                IsEnabled = action.Enabled,
+                Style = ThemeStyle(
+                    actionId == AvailableActionProjector.CancelSprintActionId ? "DangerButtonStyle" : "PrimaryButtonStyle"),
+            };
             button.Clicked += (_, _) => _ = RunAsync(execute);
             ContextualActionHost.Children.Add(
                 TrackContentFocus(string.Create(CultureInfo.InvariantCulture, $"action:{actionId}"), button));
@@ -719,7 +996,11 @@ public partial class WorkspaceShellPage
         // reason for offering an action (plan 4.3: "renders typed controls described by the Host")
         // was silently dropped. Every lifecycle/stop/move-to-stage row now shows it alongside its
         // button/verb label.
-        Label BuildRationale(AvailableAction action) => Describe(new Label { Text = text.Resolve(action.RationaleKey) });
+        Label BuildRationale(AvailableAction action) => Describe(new Label
+        {
+            Text = text.Resolve(action.RationaleKey),
+            Style = ThemeStyle("MutedLabelStyle"),
+        });
 
         bool NodeIsReady(string nodeId) =>
             currentDetails?.Nodes.Any(node => node.Id == nodeId && node.State == "ready") ?? false;
@@ -875,7 +1156,11 @@ public partial class WorkspaceShellPage
         loadMoreButton.Clicked += (_, _) => _ = RunAsync(async () =>
             RenderTimelineItems(await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true)));
         ClearContentFocusWhenFocused(loadMoreButton);
-        Button markAllReadButton = new() { Text = text.Resolve(MessageKeys.TimelineMarkAllReadAction) };
+        Button markAllReadButton = new()
+        {
+            Text = text.Resolve(MessageKeys.TimelineMarkAllReadAction),
+            Style = ThemeStyle("GhostButtonStyle"),
+        };
         markAllReadButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             await sprintWorkspace.Timeline.MarkAllReadAsync(CancellationToken.None).ConfigureAwait(true);
@@ -910,7 +1195,11 @@ public partial class WorkspaceShellPage
         // button) into this composer must not leave that stale key ready to be wrongly restored the
         // next time the user's own Send click below triggers RefreshAllAsync.
         ClearContentFocusWhenFocused(messageEntry);
-        Button sendMessageButton = new() { Text = text.Resolve(MessageKeys.TimelineMessageSendAction) };
+        Button sendMessageButton = new()
+        {
+            Text = text.Resolve(MessageKeys.TimelineMessageSendAction),
+            Style = ThemeStyle("PrimaryButtonStyle"),
+        };
         sendMessageButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string message = await sprintWorkspace
@@ -931,21 +1220,48 @@ public partial class WorkspaceShellPage
         });
         ClearContentFocusWhenFocused(sendMessageButton);
 
-        ContentHost.Children.Add(Describe(new Label { Text = text.Resolve(MessageKeys.TimelineTitle), FontAttributes = FontAttributes.Bold }));
-        ContentHost.Children.Add(new HorizontalStackLayout { Children = { filterPicker, markAllReadButton } });
+        ContentHost.Children.Add(Describe(new Label
+        {
+            Text = text.Resolve(MessageKeys.TimelineTitle),
+            Style = ThemeStyle("HeadingLabelStyle"),
+        }));
+        ContentHost.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { filterPicker, markAllReadButton } });
         ContentHost.Children.Add(timelineStatusLabel);
         ContentHost.Children.Add(timelineItemsHost);
         ContentHost.Children.Add(loadMoreButton);
         ContentHost.Children.Add(copyNoticeLabel);
-        ContentHost.Children.Add(new HorizontalStackLayout { Children = { messageEntry, sendMessageButton } });
+        // Mockup's own composer card (outlined reply box, divider-separated action row) -- the
+        // "attach" chip and "ctx NNk / NNNk" token counter have no backing data or capability in this
+        // shell today (no attachment upload, no token-budget projection anywhere in
+        // SprintWorkspaceViewModel), so this reproduces only the parts the Host actually supports:
+        // the reply Entry and its Send button.
+        ContentHost.Children.Add(new Border
+        {
+            Style = ThemeStyle("CardStyle"),
+            Stroke = ThemeColor("ColorDivider"),
+            StrokeThickness = 1,
+            Content = new VerticalStackLayout
+            {
+                Spacing = 8,
+                Children =
+                {
+                    messageEntry,
+                    new HorizontalStackLayout { Spacing = 8, HorizontalOptions = LayoutOptions.End, Children = { sendMessageButton } },
+                },
+            },
+        });
         ContentHost.Children.Add(messageResult);
 
         // ADR 0005's project-wide `control.events` capability is distinct from the sprint-scoped
         // Timeline above (it spans every sprint in the project, not just this one) -- kept reachable
         // here rather than dropped, matching plan 12.1's "every current Desktop capability remains
         // reachable."
-        Label rawEventsResult = new();
-        Button pollRawEvents = new() { Text = text.Resolve(MessageKeys.EventsPollAction) };
+        Label rawEventsResult = new() { Style = ThemeStyle("MutedLabelStyle") };
+        Button pollRawEvents = new()
+        {
+            Text = text.Resolve(MessageKeys.EventsPollAction),
+            Style = ThemeStyle("GhostButtonStyle"),
+        };
         pollRawEvents.Clicked += (_, _) => _ = RunAsync(async () =>
             rawEventsResult.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));
         // PR #110 review finding 3: see ClearContentFocusWhenFocused's own remarks.

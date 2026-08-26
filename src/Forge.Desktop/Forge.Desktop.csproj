@@ -15,6 +15,20 @@
     <ForgeOsAdapter>true</ForgeOsAdapter>
   </PropertyGroup>
   <ItemGroup>
+    <!-- The MAUI SDK's default item globs did not pick these up (verified via
+         `dotnet msbuild -getItem:MauiFont` returning empty and a Release build shipping no .ttf
+         files), so they're declared explicitly. -->
+    <MauiFont Include="Resources\Fonts\*.ttf" />
+    <!-- OFL-1.1 (Inter) and MIT (Phosphor) both require their notice to travel with the binaries,
+         so the notice ships next to the fonts it covers instead of only living in source. MauiFont
+         flattens the .ttf files to the output root, so Link (which is what AssignTargetPath derives
+         the copied-to path from) has to flatten this item the same way. Without it the notice keeps
+         its Resources\Fonts\ relative path and lands in a subfolder of its own, away from every
+         binary it covers (PR #112 review round 2). -->
+    <None Update="Resources\Fonts\THIRD-PARTY-NOTICES.md" Link="THIRD-PARTY-NOTICES.md"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+  <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Debug" />
     <PackageReference Include="Microsoft.Maui.Controls" />
     <ProjectReference Include="..\Forge.Desktop.Presentation\Forge.Desktop.Presentation.csproj" />

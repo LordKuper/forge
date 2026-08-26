@@ -267,7 +267,7 @@
       "forge.runtime": {
         "type": "Project",
         "dependencies": {
-          "Forge.Host.Client": "[0.78.0, )",
+          "Forge.Host.Client": "[0.79.0, )",
           "JsonSchema.Net": "[9.4.0, )",
           "Microsoft.Extensions.Hosting": "[10.0.10, )",
           "YamlDotNet": "[18.1.0, )"
@@ -276,7 +276,7 @@
       "forge.runtime.windows": {
         "type": "Project",
         "dependencies": {
-          "Forge.Runtime": "[0.78.0, )"
+          "Forge.Runtime": "[0.79.0, )"
         }
       },
       "JsonSchema.Net": {
