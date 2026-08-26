@@ -22,6 +22,7 @@ public sealed class ForgeSelfUpdater(
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
+        request.Progress?.Report(new(1, 7, "Detecting the update target."));
         UpdateTarget target = targetDetector.Detect();
         StrategyResolution resolution = strategyResolver.Resolve(target);
         if (!resolution.IsSuccess)
@@ -29,6 +30,7 @@ public sealed class ForgeSelfUpdater(
             return Failed(resolution.Diagnostic);
         }
 
+        request.Progress?.Report(new(2, 7, "Waiting for the update lock."));
         UpdateLockResult lockResult = await updateLock.AcquireAsync(target, cancellationToken).ConfigureAwait(false);
         if (!lockResult.IsAcquired)
         {
@@ -36,6 +38,7 @@ public sealed class ForgeSelfUpdater(
         }
 
         await using IAsyncDisposable updateLease = lockResult.Lease!;
+        request.Progress?.Report(new(3, 7, "Resolving the latest stable release."));
         ReleaseLookupResult lookup = await releaseClient.GetLatestStableAsync(
             request.CurrentVersion,
             cancellationToken).ConfigureAwait(false);
@@ -49,6 +52,7 @@ public sealed class ForgeSelfUpdater(
             return Failed(lookup.Diagnostic);
         }
 
+        request.Progress?.Report(new(4, 7, $"Downloading and verifying Forge {lookup.Release!.Version}."));
         VerificationResult verification = await releaseVerifier.VerifyAsync(
             lookup.Release!,
             target,
@@ -59,6 +63,7 @@ public sealed class ForgeSelfUpdater(
         }
 
         IPlatformUpdateStrategy strategy = resolution.Strategy!;
+        request.Progress?.Report(new(5, 7, "Downloading, extracting, and self-testing the release."));
         StageResult staged = await strategy.StageAsync(
             verification.Release!,
             target,
@@ -70,6 +75,7 @@ public sealed class ForgeSelfUpdater(
 
         RestartIdentity restartIdentity = new(verification.Release!.Version, target, request.Surface);
         RestartContext restart = restartTokens.Create(request, restartIdentity);
+        request.Progress?.Report(new(6, 7, "Activating the verified release."));
         ActivationResult activated = await strategy.ActivateAsync(
             staged.Staged!,
             restart,
@@ -81,6 +87,7 @@ public sealed class ForgeSelfUpdater(
         }
 
         UpdateDiagnostic restartResult;
+        request.Progress?.Report(new(7, 7, "Restarting Forge with the activated release."));
         try
         {
             RestartContext launch = activated.Receipt!.ExecutablePath is { Length: > 0 } executablePath

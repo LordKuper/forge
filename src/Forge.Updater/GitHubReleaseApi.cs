@@ -6,6 +6,9 @@ namespace Forge.Updater;
 
 public sealed class GitHubReleaseApi : IReleaseApi
 {
+    private static readonly Uri LatestReleaseUri = new(
+        "https://github.com/LordKuper/forge/releases/latest",
+        UriKind.Absolute);
     private static readonly Uri ReleasesUri = new(
         "https://api.github.com/repos/LordKuper/forge/releases?per_page=100",
         UriKind.Absolute);
@@ -33,6 +36,11 @@ public sealed class GitHubReleaseApi : IReleaseApi
             message,
             HttpCompletionOption.ResponseHeadersRead,
             cancellationToken).ConfigureAwait(false);
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+        {
+            return await GetLatestWithoutApiAsync(cancellationToken).ConfigureAwait(false);
+        }
+
         if (response.StatusCode == HttpStatusCode.NotModified)
         {
             return new(true, response.Headers.ETag?.Tag, Array.Empty<ReleaseMetadata>());
@@ -56,6 +64,76 @@ public sealed class GitHubReleaseApi : IReleaseApi
         }
 
         return new(false, response.Headers.ETag?.Tag, releases);
+    }
+
+    private async ValueTask<ReleaseApiResponse> GetLatestWithoutApiAsync(CancellationToken cancellationToken)
+    {
+        using HttpResponseMessage releasePage = await client.GetAsync(
+            LatestReleaseUri,
+            HttpCompletionOption.ResponseHeadersRead,
+            cancellationToken).ConfigureAwait(false);
+        releasePage.EnsureSuccessStatusCode();
+        Uri releaseUri = releasePage.RequestMessage?.RequestUri ?? LatestReleaseUri;
+        const string marker = "/releases/tag/";
+        int markerIndex = releaseUri.AbsolutePath.IndexOf(marker, StringComparison.Ordinal);
+        string tag = markerIndex >= 0
+            ? Uri.UnescapeDataString(releaseUri.AbsolutePath[(markerIndex + marker.Length)..]).TrimEnd('/')
+            : string.Empty;
+        if (!SemanticVersion.TryParse(tag, out SemanticVersion? version) || string.IsNullOrWhiteSpace(tag))
+        {
+            throw new InvalidDataException("GitHub's latest-release redirect did not contain a semantic version tag.");
+        }
+
+        Uri downloadRoot = new($"https://github.com/LordKuper/forge/releases/download/{Uri.EscapeDataString(tag)}/");
+        Uri checksumsUri = new(downloadRoot, "checksums.txt");
+        using HttpResponseMessage checksumsResponse = await client.GetAsync(
+            checksumsUri,
+            HttpCompletionOption.ResponseContentRead,
+            cancellationToken).ConfigureAwait(false);
+        checksumsResponse.EnsureSuccessStatusCode();
+        byte[] checksums = await checksumsResponse.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        List<ReleaseAsset> assets = ParseChecksumAssets(checksums, downloadRoot);
+        assets.Add(new("checksums.txt", checksums.LongLength, checksumsUri));
+        return new(false, null,
+        [
+            new(
+                version!,
+                releaseUri,
+                false,
+                false,
+                releasePage.Content.Headers.LastModified ?? DateTimeOffset.MinValue,
+                assets),
+        ]);
+    }
+
+    private static List<ReleaseAsset> ParseChecksumAssets(byte[] checksums, Uri downloadRoot)
+    {
+        List<ReleaseAsset> assets = [];
+        foreach (string line in System.Text.Encoding.UTF8.GetString(checksums).Split('\n'))
+        {
+            string[] fields = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            if (fields.Length == 3 &&
+                fields[0].Length == 64 &&
+                fields[0].All(Uri.IsHexDigit) &&
+                long.TryParse(
+                    fields[1],
+                    System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    out long size) &&
+                size >= 0 &&
+                !string.IsNullOrWhiteSpace(fields[2]))
+            {
+                string name = fields[2].TrimStart('*');
+                assets.Add(new(name, size, new(downloadRoot, Uri.EscapeDataString(name))));
+            }
+        }
+
+        if (assets.Count == 0)
+        {
+            throw new InvalidDataException("The release checksum manifest contains no valid assets.");
+        }
+
+        return assets;
     }
 
     private static bool TryReadRelease(JsonElement item, out ReleaseMetadata? release)

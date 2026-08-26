@@ -364,11 +364,13 @@ public sealed class CliTests
             CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("ru");
             using TestEnvironment environment = new();
             StringWriter output = new(CultureInfo.InvariantCulture);
+            StringWriter diagnostics = new(CultureInfo.InvariantCulture);
             ResourceLocalizationCatalog catalog = new();
             RootCommand root = CliApplication.CreateRootCommand(
                 Text(catalog),
                 output,
                 environment.Application,
+                diagnostics,
                 install: _ => ValueTask.FromResult(InstallationResult.Failure(new(
                     UpdateDiagnosticCode.ReleaseUnavailable,
                     "The release endpoint could not be reached."))));
@@ -379,11 +381,42 @@ public sealed class CliTests
 
             Assert.Equal(ExitCodes.Update, exitCode);
             Assert.Equal($"{catalog.Resolve(MessageKeys.InstallFailed)}{Environment.NewLine}", output.ToString());
+            Assert.Equal(
+                $"ReleaseUnavailable: The release endpoint could not be reached.{Environment.NewLine}",
+                diagnostics.ToString());
         }
         finally
         {
             CultureInfo.CurrentUICulture = original;
         }
+    }
+
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task UpdateCommandPrintsFailureDiagnostics()
+    {
+        using TestEnvironment environment = new();
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        StringWriter diagnostics = new(CultureInfo.InvariantCulture);
+        ResourceLocalizationCatalog catalog = new();
+        RootCommand root = CliApplication.CreateRootCommand(
+            Text(catalog),
+            output,
+            environment.Application,
+            diagnostics,
+            update: _ => ValueTask.FromResult(new UpdateResult(
+                UpdateLifecycleState.Failed,
+                new(UpdateDiagnosticCode.StagingFailed, "The staged host self-test failed."))));
+
+        int exitCode = await root
+            .Parse(["update"])
+            .InvokeAsync(new InvocationConfiguration(), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ExitCodes.Update, exitCode);
+        Assert.Equal($"{catalog.Resolve(MessageKeys.UpdateFailed)}{Environment.NewLine}", output.ToString());
+        Assert.Equal(
+            $"StagingFailed: The staged host self-test failed.{Environment.NewLine}",
+            diagnostics.ToString());
     }
 
     [Fact]

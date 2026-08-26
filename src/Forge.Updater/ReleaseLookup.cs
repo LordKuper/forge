@@ -40,9 +40,12 @@ public sealed class ForgeReleaseClient(IReleaseApi api) : IForgeReleaseClient
                 new ReleaseApiRequest(entityTag),
                 cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException exception)
         {
-            return new(null, new(UpdateDiagnosticCode.ReleaseUnavailable, "The release endpoint could not be reached."), false);
+            string detail = exception.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.TooManyRequests
+                ? "GitHub refused the release lookup because its request limit was exceeded. Retry later."
+                : "The release endpoint could not be reached.";
+            return new(null, new(UpdateDiagnosticCode.ReleaseUnavailable, detail), false);
         }
         IReadOnlyList<ReleaseMetadata>? releases = response.NotModified ? cachedReleases : response.Releases;
         if (releases is null)

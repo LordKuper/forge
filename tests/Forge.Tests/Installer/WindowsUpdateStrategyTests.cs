@@ -276,11 +276,16 @@ public sealed class WindowsUpdateStrategyTests
             releases,
             new PassingVerifier(release),
             new WindowsUpdateStrategy(new MemoryDownloader(archive), temporary.Path, new PassingSelfTester()));
+        RecordingProgress progress = new();
 
-        WindowsInstallationResult result = await installer.InstallLatestAsync(TestContext.Current.CancellationToken);
+        WindowsInstallationResult result = await installer.InstallLatestAsync(
+            progress,
+            TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal("0.0.0", releases.CurrentVersion!.ToString());
+        Assert.Equal(Enumerable.Range(1, 6), progress.Values.Select(value => value.Step));
+        Assert.All(progress.Values, value => Assert.Equal(6, value.TotalSteps));
     }
 
     [Fact]
@@ -661,6 +666,13 @@ public sealed class WindowsUpdateStrategyTests
             DownloadCount++;
             return ValueTask.FromResult<Stream>(new MemoryStream(contents, writable: false));
         }
+    }
+
+    private sealed class RecordingProgress : IProgress<UpdateProgress>
+    {
+        public List<UpdateProgress> Values { get; } = [];
+
+        public void Report(UpdateProgress value) => Values.Add(value);
     }
 
     private sealed class PassingSelfTester : IWindowsHostSelfTester

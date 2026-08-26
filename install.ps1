@@ -23,6 +23,46 @@ function Get-ForgeBootstrapArchitecture {
     }
 }
 
+function Get-ForgeLatestReleaseWithoutApi(
+    [ValidateSet('x64', 'arm64')]
+    [string]$Architecture,
+    [hashtable]$Headers
+) {
+    Write-Host 'GitHub API lookup was unavailable; resolving the release through GitHub Releases...'
+    $response = Invoke-WebRequest `
+        -Uri 'https://github.com/LordKuper/forge/releases/latest' `
+        -Headers $Headers `
+        -UseBasicParsing
+    $finalUri = if ($response.BaseResponse.RequestMessage) {
+        $response.BaseResponse.RequestMessage.RequestUri.AbsoluteUri
+    }
+    else {
+        $response.BaseResponse.ResponseUri.AbsoluteUri
+    }
+
+    if ($finalUri -notmatch '/releases/tag/(?<tag>v\d+\.\d+\.\d+)/?$') {
+        throw "GitHub's latest-release redirect did not contain a stable Forge version: $finalUri"
+    }
+
+    $tag = $Matches.tag
+    $downloadRoot = "https://github.com/LordKuper/forge/releases/download/$tag"
+    [pscustomobject]@{
+        tag_name = $tag
+        draft = $false
+        prerelease = $false
+        assets = @(
+            [pscustomobject]@{
+                name = "forge-windows-$Architecture-portable_bundle.zip"
+                browser_download_url = "$downloadRoot/forge-windows-$Architecture-portable_bundle.zip"
+            }
+            [pscustomobject]@{
+                name = 'checksums.txt'
+                browser_download_url = "$downloadRoot/checksums.txt"
+            }
+        )
+    }
+}
+
 function Invoke-ForgeBootstrap(
     [ValidateSet('x64', 'arm64')]
     [string]$Architecture,
@@ -48,10 +88,12 @@ function Invoke-ForgeBootstrap(
         $bundlePath = Join-Path $temporaryDirectory $bundleName
         $checksumsPath = Join-Path $temporaryDirectory 'checksums.txt'
 
-        Write-Output "Downloading Forge $($Release.tag_name) for Windows $Architecture..."
+        Write-Output "[1/6] Downloading the checksum manifest for Forge $($Release.tag_name)..."
         & $DownloadFile $checksumAssets[0].browser_download_url $checksumsPath
+        Write-Output "[2/6] Downloading Forge $($Release.tag_name) for Windows $Architecture..."
         & $DownloadFile $bundleAssets[0].browser_download_url $bundlePath
 
+        Write-Output '[3/6] Verifying the bundle size and SHA-256 hash...'
         $matchingChecksums = @(Get-Content -LiteralPath $checksumsPath | ForEach-Object {
             if ($_ -match '^(?<hash>[0-9A-Fa-f]{64})\s+(?<size>\d+)\s+(?<name>.+)$' -and
                 $Matches.name -eq $bundleName) {
@@ -75,6 +117,7 @@ function Invoke-ForgeBootstrap(
             throw 'Downloaded bundle SHA-256 does not match checksums.txt.'
         }
 
+        Write-Output '[4/6] Extracting the verified bundle...'
         $extractionPath = Join-Path $temporaryDirectory 'bundle'
         Expand-Archive -LiteralPath $bundlePath -DestinationPath $extractionPath
         $forgePath = Join-Path $extractionPath 'forge.exe'
@@ -82,9 +125,9 @@ function Invoke-ForgeBootstrap(
             throw 'The downloaded bundle does not contain forge.exe at its root.'
         }
 
-        Write-Output 'Starting the Forge per-user installer...'
+        Write-Output '[5/6] Starting the Forge per-user installer...'
         & $RunInstaller $forgePath
-        Write-Output 'Forge installation completed. Open a new terminal and run: forge --version'
+        Write-Output '[6/6] Forge installation completed. Open a new terminal and run: forge --version'
     }
     finally {
         if (Test-Path -LiteralPath $temporaryDirectory) {
@@ -114,9 +157,17 @@ function Install-Forge {
 
     $headers = @{ 'User-Agent' = 'Forge-Installer' }
     Write-Output 'Resolving the latest stable Forge release...'
-    $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/LordKuper/forge/releases/latest' -Headers $headers
+    $architecture = Get-ForgeBootstrapArchitecture
+    try {
+        $release = Invoke-RestMethod -Uri 'https://api.github.com/repos/LordKuper/forge/releases/latest' -Headers $headers
+    }
+    catch {
+        Write-Output "GitHub API lookup failed: $($_.Exception.Message)"
+        $release = Get-ForgeLatestReleaseWithoutApi $architecture $headers
+    }
+
     Invoke-ForgeBootstrap `
-        -Architecture (Get-ForgeBootstrapArchitecture) `
+        -Architecture $architecture `
         -Release $release `
         -DownloadFile {
             param($Uri, $Destination)

@@ -40,6 +40,9 @@ and SHA-256 checksum, then runs Forge's existing per-user installer. The script
 and release are not code-signed; HTTPS and the GitHub repository are the trust
 boundary for this initial distribution method.
 Rerun the same command to update or repair an existing per-user installation.
+The bootstrap and built-in install/update commands print numbered progress
+stages. On failure, the built-in commands also write the diagnostic code and
+detail to standard error.
 
 ## Commands
 
@@ -51,6 +54,8 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 | `forge doctor [--startup] [--recover --yes] [--bundle]` | Show the startup summary, the ordered checks with `--startup`, quarantine unreadable configuration with `--recover`, or emit a redacted diagnostic bundle with `--bundle`. |
 | `forge eval [--project-root <path>]` | Evaluate the updater, provider, bootstrap, and workflow subsystems plus the project model-policy gate; JSON, non-zero exit on a failed check. |
 | `forge init --project-root <absolute-path> [--yes]` | Display the absolute root and initialize `.forge/` after confirmation. |
+| `forge install` | Install or repair the latest verified per-user release. |
+| `forge update` | Resolve, verify, activate, and restart into the latest stable release. |
 | `forge status [--detail summary\|full] [--sprint <id>] [--json]` | Show the project status snapshot; `--json` emits the versioned machine contract. |
 | `forge tree [--sprint <id>] [--json]` | Show the sprint hierarchy, nesting each attempt under its owning node. |
 | `forge sprint inspect <id> [--json]` | Show one sprint's full node/attempt/finding/routing detail. |

@@ -10,4 +10,9 @@ public sealed record InstallationResult(bool Succeeded, string? InstalledPath, U
 public interface IPlatformInstaller
 {
     ValueTask<InstallationResult> InstallLatestAsync(CancellationToken cancellationToken);
+
+    ValueTask<InstallationResult> InstallLatestAsync(
+        IProgress<UpdateProgress>? progress,
+        CancellationToken cancellationToken) =>
+        InstallLatestAsync(cancellationToken);
 }

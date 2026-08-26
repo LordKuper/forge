@@ -84,12 +84,12 @@ public static class CliApplication
             CreateFinalizeCommand(text, output, diagnostics, effectiveResolver, effectiveIsInteractive));
         if (install is not null)
         {
-            root.Subcommands.Add(CreateInstallCommand(text, output, install));
+            root.Subcommands.Add(CreateInstallCommand(text, output, diagnostics, install));
         }
 
         if (update is not null)
         {
-            root.Subcommands.Add(CreateUpdateCommand(text, output, update));
+            root.Subcommands.Add(CreateUpdateCommand(text, output, diagnostics, update));
         }
 
         return root;
@@ -1638,6 +1638,7 @@ public static class CliApplication
     private static Command CreateInstallCommand(
         SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         Func<CancellationToken, ValueTask<InstallationResult>> install)
     {
         Command command = new("install", text.Resolve(MessageKeys.InstallDescription));
@@ -1647,6 +1648,11 @@ public static class CliApplication
             output.WriteLine(result.Succeeded
                 ? text.Resolve(MessageKeys.InstallCompleted)
                 : text.Resolve(MessageKeys.InstallFailed));
+            if (!result.Succeeded)
+            {
+                diagnostics.WriteLine($"{result.Diagnostic.Code}: {result.Diagnostic.Detail}");
+            }
+
             return result.Succeeded ? ExitCodes.Ok : ExitCodes.Update;
         });
         return command;
@@ -1655,6 +1661,7 @@ public static class CliApplication
     private static Command CreateUpdateCommand(
         SurfaceText text,
         TextWriter output,
+        TextWriter diagnostics,
         Func<CancellationToken, ValueTask<UpdateResult>> update)
     {
         Command command = new("update", text.Resolve(MessageKeys.UpdateDescription));
@@ -1664,6 +1671,11 @@ public static class CliApplication
             output.WriteLine(result.Diagnostic.Code == UpdateDiagnosticCode.None
                 ? text.Resolve(MessageKeys.UpdateCompleted)
                 : text.Resolve(MessageKeys.UpdateFailed));
+            if (result.Diagnostic.Code != UpdateDiagnosticCode.None)
+            {
+                diagnostics.WriteLine($"{result.Diagnostic.Code}: {result.Diagnostic.Detail}");
+            }
+
             return result.Diagnostic.Code == UpdateDiagnosticCode.None
                 ? ExitCodes.Ok
                 : ExitCodes.Update;
