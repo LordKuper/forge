@@ -10,8 +10,13 @@ User-facing Forge changes are listed by release, newest first.
   default appearance: Inter typography, Phosphor icons, and a consistent purple accent with
   color-coded status indicators (running, waiting, blocked, review, done) across the sidebar, the
   sprint workspace's status header/timeline/action bar, and the Forge/Project settings and Project
-  Overview pages. No navigation, control behavior, keyboard/screen-reader accessibility, or
-  localization changed -- only appearance.
+  Overview pages. No navigation, control behavior, screen-reader accessibility, or localization
+  changed. Three things did move or appear on screen: "Remove from catalog" now sits on its own at
+  the bottom of Project settings in a red-tinted danger-zone card instead of near the top of the
+  action list (it is still keyboard-reachable, now last in tab order on that page), each sidebar
+  project's settings button moved from the bottom of its sprint list into the project's own header
+  row next to its name, and the sidebar gained a per-project count of active sprints plus a small
+  Forge name/version row at the very top.
 
 ## v0.78.0
 

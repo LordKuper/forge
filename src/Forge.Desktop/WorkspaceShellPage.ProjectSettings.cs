@@ -25,13 +25,13 @@ public partial class WorkspaceShellPage
         // MonoLabelStyle since both are technical path/identifier text, matching the mockup's own
         // monospace treatment of its local-path field.
         VerticalStackLayout identityCard = new() { Spacing = 6 };
-        identityCard.Children.Add(Styled(new Label
+        identityCard.Children.Add(Themed(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"{text.Resolve(MessageKeys.ProjectSettingsRootLabel)}: {snapshot.Root}"),
         }, "MonoLabelStyle"));
-        identityCard.Children.Add(Styled(new Label
+        identityCard.Children.Add(Themed(new Label
         {
             Text = string.Create(
                 System.Globalization.CultureInfo.InvariantCulture,
@@ -39,8 +39,8 @@ public partial class WorkspaceShellPage
         }, "MonoLabelStyle"));
 
         Entry aliasEntry = Describe(new Entry { Text = snapshot.Alias }, text.Resolve(MessageKeys.ProjectSettingsAliasLabel));
-        Button aliasSave = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "SecondaryButtonStyle");
-        Label result = Styled(new Label(), "MutedLabelStyle");
+        Button aliasSave = Themed(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "SecondaryButtonStyle");
+        Label result = Themed(new Label(), "MutedLabelStyle");
         aliasSave.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             // PR #98 review finding 4: report the alias write's real outcome instead of an
@@ -50,8 +50,8 @@ public partial class WorkspaceShellPage
                 .ConfigureAwait(true);
         });
         identityCard.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { aliasEntry, aliasSave } });
-        Border identityPanel = Styled(new Border { Content = identityCard, Padding = 11 }, "OutlinedPanelStyle");
-        identityPanel.BackgroundColor = ResColor("ColorSurface");
+        Border identityPanel = Themed(new Border { Content = identityCard, Padding = ThemeSpace("Space4") }, "OutlinedPanelStyle");
+        identityPanel.BackgroundColor = ThemeColor("ColorSurface");
         ContentHost.Children.Add(identityPanel);
 
         Entry userFacing = Describe(
@@ -73,7 +73,7 @@ public partial class WorkspaceShellPage
         ContentHost.Children.Add(allowedModels);
         ContentHost.Children.Add(ProvenanceLabel(snapshot.AllowedModelsProvenance));
 
-        Button save = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "PrimaryButtonStyle");
+        Button save = Themed(new Button { Text = text.Resolve(MessageKeys.SettingsSaveAction) }, "PrimaryButtonStyle");
         save.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             ProjectSettingsEdit edit = new()
@@ -106,20 +106,20 @@ public partial class WorkspaceShellPage
                 await RenderContentAsync().ConfigureAwait(true);
             }
         });
-        Button discard = Styled(new Button { Text = text.Resolve(MessageKeys.SettingsDiscardAction) }, "SecondaryButtonStyle");
+        Button discard = Themed(new Button { Text = text.Resolve(MessageKeys.SettingsDiscardAction) }, "SecondaryButtonStyle");
         discard.Clicked += (_, _) => _ = RunAsync(RenderContentAsync);
         ContentHost.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { save, discard } });
         ContentHost.Children.Add(result);
 
         ContentHost.Children.Add(SectionDivider());
-        Button relink = Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRelinkAction) }, "SecondaryButtonStyle");
+        Button relink = Themed(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRelinkAction) }, "SecondaryButtonStyle");
         relink.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             result.Text = await projectSettings.RelinkAsync(projectId, CancellationToken.None).ConfigureAwait(true);
         });
         ContentHost.Children.Add(relink);
 
-        Button recover = Styled(new Button { Text = text.Resolve(MessageKeys.RecoverAction) }, "SecondaryButtonStyle");
+        Button recover = Themed(new Button { Text = text.Resolve(MessageKeys.RecoverAction) }, "SecondaryButtonStyle");
         recover.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.RecoverAction);
@@ -132,8 +132,8 @@ public partial class WorkspaceShellPage
 
         ContentHost.Children.Add(BuildIntegrationSection(root, result));
 
-        Button diagnosticBundle = Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsDiagnosticBundleAction) }, "SecondaryButtonStyle");
-        Label bundleOutput = Styled(new Label(), "MutedLabelStyle");
+        Button diagnosticBundle = Themed(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsDiagnosticBundleAction) }, "SecondaryButtonStyle");
+        Label bundleOutput = Themed(new Label(), "MutedLabelStyle");
         diagnosticBundle.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             bundleOutput.Text = await projectSettings.GenerateDiagnosticBundleAsync(root, CancellationToken.None)
@@ -149,7 +149,7 @@ public partial class WorkspaceShellPage
         // localization key today; see the final report).
         ContentHost.Children.Add(SectionDivider());
         Button removeFromCatalog =
-            Styled(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRemoveFromCatalogAction) }, "DangerButtonStyle");
+            Themed(new Button { Text = text.Resolve(MessageKeys.ProjectSettingsRemoveFromCatalogAction) }, "DangerButtonStyle");
         removeFromCatalog.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             await projectSettings.RemoveFromCatalogAsync(projectId, CancellationToken.None).ConfigureAwait(true);
@@ -157,18 +157,18 @@ public partial class WorkspaceShellPage
             await RenderSidebarAsync().ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         });
-        ContentHost.Children.Add(Styled(new Border { Content = removeFromCatalog }, "DangerCardStyle"));
+        ContentHost.Children.Add(Themed(new Border { Content = removeFromCatalog }, "DangerCardStyle"));
     }
 
     private VerticalStackLayout BuildIntegrationSection(string root, Label result)
     {
-        Label integrationPreview = Styled(new Label(), "MutedLabelStyle");
-        Button generate = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationGenerateAction) }, "SecondaryButtonStyle");
+        Label integrationPreview = Themed(new Label(), "MutedLabelStyle");
+        Button generate = Themed(new Button { Text = text.Resolve(MessageKeys.IntegrationGenerateAction) }, "SecondaryButtonStyle");
         generate.Clicked += (_, _) => _ = RunAsync(async () =>
             integrationPreview.Text = await projectSettings
                 .GenerateIntegrationPreviewAsync(root, CancellationToken.None)
                 .ConfigureAwait(true));
-        Button install = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationInstallAction) }, "SecondaryButtonStyle");
+        Button install = Themed(new Button { Text = text.Resolve(MessageKeys.IntegrationInstallAction) }, "SecondaryButtonStyle");
         install.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.IntegrationInstallAction);
@@ -177,7 +177,7 @@ public partial class WorkspaceShellPage
             result.Text = await projectSettings.InstallIntegrationAsync(root, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
         });
-        Button remove = Styled(new Button { Text = text.Resolve(MessageKeys.IntegrationRemoveAction) }, "SecondaryButtonStyle");
+        Button remove = Themed(new Button { Text = text.Resolve(MessageKeys.IntegrationRemoveAction) }, "SecondaryButtonStyle");
         remove.Clicked += (_, _) => _ = RunAsync(async () =>
         {
             string action = text.Resolve(MessageKeys.IntegrationRemoveAction);

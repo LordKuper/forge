@@ -1,7 +1,9 @@
 namespace Forge.Desktop.Theme;
 
 /// <summary>
-/// Phosphor "regular" glyph codepoints (https://phosphoricons.com, MIT), for use with a
+/// Phosphor "regular" glyph codepoints (https://phosphoricons.com, MIT -- the redistribution notice
+/// for this font and for Inter is Resources/Fonts/THIRD-PARTY-NOTICES.md, which ships beside the
+/// font binaries), for use with a
 /// <see cref="Microsoft.Maui.Controls.Label"/> whose FontFamily is the "Phosphor" alias registered
 /// in MauiProgram.ConfigureFonts. Only the glyphs the Nocturne visual pass actually uses are listed;
 /// extend as needed rather than pre-declaring the whole icon set. Codepoints read from

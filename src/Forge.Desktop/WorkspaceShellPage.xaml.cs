@@ -435,8 +435,15 @@ public partial class WorkspaceShellPage : ContentPage
     /// interaction and no information beyond its own visible text needs no separate accessible name).
     /// The version string reuses the exact same assembly-version reflection
     /// <see cref="App"/>'s own constructor already calls for the update handshake, so this can never
-    /// drift from the real build the way a hand-maintained literal could.</summary>
-    private static Grid BuildSidebarBrandRow()
+    /// drift from the real build the way a hand-maintained literal could.
+    /// PR #112 review finding 5: the wordmark is the resolved <see cref="MessageKeys.AppTitle"/> --
+    /// the same key <see cref="App"/> already uses for the window title -- rendered through
+    /// <see cref="TextTransform.Uppercase"/>, never a hardcoded "FORGE" literal. The mockup's
+    /// all-caps treatment is presentation, so it stays in the view; the word itself routes through
+    /// <see cref="SurfaceTextProvider"/> like every other user-visible string this shell renders
+    /// (the brand name is deliberately identical in every locale's resource, not untranslated).
+    /// </summary>
+    private Grid BuildSidebarBrandRow()
     {
         Grid row = new()
         {
@@ -458,7 +465,8 @@ public partial class WorkspaceShellPage : ContentPage
         };
         Label wordmark = new()
         {
-            Text = "FORGE",
+            Text = text.Resolve(MessageKeys.AppTitle),
+            TextTransform = TextTransform.Uppercase,
             Style = ThemeStyle("HeadingLabelStyle"),
             FontSize = 12,
             CharacterSpacing = 2.5,
@@ -623,11 +631,19 @@ public partial class WorkspaceShellPage : ContentPage
             string.Create(System.Globalization.CultureInfo.InvariantCulture, $"project:{project.ProjectId:D}"),
             projectButton));
 
+        // PR #112 review finding 4: a bare integer is meaningless to a screen reader, so it carries
+        // the same "<n> active sprints" wording SidebarViewModel.AccessibleProjectName already builds
+        // from this very count -- the existing SidebarActiveSprintsLabel key, no new copy invented.
         Label sprintCount = new()
         {
             Text = project.ActiveSprints.Count.ToString(System.Globalization.CultureInfo.InvariantCulture),
             Style = ThemeStyle("MonoLabelStyle"),
         };
+        SemanticProperties.SetDescription(
+            sprintCount,
+            string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{project.ActiveSprints.Count} {text.Resolve(MessageKeys.SidebarActiveSprintsLabel)}"));
         Grid.SetColumn(sprintCount, 2);
         header.Children.Add(sprintCount);
 
@@ -635,11 +651,16 @@ public partial class WorkspaceShellPage : ContentPage
         // already a plain decorative placeholder (never routed through SurfaceTextProvider), so
         // swapping it for a Phosphor gear glyph changes only how it looks, not any copy this file is
         // otherwise forbidden from touching. The accessible name (ProjectSettingsTitle) is unchanged.
+        // PR #112 review finding 2: the glyph is the button's own Text (the same icon-only-Button
+        // shape BuildProjectSprintsToggleButton already uses), never an ImageSource over an empty
+        // Text -- that combination is the one blank-button case SidebarIcon's own remarks rule out.
         Button settingsButton = new()
         {
-            Text = string.Empty,
+            Text = IconGlyphs.Gear,
             Style = ThemeStyle("GhostButtonStyle"),
-            ImageSource = SidebarIcon(IconGlyphs.Gear, ThemeColor("ColorNeutral600")),
+            FontFamily = ThemeString("FontIcon"),
+            FontSize = 12,
+            TextColor = ThemeColor("ColorNeutral600"),
             MinimumWidthRequest = SidebarCollapsedToggleMinimumWidth,
         };
         SemanticProperties.SetDescription(settingsButton, text.Resolve(MessageKeys.ProjectSettingsTitle));
@@ -861,9 +882,12 @@ public partial class WorkspaceShellPage : ContentPage
         }
     }
 
-    // Nocturne visual pass -- small resource-lookup helpers so every color/style/spacing value below
-    // comes from the App.xaml token sheet (this file's assigned palette) instead of a hardcoded hex
-    // or magic number scattered through the sidebar-building methods.
+    // Nocturne visual pass -- the ONE resource-lookup helper set for the whole WorkspaceShellPage
+    // partial class (PR #112 review finding 3: WorkspaceShellPage.ForgeSettings.cs and
+    // WorkspaceShellPage.SprintWorkspace.cs each grew a byte-equivalent copy of the same one-line
+    // cast under a third name), so every color/style/spacing/font-family value in every
+    // WorkspaceShellPage*.cs file comes from the App.xaml token sheet instead of a hardcoded hex,
+    // magic number, or font-name literal.
     // Fully qualified: within namespace Forge.Desktop, an unqualified "Application" resolves to the
     // sibling namespace Forge.Application (both nest directly under "Forge") ahead of
     // Microsoft.Maui.Controls.Application from the MAUI SDK's global usings -- C#'s "a sibling
@@ -876,6 +900,14 @@ public partial class WorkspaceShellPage : ContentPage
     private static double ThemeSpace(string key) => (double)Microsoft.Maui.Controls.Application.Current!.Resources[key];
 
     private static string ThemeString(string key) => (string)Microsoft.Maui.Controls.Application.Current!.Resources[key];
+
+    /// <summary>Applies a named <see cref="Style"/> to a freshly constructed control and returns it,
+    /// so a control can be built and styled in one expression.</summary>
+    private static T Themed<T>(T control, string styleKey) where T : VisualElement
+    {
+        control.Style = ThemeStyle(styleKey);
+        return control;
+    }
 
     /// <summary>A Phosphor glyph rendered as a <see cref="Button"/>'s <see cref="Button.ImageSource"/>
     /// (paired with <see cref="Button.ContentLayout"/> to sit left of the button's own Text) -- the
@@ -932,7 +964,7 @@ public partial class WorkspaceShellPage : ContentPage
                 new Span { Text = value, TextColor = ThemeColor("ColorNeutral500") },
             },
         },
-        FontFamily = "Consolas",
+        FontFamily = ThemeString("FontMono"),
         FontSize = 10.5,
     };
 

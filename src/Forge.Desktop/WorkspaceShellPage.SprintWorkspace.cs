@@ -164,10 +164,10 @@ public partial class WorkspaceShellPage
         bool suppressFilterChanged = false;
 
         // Nocturne visual pass: every restyle below reads a named resource from App.xaml (never a
-        // hardcoded hex) through these two lookups -- kept local to this method rather than promoted
-        // to a shared helper since no other WorkspaceShellPage*.cs file needs them yet.
-        static Style ResourceStyle(string key) => (Style)Microsoft.Maui.Controls.Application.Current!.Resources[key];
-        static Color ResourceColor(string key) => (Color)Microsoft.Maui.Controls.Application.Current!.Resources[key];
+        // hardcoded hex or font-family literal) through this partial class's single canonical lookup
+        // set -- ThemeColor/ThemeStyle/ThemeSpace/ThemeString/Themed in WorkspaceShellPage.xaml.cs
+        // (PR #112 review finding 3: three byte-equivalent copies of that one-line cast existed here,
+        // in WorkspaceShellPage.ForgeSettings.cs, and there).
 
         // Plan 12.6 ("focus-stable after refresh"): RefreshAllAsync below rebuilds StickyHeaderHost's
         // and ContextualActionHost's buttons from scratch on every lifecycle/gate/move/supersede/
@@ -241,24 +241,30 @@ public partial class WorkspaceShellPage
             // pulsing "running" pill, which uses the accent ramp, not a status color.
             Color stateColor = header.SprintStateText switch
             {
-                "running" => ResourceColor("ColorAccent"),
-                "blocked" or "failed" => ResourceColor("ColorStatusRed"),
-                "paused" or "awaiting_human" => ResourceColor("ColorStatusAmber"),
-                "ready_to_finalize" => ResourceColor("ColorStatusBlue"),
-                _ => ResourceColor("ColorStatusGreen"),
+                "running" => ThemeColor("ColorAccent"),
+                "blocked" or "failed" => ThemeColor("ColorStatusRed"),
+                "paused" or "awaiting_human" => ThemeColor("ColorStatusAmber"),
+                "ready_to_finalize" => ThemeColor("ColorStatusBlue"),
+                _ => ThemeColor("ColorStatusGreen"),
             };
 
-            Label title = Describe(new Label
+            // PR #112 review finding 6: the visible heading drops the state (it moved into statePill
+            // below), but the heading's SPOKEN name keeps the exact pre-restyle
+            // "<project> - <sprint id> <n> - <state>" wording -- the pill is a decorative Border with
+            // no semantics of its own, so without this the state would be lost to a screen reader.
+            Label title = new()
             {
                 Text = string.Create(
                     CultureInfo.InvariantCulture,
                     $"{header.ProjectDisplayName} - {text.Resolve(MessageKeys.SprintIdLabel)} {header.SprintSequence}"),
-                Style = ResourceStyle("HeadingLabelStyle"),
+                Style = ThemeStyle("HeadingLabelStyle"),
                 LineBreakMode = LineBreakMode.TailTruncation,
-            });
+            };
+            SemanticProperties.SetDescription(
+                title, string.Create(CultureInfo.InvariantCulture, $"{title.Text} - {stateText}"));
             Border statePill = new()
             {
-                Style = ResourceStyle("TagAccentStyle"),
+                Style = ThemeStyle("TagAccentStyle"),
                 Stroke = stateColor,
                 StrokeThickness = 1,
                 VerticalOptions = LayoutOptions.Center,
@@ -266,7 +272,7 @@ public partial class WorkspaceShellPage
                 {
                     Text = stateText,
                     TextColor = stateColor,
-                    FontFamily = "Consolas",
+                    FontFamily = ThemeString("FontMono"),
                     FontSize = 10,
                 },
             };
@@ -281,7 +287,7 @@ public partial class WorkspaceShellPage
                 Spacing = 5,
                 Children =
                 {
-                    new Label { Text = glyph, Style = ResourceStyle("IconGlyphStyle"), FontSize = 11 },
+                    new Label { Text = glyph, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 },
                     new VerticalStackLayout
                     {
                         Spacing = 1,
@@ -289,13 +295,13 @@ public partial class WorkspaceShellPage
                         {
                             new Label
                             {
-                                Text = label, FontFamily = "Consolas", FontSize = 9,
-                                TextColor = ResourceColor("ColorNeutral700"),
+                                Text = label, FontFamily = ThemeString("FontMono"), FontSize = 9,
+                                TextColor = ThemeColor("ColorNeutral700"),
                             },
                             new Label
                             {
-                                Text = value, FontFamily = "Consolas", FontSize = 12,
-                                TextColor = ResourceColor("ColorNeutral200"),
+                                Text = value, FontFamily = ThemeString("FontMono"), FontSize = 12,
+                                TextColor = ThemeColor("ColorNeutral200"),
                             },
                         },
                     },
@@ -321,8 +327,8 @@ public partial class WorkspaceShellPage
                 Spacing = 5,
                 Children =
                 {
-                    new Label { Text = IconGlyphs.Cpu, Style = ResourceStyle("IconGlyphStyle"), FontSize = 11 },
-                    Describe(new Label { Text = header.ActiveProviderModelText, Style = ResourceStyle("MonoLabelStyle") }),
+                    new Label { Text = IconGlyphs.Cpu, Style = ThemeStyle("IconGlyphStyle"), FontSize = 11 },
+                    Describe(new Label { Text = header.ActiveProviderModelText, Style = ThemeStyle("MonoLabelStyle") }),
                 },
             });
 
@@ -338,7 +344,7 @@ public partial class WorkspaceShellPage
                     $"{text.Resolve(MessageKeys.SprintStatusHeaderStageLabel)}: {header.CurrentStageId ?? "-"}  " +
                         $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)}: {header.StagesCompleted}/{header.StagesTotal}  " +
                         $"{text.Resolve(MessageKeys.FindingsLabel)}: {header.OpenFindingsCount}"),
-                Style = ResourceStyle("MonoLabelStyle"),
+                Style = ThemeStyle("MonoLabelStyle"),
             }));
 
             string lastActivityText = header.LastActivityAt is { } activity
@@ -356,12 +362,12 @@ public partial class WorkspaceShellPage
                     $"{text.Resolve(MessageKeys.SprintStatusHeaderLastActivityLabel)}: {lastActivityText}  " +
                         $"{text.Resolve(MessageKeys.RoutingLabel)} retry_remaining={header.RetryRemaining}") +
                     resumeNotBeforeText,
-                Style = ResourceStyle("MutedLabelStyle"),
+                Style = ThemeStyle("MutedLabelStyle"),
             }));
             Button detailsToggle = new()
             {
                 Text = text.Resolve(MessageKeys.SprintStatusHeaderDetailsAction),
-                Style = ResourceStyle("GhostButtonStyle"),
+                Style = ThemeStyle("GhostButtonStyle"),
                 HorizontalOptions = LayoutOptions.Start,
             };
             detailsToggle.Clicked += (_, _) =>
@@ -371,7 +377,7 @@ public partial class WorkspaceShellPage
                 detailsLabel.IsVisible = !detailsLabel.IsVisible;
             };
             StickyHeaderHost.Children.Add(TrackContentFocus("header:details-toggle", detailsToggle));
-            detailsLabel.Style = ResourceStyle("MonoLabelStyle");
+            detailsLabel.Style = ThemeStyle("MonoLabelStyle");
             StickyHeaderHost.Children.Add(detailsLabel);
         }
 
@@ -405,7 +411,7 @@ public partial class WorkspaceShellPage
                 timelineItemsHost.Children.Add(Describe(new Label
                 {
                     Text = text.Resolve(MessageKeys.TimelineNoItems),
-                    Style = ResourceStyle("MutedLabelStyle"),
+                    Style = ThemeStyle("MutedLabelStyle"),
                 }));
             }
 
@@ -419,9 +425,9 @@ public partial class WorkspaceShellPage
                     Text = string.Create(
                         CultureInfo.InvariantCulture,
                         $"{(item.Unread ? "* " : "  ")}{item.OccurredAt:O} [{item.Type}/{item.ActorText}] {item.MessageText}"),
-                    FontFamily = "Consolas",
+                    FontFamily = ThemeString("FontMono"),
                     FontSize = 11.5,
-                    TextColor = ResourceColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
+                    TextColor = ThemeColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
                 });
                 row.Children.Add(summary);
                 string argumentsText = string.Join(
@@ -434,18 +440,18 @@ public partial class WorkspaceShellPage
                     Text = string.Create(
                         CultureInfo.InvariantCulture,
                         $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
-                    Style = ResourceStyle("MonoLabelStyle"),
+                    Style = ThemeStyle("MonoLabelStyle"),
                 });
                 Button detailsButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineDetailsAction),
-                    Style = ResourceStyle("GhostButtonStyle"),
+                    Style = ThemeStyle("GhostButtonStyle"),
                 };
                 detailsButton.Clicked += (_, _) => technicalDetail.IsVisible = !technicalDetail.IsVisible;
                 Button copyButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineCopyAction),
-                    Style = ResourceStyle("GhostButtonStyle"),
+                    Style = ThemeStyle("GhostButtonStyle"),
                 };
                 copyButton.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
@@ -470,8 +476,8 @@ public partial class WorkspaceShellPage
                             new Label
                             {
                                 Text = IconGlyphs.Sparkle,
-                                Style = ResourceStyle("IconGlyphStyle"),
-                                TextColor = ResourceColor("ColorAccent"),
+                                Style = ThemeStyle("IconGlyphStyle"),
+                                TextColor = ThemeColor("ColorAccent"),
                                 VerticalOptions = LayoutOptions.Start,
                             },
                             row,
@@ -488,7 +494,7 @@ public partial class WorkspaceShellPage
                             new Label
                             {
                                 Text = TimelineIconFor(item),
-                                Style = ResourceStyle("IconGlyphStyle"),
+                                Style = ThemeStyle("IconGlyphStyle"),
                                 VerticalOptions = LayoutOptions.Start,
                             },
                             row,
@@ -498,7 +504,7 @@ public partial class WorkspaceShellPage
 
                 Border card = new()
                 {
-                    Style = ResourceStyle(isOperator ? "MessageBubbleStyle" : "OutlinedPanelStyle"),
+                    Style = ThemeStyle(isOperator ? "MessageBubbleStyle" : "OutlinedPanelStyle"),
                     Content = cardContent,
                     HorizontalOptions = isOperator ? LayoutOptions.End : LayoutOptions.Fill,
                     MaximumWidthRequest = isOperator ? 620 : double.PositiveInfinity,
@@ -543,7 +549,7 @@ public partial class WorkspaceShellPage
             ContextualActionHost.Children.Add(Describe(new Label
             {
                 Text = text.Resolve(MessageKeys.ActionsTitle),
-                Style = ResourceStyle("HeadingLabelStyle"),
+                Style = ThemeStyle("HeadingLabelStyle"),
             }));
             if (actions.Count == 0)
             {
@@ -551,7 +557,7 @@ public partial class WorkspaceShellPage
                     Describe(new Label
                     {
                         Text = text.Resolve(MessageKeys.ActionsNoneAvailable),
-                        Style = ResourceStyle("MutedLabelStyle"),
+                        Style = ThemeStyle("MutedLabelStyle"),
                     }));
             }
 
@@ -604,7 +610,7 @@ public partial class WorkspaceShellPage
                 Button stopButton = new()
                 {
                     Text = text.Resolve(MessageKeys.AttemptStopAction),
-                    Style = ResourceStyle("DangerButtonStyle"),
+                    Style = ThemeStyle("DangerButtonStyle"),
                 };
                 stopButton.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
@@ -675,7 +681,7 @@ public partial class WorkspaceShellPage
                         Text = string.Create(
                             CultureInfo.InvariantCulture, $"{text.Resolve(MessageKeys.MoveToStageAction)}: {targetStageId}"),
                         IsEnabled = moveAction.Enabled,
-                        Style = ResourceStyle("SecondaryButtonStyle"),
+                        Style = ThemeStyle("SecondaryButtonStyle"),
                     };
                     moveButton.Clicked += (_, _) => _ = RunAsync(async () =>
                         await MoveToStageAsync(targetStageId).ConfigureAwait(true));
@@ -689,7 +695,7 @@ public partial class WorkspaceShellPage
                             Text = string.Create(
                                 CultureInfo.InvariantCulture,
                                 $"{text.Resolve(MessageKeys.ActionsBlockedPrefix)} {string.Join(", ", moveAction.Blockers)}"),
-                            Style = ResourceStyle("MutedLabelStyle"),
+                            Style = ThemeStyle("MutedLabelStyle"),
                         }));
                     }
                 }
@@ -703,13 +709,13 @@ public partial class WorkspaceShellPage
                 // A pending gate is this shell's own closest equivalent to the mockup's amber
                 // "Permission required" card -- a human decision genuinely blocks the sprint here too
                 // -- so it gets the same AmberCardStyle treatment instead of a bare button row.
-                Button approve = new() { Text = text.Resolve(MessageKeys.GateApproveAction), Style = ResourceStyle("PrimaryButtonStyle") };
-                Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction), Style = ResourceStyle("DangerButtonStyle") };
+                Button approve = new() { Text = text.Resolve(MessageKeys.GateApproveAction), Style = ThemeStyle("PrimaryButtonStyle") };
+                Button reject = new() { Text = text.Resolve(MessageKeys.GateRejectAction), Style = ThemeStyle("DangerButtonStyle") };
                 approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true));
                 reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false));
                 ContextualActionHost.Children.Add(new Border
                 {
-                    Style = ResourceStyle("AmberCardStyle"),
+                    Style = ThemeStyle("AmberCardStyle"),
                     Content = new HorizontalStackLayout
                     {
                         Spacing = 8,
@@ -717,8 +723,8 @@ public partial class WorkspaceShellPage
                         {
                             new Label
                             {
-                                Text = IconGlyphs.ShieldCheck, Style = ResourceStyle("IconGlyphStyle"),
-                                TextColor = ResourceColor("ColorStatusAmber"),
+                                Text = IconGlyphs.ShieldCheck, Style = ThemeStyle("IconGlyphStyle"),
+                                TextColor = ThemeColor("ColorStatusAmber"),
                             },
                             TrackContentFocus("action:gate:approve", approve),
                             TrackContentFocus("action:gate:reject", reject),
@@ -735,7 +741,7 @@ public partial class WorkspaceShellPage
                 Button supersede = new()
                 {
                     Text = text.Resolve(MessageKeys.AttemptSupersedeAction),
-                    Style = ResourceStyle("SecondaryButtonStyle"),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
                 };
                 supersede.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
@@ -788,12 +794,12 @@ public partial class WorkspaceShellPage
                 Button confirmed = new()
                 {
                     Text = text.Resolve(MessageKeys.ConfirmConfirmedAction),
-                    Style = ResourceStyle("PrimaryButtonStyle"),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
                 };
                 Button notConfirmed = new()
                 {
                     Text = text.Resolve(MessageKeys.ConfirmNotConfirmedAction),
-                    Style = ResourceStyle("SecondaryButtonStyle"),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
                 };
                 async Task ConfirmAsync(ConfirmationOutcome outcome)
                 {
@@ -861,12 +867,12 @@ public partial class WorkspaceShellPage
                 Button added = new()
                 {
                     Text = text.Resolve(MessageKeys.TestWorkAddedAction),
-                    Style = ResourceStyle("PrimaryButtonStyle"),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
                 };
                 Button noNewTests = new()
                 {
                     Text = text.Resolve(MessageKeys.TestWorkNoNewTestsAction),
-                    Style = ResourceStyle("SecondaryButtonStyle"),
+                    Style = ThemeStyle("SecondaryButtonStyle"),
                 };
                 async Task TestWorkAsync(TestWorkOutcome outcome)
                 {
@@ -924,7 +930,7 @@ public partial class WorkspaceShellPage
                 Button finalize = new()
                 {
                     Text = text.Resolve(MessageKeys.FinalizeAction),
-                    Style = ResourceStyle("PrimaryButtonStyle"),
+                    Style = ThemeStyle("PrimaryButtonStyle"),
                 };
                 finalize.Clicked += (_, _) => _ = RunAsync(async () =>
                 {
@@ -966,7 +972,7 @@ public partial class WorkspaceShellPage
             {
                 Text = label,
                 IsEnabled = action.Enabled,
-                Style = ResourceStyle(
+                Style = ThemeStyle(
                     actionId == AvailableActionProjector.CancelSprintActionId ? "DangerButtonStyle" : "PrimaryButtonStyle"),
             };
             button.Clicked += (_, _) => _ = RunAsync(execute);
@@ -983,7 +989,7 @@ public partial class WorkspaceShellPage
         Label BuildRationale(AvailableAction action) => Describe(new Label
         {
             Text = text.Resolve(action.RationaleKey),
-            Style = ResourceStyle("MutedLabelStyle"),
+            Style = ThemeStyle("MutedLabelStyle"),
         });
 
         bool NodeIsReady(string nodeId) =>
@@ -1143,7 +1149,7 @@ public partial class WorkspaceShellPage
         Button markAllReadButton = new()
         {
             Text = text.Resolve(MessageKeys.TimelineMarkAllReadAction),
-            Style = ResourceStyle("GhostButtonStyle"),
+            Style = ThemeStyle("GhostButtonStyle"),
         };
         markAllReadButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
@@ -1182,7 +1188,7 @@ public partial class WorkspaceShellPage
         Button sendMessageButton = new()
         {
             Text = text.Resolve(MessageKeys.TimelineMessageSendAction),
-            Style = ResourceStyle("PrimaryButtonStyle"),
+            Style = ThemeStyle("PrimaryButtonStyle"),
         };
         sendMessageButton.Clicked += (_, _) => _ = RunAsync(async () =>
         {
@@ -1207,7 +1213,7 @@ public partial class WorkspaceShellPage
         ContentHost.Children.Add(Describe(new Label
         {
             Text = text.Resolve(MessageKeys.TimelineTitle),
-            Style = ResourceStyle("HeadingLabelStyle"),
+            Style = ThemeStyle("HeadingLabelStyle"),
         }));
         ContentHost.Children.Add(new HorizontalStackLayout { Spacing = 8, Children = { filterPicker, markAllReadButton } });
         ContentHost.Children.Add(timelineStatusLabel);
@@ -1221,8 +1227,8 @@ public partial class WorkspaceShellPage
         // the reply Entry and its Send button.
         ContentHost.Children.Add(new Border
         {
-            Style = ResourceStyle("CardStyle"),
-            Stroke = ResourceColor("ColorDivider"),
+            Style = ThemeStyle("CardStyle"),
+            Stroke = ThemeColor("ColorDivider"),
             StrokeThickness = 1,
             Content = new VerticalStackLayout
             {
@@ -1240,11 +1246,11 @@ public partial class WorkspaceShellPage
         // Timeline above (it spans every sprint in the project, not just this one) -- kept reachable
         // here rather than dropped, matching plan 12.1's "every current Desktop capability remains
         // reachable."
-        Label rawEventsResult = new() { Style = ResourceStyle("MutedLabelStyle") };
+        Label rawEventsResult = new() { Style = ThemeStyle("MutedLabelStyle") };
         Button pollRawEvents = new()
         {
             Text = text.Resolve(MessageKeys.EventsPollAction),
-            Style = ResourceStyle("GhostButtonStyle"),
+            Style = ThemeStyle("GhostButtonStyle"),
         };
         pollRawEvents.Clicked += (_, _) => _ = RunAsync(async () =>
             rawEventsResult.Text = await sprintWorkspace.PollEventsAsync(root, CancellationToken.None).ConfigureAwait(true));

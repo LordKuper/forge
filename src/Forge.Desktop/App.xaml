@@ -20,23 +20,17 @@
       <Color x:Key="ColorAccent">#9184D9</Color>
       <Color x:Key="ColorDivider">#29E9E9ED</Color>
 
-      <Color x:Key="ColorNeutral100">#F3F5FE</Color>
+      <!-- Only the ramp steps the Nocturne pass actually reads are declared (PR #112 review finding
+           8): a token nothing references is dead weight, so the unused steps are left in the design
+           system's styles.css rather than mirrored here, and are added back one at a time as a
+           surface genuinely needs them. -->
       <Color x:Key="ColorNeutral200">#E4E7F5</Color>
       <Color x:Key="ColorNeutral300">#CFD3E5</Color>
       <Color x:Key="ColorNeutral400">#B2B6CA</Color>
       <Color x:Key="ColorNeutral500">#9397AB</Color>
       <Color x:Key="ColorNeutral600">#75798C</Color>
       <Color x:Key="ColorNeutral700">#595D6C</Color>
-      <Color x:Key="ColorNeutral800">#3F424D</Color>
-      <Color x:Key="ColorNeutral900">#292B31</Color>
 
-      <Color x:Key="ColorAccent100">#F5F4FF</Color>
-      <Color x:Key="ColorAccent200">#E7E5FE</Color>
-      <Color x:Key="ColorAccent300">#D2CEFD</Color>
-      <Color x:Key="ColorAccent400">#B5ABFC</Color>
-      <Color x:Key="ColorAccent500">#968AE0</Color>
-      <Color x:Key="ColorAccent600">#796CBF</Color>
-      <Color x:Key="ColorAccent700">#5D5294</Color>
       <Color x:Key="ColorAccent800">#423A6A</Color>
       <Color x:Key="ColorAccent900">#2B2741</Color>
 
@@ -59,21 +53,25 @@
       <Color x:Key="ColorDangerBorder">#57CF7D78</Color>
       <Color x:Key="ColorDangerBorderStrong">#8CCF7D78</Color>
 
-      <!-- Spacing scale (density 0.7x baked in, per readme.md) and radii, in device-independent units. -->
+      <!-- Spacing scale (density 0.7x baked in, per readme.md), in device-independent units. Same
+           "declare only what is read" rule as the ramps above (PR #112 review finding 8): the wider
+           scale's unused steps, and the radius scale, are not mirrored here. The four corner radii
+           this pass uses stay literal on the Style setters below: a Setter can only reach a radius
+           token through an implicit double conversion, which nothing in this repository can verify
+           without a live MAUI run. Add the radius tokens back together with that verification. -->
       <x:Double x:Key="Space1">3</x:Double>
       <x:Double x:Key="Space2">6</x:Double>
       <x:Double x:Key="Space3">8</x:Double>
       <x:Double x:Key="Space4">11</x:Double>
-      <x:Double x:Key="Space6">17</x:Double>
-      <x:Double x:Key="Space8">22</x:Double>
-      <x:Double x:Key="RadiusSm">4</x:Double>
-      <x:Double x:Key="RadiusMd">8</x:Double>
-      <x:Double x:Key="RadiusLg">14</x:Double>
 
-      <!-- Font family aliases registered in MauiProgram.ConfigureFonts. -->
+      <!-- Font family aliases registered in MauiProgram.ConfigureFonts, plus the one system font this
+           app asks for by name. FontMono is a Windows system font, not a bundled resource: this
+           project is an OS adapter (ForgeOsAdapter=true in Forge.Desktop.csproj), and naming it once
+           here is what keeps that choice, and any future fallback stack, in a single place. -->
       <x:String x:Key="FontHeading">InterMedium</x:String>
       <x:String x:Key="FontBody">InterRegular</x:String>
       <x:String x:Key="FontIcon">Phosphor</x:String>
+      <x:String x:Key="FontMono">Consolas</x:String>
 
       <!-- Page default -->
       <Style TargetType="ContentPage">
@@ -125,7 +123,7 @@
       </Style>
       <!-- ui-monospace counterpart for the mockup's timestamps, counters, and technical detail rows. -->
       <Style x:Key="MonoLabelStyle" TargetType="Label">
-        <Setter Property="FontFamily" Value="Consolas" />
+        <Setter Property="FontFamily" Value="{StaticResource FontMono}" />
         <Setter Property="TextColor" Value="{StaticResource ColorNeutral600}" />
         <Setter Property="FontSize" Value="10.5" />
       </Style>
@@ -178,13 +176,6 @@
         <Setter Property="BorderWidth" Value="0" />
         <Setter Property="Padding" Value="3,2" />
       </Style>
-      <!-- Square icon-only button, e.g. the sprint composer's stop-current-operation control. -->
-      <Style x:Key="IconButtonStyle" TargetType="Button" BasedOn="{StaticResource SecondaryButtonStyle}">
-        <Setter Property="WidthRequest" Value="32" />
-        <Setter Property="HeightRequest" Value="28" />
-        <Setter Property="Padding" Value="0" />
-        <Setter Property="FontFamily" Value="{StaticResource FontIcon}" />
-      </Style>
 
       <!-- Surface-filled content card. -->
       <Style x:Key="CardStyle" TargetType="Border">
@@ -211,9 +202,6 @@
         <Setter Property="Padding" Value="8,2" />
         <Setter Property="StrokeShape" Value="RoundRectangle 99" />
         <Setter Property="Stroke" Value="Transparent" />
-      </Style>
-      <Style x:Key="TagNeutralStyle" TargetType="Border" BasedOn="{StaticResource TagAccentStyle}">
-        <Setter Property="BackgroundColor" Value="{StaticResource ColorNeutral800}" />
       </Style>
 
       <!-- Red-tinted destructive-action container (mockup's "Danger zone" card). -->
