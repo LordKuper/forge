@@ -5,17 +5,22 @@ namespace Forge.Application;
 
 /// <summary>
 /// Resolves and validates the three frozen <see cref="ExecutionProfile"/>s ADR 0006 requires
-/// (ADR 0014). Pure and deterministic given already-frozen inputs (<see cref="SprintDefinition.FrozenProviders"/>
-/// and one already-resolved model per provider) — no I/O, no clock, so <see cref="SprintOrchestrator.CreateSprintAsync"/>
-/// can call it once at freeze time and get the exact same result on any resumed retry.
+/// (ADR 0014). <see cref="Freeze"/> is pure and deterministic given already-frozen inputs
+/// (<see cref="SprintDefinition.FrozenProviders"/> and one already-resolved model per provider) — no
+/// I/O, no clock, so <see cref="SprintOrchestrator.CreateSprintAsync"/> can call it once at freeze
+/// time and get the exact same result on any resumed retry. <see cref="ResolveModelsAsync"/> is the
+/// one member that is not: producing those already-resolved models is what asks each adapter to
+/// refresh (ADR 0063), and it is deliberately a separate, earlier step for that reason.
 /// </summary>
 public static class ExecutionProfilePolicy
 {
     // ponytail: every phase shares one fixed MVP policy (sandbox/permission/allowlist), and effort
     // only distinguishes review from the other two. ADR 0042 added the allowlist half of ADR 0006's
-    // "project model policy" (SprintOrchestrator.CreateSprintAsync refuses creation via
-    // ModelPolicyGate before this class ever runs) but not per-phase model *selection* -- every
-    // phase still resolves the same fixed ILlmProvider.DefaultModel. Revisit once that exists.
+    // "project model policy" but not per-phase model *selection*: ResolveModelsAsync below resolves
+    // ONE model per provider -- refreshing it live from the vendor where the adapter can (ADR 0063) --
+    // and every phase of that provider then freezes that same value, which ModelPolicyGate validates
+    // in SprintOrchestrator.CreateSprintAsync between those two steps. Revisit once real per-project,
+    // per-phase model selection exists.
     private const string SandboxPolicy = "workspace-write";
     private const string PermissionPolicy = "never";
     private static readonly IReadOnlyList<string> CapabilityAllowlist =
@@ -30,7 +35,7 @@ public static class ExecutionProfilePolicy
     /// implementation phase's provider (lineage independence), falling back to the same provider —
     /// recording <see cref="ExecutionLineage.AchievedIndependence"/> either way, never blocking.
     ///
-    /// Takes <paramref name="models"/> already resolved by <see cref="ResolveModels"/> rather than
+    /// Takes <paramref name="models"/> already resolved by <see cref="ResolveModelsAsync"/> rather than
     /// reading <see cref="ILlmProvider.DefaultModel"/> itself, and deliberately has no
     /// catalog-taking overload: ADR 0063 makes that property resolvable at runtime, so every read is
     /// a separate answer. <see cref="SprintOrchestrator.CreateSprintAsync"/> must validate the exact
@@ -127,25 +132,54 @@ public static class ExecutionProfilePolicy
             lineage);
 
     /// <summary>
-    /// Reads each distinct frozen provider's <see cref="ILlmProvider.DefaultModel"/> exactly once.
-    /// This is the single resolution point ADR 0063 requires: the property is resolvable at runtime,
-    /// so every read of it is a separate answer, and a sprint is one decision about one set of models.
+    /// Refreshes and then reads each distinct frozen provider's
+    /// <see cref="ILlmProvider.DefaultModel"/>, exactly once per provider. This is the single
+    /// resolution point ADR 0063 requires, and both halves of it matter:
+    ///
+    /// The refresh is here rather than left to the provider-capability pass because that pass does
+    /// not run in every process that creates a sprint. The Forge Host serves Desktop and remote
+    /// sprint creation and never probes providers, so its own adapter instances would freeze the
+    /// unresolved sentinel indefinitely if this method only read. Asking each provider to refresh
+    /// itself here makes resolution reachable from every creating process by construction instead of
+    /// depending on which one happens to have run a capability check. It is cheap: an adapter
+    /// throttles through its own cross-process cache, so a fresh entry — including one another
+    /// process wrote — returns without any vendor work, and a real probe happens only when the answer
+    /// is genuinely stale, which is exactly when one is needed. A failed refresh is not an error
+    /// here: the adapter leaves <see cref="ILlmProvider.DefaultModel"/> as it was (its unresolved
+    /// sentinel, or the last known-good value) and creation proceeds on that, subject to
+    /// <see cref="ModelPolicyGate"/> like any other model.
+    ///
+    /// The single read is what makes the resolved value one answer: the property is resolvable at
+    /// runtime, so every read of it is a separate answer, and a sprint is one decision about one set
+    /// of models.
     /// </summary>
-    public static IReadOnlyDictionary<string, string> ResolveModels(
+    public static async Task<IReadOnlyDictionary<string, string>> ResolveModelsAsync(
         IReadOnlyList<string> frozenProviders,
-        ProviderCatalog catalog)
+        ProviderCatalog catalog,
+        CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(frozenProviders);
         ArgumentNullException.ThrowIfNull(catalog);
         Dictionary<string, string> models = new(StringComparer.Ordinal);
         foreach (string providerId in frozenProviders)
         {
-            models.TryAdd(
-                providerId,
-                catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider)
-                    ? provider.DefaultModel
-                    : throw new InvalidOperationException(
-                        $"Frozen provider '{providerId}' is not registered in the provider catalog."));
+            if (models.ContainsKey(providerId))
+            {
+                continue;
+            }
+
+            if (!catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider))
+            {
+                throw new InvalidOperationException(
+                    $"Frozen provider '{providerId}' is not registered in the provider catalog.");
+            }
+
+            // Sequential, matching ProviderToolchainManager's own loop: a refresh may spawn a vendor
+            // process, and two at once buys nothing on a path that runs once per sprint creation.
+            // `bypassCache: false` — sprint creation honours the throttle; only `forge models
+            // --refresh` bypasses it.
+            await provider.RefreshDefaultModelAsync(false, cancellationToken).ConfigureAwait(false);
+            models.Add(providerId, provider.DefaultModel);
         }
 
         return models;

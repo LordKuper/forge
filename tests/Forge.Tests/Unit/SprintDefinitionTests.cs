@@ -661,6 +661,12 @@ public sealed class SprintDefinitionTests
 
         public void Rewind() => Interlocked.Exchange(ref reads, 0);
 
+        /// <summary>A no-op that deliberately does NOT count as a read: the point of this fake is
+        /// that every <see cref="DefaultModel"/> read reports something new, so the refresh
+        /// <c>ExecutionProfilePolicy.ResolveModelsAsync</c> performs must not itself consume one.</summary>
+        public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
 

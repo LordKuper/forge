@@ -418,9 +418,11 @@ public static partial class ProviderInstallation
 
     /// <summary>Shared verbatim by the release check and the default-model probe
     /// (<see cref="ResolveDefaultModelAsync"/>) — one cadence, deliberately, not an oversight
-    /// (ADR 0063: both answer "what does the vendor say today", both are refreshed by the same
+    /// (ADR 0063: both answer "what does the vendor say today", both are refreshed by the
     /// provider-capability pass, and both are cheap to be a day stale, so a second pair of windows
-    /// would only be a second thing for a user to reason about).</summary>
+    /// would only be a second thing for a user to reason about). The model probe has one further
+    /// trigger the release check does not — sprint creation, which must resolve a model even in the
+    /// Host process, where no capability pass runs — and these same windows govern it there.</summary>
     private static bool IsStale(DateTimeOffset checkedAt, bool succeeded, DateTimeOffset now) =>
         now - checkedAt >= (succeeded ? ReleaseCheckSuccessWindow : ReleaseCheckFailureWindow);
 

@@ -151,11 +151,18 @@ public sealed class CodexLlmProvider(
 
     /// <summary>
     /// Resolves <see cref="DefaultModel"/> from Codex's own `doctor --json` diagnostic (ADR 0063),
-    /// throttled on the same 24h/1h cadence as the release check. Called from
-    /// <see cref="DiscoverAsync"/> and <see cref="InstallOrUpdateAsync"/> and forwarding their own
-    /// bypass flag, so resolution rides the provider-capability pass that already runs before any
-    /// sprint can be created — no new call site, and <see cref="DefaultModel"/> stays a synchronous
-    /// property.
+    /// throttled on the same 24h/1h cadence as the release check, through a cache file shared by
+    /// every Forge process on the machine.
+    ///
+    /// Three call sites, all forwarding their own bypass flag: <see cref="DiscoverAsync"/> and
+    /// <see cref="InstallOrUpdateAsync"/> (the provider-capability pass, so `forge models --refresh`
+    /// refreshes this too), and <c>ExecutionProfilePolicy.ResolveModelsAsync</c> immediately before a
+    /// sprint's model is gated and frozen. The last is not redundant with the first two: the resolved
+    /// value below is per-INSTANCE in-memory state, and the Forge Host — the process that creates
+    /// every Desktop and remote sprint — runs no provider-capability pass at all, so its own instance
+    /// would otherwise freeze the unresolved sentinel forever. Because the throttle is the shared
+    /// cache file rather than this field, that extra call costs nothing when another process already
+    /// probed within the window: it reads the cache and returns without spawning anything.
     ///
     /// The child environment is the same minimal one <see cref="RunAsync"/> builds, deliberately: the
     /// probe must resolve the model under exactly the environment an attempt will run under, or the

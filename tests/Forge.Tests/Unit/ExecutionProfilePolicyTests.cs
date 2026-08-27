@@ -54,7 +54,7 @@ public sealed class ExecutionProfilePolicyTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public void FreezeProducesExactlyThreePhasesWithReviewLineageEvidence()
+    public async Task FreezeProducesExactlyThreePhasesWithReviewLineageEvidence()
     {
         ProviderCatalog catalog = new(
             [
@@ -64,7 +64,8 @@ public sealed class ExecutionProfilePolicyTests
 
         IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
             ["claude_code", "codex"],
-            ExecutionProfilePolicy.ResolveModels(["claude_code", "codex"], catalog));
+            await ExecutionProfilePolicy.ResolveModelsAsync(
+                ["claude_code", "codex"], catalog, TestContext.Current.CancellationToken));
 
         Assert.Equal(3, profiles.Count);
         Assert.Equal("claude_code", profiles[ExecutionPhase.Planning].Provider);
@@ -86,12 +87,13 @@ public sealed class ExecutionProfilePolicyTests
 
     [Fact]
     [Trait("Category", "Unit")]
-    public void FreezeThrowsForAnEmptyProviderList()
+    public async Task FreezeThrowsForAnEmptyProviderList()
     {
         ProviderCatalog catalog = new([]);
+        IReadOnlyDictionary<string, string> models =
+            await ExecutionProfilePolicy.ResolveModelsAsync([], catalog, TestContext.Current.CancellationToken);
 
-        Assert.Throws<ArgumentException>(
-            () => ExecutionProfilePolicy.Freeze([], ExecutionProfilePolicy.ResolveModels([], catalog)));
+        Assert.Throws<ArgumentException>(() => ExecutionProfilePolicy.Freeze([], models));
     }
 
     /// <summary>ADR 0063 made <see cref="ILlmProvider.DefaultModel"/> resolvable at runtime, so it can
@@ -102,12 +104,14 @@ public sealed class ExecutionProfilePolicyTests
     /// does not name is unreadable evidence.</summary>
     [Fact]
     [Trait("Category", "Unit")]
-    public void FreezeReadsEachProviderSModelOnceSoOneSprintCannotRecordTwoDifferentModels()
+    public async Task FreezeReadsEachProviderSModelOnceSoOneSprintCannotRecordTwoDifferentModels()
     {
         ProviderCatalog catalog = new([new ShiftingModelProvider(new ProviderId("codex"))]);
 
         IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
-            ["codex"], ExecutionProfilePolicy.ResolveModels(["codex"], catalog));
+            ["codex"],
+            await ExecutionProfilePolicy.ResolveModelsAsync(
+                ["codex"], catalog, TestContext.Current.CancellationToken));
 
         Assert.Single(profiles.Values.Select(profile => profile.Model).Distinct());
         Assert.Equal(
@@ -122,19 +126,44 @@ public sealed class ExecutionProfilePolicyTests
     /// string.</summary>
     [Fact]
     [Trait("Category", "Unit")]
-    public void FreezeProducesASchemaValidModelEvenWhenTheProviderHasNotResolvedOneYet()
+    public async Task FreezeProducesASchemaValidModelEvenWhenTheProviderHasNotResolvedOneYet()
     {
         ProviderCatalog catalog = new([new FixedModelProvider(new ProviderId("codex"), "vendor-default")]);
 
         IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
-            ["codex"], ExecutionProfilePolicy.ResolveModels(["codex"], catalog));
+            ["codex"],
+            await ExecutionProfilePolicy.ResolveModelsAsync(
+                ["codex"], catalog, TestContext.Current.CancellationToken));
 
         Assert.All(profiles.Values, profile => Assert.NotEmpty(profile.Model));
         Assert.NotEmpty(profiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
     }
 
+    /// <summary>Round 3 review of PR #120: resolution must be triggered BY the sprint-creation path,
+    /// not assumed to have already happened on a provider-capability pass — the Forge Host creates
+    /// every Desktop and remote sprint and runs no such pass, so its own adapter instances are never
+    /// refreshed by anything else. Against a provider that reports the unresolved sentinel until it
+    /// is asked to refresh, the frozen model must be the resolved one, which is only possible if
+    /// <see cref="ExecutionProfilePolicy.ResolveModelsAsync"/> refreshes before it reads.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ResolveModelsRefreshesEachProviderBeforeReadingItsModel()
+    {
+        RefreshableModelProvider provider = new(new ProviderId("codex"));
+        ProviderCatalog catalog = new([provider]);
+
+        IReadOnlyDictionary<string, string> models = await ExecutionProfilePolicy.ResolveModelsAsync(
+            ["codex", "codex"], catalog, TestContext.Current.CancellationToken);
+
+        Assert.Equal("gpt-resolved", models["codex"]);
+        // Once per DISTINCT provider, not once per frozen-candidate entry.
+        Assert.Equal(1, provider.RefreshCalls);
+        // Sprint creation honours the adapter's own throttle; only `forge models --refresh` bypasses it.
+        Assert.False(provider.LastBypassedCache);
+    }
+
     /// <summary>Reports a different model on every single read — the pathological end of what ADR 0063
-    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.ResolveModels"/>
+    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.ResolveModelsAsync"/>
     /// plus <see cref="ExecutionProfilePolicy.Freeze"/> is caught rather than depending on a race
     /// actually occurring.</summary>
     private sealed class ShiftingModelProvider(ProviderId id) : StubProvider(id)
@@ -149,13 +178,38 @@ public sealed class ExecutionProfilePolicyTests
         public override string DefaultModel => model;
     }
 
-    /// <summary>Only <see cref="ILlmProvider.Id"/> and <see cref="ILlmProvider.DefaultModel"/> matter
-    /// to <see cref="ExecutionProfilePolicy"/>; it performs no I/O at all.</summary>
+    /// <summary>Models a real adapter's shape: unresolved until something asks it to resolve, exactly
+    /// like a <c>CodexLlmProvider</c> instance in a process that never ran a provider check.</summary>
+    private sealed class RefreshableModelProvider(ProviderId id) : StubProvider(id)
+    {
+        private string model = "vendor-default";
+
+        public int RefreshCalls { get; private set; }
+
+        public bool LastBypassedCache { get; private set; } = true;
+
+        public override string DefaultModel => model;
+
+        public override Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken)
+        {
+            RefreshCalls++;
+            LastBypassedCache = bypassCache;
+            model = "gpt-resolved";
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>Only <see cref="ILlmProvider.Id"/>, <see cref="ILlmProvider.DefaultModel"/>, and
+    /// <see cref="ILlmProvider.RefreshDefaultModelAsync"/> matter to
+    /// <see cref="ExecutionProfilePolicy"/>; it performs no other I/O at all.</summary>
     private abstract class StubProvider(ProviderId id) : ILlmProvider
     {
         public ProviderId Id => id;
 
         public abstract string DefaultModel { get; }
+
+        public virtual Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
 
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

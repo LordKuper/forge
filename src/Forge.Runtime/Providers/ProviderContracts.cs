@@ -230,11 +230,31 @@ public interface ILlmProvider
     /// freeze an <c>ExecutionProfile.Model</c> for a sprint's chosen provider (Stage 11,
     /// P11.13-P11.20) until per-project model selection exists. Always a non-empty string
     /// (`execution-profile.schema.json` requires `minLength: 1`), read synchronously. An adapter MAY
-    /// resolve this from the user's real vendor configuration during its own
-    /// <see cref="DiscoverAsync"/>/<see cref="InstallOrUpdateAsync"/> pass (ADR 0063), so the value
-    /// can change from an unresolved placeholder to a real model id within one process lifetime — a
-    /// caller that needs two internally consistent readings must take one and reuse it.</summary>
+    /// resolve this from the user's real vendor configuration (ADR 0063), so the value can change
+    /// from an unresolved placeholder to a real model id within one process lifetime — a caller that
+    /// needs two internally consistent readings must take one and reuse it. This property never
+    /// resolves anything itself; <see cref="RefreshDefaultModelAsync"/> is what makes it current.</summary>
     string DefaultModel { get; }
+
+    /// <summary>
+    /// Brings <see cref="DefaultModel"/> up to date with what the vendor would resolve for a run
+    /// started right now, then returns (ADR 0063). Every process that is about to freeze a model into
+    /// durable sprint state MUST call this first: an adapter's resolved value is per-instance
+    /// in-memory state, and the Forge Host — which serves Desktop and remote sprint creation — runs
+    /// no provider-capability pass of its own, so relying on <see cref="DiscoverAsync"/> or
+    /// <see cref="InstallOrUpdateAsync"/> having run would leave the model unresolved in exactly the
+    /// process that freezes it. <see cref="Forge.Application.ExecutionProfilePolicy.ResolveModelsAsync"/>
+    /// is that call site, and pairs this with the single <see cref="DefaultModel"/> read.
+    ///
+    /// Implementations MUST be cheap to call routinely: throttle real vendor work through a shared,
+    /// cross-process cache so a fresh entry returns without spawning anything.
+    /// <paramref name="bypassCache"/> ignores that throttle (`forge models --refresh`).
+    /// Implementations MUST NOT throw for a failed resolution — a probe that fails leaves
+    /// <see cref="DefaultModel"/> at whatever it already reported, so an optional resolution failure
+    /// can never block sprint creation. An adapter whose <see cref="DefaultModel"/> is a constant
+    /// implements this as a no-op.
+    /// </summary>
+    Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken);
 
     /// <summary>
     /// Reads the fixed, vendor-owned install path and runs `--version`. When the local probe

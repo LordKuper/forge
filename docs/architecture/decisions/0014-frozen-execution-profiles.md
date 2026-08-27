@@ -130,12 +130,15 @@ this exact file.
 > gone. `CodexLlmProvider.DefaultModel` is no longer a pure, no-I/O lookup
 > once Codex's real model is resolved from a live probe, so
 > `SprintOrchestrator.CreateSprintAsync` now calls
-> `ExecutionProfilePolicy.ResolveModels` exactly once per sprint creation,
-> before `ModelPolicyGate` validation, and passes that single resolved map
-> into `Freeze` — so the model the gate approves and the model `Freeze`
-> records are guaranteed identical, with no window for a concurrent
-> resolution refresh to change the answer in between. `Freeze` itself is
-> still pure over its inputs; only where those inputs come from changed.
+> `ExecutionProfilePolicy.ResolveModelsAsync` exactly once per sprint
+> creation, before `ModelPolicyGate` validation, and passes that single
+> resolved map into `Freeze` — so the model the gate approves and the model
+> `Freeze` records are guaranteed identical, with no window for a concurrent
+> resolution refresh to change the answer in between. That call also asks
+> each provider to refresh its resolved model first, because the Host
+> process — which creates every Desktop and remote sprint — runs no
+> provider-capability pass of its own. `Freeze` itself is still pure over
+> its inputs; only where those inputs come from changed.
 
 ### `NodeRole` → `ExecutionPhase`, and why no capability guard exists yet
 

@@ -9,10 +9,12 @@ User-facing Forge changes are listed by release, newest first.
 - **Forge now asks Codex which model it would actually use, instead of guessing.** Codex's model is
   read from your own Codex configuration through the vendor's own diagnostic command, so it reflects
   a `model = "..."` you set in `~/.codex/config.toml` rather than a name Forge hardcoded. The lookup
-  runs as part of the provider check Forge already performs and is cached with the same cadence as
-  the update check — once a day after a success, once an hour after a failure — so it costs at most
-  one short extra vendor call per day. If the lookup fails for any reason, Forge falls back to
-  exactly the previous behaviour and nothing breaks.
+  runs both as part of the provider check Forge already performs and at sprint creation, so it works
+  the same whether a sprint is started from the CLI or from Forge Desktop. It is cached with the same
+  cadence as the update check — once a day after a success, once an hour after a failure, shared
+  across every Forge process on the machine — so it costs at most one short extra vendor call per
+  day, and sprint creation almost always just reads that cache. If the lookup fails for any reason,
+  Forge falls back to exactly the previous behaviour and nothing breaks.
 
 ### Changed
 

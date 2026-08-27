@@ -335,6 +335,10 @@ internal sealed class FakeLlmProvider(
 
     public string DefaultModel => $"{id.Value}-fake-model";
 
+    /// <summary>A no-op: this fake's model is a fixed string, so there is nothing to resolve.</summary>
+    public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
         DiscoverCalls++;
@@ -391,6 +395,9 @@ internal sealed class FakeRunnableLlmProvider(
     public ProviderId Id => id;
 
     public string DefaultModel => $"{id.Value}-fake-model";
+
+    public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));

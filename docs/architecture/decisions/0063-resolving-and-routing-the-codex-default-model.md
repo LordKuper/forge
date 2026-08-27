@@ -64,14 +64,45 @@ different meanings, and the release entry's shape is load-bearing in existing te
 
 The throttle windows are the release check's own 24-hour success / one-hour failure pair (ADR 0008),
 reused rather than reinvented. Both answer "what does the vendor say today", both are refreshed by
-the same pass, and both are cheap to be a day stale — one cadence is one thing for a user to reason
-about instead of two.
+the provider-capability pass, and both are cheap to be a day stale — one cadence is one thing for a
+user to reason about instead of two. Only the model check has a second trigger (sprint creation,
+below); the windows are the same either way.
+
+### Resolution is triggered by sprint creation, not only by the provider-capability pass
 
 The probe rides `DiscoverAsync` and `InstallOrUpdateAsync`, forwarding their existing
-`bypassReleaseCache` flag (so `forge models --refresh` refreshes this too). That is the
-provider-capability pass which already runs before any sprint can be created, so no new call site had
-to be invented and `ILlmProvider.DefaultModel` stays a synchronous property — no interface shape
-change.
+`bypassReleaseCache` flag (so `forge models --refresh` refreshes this too). **That is not sufficient
+on its own**, and an earlier revision of this ADR was wrong to claim it was.
+
+A resolved model is per-**instance** in-memory state on the adapter. The provider-capability pass runs
+in the CLI and Desktop-facing `ForgeApplication` path — but the process that actually freezes a
+sprint's model is the Forge **Host** whenever a Desktop or remote client creates a sprint
+(`RemoteForgeMutations` → the Host's `DispatchCreateSprintAsync` → `SprintOrchestrator.CreateSprintAsync`).
+The Host references no `IProviderToolchainManager` at all: it never discovers, installs, or checks a
+provider. Its own adapter instances are therefore never refreshed by anything, so relying on the
+capability pass would leave `ExecutionProfile.Model` at the unresolved sentinel — and `-m` unsent —
+for every sprint not created by the CLI, which is the common case.
+
+So `ILlmProvider` gains one member, `RefreshDefaultModelAsync(bypassCache, cancellationToken)`, and
+`ExecutionProfilePolicy.ResolveModelsAsync` calls it for each distinct frozen provider immediately
+before reading `DefaultModel` — inside sprint creation, ahead of both the `ModelPolicyGate` check and
+`Freeze`, so the gate and the freeze see one freshly resolved value (see the single-resolution
+decision below, which this does not weaken). `DefaultModel` stays a synchronous property: the refresh
+is the asynchronous half, and the read stays the cheap, repeatable one.
+
+The extra member is affordable because there are exactly two implementations. Claude's is a
+deliberate no-op — its `DefaultModel` is a real constant with nothing to resolve — written out
+explicitly rather than defaulted on the interface, so a future adapter whose vendor *can* be asked
+what it would do has to decide rather than inherit silence. The alternative, having the orchestrator
+call `CodexLlmProvider`'s own method directly, is not available: `Forge.Runtime` is neutral code and
+must not reference an OS adapter.
+
+The call costs nothing in the common case. Its throttle is the shared cache **file**, not the
+in-memory field, so a Host-side refresh within another process's 24-hour success window reads that
+file and returns without spawning anything. A real probe happens only when the answer is genuinely
+stale — exactly when one is needed, whichever process is asking. A failed refresh is not an error on
+this path either: the adapter leaves `DefaultModel` as it was and creation proceeds on that value,
+subject to the gate like any other model.
 
 Every failure mode returns "unresolved", never an exception and never a partial value: no installed
 executable (the cache is not even read or written, so an uninstalled provider cannot throttle the
@@ -118,9 +149,13 @@ Two values are suppressed rather than sent, and both degrade to exactly ADR 0062
 reads within one process. Every read inside one sprint creation must therefore be the *same* read.
 
 `SprintOrchestrator.CreateSprintAsync` resolves one model per distinct frozen provider
-(`ExecutionProfilePolicy.ResolveModels`) before its `ModelPolicyGate` check and passes that map into
+(`ExecutionProfilePolicy.ResolveModelsAsync`, which refreshes each provider exactly once and then
+reads it exactly once) before its `ModelPolicyGate` check, and passes that map into
 `ExecutionProfilePolicy.Freeze`, which takes already-resolved models and has no catalog-taking
-overload at all. Two reads there would be a policy hole, not just untidy: the gate and the freeze are
+overload at all. Refresh-then-read in one step is deliberate: it puts the live refresh *ahead* of the
+gate, so the gate validates the same freshly resolved value the sprint freezes, and it makes reading
+`DefaultModel` on this path without first refreshing it structurally unavailable rather than merely
+discouraged. Two reads would be a policy hole, not just untidy: the gate and the freeze are
 separated by durable writes, so a provider check refreshing the model in that window could have the
 gate approve a model the allowlist names while the sprint freezes and runs a different one — silently
 defeating `models.allowed_models`. Keeping the resolution in the caller's hands makes that
@@ -141,9 +176,12 @@ real per-project model selection.
 
 ## Consequences
 
-- **`ExecutionProfile.Model` becomes true for Codex sprints.** Sprint history and every surface that
-  displays a frozen profile now show the model Codex actually resolves, instead of the non-functional
-  `gpt-5` placeholder.
+- **`ExecutionProfile.Model` becomes true for Codex sprints, on every path that creates one.** Sprint
+  history and every surface that displays a frozen profile now show the model Codex actually
+  resolves, instead of the non-functional `gpt-5` placeholder — including sprints created from
+  Desktop or a remote client, which are frozen inside the Host process and therefore depend on
+  sprint creation triggering resolution itself rather than on a capability pass the Host never runs.
+  The same value is what reaches the run as `-m`.
 - **A stale `models.allowed_models` entry can now block sprint creation where it silently passed.**
   `ModelPolicyGate` has always evaluated whatever `DefaultModel` returns; it was previously always
   evaluating `gpt-5`. A project whose allowlist names `gpt-5`, or names a model Codex no longer
@@ -156,17 +194,21 @@ real per-project model selection.
   (CLI exit code unchanged) whenever `DefaultModel` is still the `vendor-default` sentinel — the
   sentinel is obviously not in the allowlist. That state is reachable right after a fresh install and
   after a transient `codex doctor` failure, and the cache's failure window means it can persist up to
-  one hour, until the next provider check re-probes. Accepted as a documented tradeoff: it is rare
+  one hour, until the next probe. Accepted as a documented tradeoff: it is rare
   (only a first check or a failing vendor probe, only for a project that restricts Codex), it
-  self-clears on the next successful probe within that window, `forge models --refresh` clears it
-  immediately by bypassing the cache, and the alternative — exempting the sentinel from the gate —
+  self-clears on the next successful probe within that window — which sprint creation itself now
+  attempts, so it no longer depends on a provider check happening to run — `forge models --refresh`
+  clears it immediately by bypassing the cache, and the alternative — exempting the sentinel from the gate —
   would let a sprint start on a model the policy never approved and cannot name, which is exactly the
   failure this gate exists to prevent. Fail-closed with an imprecise diagnostic beats fail-open with a
   precise one. A distinct diagnostic for "unresolved, not disallowed" is a deferred follow-up rather
   than part of this slice: a new code is a public contract addition spanning `DiagnosticCodes`,
   `ExitCodes`, localized surfaces, and the README's diagnostic table, and it changes no outcome.
-- Each Codex provider check may spawn one additional short-lived vendor process, at most once per 24
-  hours per instance (once per hour after a failure), and never when Codex is not installed.
+- Each Codex provider check, and each sprint creation, may spawn one additional short-lived vendor
+  process — but at most once per 24 hours per machine (once per hour after a failure), because the
+  throttle is the shared cache file rather than any one process's memory, and never when Codex is not
+  installed. Sprint creation is not measurably slower in the common case: a fresh cache entry is a
+  single small file read.
 - Sprints frozen before v0.85.0 keep the `gpt-5` value in their durable state and are unaffected at
   run time: that value is suppressed rather than sent, so nothing about how those attempts choose a
   model changes.

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Forge.Application;
+using Forge.Configuration;
 using Forge.Domain;
 using Forge.Providers;
 using Forge.Providers.Codex;
@@ -10,6 +11,11 @@ namespace Forge.ProviderAdapterTests;
 
 public sealed class CodexLlmProviderTests
 {
+    /// <summary>An allowlist naming ONLY the model `codex doctor --json` resolves, so
+    /// <c>ModelPolicyGate</c> refuses creation unless resolution actually happened first.</summary>
+    private static readonly string[] ResolvedModelPolicy = ["codex:gpt-5.6-sol"];
+
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task DiscoverReportsMissingWithoutTheVendorExecutable()
@@ -481,6 +487,74 @@ public sealed class CodexLlmProviderTests
             capturedArguments = request.Arguments;
             return new(0, """{"type":"turn.completed"}""", string.Empty);
         }
+    }
+
+    /// <summary>
+    /// Round 3 review of PR #120's own regression test, and the reason the interface gained
+    /// <see cref="ILlmProvider.RefreshDefaultModelAsync"/>. The resolved model is per-INSTANCE
+    /// in-memory state, and the Forge Host — the process that creates every Desktop and remote
+    /// sprint — runs no provider-capability pass at all, so its own adapter instance is never touched
+    /// by <see cref="CodexLlmProvider.DiscoverAsync"/> or
+    /// <see cref="CodexLlmProvider.InstallOrUpdateAsync"/>. Resolution therefore has to be triggered
+    /// by the sprint-creation path itself; every other test in this file resolves and freezes through
+    /// one container that ran discovery first, which is exactly why none of them could catch this.
+    ///
+    /// So: an adapter instance nothing has ever discovered, a toolchain manager that can never touch
+    /// it, and a direct <c>SprintOrchestrator.CreateSprintAsync</c> call. The frozen profiles must
+    /// name the model `codex doctor --json` reports, and the allowlist deliberately names only that
+    /// model — the unresolved sentinel would be refused by <c>ModelPolicyGate</c>, so creation
+    /// succeeding proves the gate saw the resolved value too, not just the freeze.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task SprintCreationResolvesTheModelItselfOnAProviderNoDiscoveryPassEverTouched()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string doctor = ReadFixture("codex-doctor.json");
+        int probes = 0;
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            Assert.Equal(["doctor", "--json"], request.Arguments);
+            probes++;
+            return new(0, doctor, string.Empty);
+        });
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready),
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(ResolvedModelPolicy),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        // Nothing has probed this instance, and nothing in this container can: the sentinel here is
+        // the Forge Host's own steady state, not a setup detail.
+        Assert.Equal("vendor-default", provider.DefaultModel);
+        Assert.Equal(0, probes);
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+
+        // Asserted before the definition is loaded: without the refresh this is a
+        // `model_policy_violation` and there is no sprint to load, and that diagnostic is the
+        // readable failure rather than a null id further down.
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.True(result.Succeeded);
+        Assert.Equal(1, probes);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.All(definition!.ExecutionProfiles.Values, profile => Assert.Equal("gpt-5.6-sol", profile.Model));
+        Assert.Equal(
+            "gpt-5.6-sol",
+            definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
     }
 
     /// <summary>ADR 0063's safe-degradation regression test. Every way the vendor probe can fail — a
