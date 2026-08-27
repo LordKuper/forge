@@ -84,6 +84,13 @@ constantly is not a signal.
 - **Unmapped** — a shape this adapter's mapping does not cover at all. No row; increments
   `unmapped_items`, which rides on the durable payload.
 
+`unmapped_items` counts ITEMS, not stream lines, and Codex describes one item on two lines
+(`item.started` then `item.completed`). An unmapped verdict therefore carries the item's correlation
+id when the adapter could read one, and the sink deduplicates on it — reusing the pairing the duration
+already relies on — so a start/completion pair for one unrecognized item counts once. A line with no
+readable id has nothing to deduplicate on and always counts on its own: under-reporting real drift
+would be a worse failure than the double count.
+
 The extraction result carries a *list* of candidates rather than one, because `file_change`'s `changes`
 is an array: every entry becomes its own row sharing the item's correlation id (and therefore its
 duration), so an entry past the first is never silently dropped. An empty or wholly malformed
@@ -100,10 +107,15 @@ applies `RelativePathShape.IsSyntacticallySafe`.
 
 A path that fails is **rejected, never rewritten**, reusing ADR 0059's rule for diff paths verbatim:
 there is no safe interpretation of a path that escapes the worktree. The call itself is still recorded,
-just with no target, so a rejected path shrinks the detail, never the count. A malformed path can make
-`Path.GetRelativePath` throw outright (an embedded null character); that is caught and treated as "no
-usable target" rather than allowed to reach the sink's caller. The surviving path is redacted before
-any bounding (ADR 0057/0059), since a placeholder can be longer than what it replaces.
+just with no target, so a rejected path shrinks the detail, never the count. The surviving path is
+redacted before any bounding (ADR 0057/0059), since a placeholder can be longer than what it replaces.
+
+Normalization is fail-open in full, not for one exception type: it runs on the stdout pump, so anything
+escaping it faults that pump and fails an otherwise-successful attempt. `Path.GetRelativePath` throws
+on more than the obvious embedded null character — a rooted path at or past ~32,767 characters raises
+`PathTooLongException` on Windows, well inside the 1 MiB frame bound — and enumerating every exception
+a path API may raise across three operating systems is exactly the guess the catch refuses to make. Any
+of them is treated as "no usable target"; only a genuine cancellation still propagates.
 
 `kind` (`"update"`, ...) on a `file_change` entry is deliberately **not** read. ADR 0059 could define a
 closed `DiffChangeKinds` vocabulary because `git diff --name-status`'s statuses are a documented,

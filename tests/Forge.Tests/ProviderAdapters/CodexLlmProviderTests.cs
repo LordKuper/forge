@@ -432,6 +432,88 @@ public sealed class CodexLlmProviderTests
         Assert.Equal(expectedUnmapped, result.UnmappedItemCount);
     }
 
+    /// <summary>Regression test (PR #117 review): every entry of one `file_change` completion belongs
+    /// to the same logical operation, which started and completed together — so ADR 0060 and
+    /// `ExtractFileChanges` both promise the entries share the item's correlation id "and therefore
+    /// its duration". The duration used to be resolved inside the per-entry loop, which consumed the
+    /// pending start on the first entry and left every sibling null. Asserted on the durable
+    /// <see cref="ToolCallStat"/> rows rather than the in-memory records, since that is where a reader
+    /// would have seen the inconsistency.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncGivesEveryEntryOfOneFileChangeCompletionTheSameObservedDuration()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        // Three entries under one `item.id`, in the exact wrapper shape the recorded fixture holds
+        // (`changes` rides on both the start and the completion line).
+        const string changes = "[{\"path\":\"" + CapturedWorktreeJson + "\\\\a.txt\",\"kind\":\"update\"}," +
+            "{\"path\":\"" + CapturedWorktreeJson + "\\\\b.txt\",\"kind\":\"add\"}," +
+            "{\"path\":\"" + CapturedWorktreeJson + "\\\\c.txt\",\"kind\":\"delete\"}]";
+        string stream = string.Join(
+            '\n',
+            "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"file_change\",\"changes\":" +
+                changes + ",\"status\":\"in_progress\"}}",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"file_change\",\"changes\":" +
+                changes + ",\"status\":\"completed\"}}",
+            """{"type":"turn.completed"}""");
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(0, result.UnmappedItemCount);
+        ToolUsePayload payload = Assert.IsType<ToolUsePayload>(ProviderToolUse.ToPayload(result));
+        Assert.Equal(["a.txt", "b.txt", "c.txt"], payload.Calls.Select(stat => stat.Target));
+        Assert.All(payload.Calls, stat => Assert.NotNull(stat.DurationMilliseconds));
+        Assert.Single(payload.Calls.Select(stat => stat.DurationMilliseconds).Distinct());
+    }
+
+    /// <summary>Regression test (PR #117 review): `unmapped_items` is a durable, versioned, publicly
+    /// documented field counted in ITEMS, but Codex describes one logical item across TWO stream lines
+    /// — `item.started` then `item.completed`, sharing `item.id`, exactly as the recorded fixture shows
+    /// for both `command_execution` and `file_change`. An unrecognized subtype following that same
+    /// lifecycle was therefore counted twice for one item. It is now deduplicated by correlation id,
+    /// reusing the pairing the duration already relies on. A line that carries no id, or a fresh id
+    /// each time, still counts on its own: there is nothing to deduplicate on, and under-counting real
+    /// drift would be a worse failure than the double count this fixes.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(
+        """{"type":"item.started","item":{"id":"item_0","type":"totally_unknown_thing"}}""",
+        """{"type":"item.completed","item":{"id":"item_0","type":"totally_unknown_thing"}}""",
+        1)]
+    [InlineData(
+        """{"type":"item.started","item":{"id":"item_0","type":"file_change","changes":[]}}""",
+        """{"type":"item.completed","item":{"id":"item_0","type":"file_change","changes":[]}}""",
+        1)]
+    [InlineData(
+        """{"type":"item.started","item":{"type":"totally_unknown_thing"}}""",
+        """{"type":"item.completed","item":{"type":"totally_unknown_thing"}}""",
+        2)]
+    [InlineData(
+        """{"type":"item.started","item":{"id":"item_0","type":"totally_unknown_thing"}}""",
+        """{"type":"item.completed","item":{"id":"item_1","type":"totally_unknown_thing"}}""",
+        2)]
+    public async Task RunAsyncCountsAnUnrecognizedItemOncePerItemNotOncePerStreamLine(
+        string startLine, string completionLine, int expectedUnmapped)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(
+            0,
+            string.Join('\n', startLine, completionLine, """{"type":"turn.completed"}"""),
+            string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.ToolCalls);
+        Assert.Equal(expectedUnmapped, result.UnmappedItemCount);
+    }
+
     /// <summary>The invariant this whole slice hangs on (ADR 0006 via ADR 0060): a
     /// `command_execution` item carries the full command line and its full stdout, both of which
     /// routinely contain secrets. Neither field is ever read into anything durable. Asserted against
@@ -499,6 +581,10 @@ public sealed class CodexLlmProviderTests
     /// <summary>The placeholder worktree root the recorded fixture's absolute `file_change` path sits
     /// under, so relativizing it produces a real, in-worktree relative target.</summary>
     private const string CapturedWorktree = @"C:\Users\example\codex-worktree";
+
+    /// <summary><see cref="CapturedWorktree"/> as it appears INSIDE a JSON string, where every
+    /// separator is escaped — the exact form the recorded fixture's `path` values use.</summary>
+    private const string CapturedWorktreeJson = @"C:\\Users\\example\\codex-worktree";
 
     [Fact]
     [Trait("Category", "Unit")]

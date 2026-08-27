@@ -254,6 +254,35 @@ public sealed class ProviderExecutionTests
         Assert.Contains("[REDACTED:credential]", call.Target, StringComparison.Ordinal);
     }
 
+    /// <summary>Regression test (PR #117 review): the normalization call ran OUTSIDE the sink's
+    /// fail-open guard and caught only <see cref="ArgumentException"/>, so a rooted path at or past
+    /// ~32,767 characters — which <c>Path.GetRelativePath</c> rejects with
+    /// <see cref="PathTooLongException"/> on Windows, and which the 1 MiB
+    /// <see cref="ProviderExecution.MaxLineLengthBytes"/> frame bound leaves ample room to deliver —
+    /// escaped the sink, faulted the stdout pump, and failed an attempt that had otherwise succeeded.
+    /// ADR 0060: "a vendor-shape surprise must never fail an attempt."
+    ///
+    /// The pathological path is deliberately outside the worktree too, so the expected outcome is
+    /// identical on every OS: Windows rejects it for its length, and a platform whose path API
+    /// relativizes it happily still rejects the resulting `..` segment.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncDegradesAPathologicallyLongToolCallTargetInsteadOfFaultingTheStream()
+    {
+        string worktree = Path.Combine(Path.GetTempPath(), "forge-tool-use-worktree");
+        string pathological = Path.Combine(
+            Path.GetTempPath(), "forge-tool-use-elsewhere", new string('a', 33_000) + ".cs");
+
+        IReadOnlyList<ProviderToolCall> calls = await CaptureToolCallsAsync(
+            worktree, [pathological, Path.Combine(worktree, "src", "a.cs")]);
+
+        // The call is still recorded, just with no target -- rejected, never rewritten...
+        Assert.Equal(2, calls.Count);
+        Assert.Null(calls[0].Target);
+        // ...and the sink went on consuming the rest of the stream instead of dying on that line.
+        Assert.Equal("src/a.cs", calls[1].Target);
+    }
+
     /// <summary>An adapter is untrusted input like any other: a kind outside the closed set is drift
     /// to be counted, never a row to be fabricated onto the durable envelope. Same for an extractor
     /// that throws outright -- tool-call capture is optional enrichment, so it fails open and the run

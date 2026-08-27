@@ -221,7 +221,9 @@ public sealed class CodexLlmProvider(
                         isCompletion ? SucceededOf(item) : null),
                 ]),
             FileChangeItemType => ExtractFileChanges(item, correlationId, isCompletion),
-            _ => ProviderToolCallExtraction.Unmapped,
+            // Carries the id, so the core counts this unrecognized ITEM once even though Codex
+            // describes it on both an `item.started` and an `item.completed` line.
+            _ => ProviderToolCallExtraction.UnmappedItem(correlationId),
         };
     }
 
@@ -236,7 +238,7 @@ public sealed class CodexLlmProvider(
     {
         if (!item.TryGetProperty("changes", out JsonElement changes) || changes.ValueKind != JsonValueKind.Array)
         {
-            return ProviderToolCallExtraction.Unmapped;
+            return ProviderToolCallExtraction.UnmappedItem(correlationId);
         }
 
         List<ProviderToolCallCandidate> candidates = [];
@@ -261,8 +263,9 @@ public sealed class CodexLlmProvider(
         }
 
         // An empty or entirely malformed `changes` array is a shape this mapping does not actually
-        // cover, so `Of` reports it as drift rather than as a recognized item with nothing in it.
-        return ProviderToolCallExtraction.Of(candidates);
+        // cover, so `Of` reports it as drift rather than as a recognized item with nothing in it --
+        // still as one identifiable item, so its start and completion lines count once between them.
+        return ProviderToolCallExtraction.Of(candidates, correlationId);
     }
 
     private static int? ExitCodeOf(JsonElement item) =>

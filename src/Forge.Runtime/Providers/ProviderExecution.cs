@@ -115,22 +115,46 @@ public sealed record ProviderToolCallCandidate(
 
 /// <summary>One extractor call's verdict. A single vendor line may legitimately describe more than
 /// one tool call (Codex's `file_change` carries a `changes` array), so this returns a list rather
-/// than a single candidate — an entry beyond the first is never silently dropped.</summary>
+/// than a single candidate — an entry beyond the first is never silently dropped.
+///
+/// <paramref name="CorrelationId"/> matters only for
+/// <see cref="ProviderToolCallOutcome.Unmapped"/>, and only because one logical vendor item spans two
+/// stream lines (Codex emits `item.started` then `item.completed` for the same `item.id`). The drift
+/// counter it feeds is named — and documented — in ITEMS, so an adapter that can identify the
+/// unrecognized item should say which one it was; the core then counts that item exactly once no
+/// matter how many lines carried it. Used in memory only, exactly like
+/// <see cref="ProviderToolCallCandidate.CorrelationId"/>, and never persisted. It is
+/// <see langword="null"/> when the line was so unrecognizable that no id could be read from it, in
+/// which case there is nothing to deduplicate on and every such line counts on its own.</summary>
 public sealed record ProviderToolCallExtraction(
     ProviderToolCallOutcome Outcome,
-    IReadOnlyList<ProviderToolCallCandidate> Candidates)
+    IReadOnlyList<ProviderToolCallCandidate> Candidates,
+    string? CorrelationId = null)
 {
     public static readonly ProviderToolCallExtraction Ignored = new(ProviderToolCallOutcome.Ignored, []);
 
+    /// <summary>An unrecognized shape carrying no usable correlation id. Prefer
+    /// <see cref="UnmappedItem"/> whenever the adapter did manage to read one.</summary>
     public static readonly ProviderToolCallExtraction Unmapped = new(ProviderToolCallOutcome.Unmapped, []);
 
-    /// <summary>An empty candidate list is <see cref="Unmapped"/>, never
+    /// <summary>An unrecognized shape the adapter could still name, so the core can count the ITEM
+    /// once rather than once per stream line describing it.</summary>
+    public static ProviderToolCallExtraction UnmappedItem(string? correlationId) =>
+        correlationId is { Length: > 0 }
+            ? new(ProviderToolCallOutcome.Unmapped, [], correlationId)
+            : Unmapped;
+
+    /// <summary>An empty candidate list is <see cref="ProviderToolCallOutcome.Unmapped"/>, never
     /// <see cref="ProviderToolCallOutcome.Extracted"/>: an adapter that recognized the subtype but
-    /// found nothing inside it saw a shape its mapping does not actually cover.</summary>
-    public static ProviderToolCallExtraction Of(IReadOnlyList<ProviderToolCallCandidate> candidates)
+    /// found nothing inside it saw a shape its mapping does not actually cover — and that unmapped
+    /// verdict keeps <paramref name="correlationId"/>, since it is still one identifiable item.</summary>
+    public static ProviderToolCallExtraction Of(
+        IReadOnlyList<ProviderToolCallCandidate> candidates, string? correlationId = null)
     {
         ArgumentNullException.ThrowIfNull(candidates);
-        return candidates.Count == 0 ? Unmapped : new(ProviderToolCallOutcome.Extracted, candidates);
+        return candidates.Count == 0
+            ? UnmappedItem(correlationId)
+            : new(ProviderToolCallOutcome.Extracted, candidates);
     }
 }
 
@@ -324,11 +348,20 @@ public static class ProviderExecution
     /// A path that escapes <paramref name="workingDirectory"/>, keeps a separator the current OS does
     /// not own, or is otherwise syntactically unsafe is REJECTED (null), never rewritten — ADR 0059's
     /// rule for diff paths, reused verbatim: there is no safe interpretation of such an entry, and the
-    /// call itself is still recorded, just without a target. A malformed path can make
-    /// <see cref="Path.GetRelativePath"/> throw outright (an embedded null character, for one); that
-    /// is treated as "no usable target" rather than allowed to reach the sink's caller. The surviving
-    /// relative path is redacted BEFORE any bounding (ADR 0057/0059), since a redaction placeholder
-    /// can be longer than the text it replaces.</summary>
+    /// call itself is still recorded, just without a target. The surviving relative path is redacted
+    /// BEFORE any bounding (ADR 0057/0059), since a redaction placeholder can be longer than the text
+    /// it replaces.
+    ///
+    /// The whole body is fail-open, for the same reason <see cref="BoundedOutputSink.RecordToolCall"/>
+    /// is (ADR 0060: "a vendor-shape surprise must never fail an attempt"). This runs on the stdout
+    /// pump, so anything that escapes here faults that pump and fails an otherwise-successful attempt —
+    /// and <see cref="Path.GetRelativePath"/> genuinely throws on hostile input beyond the obvious
+    /// <see cref="ArgumentException"/> for an embedded null character: a rooted path at or past
+    /// ~32,767 characters raises <see cref="PathTooLongException"/> on Windows, which the 1 MiB
+    /// <see cref="MaxLineLengthBytes"/> frame bound leaves ample room to deliver. Enumerating every
+    /// exception a path API may raise across three operating systems is exactly the guess this catch
+    /// refuses to make; a genuine cancellation is still allowed through, so a real Host shutdown is
+    /// never swallowed.</summary>
     internal static string? NormalizeToolCallTarget(string? rawTarget, string workingDirectory)
     {
         if (string.IsNullOrWhiteSpace(rawTarget))
@@ -336,20 +369,18 @@ public static class ProviderExecution
             return null;
         }
 
-        string candidate;
         try
         {
-            candidate = Path.IsPathRooted(rawTarget)
+            string candidate = Path.IsPathRooted(rawTarget)
                 ? Path.GetRelativePath(workingDirectory, rawTarget)
                 : rawTarget;
+            candidate = candidate.Replace(Path.DirectorySeparatorChar, '/');
+            return RelativePathShape.IsSyntacticallySafe(candidate) ? SecretRedactor.Redact(candidate) : null;
         }
-        catch (ArgumentException)
+        catch (Exception error) when (error is not OperationCanceledException)
         {
             return null;
         }
-
-        candidate = candidate.Replace(Path.DirectorySeparatorChar, '/');
-        return RelativePathShape.IsSyntacticallySafe(candidate) ? SecretRedactor.Redact(candidate) : null;
     }
 
     /// <summary>
@@ -441,6 +472,17 @@ public static class ProviderExecution
         /// same <see cref="MaxEventCount"/> that bounds <see cref="events"/>, since every entry comes
         /// from exactly one retained event.</summary>
         private readonly Dictionary<string, long> toolCallStarts = new(StringComparer.Ordinal);
+
+        /// <summary>Correlation ids already counted in <see cref="UnmappedItemCount"/>. One logical
+        /// vendor item spans two stream lines (Codex emits `item.started` then `item.completed` for the
+        /// same `item.id`), and that counter is a durable, versioned field documented in ITEMS — so an
+        /// unrecognized item counts once, on whichever of its lines arrives first, not once per line.
+        /// A line carrying no usable id is not recorded here at all and always counts on its own:
+        /// there is nothing to deduplicate on, and under-counting real drift would be worse than the
+        /// double-count this set exists to prevent. In-memory only and bounded by the same
+        /// <see cref="MaxEventCount"/> that bounds <see cref="toolCallStarts"/>, for the same reason —
+        /// every entry comes from exactly one retained event.</summary>
+        private readonly HashSet<string> unmappedItemIds = new(StringComparer.Ordinal);
 
         private long aggregateBytes;
 
@@ -587,13 +629,14 @@ public static class ProviderExecution
             }
             catch (Exception error) when (error is not OperationCanceledException)
             {
-                UnmappedItemCount++;
+                // No verdict at all, so no id to deduplicate on: this line is drift on its own.
+                CountUnmappedItem(null);
                 return;
             }
 
             if (extraction is null || extraction.Outcome == ProviderToolCallOutcome.Unmapped)
             {
-                UnmappedItemCount++;
+                CountUnmappedItem(extraction?.CorrelationId);
                 return;
             }
 
@@ -602,20 +645,50 @@ public static class ProviderExecution
                 return;
             }
 
+            IReadOnlyDictionary<string, int> durations = ResolveCompletionDurations(extraction.Candidates);
             foreach (ProviderToolCallCandidate candidate in extraction.Candidates)
             {
-                RecordToolCallCandidate(candidate);
+                RecordToolCallCandidate(candidate, durations);
             }
         }
 
+        /// <summary>Must run under <see cref="gate"/>. Consumes each completed correlation id's pending
+        /// start ONCE and returns the duration every row from it shares. ADR 0060: the entries of one
+        /// `file_change` completion "become their own row sharing the item's correlation id (and
+        /// therefore its duration)" — they are one logical operation that started and completed
+        /// together. Resolving the duration inside the per-candidate loop instead would give the first
+        /// entry the real value and every sibling <see langword="null"/>, because the first lookup
+        /// removes the pending start the siblings still need. Only known kinds consume a start: an
+        /// out-of-set kind is drift that produces no row, so it must not silently eat the pairing an
+        /// adapter's real candidate would otherwise use.</summary>
+        private Dictionary<string, int> ResolveCompletionDurations(
+            IReadOnlyList<ProviderToolCallCandidate> candidates)
+        {
+            Dictionary<string, int> durations = new(StringComparer.Ordinal);
+            foreach (ProviderToolCallCandidate candidate in candidates)
+            {
+                if (candidate is { IsCompletion: true, CorrelationId: { Length: > 0 } completionId } &&
+                    ProviderToolCallKinds.IsKnown(candidate.Kind) &&
+                    !durations.ContainsKey(completionId) &&
+                    toolCallStarts.Remove(completionId, out long startedAt))
+                {
+                    durations[completionId] = (int)Math.Clamp(
+                        Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 0, int.MaxValue);
+                }
+            }
+
+            return durations;
+        }
+
         /// <summary>Must run under <see cref="gate"/>.</summary>
-        private void RecordToolCallCandidate(ProviderToolCallCandidate candidate)
+        private void RecordToolCallCandidate(
+            ProviderToolCallCandidate candidate, IReadOnlyDictionary<string, int> durations)
         {
             // An adapter is untrusted input like any other: a kind outside the closed set is drift to
             // be counted, never a row to be fabricated on the durable envelope.
             if (!ProviderToolCallKinds.IsKnown(candidate.Kind))
             {
-                UnmappedItemCount++;
+                CountUnmappedItem(candidate.CorrelationId);
                 return;
             }
 
@@ -629,13 +702,10 @@ public static class ProviderExecution
                 return;
             }
 
-            int? duration = null;
-            if (candidate.CorrelationId is { Length: > 0 } completionId &&
-                toolCallStarts.Remove(completionId, out long startedAt))
-            {
-                duration = (int)Math.Clamp(
-                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 0, int.MaxValue);
-            }
+            int? duration = candidate.CorrelationId is { Length: > 0 } completionId &&
+                durations.TryGetValue(completionId, out int resolved)
+                ? resolved
+                : null;
 
             toolCalls.Add(new(
                 candidate.Kind,
@@ -643,6 +713,18 @@ public static class ProviderExecution
                 duration,
                 candidate.ExitCode,
                 candidate.Succeeded));
+        }
+
+        /// <summary>Must run under <see cref="gate"/>. See <see cref="unmappedItemIds"/>: counts one
+        /// unrecognized ITEM, not one unrecognized stream line.</summary>
+        private void CountUnmappedItem(string? correlationId)
+        {
+            if (correlationId is { Length: > 0 } id && !unmappedItemIds.Add(id))
+            {
+                return;
+            }
+
+            UnmappedItemCount++;
         }
 
         /// <summary>Must run under <see cref="gate"/>. Appends to the safe tail and enforces the
