@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "1787851907s since unix epoch",
+  "overallStatus": "warning",
+  "codexVersion": "0.149.1",
+  "checks": {
+    "auth.credentials": {
+      "id": "auth.credentials",
+      "category": "auth",
+      "status": "ok",
+      "summary": "auth is configured",
+      "details": {
+        "auth file": "C:\\Users\\example\\.codex\\auth.json",
+        "auth storage mode": "File",
+        "stored API key": "false",
+        "stored ChatGPT tokens": "true",
+        "stored agent identity": "false",
+        "stored auth mode": "chatgpt"
+      },
+      "remediation": null,
+      "durationMs": 0
+    },
+    "config.load": {
+      "id": "config.load",
+      "category": "config",
+      "status": "ok",
+      "summary": "config loaded",
+      "details": {
+        "CODEX_HOME": "C:\\Users\\example\\.codex",
+        "config.toml": "C:\\Users\\example\\.codex\\config.toml",
+        "config.toml parse": "ok",
+        "cwd": "C:\\Users\\example\\project",
+        "enabled feature flags": "<redacted>",
+        "feature flag overrides": "none",
+        "feature flags enabled": "43",
+        "log dir": "C:\\Users\\example\\.codex\\log",
+        "mcp servers": "1",
+        "model": "gpt-5.6-sol",
+        "model provider": "openai",
+        "sqlite home": "C:\\Users\\example\\.codex"
+      },
+      "remediation": null,
+      "durationMs": 0
+    },
+    "runtime.provenance": {
+      "id": "runtime.provenance",
+      "category": "runtime",
+      "status": "ok",
+      "summary": "running standalone on windows-x86_64",
+      "details": {
+        "commit": "unknown",
+        "current executable": "C:\\Users\\example\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+        "platform": "windows-x86_64",
+        "version": "0.149.1"
+      },
+      "remediation": null,
+      "durationMs": 0
+    }
+  }
+}

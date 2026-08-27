@@ -210,6 +210,51 @@ public sealed class SprintDefinitionTests
         Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
     }
 
+    // Round 2 review of PR #120: ADR 0063 made ILlmProvider.DefaultModel resolvable at runtime, so a
+    // provider-capability refresh can change it at any moment -- including between this method's gate
+    // check and its freeze, which are separated by durable writes. Two reads there would let the gate
+    // approve model A while the sprint freezes and runs model B, silently defeating the very
+    // models.allowed_models restriction the gate exists to enforce. Against a provider that reports a
+    // NEW model on every single read, the model the allowlist approved must be exactly the model the
+    // definition freezes -- one resolution per creation call, used for both.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationResolvesTheDefaultModelOnceSoTheGateApprovesTheModelItFreezes()
+    {
+        ShiftingModelProvider provider = new(new ProviderId("codex"));
+        using TestEnvironment environment = new(
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        string approvedModel = ShiftingModelProvider.ModelName(1);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(new[] { $"codex:{approvedModel}" }),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        // Discards whatever setup above read, so the creation call under test starts at read 1 -- the
+        // one value the allowlist names.
+        provider.Rewind();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid()), cancellationToken);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.All(definition!.ExecutionProfiles.Values, profile => Assert.Equal(approvedModel, profile.Model));
+        Assert.Equal(
+            approvedModel,
+            definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
+        Assert.Equal(1, provider.ModelReads);
+    }
+
     // A definition.json written before FrozenProviders existed has no such key at all -- proves
     // LoadDefinitionAsync tolerates that instead of throwing, defaulting to an empty list.
     [Fact]
@@ -595,6 +640,54 @@ public sealed class SprintDefinitionTests
                 root, sprintId, AggregateKind.Sprint, id, "SprintChanged", "workflow.sprint_advanced",
                 state, version, Guid.NewGuid(), cancellationToken);
         }
+    }
+
+    /// <summary>Reports a NEW model on every read of <see cref="DefaultModel"/> — the pathological end
+    /// of what ADR 0063 makes runtime-resolvable, so a second read anywhere in the creation path is
+    /// caught deterministically instead of depending on a real refresh actually racing it.</summary>
+    private sealed class ShiftingModelProvider(ProviderId id) : ILlmProvider
+    {
+        private int reads;
+
+        public ProviderId Id => id;
+
+        public int ModelReads => Volatile.Read(ref reads);
+
+        public string DefaultModel => ModelName(Interlocked.Increment(ref reads));
+
+        /// <summary>The value the <paramref name="read"/>-th read since the last
+        /// <see cref="Rewind"/> reports.</summary>
+        public static string ModelName(int read) => $"codex-model-{read}";
+
+        public void Rewind() => Interlocked.Exchange(ref reads, 0);
+
+        /// <summary>A no-op that deliberately does NOT count as a read: the point of this fake is
+        /// that every <see cref="DefaultModel"/> read reports something new, so the refresh
+        /// <c>ExecutionProfilePolicy.ResolveModelsAsync</c> performs must not itself consume one.</summary>
+        public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
+            Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
+
+        public Task<ProviderStatus> InstallOrUpdateAsync(
+            bool bypassReleaseCache, CancellationToken cancellationToken) =>
+            Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));
+
+        public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<string?>(null);
+
+        public Task<ProviderAuthenticationStatus> CheckAuthenticationAsync(CancellationToken cancellationToken) =>
+            Task.FromResult(ProviderAuthenticationStatus.Ready);
+
+        public Task<ProviderRunResult> RunAsync(
+            string prompt,
+            string workingDirectory,
+            string? model,
+            string? effort,
+            CancellationToken cancellationToken,
+            Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null) =>
+            throw new NotSupportedException("This fake only exercises sprint creation.");
     }
 
     private static async Task<TestEnvironment> InitializedAsync(IRepository? repository = null)

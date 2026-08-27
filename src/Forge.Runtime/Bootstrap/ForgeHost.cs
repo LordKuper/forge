@@ -50,6 +50,7 @@ public static class ForgeHost
         services.TryAddSingleton<ProviderCatalog>();
         services.TryAddSingleton<IProviderEnablementSource, ScopedConfigurationProviderEnablementSource>();
         services.TryAddSingleton<IProviderReleaseCache, FileProviderReleaseCache>();
+        services.TryAddSingleton<IProviderDefaultModelCache, FileProviderDefaultModelCache>();
         services.TryAddSingleton<IProviderInstallLock, ProviderInstallLock>();
         services.TryAddSingleton<IProviderToolchainManager, ProviderToolchainManager>();
         services.AddSingleton<ProjectRootResolver>();

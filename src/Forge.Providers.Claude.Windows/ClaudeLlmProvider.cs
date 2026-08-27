@@ -72,6 +72,14 @@ public sealed class ClaudeLlmProvider(
     // (Stage 11, P11.13-P11.20). Revisit once real per-project model configuration exists.
     public string DefaultModel => "sonnet";
 
+    /// <summary>A no-op: <see cref="DefaultModel"/> is a constant here, so there is nothing to
+    /// resolve and nothing a probe could learn. Kept explicit rather than defaulted on
+    /// <see cref="ILlmProvider"/> so a future adapter whose vendor can be asked what it would do has
+    /// to decide, not inherit silence (ADR 0060's "no default, review every call site" discipline,
+    /// affordable at two implementations).</summary>
+    public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.DiscoverAsync(
             Id,

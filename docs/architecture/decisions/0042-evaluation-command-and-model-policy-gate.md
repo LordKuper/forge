@@ -1,6 +1,6 @@
 # ADR 0042: `forge eval` and a project model-policy gate
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-27)
 - Date: 2026-08-21
 
 ## Context
@@ -61,7 +61,20 @@ provider's own model catalog is discovered) and no MVP acceptance case yet.
 What P12.9–P12.15 actually asks for — a **gate** — has a narrower, concrete
 shape available today: a project can restrict which model id is acceptable
 per enabled provider, and sprint creation is refused before any state is
-written if the provider's fixed `ILlmProvider.DefaultModel` violates it.
+written if the provider's `ILlmProvider.DefaultModel` violates it.
+
+> **Revised by ADR 0063** (2026-08-27): `DefaultModel` is no longer
+> necessarily "fixed" — Codex's resolves at runtime from a live, cached
+> probe rather than a constant. The gate itself is unchanged (it still
+> validates whatever `DefaultModel` currently reports), but
+> `SprintOrchestrator.CreateSprintAsync` now resolves the model exactly once
+> per sprint creation and reuses that single value for both the gate check
+> and the frozen profile, so a resolution refresh landing between the two
+> can never let the gate approve one model while a different one is
+> actually frozen and run. See ADR 0063's own Consequences section for the
+> resulting sentinel-vs-allowlist interaction (an unresolved Codex model
+> fails a `codex:`-scoped allowlist with `model_policy_violation` until the
+> next successful probe).
 
 New project-scoped configuration key `models.allowed_models`: an optional
 array of `"<provider_id>:<model_id>"` strings (reusing

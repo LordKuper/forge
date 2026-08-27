@@ -172,13 +172,30 @@ public sealed class SprintOrchestrator(
             return new(false, null, DiagnosticCodes.SprintProviderCandidatesEmpty);
         }
 
+        // ADR 0063. Two properties, one call, and both are load-bearing here.
+        //
+        // It RESOLVES rather than merely reads: an adapter's resolved model is per-instance in-memory
+        // state, and this method runs in the Forge Host for every Desktop and remote sprint -- a
+        // process that runs no provider-capability pass at all. Reading without refreshing would
+        // freeze the unresolved sentinel into every sprint created that way, which is every sprint
+        // not created by the CLI. The refresh is throttled through the adapter's own cross-process
+        // cache, so it spawns nothing unless the answer is actually stale, and a failed refresh
+        // leaves the previous value rather than failing creation.
+        //
+        // It resolves ONCE: every read of ILlmProvider.DefaultModel is a separate answer, so using
+        // this same map for both the gate below and the freeze further down (which would otherwise
+        // re-read it after this method's durable writes) is what makes the model the allowlist
+        // approved provably the model the sprint freezes and runs; two reads would let a refresh in
+        // that window approve model A and run model B, silently defeating the allowlist.
+        IReadOnlyDictionary<string, string> frozenModels = await ExecutionProfilePolicy
+            .ResolveModelsAsync(frozenProviders, providerCatalog, cancellationToken).ConfigureAwait(false);
+
         // ADR 0042: the allowlist half of ADR 0006's "project model policy" -- refused before any
         // event is written, the same fail-closed placement as the empty-candidates check above.
         IReadOnlyList<string> allowedModels = ModelPolicyGate.ParseAllowedModels(
             await configuration.GetProjectAsync(status.Root, cancellationToken).ConfigureAwait(false));
-        bool policyViolated = frozenProviders.Any(providerId =>
-            providerCatalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider) &&
-            !ModelPolicyGate.IsAllowed(providerId, provider.DefaultModel, allowedModels));
+        bool policyViolated = frozenModels.Any(
+            resolved => !ModelPolicyGate.IsAllowed(resolved.Key, resolved.Value, allowedModels));
         if (policyViolated)
         {
             return new(false, null, DiagnosticCodes.ModelPolicyViolation);
@@ -264,7 +281,7 @@ public sealed class SprintOrchestrator(
                 ArtifactPolicySnapshotHash(configurationSnapshot),
                 clock.UtcNow,
                 frozenProviders,
-                ExecutionProfilePolicy.Freeze(frozenProviders, providerCatalog),
+                ExecutionProfilePolicy.Freeze(frozenProviders, frozenModels),
                 title);
             await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
         }
