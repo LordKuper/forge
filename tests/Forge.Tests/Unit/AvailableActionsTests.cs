@@ -216,6 +216,100 @@ public sealed class AvailableActionsTests
         Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
     }
 
+    // ADR 0058: the gate decision is a Host-described action linked to the event that requested it,
+    // not a boolean a client scrapes off node state. Two gates, because the action id is node-scoped
+    // precisely so several pending gates cannot collapse into one ambiguous `approve_gate` row; and a
+    // user message posted afterwards, so the sprint's own LastSequence is a *different*, unrelated
+    // event -- an implementation that reported it instead of each gate's own transition would still
+    // produce a plausible-looking number, and only this shape catches that.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task EachPendingGateOffersApproveAndRejectLinkedToTheEventThatRequestedIt()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(),
+                Graph: [new("first", NodeKind.HumanGate, []), new("second", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        await store.AppendUserMessageAsync(
+            environment.ProjectRoot, sprintId, Guid.NewGuid(), "posted after both gates opened", cancellationToken);
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        IReadOnlyList<WorkflowEvent> events =
+            await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        IReadOnlyList<AvailableAction> actions = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        foreach (string nodeId in (string[])["first", "second"])
+        {
+            Assert.Equal(NodeState.AwaitingHuman, state.Nodes[nodeId].State);
+            foreach (string prefix in (string[])
+                [AvailableActionProjector.ApproveGateActionPrefix, AvailableActionProjector.RejectGateActionPrefix])
+            {
+                AvailableAction gate = Assert.Single(actions, action => action.ActionId == $"{prefix}{nodeId}");
+                Assert.Equal(sprintId.Value, gate.Target.SprintId);
+                Assert.Equal(nodeId, gate.Target.NodeId);
+                Assert.Equal(SafetyClass.HumanApproval, gate.SafetyClass);
+                Assert.True(gate.ConfirmationRequired);
+                Assert.True(gate.Enabled);
+
+                // The linked event must be this node's own transition into `awaiting_human` -- checked
+                // by resolving the sequence back to the real journal entry rather than recomputing the
+                // projector's own lookup, so a wrong-but-plausible sequence (the sprint's LastSequence,
+                // another gate's transition, the same node's earlier `running` step) fails here.
+                long linked = Assert.NotNull(gate.Target.TimelineSequence);
+                Assert.NotEqual(state.LastSequence, linked);
+                WorkflowEvent requesting = Assert.Single(events, item => item.Sequence == linked);
+                Assert.Equal(AggregateKind.Node, requesting.Aggregate.Kind);
+                Assert.Equal(nodeId, requesting.Aggregate.Id);
+                Assert.Equal(
+                    WorkflowStateNames.ToSnakeCase(NodeState.AwaitingHuman),
+                    requesting.Arguments[WorkflowEvent.ToStateArgument]);
+            }
+        }
+    }
+
+    /// <summary>The same round-trip guarantee the sprint-lifecycle rows above are pinned to, for the
+    /// gate pair: what the action reports is enough to execute the mutation it describes. The second
+    /// half is the state-versus-history check -- the resolved gate's `awaiting_human` transition is
+    /// still in the journal forever, so a projector keyed on the event rather than on current node
+    /// state would keep offering a decision that has already been made.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AGateActionsReportedNodeResolvesTheRealGateAndTheRowsThenDisappear()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        IReadOnlyList<AvailableAction> actions = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+        AvailableAction approve = Assert.Single(
+            actions,
+            action => action.ActionId == $"{AvailableActionProjector.ApproveGateActionPrefix}gate");
+
+        NodeActionResult resolved = await environment.Application.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value, approve.Target.NodeId!, true, true, cancellationToken);
+
+        Assert.True(resolved.Succeeded);
+        Assert.Equal(DiagnosticCodes.None, resolved.DiagnosticCode);
+        IReadOnlyList<AvailableAction> after = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+        Assert.DoesNotContain(
+            after,
+            action => action.ActionId.StartsWith(AvailableActionProjector.ApproveGateActionPrefix, StringComparison.Ordinal) ||
+                action.ActionId.StartsWith(AvailableActionProjector.RejectGateActionPrefix, StringComparison.Ordinal));
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

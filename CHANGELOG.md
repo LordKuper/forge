@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.81.0
+
+### Added
+
+- When a sprint stops at a human gate, Forge now describes approving or rejecting it as a real
+  action in its contextual-action list, and names the exact timeline event that asked for the
+  decision. `forge workspace actions --sprint <id>` lists an `approve_gate:<node>` and a
+  `reject_gate:<node>` row per waiting gate, each requiring confirmation, and the `--json` output
+  carries the requesting event's timeline position in `target.timeline_sequence`. This changes what
+  the command-line and other API consumers see; the Desktop gate card still appears in the sprint
+  workspace's bottom action panel exactly as before, and moving it next to the event that raised it
+  is separate, later work.
+
 ## v0.80.0
 
 ### Added

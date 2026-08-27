@@ -428,6 +428,12 @@ public static class MessageKeys
     /// offers while a rewind has not yet converged -- a resume, not an ordinary fresh move.</summary>
     public const string WorkspaceActionResumeRewindRationale = "workspace_action.move_to_stage.resume_rewind";
 
+    /// <summary>ADR 0058: the approve/reject pair <c>AvailableActionProjector.ForSprintAsync</c> offers
+    /// per pending human gate.</summary>
+    public const string WorkspaceActionApproveGateRationale = "workspace_action.approve_gate";
+
+    public const string WorkspaceActionRejectGateRationale = "workspace_action.reject_gate";
+
     // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnknown`
     // (defined above, Slice 5) is the only state this codebase currently produces -- the remaining
     // four exist so the sidebar/CLI rendering is complete for every state the plan requires, not

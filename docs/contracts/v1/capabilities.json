@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.12.0",
+  "contract_version": "1.13.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -214,7 +214,7 @@
       "desktop": "SprintWorkspace/ContextualActions",
       "permission": "read_redacted",
       "acceptance": "available-actions-parity",
-      "note": "Implemented on Host, CLI, and Desktop (plan section 6.4, Slice 4/ADR 0049; Desktop's SprintWorkspace/ContextualActions, Slice 6/ADR 0051). Wraps two already-existing computations rather than a parallel policy engine: the project-level suggested-action list (`StatusAdvisor.Recommend`) without a sprint, and `StageTransitionAssessor`'s own assessment per candidate stage plus sprint-lifecycle state for a given sprint. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved for the same reason as `sprint.timeline`."
+      "note": "Implemented on Host, CLI, and Desktop (plan section 6.4, Slice 4/ADR 0049; Desktop's SprintWorkspace/ContextualActions, Slice 6/ADR 0051). Wraps already-existing computations rather than a parallel policy engine: the project-level suggested-action list (`StatusAdvisor.Recommend`) without a sprint, and `StageTransitionAssessor`'s own assessment per candidate stage plus sprint-lifecycle state for a given sprint. ADR 0058 adds a node-scoped `approve_gate:<node-id>`/`reject_gate:<node-id>` pair per pending human gate, each executed through `workflow.review` below and each carrying `target.timeline_sequence` -- the sequence of the exact journal event that requested the decision. Not yet in `CapabilityIds.Implemented` -- ADR 0051 keeps this reserved for the same reason as `sprint.timeline`."
     },
     {
       "id": "workflow.stop_operation",

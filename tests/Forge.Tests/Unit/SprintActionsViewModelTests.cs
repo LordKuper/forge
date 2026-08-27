@@ -26,7 +26,7 @@ public sealed class SprintActionsViewModelTests
             AvailableActionProjector.StopCurrentOperationActionId,
             "workspace_action.stop_current_operation",
             new Dictionary<string, string>(StringComparer.Ordinal),
-            new(null, sprintId, nodeId, attemptId, null),
+            new(null, sprintId, nodeId, attemptId, null, null),
             1,
             SafetyClass.HumanApproval,
             true,
