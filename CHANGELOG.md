@@ -2,6 +2,35 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.84.1
+
+### Fixed
+
+- **Sprints now actually run at the effort level Forge already decided for them.** Forge freezes a
+  reasoning-effort level onto every sprint phase when the sprint is created, records it as durable
+  state, and shows it — but it was never sent to the provider CLI. Every planning, implementation,
+  and review attempt in every release before this one ran at whatever effort the vendor CLI happened
+  to default to, no matter what Forge had recorded. The frozen level is now passed to the provider
+  process on every attempt.
+- **This changes real behaviour and real cost from this release onward, not just internal
+  correctness.** Review is frozen at `high` effort and planning and implementation at `medium`, so a
+  phase whose frozen level sits above the vendor's own default will now think harder, take longer,
+  and consume more tokens than the same sprint did on v0.84.0 — review most of all. Nothing about
+  the levels themselves changed; they are simply being honoured now. If a provider CLI was
+  configured to a low default effort, the increase will be noticeable in both wall-clock time and
+  token spend.
+- A frozen level a vendor does not offer is mapped to the nearest level it does, never sent
+  verbatim: neither CLI rejects an unknown effort — Codex forwards it to its API and Claude Code
+  warns and silently reverts to its default — so Forge decides rather than letting the run proceed
+  at an effort nobody chose. A level Forge does not recognize at all sends no override, leaving the
+  vendor default explicitly in charge instead of guessing.
+- The frozen model is now applied for Claude attempts, which accept a stable model name. Codex
+  attempts continue to use the model your own Codex configuration resolves: Codex publishes only
+  version-pinned model slugs, and the slug Forge currently records for a Codex sprint is one current
+  Codex releases reject outright, so sending it would fail every Codex attempt. That recorded value
+  is still inaccurate for Codex and is tracked as a separate defect; nothing about how Codex
+  attempts choose a model changes in this release.
+
 ## v0.84.0
 
 ### Added

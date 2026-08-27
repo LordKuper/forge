@@ -270,10 +270,21 @@ public interface ILlmProvider
     /// <paramref name="onActivity"/>, when supplied, is invoked once per parsed provider event so
     /// the caller can record a safe, throttled attempt-activity update (ADR 0006) without this
     /// contract depending on how or how often that update is persisted.
+    ///
+    /// <paramref name="model"/> and <paramref name="effort"/> are the caller's already-frozen
+    /// <c>ExecutionProfile.Model</c> and <c>ExecutionProfile.Effort</c> for this attempt (ADR 0062).
+    /// Both are deliberately required rather than defaulted: a call site that forgets them would
+    /// silently reintroduce the defect ADR 0062 fixes — a profile Forge froze, recorded, and showed
+    /// the user, but never actually applied to the run. Pass <see langword="null"/> only for a run
+    /// that genuinely has no frozen profile, which means "leave the vendor's own default alone";
+    /// an adapter then sends no flag at all rather than an empty one. An adapter honours what its
+    /// vendor can actually accept and never forwards a value verbatim on trust.
     /// </summary>
     Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
+        string? model,
+        string? effort,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null);
 }

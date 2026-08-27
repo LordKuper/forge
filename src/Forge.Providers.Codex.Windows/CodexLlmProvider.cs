@@ -139,14 +139,40 @@ public sealed class CodexLlmProvider(
             cancellationToken).ConfigureAwait(false);
     }
 
+    /// <summary>The effort levels every model in Codex 0.149.1's own catalog accepts, lowest to
+    /// highest. `codex exec` itself validates nothing — an unrecognized `model_reasoning_effort`
+    /// reaches the run header verbatim and fails at the API — so this set comes from `codex debug
+    /// models`, where each entry lists its `supported_reasoning_levels`. `low`/`medium`/`high`/`xhigh`
+    /// are the levels common to all of them; `max` and `ultra` exist in the wire enum but only some
+    /// models offer them, and this adapter does not know which model the run will resolve to (see
+    /// <see cref="RunAsync"/>), so a profile frozen above `xhigh` clamps down to it rather than risking
+    /// a rejection. `none` and `minimal` are in the enum but offered by no catalogued model, and clamp
+    /// up to `low`.</summary>
+    private static readonly IReadOnlyList<string> SupportedEffortLevels = ["low", "medium", "high", "xhigh"];
+
     /// <summary>
     /// Event shape per `developers.openai.com/codex` (`type`: `thread.started`, `turn.started`,
     /// `turn.completed`, `turn.failed`, `item.*`). Item subtypes are documented only in prose, so
     /// text extraction stays conservative rather than guessing field names.
+    ///
+    /// ADR 0062: the frozen profile's effort is applied through `-c model_reasoning_effort=&lt;level&gt;`,
+    /// verified against Codex 0.149.1 (the value reaches the run header's `reasoning effort:` line).
+    ///
+    /// ponytail: <paramref name="model"/> is deliberately NOT sent. Codex exposes only
+    /// version-pinned slugs (`codex debug models`) and no stable alias, and this adapter's own
+    /// <see cref="DefaultModel"/> — the value neutral code freezes into every Codex
+    /// `ExecutionProfile` — names a slug that release no longer serves: `codex exec -m gpt-5` fails
+    /// with `400 invalid_request_error, "The 'gpt-5' model is not supported"`. Sending it would break
+    /// every Codex attempt, and replacing it with today's top slug would pin Forge to a name that
+    /// rots at the vendor's next release while overriding the model the user configured. Not sending
+    /// it leaves the run on the user's/vendor's own default. Revisit together with the stale
+    /// <see cref="DefaultModel"/> when real per-project model selection exists (ADR 0062).
     /// </summary>
     public async Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
+        string? model,
+        string? effort,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
     {
@@ -154,10 +180,17 @@ public sealed class CodexLlmProvider(
         string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
         // The prompt travels on stdin, never a command-line argument (ADR 0006): `codex exec
         // --json` has no positional prompt argument at all (ADR 0002).
+        List<string> arguments = ["exec", "--json"];
+        if (ProviderEffortLevels.Resolve(effort, SupportedEffortLevels) is { } resolvedEffort)
+        {
+            arguments.Add("-c");
+            arguments.Add($"model_reasoning_effort={resolvedEffort}");
+        }
+
         return await ProviderExecution.RunAsync(
             executable,
             processRunner,
-            ["exec", "--json"],
+            arguments,
             prompt,
             workingDirectory,
             ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames),

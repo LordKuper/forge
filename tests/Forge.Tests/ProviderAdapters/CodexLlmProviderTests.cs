@@ -339,6 +339,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "list open bugs",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
@@ -348,6 +350,61 @@ public sealed class CodexLlmProviderTests
         Assert.Equal(ProviderEventKind.ToolUse, result.Events[2].Kind);
         Assert.Equal(ProviderEventKind.Result, result.Events[3].Kind);
         Assert.NotNull(result.TerminalResult);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    // ADR 0062. Codex takes its effort as a config override, not a dedicated flag.
+    [InlineData("high", new[] { "-c", "model_reasoning_effort=high" })]
+    [InlineData("medium", new[] { "-c", "model_reasoning_effort=medium" })]
+    // No catalogued Codex model offers a tier below `low` or above `xhigh`, so both ends clamp into
+    // the range every one of them accepts.
+    [InlineData("none", new[] { "-c", "model_reasoning_effort=low" })]
+    [InlineData("max", new[] { "-c", "model_reasoning_effort=xhigh" })]
+    // Codex validates nothing here -- an unrecognized level reaches its API verbatim -- so an
+    // unrecognized level must produce no override at all rather than a value the run would fail on.
+    [InlineData("aggressive", new string[0])]
+    [InlineData(null, new string[0])]
+    public async Task RunAsyncAppliesTheFrozenEffortAsAConfigOverride(string? effort, string[] expectedTail)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        IReadOnlyList<string>? capturedArguments = null;
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            capturedArguments = request.Arguments;
+            return new(0, """{"type":"turn.completed"}""", string.Empty);
+        });
+
+        await provider.RunAsync("prompt", "C:\\work", model: null, effort, TestContext.Current.CancellationToken);
+
+        Assert.Equal(["exec", "--json", .. expectedTail], capturedArguments);
+    }
+
+    /// <summary>ADR 0062: this adapter deliberately sends no model flag even when neutral code hands
+    /// it one. Codex publishes only version-pinned slugs and no stable alias, and the slug this
+    /// adapter's own <c>DefaultModel</c> still names -- the value frozen into every Codex
+    /// <c>ExecutionProfile</c> -- is one Codex 0.149.1 rejects outright (`400 invalid_request_error`).
+    /// Sending it would fail every Codex attempt, so the run is left on the model the user's own Codex
+    /// configuration resolves. This test pins that decision so it cannot be quietly reversed into a
+    /// broken `-m`.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncNeverSendsAModelFlagBecauseCodexHasNoStableModelNameToSend()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        IReadOnlyList<string>? capturedArguments = null;
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            capturedArguments = request.Arguments;
+            return new(0, """{"type":"turn.completed"}""", string.Empty);
+        });
+
+        await provider.RunAsync(
+            "prompt", "C:\\work", provider.DefaultModel, "high", TestContext.Current.CancellationToken);
+
+        Assert.Equal(["exec", "--json", "-c", "model_reasoning_effort=high"], capturedArguments);
     }
 
     /// <summary>ADR 0060, against the real thing: `codex-exec-json-tool-calls.jsonl` is a verbatim
@@ -370,6 +427,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "append a line",
             CapturedWorktree,
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
@@ -425,7 +484,7 @@ public sealed class CodexLlmProviderTests
             0, line + "\n" + """{"type":"turn.completed"}""", string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(expectedToolCalls, result.ToolCalls.Count);
@@ -460,7 +519,7 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(0, result.UnmappedItemCount);
@@ -496,7 +555,7 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(ProviderExecution.MaxRetainedToolCalls, result.ToolCalls.Count);
@@ -550,7 +609,7 @@ public sealed class CodexLlmProviderTests
             string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Empty(result.ToolCalls);
@@ -585,7 +644,7 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         ProviderToolCall call = Assert.Single(result.ToolCalls);
         Assert.Equal(ProviderToolCallKinds.Command, call.Kind);
@@ -639,7 +698,7 @@ public sealed class CodexLlmProviderTests
             0, """{"type":"thread.started","thread_id":"t1"}""" + "\n", string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", "C:\\work", TestContext.Current.CancellationToken);
+            "prompt", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal(ProviderFailureKind.MissingTerminalResult, result.Failure);
@@ -656,6 +715,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "prompt",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -676,6 +737,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "prompt",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -702,6 +765,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "prompt",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.Equal(expected, result.Failure);
@@ -722,6 +787,8 @@ public sealed class CodexLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "prompt",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
@@ -744,7 +811,7 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "append a line", CapturedWorktree, TestContext.Current.CancellationToken);
+            "append a line", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         ProviderUsage usage = Assert.IsType<ProviderUsage>(result.Usage);
@@ -781,7 +848,7 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, _ => new(0, line + "\n", string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+            "prompt", CapturedWorktree, model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(expectedInput, result.Usage?.InputTokens);

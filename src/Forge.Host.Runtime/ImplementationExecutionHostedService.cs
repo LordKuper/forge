@@ -459,7 +459,9 @@ public sealed class ImplementationExecutionHostedService(
             {
                 try
                 {
-                    return await provider.RunAsync(prompt, worktreePath, token, onActivity)
+                    // ADR 0062: model and effort come from the same frozen profile as the deadlines.
+                    return await provider
+                        .RunAsync(prompt, worktreePath, profile.Model, profile.Effort, token, onActivity)
                         .ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
