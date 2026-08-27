@@ -44,4 +44,14 @@ public sealed class ExitCodesTests
     [Trait("Category", "Unit")]
     public void CapabilityNotSupportedMapsToTheCompatibilityExitCode() =>
         Assert.Equal(ExitCodes.Compatibility, ExitCodes.For(DiagnosticCodes.CapabilityNotSupported));
+
+    /// <summary>Round 1 review of PR #114: ADR 0057's <see cref="DiagnosticCodes.SprintTitleTooLong"/>
+    /// had no `ExitCodes.For` case, so a rejected `--title` exited 13 ("sanitized unexpected failure")
+    /// instead of the usage family every sibling bounded-input diagnostic
+    /// (<see cref="DiagnosticCodes.UserMessageTooLong"/>,
+    /// <see cref="DiagnosticCodes.SupersessionInstructionTooLong"/>) already maps to.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void SprintTitleTooLongMapsToTheUsageExitCode() =>
+        Assert.Equal(ExitCodes.Usage, ExitCodes.For(DiagnosticCodes.SprintTitleTooLong));
 }

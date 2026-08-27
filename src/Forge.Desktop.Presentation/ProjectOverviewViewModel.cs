@@ -6,14 +6,18 @@ using Forge.Providers;
 namespace Forge.Desktop.Presentation;
 
 /// <summary>One sprint card on the project overview (plan section 4.2): active or recent-history,
-/// distinguished by <see cref="Terminal"/>.</summary>
+/// distinguished by <see cref="Terminal"/>. <see cref="DisplayTitle"/> is the sprint's own frozen
+/// title when it has one, and <see cref="SprintDisplayTitle"/>'s localized "Sprint {N}" fallback
+/// when it does not (ADR 0057) -- always renderable, never a synthesized value in any durable
+/// contract.</summary>
 public sealed record ProjectOverviewSprintCard(
     Guid SprintId,
     int CreationSequence,
     string StateText,
     bool Terminal,
     bool RequiresHumanAttention,
-    string? AttentionReasonKey);
+    string? AttentionReasonKey,
+    string DisplayTitle);
 
 public sealed record ProjectOverviewSnapshot(
     string DisplayName,
@@ -35,10 +39,15 @@ public sealed record ProjectOverviewSnapshot(
 /// monolithic page called -- so no existing capability or its already-reviewed behavior is
 /// reimplemented (plan 12.1).
 /// </summary>
-public sealed class ProjectOverviewViewModel(ForgeApplication application, MainPageViewModel legacy)
+public sealed class ProjectOverviewViewModel(
+    ForgeApplication application, MainPageViewModel legacy, SurfaceText text)
 {
     private readonly ForgeApplication application = application ?? throw new ArgumentNullException(nameof(application));
     private readonly MainPageViewModel legacy = legacy ?? throw new ArgumentNullException(nameof(legacy));
+
+    // ADR 0057: needed only to resolve the untitled-sprint display fallback. Bound to one culture
+    // like every other view model here -- the shell rebuilds this instance on a language change.
+    private readonly SurfaceText text = text ?? throw new ArgumentNullException(nameof(text));
 
     private const int MaxRecentHistory = 10;
 
@@ -81,7 +90,7 @@ public sealed class ProjectOverviewViewModel(ForgeApplication application, MainP
             snapshot.Providers);
     }
 
-    private static ProjectOverviewSprintCard ToCard(SprintStatus sprint, bool terminal)
+    private ProjectOverviewSprintCard ToCard(SprintStatus sprint, bool terminal)
     {
         bool humanAttention = !terminal && SprintOrderingRank.RequiresHumanAttention(sprint.State);
         return new(
@@ -90,7 +99,8 @@ public sealed class ProjectOverviewViewModel(ForgeApplication application, MainP
             SurfaceFormatting.Machine(sprint.State),
             terminal,
             humanAttention,
-            humanAttention ? SidebarViewModel.AttentionReasonKey(sprint.State) : null);
+            humanAttention ? SidebarViewModel.AttentionReasonKey(sprint.State) : null,
+            SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text));
     }
 
     public Task<ProjectSnapshot> GetProjectSnapshotAsync(string? root, CancellationToken cancellationToken) =>
@@ -104,8 +114,8 @@ public sealed class ProjectOverviewViewModel(ForgeApplication application, MainP
     public Task<string> RecoverAsync(string? root, bool confirmed, CancellationToken cancellationToken) =>
         legacy.RecoverAsync(root, confirmed, cancellationToken);
 
-    public Task<string> CreateSprintAsync(string? root, CancellationToken cancellationToken) =>
-        legacy.CreateSprintAsync(root, cancellationToken);
+    public Task<string> CreateSprintAsync(string? root, string? title, CancellationToken cancellationToken) =>
+        legacy.CreateSprintAsync(root, title, cancellationToken);
 
     public Task<string> RunSprintAsync(string? root, string? sprintId, CancellationToken cancellationToken) =>
         legacy.RunSprintAsync(root, sprintId, cancellationToken);

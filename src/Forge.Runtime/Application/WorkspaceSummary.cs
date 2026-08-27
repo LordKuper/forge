@@ -7,7 +7,10 @@ namespace Forge.Application;
 /// <summary>One active (non-terminal) sprint's bounded contribution to a project's workspace-summary
 /// row (plan section 6.2). <see cref="CurrentStageId"/>/<see cref="StagesCompleted"/>/
 /// <see cref="StagesTotal"/> are derived from the same folded node state a full snapshot already
-/// computes -- never a fresh timeline or per-node detail load.</summary>
+/// computes -- never a fresh timeline or per-node detail load. <see cref="Title"/> carries the
+/// sprint's own frozen <see cref="SprintDefinition.Title"/> verbatim, including its
+/// <see langword="null"/> (ADR 0057) -- a presentation fallback is never baked into this read
+/// model.</summary>
 public sealed record SprintWorkspaceSummary(
     Guid SprintId,
     int CreationSequence,
@@ -18,7 +21,8 @@ public sealed record SprintWorkspaceSummary(
     bool AttentionRequired,
     bool HasActiveOperation,
     string? ActiveOperationNodeId,
-    Guid? ActiveOperationAttemptId);
+    Guid? ActiveOperationAttemptId,
+    string? Title);
 
 /// <summary>
 /// Plan section 6.2's bounded, per-project workspace-summary row: project availability,
@@ -41,7 +45,9 @@ public sealed record ProjectWorkspaceSummary(
     IReadOnlyList<ProviderHealthEntry> Providers,
     string DiagnosticCode)
 {
-    public const string ContractVersion = "1.0.0";
+    /// <summary>`1.1.0` adds <see cref="SprintWorkspaceSummary.Title"/> (ADR 0057) -- additive and
+    /// nullable, so an older reader that ignores it still sees a valid row.</summary>
+    public const string ContractVersion = "1.1.0";
 }
 
 /// <summary>A pure read derivation of "does this sprint have an exact live active operation right
@@ -160,7 +166,8 @@ public sealed class WorkspaceSummaryProjector(
                     needsAttention,
                     activeOperation is not null,
                     activeOperation?.NodeId,
-                    activeOperation?.Id.Value));
+                    activeOperation?.Id.Value,
+                    definition.Title));
             }
 
             return new(

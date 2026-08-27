@@ -91,10 +91,19 @@ public partial class WorkspaceShellPage
             ContentHost.Children.Add(recover);
         }
 
+        // ADR 0057: the optional title travels with the create call. Deliberately passed through
+        // exactly as typed (including blank) -- the orchestrator owns trimming, blank-means-none,
+        // redaction, and the length bound, so this surface never re-implements any of them.
+        // `Describe` is this file's established Entry convention: it sets both the placeholder and
+        // the SemanticProperties description that screen readers announce.
+        Entry sprintTitle = Describe(new Entry(), text.Resolve(MessageKeys.SprintTitleLabel));
+        ContentHost.Children.Add(sprintTitle);
         Button createSprint = Themed(new Button { Text = text.Resolve(MessageKeys.SprintCreateAction) }, "PrimaryButtonStyle");
         createSprint.Clicked += (_, _) => _ = RunAsync(async () =>
         {
-            result.Text = await projectOverview.CreateSprintAsync(root, CancellationToken.None).ConfigureAwait(true);
+            result.Text = await projectOverview
+                .CreateSprintAsync(root, sprintTitle.Text, CancellationToken.None)
+                .ConfigureAwait(true);
             await RenderContentAsync().ConfigureAwait(true);
         });
         ContentHost.Children.Add(createSprint);
@@ -112,11 +121,14 @@ public partial class WorkspaceShellPage
             ContentHost.Children.Add(GroupTitle(MessageKeys.ProjectOverviewHistoryTitle));
             foreach (ProjectOverviewSprintCard card in snapshot.RecentHistory)
             {
+                // ADR 0057: same resolved title as the active-sprint card above -- a terminal sprint
+                // is no less identifiable by what it was for, and the view model already projects
+                // DisplayTitle for the history cards too.
                 Label historyLine = Themed(new Label
                 {
                     Text = string.Create(
                         System.Globalization.CultureInfo.InvariantCulture,
-                        $"{card.CreationSequence}. {card.StateText}"),
+                        $"{card.DisplayTitle} — {card.StateText}"),
                 }, "MutedLabelStyle");
                 ContentHost.Children.Add(historyLine);
             }
@@ -167,8 +179,14 @@ public partial class WorkspaceShellPage
         VerticalStackLayout column = new() { Spacing = 6 };
         Label header = Themed(new Label
         {
+            // ADR 0057: the sprint's own title, or SprintDisplayTitle's localized "Sprint {N}"
+            // fallback -- already resolved by the view model, never re-derived here. No separate
+            // "{N}. " prefix: DisplayTitle already carries either a real title or a
+            // sequence-bearing fallback, so prefixing rendered "2. Sprint 2" for every untitled
+            // sprint. CreationSequence stays the ordering/fallback input, not rendered text.
             Text = string.Create(
-                System.Globalization.CultureInfo.InvariantCulture, $"{card.CreationSequence}. {card.StateText}"),
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{card.DisplayTitle} — {card.StateText}"),
             // A sprint needing human attention is the one case this card's own typed data (not a
             // parsed status string) already flags -- amber, matching this pass's
             // "waiting for input"/"paused" convention.

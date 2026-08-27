@@ -277,9 +277,13 @@ public sealed class MainPageViewModelTests
         MainPageViewModel viewModel = new(
             Text(), environment.Application, (_, _) => Task.FromResult<IForgeMutations>(mutations));
 
-        await viewModel.CreateSprintAsync(environment.ProjectRoot, TestContext.Current.CancellationToken);
+        await viewModel.CreateSprintAsync(
+            environment.ProjectRoot, "Close the parity gap", TestContext.Current.CancellationToken);
 
         Assert.Equal(1, mutations.CreateSprintCalls);
+        // ADR 0057: the title reaches the RESOLVED mutations (the Host, in production) untouched --
+        // the view model normalizes nothing of its own, and drops nothing on the way.
+        Assert.Equal("Close the parity gap", mutations.LastCreateSprintTitle);
     }
 
     [Fact]

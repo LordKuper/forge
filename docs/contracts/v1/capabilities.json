@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.11.0",
+  "contract_version": "1.12.0",
   "rules": {
     "public_requires_both_surfaces": true,
     "presentation_business_orchestration": false,
@@ -43,11 +43,11 @@
       "kind": "command",
       "contract": "CreateRunResumeCancelSprint",
       "events": ["SprintChanged"],
-      "cli": "forge sprint <create|run|resume|cancel>",
+      "cli": "forge sprint <create|run|resume|cancel> [--title <text>]",
       "desktop": "Sprints/Actions",
       "permission": "workflow_mutate",
       "acceptance": "sprint-lifecycle-parity",
-      "note": "`forge sprint inspect` shares the `sprint` command group but belongs to project.snapshot (a query), not this mutation capability. `forge sprint rebase` is a separate capability (`sprint.rebase`) below, not one of this id's verbs."
+      "note": "`forge sprint inspect` shares the `sprint` command group but belongs to project.snapshot (a query), not this mutation capability. `forge sprint rebase` is a separate capability (`sprint.rebase`) below, not one of this id's verbs. `--title` (ADR 0057) applies to the `create` verb only; it is written after the verb alternatives so the documented-CLI parity check still reads them as sibling subcommands."
     },
     {
       "id": "sprint.rebase",

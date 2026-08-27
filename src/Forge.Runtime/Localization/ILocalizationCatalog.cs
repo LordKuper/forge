@@ -196,6 +196,15 @@ public static class MessageKeys
     public const string SprintManageFailed = "SprintManageFailed";
     public const string SprintManageSprintAmbiguous = "SprintManageSprintAmbiguous";
 
+    /// <summary>ADR 0057: the create-sprint title field -- the CLI's `--title` description and the
+    /// Desktop create-sprint entry's placeholder/accessible name.</summary>
+    public const string SprintTitleLabel = "SprintTitleLabel";
+
+    /// <summary>ADR 0057: the presentation-only display fallback for a sprint with no frozen title
+    /// (see <c>Forge.Desktop.Presentation.SprintDisplayTitle</c>). `{0}` is the sprint's
+    /// creation sequence number.</summary>
+    public const string SprintUntitledFallback = "SprintUntitledFallback";
+
     /// <summary>The workspace redesign's sprint-status label for <see
     /// cref="Forge.Domain.SprintState.Paused"/> (plan section 4.1: "Every status has text and an
     /// accessible icon"). Not yet rendered anywhere -- no surface displays sprint state through a

@@ -105,6 +105,53 @@ public sealed class ContractTests
         Assert.True(result.IsValid, json);
     }
 
+    /// <summary>ADR 0057: `project-snapshot.schema.json` 1.5.0 adds the nullable `title` to
+    /// `$defs.sprint`. Proven with the actual serializer, matching the two tests above -- `$defs.sprint`
+    /// declares `additionalProperties: false`, so a snake_case naming or converter drift on the new
+    /// property fails the schema here rather than shipping.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void ASnapshotWithATitledSprintSatisfiesTheProjectSnapshotContract()
+    {
+        ProjectSnapshot snapshot = new(
+            SchemaVersion: "1.5.0",
+            StateVersion: 7,
+            GeneratedAt: DateTimeOffset.Parse("2026-08-27T12:00:00Z", System.Globalization.CultureInfo.InvariantCulture),
+            Project: new ProjectDescriptor("C:/src/forge", true),
+            Startup: StartupState.Ready,
+            ActiveSprintId: Guid.Parse("44444444-4444-4444-8444-444444444444"),
+            Sprints:
+            [
+                new SprintStatus(
+                    Guid.Parse("44444444-4444-4444-8444-444444444444"),
+                    1,
+                    SprintState.Running,
+                    "implementation-critical",
+                    "0123456789abcdef0123456789abcdef01234567",
+                    Title: "Close the sidebar parity gap"),
+                // The untitled case travels on the same wire: `title` is always written (never
+                // omitted), as an explicit null, which the schema's ["string", "null"] must accept.
+                new SprintStatus(
+                    Guid.Parse("55555555-5555-4555-8555-555555555555"),
+                    2,
+                    SprintState.Draft,
+                    "implementation-critical",
+                    "0123456789abcdef0123456789abcdef01234567")
+            ],
+            Attention: [],
+            SuggestedActions: [],
+            StartupChecks: [],
+            Providers: []);
+
+        string json = StatusJson.Serialize(snapshot);
+        using JsonDocument instance = JsonDocument.Parse(json);
+
+        EvaluationResults result = ContractSchemas.Load("project-snapshot").Evaluate(
+            instance.RootElement,
+            new EvaluationOptions { OutputFormat = OutputFormat.List, RequireFormatValidation = true });
+        Assert.True(result.IsValid, json);
+    }
+
     /// <summary>Round 1 review of PR #64 found `docs/contracts/v1/configuration.json`'s own `keys`
     /// list can drift from `ConfigurationRegistry.CreateDefaultKeys()` (it had, for the new
     /// `notifications.enabled` key) with nothing catching it. Proves both directions: every

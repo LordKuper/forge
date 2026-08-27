@@ -153,6 +153,8 @@
   <data name="IntegrationGenerateAction" xml:space="preserve"><value>Предпросмотр интеграции</value></data>
   <data name="IntegrationInstallAction" xml:space="preserve"><value>Установить интеграцию</value></data>
   <data name="IntegrationRemoveAction" xml:space="preserve"><value>Удалить интеграцию</value></data>
+  <data name="SprintTitleLabel" xml:space="preserve"><value>Название спринта (необязательно)</value></data>
+  <data name="SprintUntitledFallback" xml:space="preserve"><value>Спринт {0}</value></data>
   <data name="SprintCreateAction" xml:space="preserve"><value>Создать спринт</value></data>
   <data name="SprintRunAction" xml:space="preserve"><value>Запустить спринт</value></data>
   <data name="SprintResumeAction" xml:space="preserve"><value>Возобновить спринт</value></data>

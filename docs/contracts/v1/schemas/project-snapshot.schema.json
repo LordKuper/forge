@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "state_version", "generated_at", "project", "startup", "sprints", "attention", "suggested_actions", "startup_checks", "providers"],
   "properties": {
-    "schema_version": {"enum": ["1.1.0", "1.2.0", "1.3.0", "1.4.0"]},
+    "schema_version": {"enum": ["1.1.0", "1.2.0", "1.3.0", "1.4.0", "1.5.0"]},
     "state_version": {"type": "integer", "minimum": 0},
     "generated_at": {"type": "string", "format": "date-time"},
     "project": {
@@ -35,7 +35,8 @@
         "creation_sequence": {"type": "integer", "minimum": 1},
         "state": {"enum": ["draft", "ready", "running", "paused", "awaiting_human", "blocked", "failed", "ready_to_finalize", "completed", "cancelled"]},
         "workflow": {"const": "implementation-critical"},
-        "base_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+        "base_sha": {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"},
+        "title": {"type": ["string", "null"], "maxLength": 200}
       }
     },
     "details": {

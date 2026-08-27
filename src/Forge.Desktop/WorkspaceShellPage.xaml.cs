@@ -161,7 +161,7 @@ public partial class WorkspaceShellPage : ContentPage
         MainPageViewModel freshLegacy = new(text.Current, application, resolveMutations);
         return (
             freshLegacy,
-            new(application, freshLegacy),
+            new(application, freshLegacy, text.Current),
             new(application, catalog, freshLegacy, resolveMutations, folderPicker, text),
             new(freshLegacy, application, catalog, resolveMutations, text.Current));
     }

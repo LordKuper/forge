@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.80.0
+
+### Added
+
+- A sprint can now be given an optional title when it is created, so sprints are identifiable by
+  what they are for instead of only by number: `forge sprint create --title "<text>"` on the command
+  line, and a title field above "Create sprint" on the Desktop Project Overview page. The title is
+  shown on that page's sprint cards; a sprint created without one (including every sprint that
+  already exists) keeps showing "Sprint <number>". Titles are set once, at creation, stored durably
+  and redacted like every other user-typed text, and capped at 200 characters after redaction (a
+  title containing a secret-looking value is stored with it replaced, and may be rejected as too
+  long if the replacement pushes it past the cap).
+
 ## v0.79.1
 
 ### Fixed

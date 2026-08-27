@@ -50,12 +50,17 @@ public sealed record SuggestedAction(
 
 public sealed record ProjectDescriptor(string Root, bool Initialized);
 
+/// <summary><see cref="Title"/> is the sprint's own frozen <see cref="SprintDefinition.Title"/>
+/// (ADR 0057) -- <see langword="null"/> for an untitled sprint or one frozen before that field
+/// existed, never a synthesized fallback. Optional so the many positional constructions of this
+/// record (including a snapshot fixture's own) stay valid.</summary>
 public sealed record SprintStatus(
     Guid Id,
     int CreationSequence,
     SprintState State,
     string Workflow,
-    string BaseSha);
+    string BaseSha,
+    string? Title = null);
 
 /// <summary>Matches `detail` in docs/contracts/v1/schemas/project-snapshot.schema.json. `Full`
 /// requests the one named sprint's <see cref="SprintDetails"/> section (the active sprint when no

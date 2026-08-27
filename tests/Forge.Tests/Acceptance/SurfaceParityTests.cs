@@ -1335,7 +1335,7 @@ public sealed class SurfaceParityTests
             .Parse(["sprint", "create", "--project-root", cliEnvironment.ProjectRoot])
             .InvokeAsync(new InvocationConfiguration(), cancellationToken));
         string desktop = await new MainPageViewModel(text, desktopEnvironment.Application)
-            .CreateSprintAsync(desktopEnvironment.ProjectRoot, cancellationToken);
+            .CreateSprintAsync(desktopEnvironment.ProjectRoot, null, cancellationToken);
 
         Assert.Empty(diagnostics.ToString());
         string cli = cliOutput.ToString().TrimEnd();
