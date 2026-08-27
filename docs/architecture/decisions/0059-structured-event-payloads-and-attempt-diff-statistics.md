@@ -77,10 +77,16 @@ second call is always a replay.
 `ImplementationExecutionHostedService` reads the statistics **before** `IntegrateAsync` (a successful
 integrate discards the attempt worktree the read resolves against) and appends the event **after** it
 succeeds. A diff summary for work that never reached the integration branch would be a durable claim
-about a change the sprint does not have. A failure to read or append is logged and never fails the
-attempt: the change is already integrated and durable by then, so the cost is an audit record, not
-work — the same accepted debt `RecordHandoffAsync` already carries at this service's other
-post-success write.
+about a change the sprint does not have.
+
+A failure to read or to append is logged and never fails the attempt, for two distinct reasons
+depending on which side fails. If the *read* fails, integration has not happened yet: the diff summary
+is an enrichment fact, not a precondition, so losing it costs only the summary, not the integration
+itself. If the *append* fails, the change is already integrated and durable by then, so the cost is an
+audit record, not work — the same accepted debt `RecordHandoffAsync` already carries at this service's
+other post-success write. Either way, the node must still reach its normal completed state: both call
+sites catch and log rather than let an exception propagate, so a diff-statistics failure can never
+block or strand an otherwise-successful attempt.
 
 An attempt whose net diff is empty is still recorded, as an all-zero payload. "This attempt changed
 nothing" is itself worth showing, and skipping it would make an absent record ambiguous between

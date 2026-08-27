@@ -837,10 +837,10 @@ public sealed class ImplementationExecutionHostedServiceTests
         [.. (await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken))
             .Where(item => item.Type == WorkflowEvent.AttemptDiffRecordedType)];
 
-    /// <summary>The diff record is appended before the node reaches `succeeded` (see ADR 0059 /
-    /// review finding 2: it must land before completion, not after, so a crash between the two never
-    /// strands an integrated attempt). Poll for the diff event directly rather than inferring its
-    /// presence from node state, since the two are separate store reads.</summary>
+    /// <summary>The diff record is appended before the node reaches `succeeded`, but the append is
+    /// fail-open: if it fails, the node still reaches `succeeded` with no diff event at all. Node
+    /// state therefore never guarantees the diff event's presence in either direction, so tests that
+    /// expect one must poll for it directly rather than inferring it from node state.</summary>
     private static async Task WaitForAttemptDiffRecordedAsync(
         ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
     {
