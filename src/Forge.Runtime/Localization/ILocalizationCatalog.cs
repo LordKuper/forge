@@ -557,6 +557,15 @@ public static class MessageKeys
     /// agent's summary text (<see cref="WorkflowEvent.AgentSummaryTextArgument"/>).</summary>
     public const string WorkflowAgentSummaryRecorded = "workflow.agent_summary_recorded";
 
+    /// <summary>ADR 0059. A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the attempt's changed-file count
+    /// (<see cref="WorkflowEvent.DiffFilesChangedArgument"/>), then its added and deleted line totals
+    /// (<see cref="WorkflowEvent.DiffInsertionsArgument"/>/<see cref="WorkflowEvent.DiffDeletionsArgument"/>).
+    /// All three are pure numbers, so no closed-set code needs a localized label of its own here --
+    /// unlike <see cref="WorkflowSprintBlocked"/> or <see cref="WorkflowAttemptTransitioned"/>. The
+    /// per-file breakdown rides on the event's structured payload, not this sentence.</summary>
+    public const string WorkflowAttemptDiffRecorded = "workflow.attempt_diff_recorded";
+
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
     /// template taking the routed provider id, model id verbatim (proper identifiers, never
     /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by

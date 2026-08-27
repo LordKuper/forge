@@ -31,6 +31,14 @@ public enum TimelineActor
 /// before rendering"). <see cref="ArtifactReferences"/> is always empty: <c>IArtifactStore</c> remains
 /// an empty marker (ADR 0048) -- nothing in this codebase produces a real artifact yet.
 /// </summary>
+/// <summary>ADR 0059: <see cref="Payload"/> is the durable <see cref="WorkflowEvent.Payload"/>
+/// projected through unchanged — the domain type itself, not a parallel read-model copy, exactly as
+/// <see cref="Arguments"/> already reuses its own domain shape. It is redacted by both passes like
+/// every other field (see <see cref="SprintTimelineProjector.ToItem"/> and
+/// <see cref="SprintTimelineRedaction"/>), so a payload can never bypass the redaction every string
+/// field on this record goes through. <see langword="null"/> for every event type that carries no
+/// structured payload, which today is all of them except
+/// <see cref="WorkflowEvent.AttemptDiffRecordedType"/>.</summary>
 /// <summary><see cref="Sequence"/> is the underlying <see cref="WorkflowEvent.Sequence"/> this item
 /// was projected from -- a dense, strictly increasing per-sprint counter, unlike
 /// <see cref="OccurredAt"/> (<see cref="IClock.UtcNow"/> is not guaranteed to advance between two
@@ -50,7 +58,8 @@ public sealed record SprintTimelineItem(
     IReadOnlyDictionary<string, string?> Arguments,
     Guid? CorrelationId,
     Guid? CausationId,
-    IReadOnlyList<string> ArtifactReferences);
+    IReadOnlyList<string> ArtifactReferences,
+    WorkflowEventPayload? Payload = null);
 
 /// <summary>The single-sprint watermark cursor <see cref="SprintTimelineProjector"/> pages with.
 /// Deliberately simpler than <see cref="ControlEventsCursor"/>'s per-sprint dictionary: this
@@ -132,7 +141,9 @@ public sealed record SprintTimelinePage(
 {
     // 1.1.0: SprintTimelineItem gained Sequence (PR #99 review finding 4) -- additive, so a
     // pre-1.1.0 consumer that ignores unknown fields still round-trips every other field unchanged.
-    public const string ContractVersion = "1.1.0";
+    // 1.2.0: SprintTimelineItem gained the optional Payload (ADR 0059) -- additive in the same
+    // sense: it is null on every item a pre-1.2.0 consumer has ever seen.
+    public const string ContractVersion = "1.2.0";
 
     public static SprintTimelinePage Empty(Guid sprintId, string? requestedCursor, string diagnosticCode)
     {
@@ -178,7 +189,36 @@ public static class SprintTimelineRedaction
                 entry => entry.Key,
                 entry => entry.Value is null ? null : SecretRedactor.Redact(entry.Value),
                 StringComparer.Ordinal),
+            Payload = RedactPayload(item.Payload),
         };
+
+    /// <summary>ADR 0059. <see cref="SecretRedactor.RedactProperties"/> cannot be used for this:
+    /// handed a typed record it falls through to its own `RedactSerializable` arm, which returns an
+    /// untyped dictionary rather than a <see cref="WorkflowEventPayload"/>, so the redacted result
+    /// could not be projected back onto the strongly typed contract. This walks the payload's own
+    /// string fields explicitly instead -- and is called by BOTH redaction passes
+    /// (<see cref="SprintTimelineProjector.ToItem"/> is pass 1, <see cref="Apply(SprintTimelinePage)"/>
+    /// is pass 2), so the payload is never the one field that reaches a surface through only one of
+    /// them. Every new string field added to a payload sub-object MUST be added here; the two passes
+    /// share this helper deliberately (they are independent in field *coverage*, not in which
+    /// redactor they use -- both already share <see cref="SecretRedactor"/> itself).</summary>
+    internal static WorkflowEventPayload? RedactPayload(WorkflowEventPayload? payload) =>
+        payload?.Diff is not { } diff
+            ? payload
+            : payload with
+            {
+                Diff = diff with
+                {
+                    Files =
+                    [
+                        .. diff.Files.Select(file => file with
+                        {
+                            Path = SecretRedactor.Redact(file.Path),
+                            ChangeKind = SecretRedactor.Redact(file.ChangeKind),
+                        }),
+                    ],
+                },
+            };
 }
 
 /// <summary>
@@ -328,6 +368,10 @@ public sealed class SprintTimelineProjector(ISprintStore store, int maxItemsPerP
             arguments,
             item.CorrelationId,
             item.CausationId,
-            []);
+            [],
+            // ADR 0059: redacted here in pass 1 too -- SecretRedactor.RedactProperties above only
+            // ever sees Arguments, and a future persisted/cached view of this projection must never
+            // receive an unredacted payload in the first place.
+            SprintTimelineRedaction.RedactPayload(item.Payload));
     }
 }

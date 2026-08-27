@@ -588,6 +588,176 @@ public sealed class GitIsolationTests
         Assert.False(char.IsHighSurrogate(diff.Diff[^1]));
     }
 
+    /// <summary>ADR 0059. Exercises all five <see cref="DiffChangeKinds"/> against real `git.exe` in
+    /// one commit, because the classification is the one part of this that cannot be derived from
+    /// `--numstat` alone: it is joined from a second `--name-status` invocation, and a binary file
+    /// (which `--numstat` reports as `-`/`-`, but `--name-status` reports as an ordinary `M`) must
+    /// come back as <see cref="DiffChangeKinds.Binary"/> with zero counts rather than as a modified
+    /// file with zero counts. The rename is what proves the `-z` parsing: plain `--numstat` collapses
+    /// it into a single ambiguous `old =&gt; new` field.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ReadDiffStatClassifiesEveryChangeKindAndTotalsRealGitLineCounts()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        (SprintId sprintId, Guid projectId, string baseCommit) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+
+        // A first commit establishes the files the second one then modifies/deletes/renames; the
+        // asserted range spans exactly those two commits, so every kind is genuinely reachable
+        // (against the sprint's own base, a file created and then renamed inside the attempt is just
+        // an addition, and the delete cancels out entirely).
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "kept.txt"), "a\nb\nc\n", cancellationToken);
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "gone.txt"), "x\n", cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(attemptPath, "before.txt"), "r1\nr2\nr3\nr4\nr5\n", cancellationToken);
+        await File.WriteAllBytesAsync(
+            Path.Combine(attemptPath, "blob.bin"), [0x00, 0x01, 0x02, 0x03], cancellationToken);
+        GitOperationResult seeded = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Seed", cancellationToken);
+        AssertSucceeded(seeded);
+
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "kept.txt"), "a\nb\nc\nd\n", cancellationToken);
+        File.Delete(Path.Combine(attemptPath, "gone.txt"));
+        File.Move(Path.Combine(attemptPath, "before.txt"), Path.Combine(attemptPath, "after.txt"));
+        await File.WriteAllTextAsync(Path.Combine(attemptPath, "fresh.txt"), "new\n", cancellationToken);
+        await File.WriteAllBytesAsync(
+            Path.Combine(attemptPath, "blob.bin"), [0x00, 0x01, 0x02, 0x03, 0x04], cancellationToken);
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Change everything", cancellationToken);
+        AssertSucceeded(committed);
+
+        GitDiffStatResult result = await isolation.ReadDiffStatAsync(
+            repository.Root, projectId, sprintId, attemptId, seeded.Commit!, committed.Commit!, cancellationToken);
+
+        Assert.True(result.Succeeded, $"ReadDiffStatAsync failed: {result.DiagnosticCode} ({result.Detail})");
+        DiffPayload stat = result.Stat!;
+        Dictionary<string, DiffFileStat> byPath = stat.Files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+        Assert.Equal(DiffChangeKinds.Modified, byPath["kept.txt"].ChangeKind);
+        Assert.Equal(1, byPath["kept.txt"].Added);
+        Assert.Equal(0, byPath["kept.txt"].Deleted);
+        Assert.Equal(DiffChangeKinds.Deleted, byPath["gone.txt"].ChangeKind);
+        Assert.Equal(1, byPath["gone.txt"].Deleted);
+        Assert.Equal(DiffChangeKinds.Added, byPath["fresh.txt"].ChangeKind);
+        Assert.Equal(DiffChangeKinds.Renamed, byPath["after.txt"].ChangeKind);
+        Assert.DoesNotContain("before.txt", byPath.Keys, StringComparer.Ordinal);
+        Assert.Equal(DiffChangeKinds.Binary, byPath["blob.bin"].ChangeKind);
+        Assert.Equal(0, byPath["blob.bin"].Added);
+        Assert.Equal(0, byPath["blob.bin"].Deleted);
+        Assert.Equal(stat.Files.Count, stat.FilesChanged);
+        Assert.Equal(0, stat.ElidedFiles);
+        Assert.Equal(stat.Files.Sum(file => file.Added), stat.Insertions);
+        Assert.Equal(stat.Files.Sum(file => file.Deleted), stat.Deletions);
+    }
+
+    /// <summary>ADR 0059's per-file cap. The totals must still describe the whole change: only the
+    /// per-file rows are bounded, and every file beyond the bound is counted -- never silently
+    /// dropped -- so a reader can always tell a genuinely small change from a truncated view of a
+    /// large one.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ReadDiffStatCapsThePerFileListAndReportsTheRemainderAsElidedWithoutUnderreportingTotals()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using GitTestRepository repository = await GitTestRepository.CreateAsync(cancellationToken);
+        using TestEnvironment environment = new();
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+        (SprintId sprintId, Guid projectId, string baseCommit) =
+            await SetUpIntegrationAsync(isolation, repository, environment, cancellationToken);
+        AttemptId attemptId = AttemptId.New();
+        await CreateAttemptWorktreeOrFailAsync(isolation, repository.Root, projectId, sprintId, attemptId, cancellationToken);
+        string attemptPath = WorktreeLayout.AttemptPath(environment, projectId, sprintId, attemptId);
+        const int fileCount = GitWorktreeManagerDiffStatBudget.MaxFiles + 7;
+        for (int index = 0; index < fileCount; index++)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(attemptPath, $"file-{index:D3}.txt"), "one\ntwo\n", cancellationToken);
+        }
+
+        GitOperationResult committed = await isolation.CommitAttemptAsync(
+            repository.Root, projectId, sprintId, attemptId, "Add many files", cancellationToken);
+        AssertSucceeded(committed);
+
+        GitDiffStatResult result = await isolation.ReadDiffStatAsync(
+            repository.Root, projectId, sprintId, attemptId, baseCommit, committed.Commit!, cancellationToken);
+
+        Assert.True(result.Succeeded, $"ReadDiffStatAsync failed: {result.DiagnosticCode} ({result.Detail})");
+        DiffPayload stat = result.Stat!;
+        Assert.Equal(GitWorktreeManagerDiffStatBudget.MaxFiles, stat.Files.Count);
+        Assert.Equal(fileCount, stat.FilesChanged);
+        Assert.Equal(fileCount - GitWorktreeManagerDiffStatBudget.MaxFiles, stat.ElidedFiles);
+        Assert.Equal(fileCount * 2, stat.Insertions);
+        Assert.Equal(0, stat.Deletions);
+    }
+
+    /// <summary>ADR 0059's path-shape safety rule, and the one part of <c>ReadDiffStatAsync</c> that
+    /// real `git.exe` cannot reach: git reports repository-root-relative, forward-slashed paths by
+    /// construction, so an absolute, drive-prefixed, backslashed, or `..`-traversing entry cannot
+    /// arise from a healthy repository at all. That makes the drop-and-count branch unreachable from
+    /// every other test in this file -- a bug that removed the check, or that dropped the running
+    /// count's own `+ dropped` term, would pass the whole suite undetected (PR #116 review finding
+    /// 4). Driven through the real <see cref="SprintGitIsolation.ReadDiffStatAsync"/> with a fake
+    /// worktree manager standing in for the unreachable git output, since the sanitizer is private
+    /// to that method by design.
+    ///
+    /// The retained-count assertion is what pins the two halves together: a dropped entry must be
+    /// ADDED to whatever <see cref="DiffPayload.ElidedFiles"/> the per-file cap already reported,
+    /// never replace it, and the totals must keep describing every changed file -- so a reader is
+    /// never told a change was smaller than it was.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReadDiffStatDropsEveryPathThatIsNotWorktreeRootRelativeAndAddsItToTheElidedCount()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new()
+        {
+            DiffStat = new(
+                4,
+                10,
+                2,
+                [
+                    new DiffFileStat("src/kept.cs", 5, 1, DiffChangeKinds.Modified),
+                    // One entry per shape RelativePathShape.IsSyntacticallySafe rejects: an escaping
+                    // segment, a drive/root prefix, and a backslash separator.
+                    new DiffFileStat("../escaped.cs", 3, 1, DiffChangeKinds.Modified),
+                    new DiffFileStat("C:/absolute.cs", 1, 0, DiffChangeKinds.Added),
+                    new DiffFileStat("src\\backslashed.cs", 1, 0, DiffChangeKinds.Added),
+                ],
+                2),
+        };
+        using TestEnvironment environment = new(worktrees: worktrees);
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+
+        GitDiffStatResult result = await isolation.ReadDiffStatAsync(
+            environment.ProjectRoot, Guid.NewGuid(), SprintId.New(), AttemptId.New(),
+            new string('a', 40), new string('b', 40), cancellationToken);
+
+        Assert.True(result.Succeeded, $"ReadDiffStatAsync failed: {result.DiagnosticCode} ({result.Detail})");
+        DiffPayload stat = result.Stat!;
+        DiffFileStat kept = Assert.Single(stat.Files);
+        Assert.Equal("src/kept.cs", kept.Path);
+        Assert.Equal(2 + 3, stat.ElidedFiles);
+        Assert.Equal(4, stat.FilesChanged);
+        Assert.Equal(10, stat.Insertions);
+        Assert.Equal(2, stat.Deletions);
+    }
+
     /// <summary>A `git` failure's own `stderr` (<see cref="GitOperationResult.Detail"/>) is what
     /// actually diagnoses a CI-only failure that cannot be reproduced locally; every success
     /// assertion in this file goes through this helper instead of a bare `Assert.True` so that text

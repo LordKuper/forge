@@ -32,6 +32,7 @@ internal static class WorkflowEventCodec
             Arguments = new(workflowEvent.Arguments, StringComparer.Ordinal),
             CorrelationId = workflowEvent.CorrelationId,
             CausationId = workflowEvent.CausationId,
+            Payload = ToPersisted(workflowEvent.Payload),
         };
         JsonElement element = JsonSerializer.SerializeToElement(persisted, JsonOptions);
         Validate(element);
@@ -56,14 +57,61 @@ internal static class WorkflowEventCodec
             persisted.MessageKey,
             persisted.Arguments,
             persisted.CorrelationId,
-            persisted.CausationId);
+            persisted.CausationId,
+            FromPersisted(persisted.Payload));
     }
 
     private static void Validate(JsonElement element) => SchemaValidation.Validate(element, Schema, "workflow event");
 
+    /// <summary>ADR 0059. <see cref="JsonSerializerOptions.DefaultIgnoreCondition"/> is
+    /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull"/> on
+    /// <see cref="JsonOptions"/>, so a <see langword="null"/> payload (every event type except
+    /// <see cref="WorkflowEvent.AttemptDiffRecordedType"/>) is omitted from the line entirely rather
+    /// than written as `"payload": null` — which the envelope's own
+    /// `additionalProperties: false`/typed `payload` object would reject.</summary>
+    private static PersistedPayload? ToPersisted(WorkflowEventPayload? payload) =>
+        payload?.Diff is not { } diff
+            ? null
+            : new()
+            {
+                Diff = new()
+                {
+                    FilesChanged = diff.FilesChanged,
+                    Insertions = diff.Insertions,
+                    Deletions = diff.Deletions,
+                    Files =
+                    [
+                        .. diff.Files.Select(file => new PersistedDiffFile
+                        {
+                            Path = file.Path,
+                            Added = file.Added,
+                            Deleted = file.Deleted,
+                            ChangeKind = file.ChangeKind,
+                        }),
+                    ],
+                    ElidedFiles = diff.ElidedFiles,
+                },
+            };
+
+    private static WorkflowEventPayload? FromPersisted(PersistedPayload? payload) =>
+        payload?.Diff is not { } diff
+            ? null
+            : new(new DiffPayload(
+                diff.FilesChanged,
+                diff.Insertions,
+                diff.Deletions,
+                [.. diff.Files.Select(file => new DiffFileStat(file.Path, file.Added, file.Deleted, file.ChangeKind))],
+                diff.ElidedFiles));
+
     private sealed class Persisted
     {
-        public string SchemaVersion { get; set; } = "1.0.0";
+        /// <summary>ADR 0059 raised this from `1.0.0` to `1.1.0` (the optional `payload` object).
+        /// The schema accepts BOTH values -- every line already on disk for every existing sprint
+        /// carries `1.0.0` and is re-validated on every read, so a bare bump would have invalidated
+        /// every existing journal. New lines are stamped `1.1.0` unconditionally, payload or
+        /// not: the version describes the envelope this producer writes to, not whether one
+        /// particular optional field happens to be populated.</summary>
+        public string SchemaVersion { get; set; } = "1.1.0";
 
         public Guid EventId { get; set; }
 
@@ -82,6 +130,8 @@ internal static class WorkflowEventCodec
         public Guid? CorrelationId { get; set; }
 
         public Guid? CausationId { get; set; }
+
+        public PersistedPayload? Payload { get; set; }
     }
 
     private sealed class PersistedAggregate
@@ -91,5 +141,34 @@ internal static class WorkflowEventCodec
         public string Id { get; set; } = string.Empty;
 
         public long Version { get; set; }
+    }
+
+    private sealed class PersistedPayload
+    {
+        public PersistedDiff? Diff { get; set; }
+    }
+
+    private sealed class PersistedDiff
+    {
+        public int FilesChanged { get; set; }
+
+        public int Insertions { get; set; }
+
+        public int Deletions { get; set; }
+
+        public List<PersistedDiffFile> Files { get; set; } = [];
+
+        public int ElidedFiles { get; set; }
+    }
+
+    private sealed class PersistedDiffFile
+    {
+        public string Path { get; set; } = string.Empty;
+
+        public int Added { get; set; }
+
+        public int Deleted { get; set; }
+
+        public string ChangeKind { get; set; } = string.Empty;
     }
 }

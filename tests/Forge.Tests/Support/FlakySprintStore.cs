@@ -138,6 +138,20 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
         string projectRoot, SprintId sprintId, Guid messageId, string text, CancellationToken cancellationToken) =>
         inner.AppendUserMessageAsync(projectRoot, sprintId, messageId, text, cancellationToken);
 
+    /// <summary>When set, every <see cref="AppendAttemptDiffRecordedAsync"/> call throws it instead
+    /// of delegating -- the audit-only diff record (ADR 0059) is appended before the attempt is
+    /// marked complete, so a throw escaping it would strand an already-integrated attempt in
+    /// `running` forever (PR #116 review finding 2). Separate from <see cref="FailAt"/> because that
+    /// one models a *returned* transition outcome, not a throw.</summary>
+    public Exception? DiffRecordFailure { get; set; }
+
+    public Task AppendAttemptDiffRecordedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, DiffPayload diff,
+        CancellationToken cancellationToken) =>
+        DiffRecordFailure is { } failure
+            ? Task.FromException(failure)
+            : inner.AppendAttemptDiffRecordedAsync(projectRoot, sprintId, attemptId, diff, cancellationToken);
+
     public Task AppendAgentSummaryRecordedAsync(
         string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
         CancellationToken cancellationToken) =>

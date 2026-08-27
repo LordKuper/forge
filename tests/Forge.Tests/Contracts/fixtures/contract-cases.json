@@ -193,6 +193,114 @@
       }
     },
     {
+      "name": "event 1.1.0 accepts a diff payload with per-file statistics",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.1.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 7,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "2", "insertions": "5", "deletions": "1"},
+        "payload": {
+          "diff": {
+            "files_changed": 2,
+            "insertions": 5,
+            "deletions": 1,
+            "files": [
+              {"path": "src/a.cs", "added": 5, "deleted": 1, "change_kind": "modified"},
+              {"path": "assets/logo.png", "added": 0, "deleted": 0, "change_kind": "binary"}
+            ],
+            "elided_files": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event still accepts a 1.0.0 line with no payload, so existing journals stay valid",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.0.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 4,
+        "occurred_at": "2026-07-27T12:00:00Z",
+        "type": "AttemptChanged",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 2},
+        "message_key": "workflow.attempt_transitioned",
+        "arguments": {"to_state": "running"}
+      }
+    },
+    {
+      "name": "event rejects a diff payload file with an unknown change kind",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.1.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 7,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "1", "insertions": "1", "deletions": "0"},
+        "payload": {
+          "diff": {
+            "files_changed": 1,
+            "insertions": 1,
+            "deletions": 0,
+            "files": [{"path": "src/a.cs", "added": 1, "deleted": 0, "change_kind": "mangled"}],
+            "elided_files": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event rejects a diff payload missing its elided file count",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.1.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 7,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "1", "insertions": "1", "deletions": "0"},
+        "payload": {
+          "diff": {
+            "files_changed": 1,
+            "insertions": 1,
+            "deletions": 0,
+            "files": [{"path": "src/a.cs", "added": 1, "deleted": 0, "change_kind": "modified"}]
+          }
+        }
+      }
+    },
+    {
+      "name": "event rejects an unknown payload family alongside a valid diff",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.1.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 7,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "0", "insertions": "0", "deletions": "0"},
+        "payload": {
+          "diff": {"files_changed": 0, "insertions": 0, "deletions": 0, "files": [], "elided_files": 0},
+          "tool_use": {"name": "Edit"}
+        }
+      }
+    },
+    {
       "name": "handoff requires language for human artifacts and none for machine artifacts",
       "schema": "handoff",
       "valid": true,

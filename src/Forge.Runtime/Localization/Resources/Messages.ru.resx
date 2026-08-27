@@ -352,6 +352,7 @@
   <data name="workflow.stage_transition_converged" xml:space="preserve"><value>Переход между этапами завершён.</value></data>
   <data name="workflow.user_message_posted" xml:space="preserve"><value>Сообщение: {0}</value></data>
   <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Итог: {0}</value></data>
+  <data name="workflow.attempt_diff_recorded" xml:space="preserve"><value>Изменено файлов: {0}; строк: +{1}/-{2}.</value></data>
   <data name="routing.decision_recorded" xml:space="preserve"><value>Маршрутизировано на {0}/{1}: {2}.</value></data>
   <data name="workflow.sprint_failed" xml:space="preserve"><value>Спринт завершился ошибкой.</value></data>
   <data name="workflow.attempt_preparing" xml:space="preserve"><value>Попытка готовится к выполнению.</value></data>

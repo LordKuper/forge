@@ -886,6 +886,65 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         }
     }
 
+    public async Task AppendAttemptDiffRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        DiffPayload diff,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(diff);
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // An attempt produces exactly one commit, so a second call for the same attempt is always
+            // a replay -- deduplicated the same way AppendAttemptSupersededAsync is, and for the same
+            // reason: skipping outright keeps whichever record actually landed first rather than
+            // letting a replay silently overwrite it.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptDiffRecordedType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent recorded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptDiffRecordedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_diff_recorded",
+                // Derived here, from the payload itself, so the flat summary every surface renders
+                // and the structured payload a machine consumer reads can never disagree.
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.DiffFilesChangedArgument] =
+                        diff.FilesChanged.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.DiffInsertionsArgument] =
+                        diff.Insertions.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.DiffDeletionsArgument] =
+                        diff.Deletions.ToString(CultureInfo.InvariantCulture),
+                },
+                Payload: new(diff));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public async Task<AppendOutcome> AppendAttemptStopRequestedAsync(
         string projectRoot,
         SprintId sprintId,

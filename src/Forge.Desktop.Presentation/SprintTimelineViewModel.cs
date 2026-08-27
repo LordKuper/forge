@@ -1,5 +1,6 @@
 using System.Globalization;
 using Forge.Application;
+using Forge.Domain;
 using Forge.Localization;
 
 namespace Forge.Desktop.Presentation;
@@ -7,6 +8,12 @@ namespace Forge.Desktop.Presentation;
 /// <summary>One rendered timeline row (plan section 4.3). <see cref="Unread"/> and
 /// <see cref="CopyText"/> are computed once here so the page never re-derives either from raw
 /// <see cref="SprintTimelineItem"/> fields itself.</summary>
+/// <remarks><c>Payload</c> is ADR 0059's already-redacted structured payload, carried through
+/// verbatim so the page has it available. Nothing renders it yet -- a diff-statistics card is
+/// deliberately separate follow-up work (finding D1 of the desktop design-parity review), and this
+/// slice adds no Desktop UI at all. <see cref="MessageText"/> already carries the localized one-line
+/// summary for an <c>AttemptDiffRecorded</c> item, identical to the CLI's, because it resolves the
+/// same <c>workflow.attempt_diff_recorded</c> template from the event's own flat arguments.</remarks>
 public sealed record TimelineItemView(
     Guid Id,
     DateTimeOffset OccurredAt,
@@ -17,7 +24,8 @@ public sealed record TimelineItemView(
     Guid? CorrelationId,
     Guid? CausationId,
     bool Unread,
-    string CopyText);
+    string CopyText,
+    WorkflowEventPayload? Payload = null);
 
 /// <summary>The timeline pane's full render state: the filtered/ordered rows, whether a genuinely
 /// larger backlog exists beyond what is loaded (<see cref="HasMore"/>), the unread count over every
@@ -322,6 +330,6 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
                 $"({item.TargetKind}:{item.TargetId})");
         return new(
             item.Id, item.OccurredAt, item.Type, actorText, messageText, item.Arguments, item.CorrelationId,
-            item.CausationId, unread, copyText);
+            item.CausationId, unread, copyText, item.Payload);
     }
 }

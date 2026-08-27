@@ -2,6 +2,24 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.82.0
+
+### Added
+
+- The sprint timeline now records what each implementation attempt actually changed in git, not only
+  that it succeeded. Once an attempt's commit reaches the sprint's integration branch, Forge appends
+  a diff-summary entry to that sprint's timeline. `forge sprint timeline <id>` shows it as a line
+  like `Changed 2 file(s): +12/-3 lines.`, and `--json` additionally carries the per-file breakdown
+  (path, added and deleted lines, and whether the file was added, deleted, modified, renamed, or
+  binary) for other API consumers. The per-file list is capped at 50 entries; the totals still cover
+  every changed file, and any remainder is reported as a count so a large change is never shown as a
+  small one. Diff content itself is never stored -- only these structural statistics -- and file
+  paths are redacted like every other recorded text. Recording the summary is audit-only and never
+  affects the work itself: if reading or recording it fails, the attempt's change is still
+  integrated and the attempt still completes normally, with only the timeline entry missing.
+  Desktop's timeline shows the same one-line summary as the command line; it does not yet render the
+  per-file breakdown, which is separate, later work.
+
 ## v0.81.0
 
 ### Added

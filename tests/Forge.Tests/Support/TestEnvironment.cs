@@ -520,6 +520,29 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
         Task.FromResult(
             FailNextDiff ? GitDiffResult.Fail(DiffFailureCode) : GitDiffResult.Ok(Diff, DiffTruncated));
 
+    /// <summary>Returned by every <see cref="DiffStatAsync"/> call (ADR 0059); a test overrides it to
+    /// exercise what an executor records for a specific change. Shares
+    /// <see cref="FailNextDiff"/>/<see cref="DiffFailureCode"/> with <see cref="DiffAsync"/> -- both
+    /// read the same two commits through the same `git`, so a failure that hides one hides the
+    /// other. The real `--numstat` parsing itself belongs to <c>GitIsolationTests</c>, against real
+    /// `git.exe`.</summary>
+    public DiffPayload DiffStat { get; set; } = new(1, 1, 0, [new DiffFileStat("file.txt", 1, 0, "modified")], 0);
+
+    /// <summary>When set, <see cref="DiffStatAsync"/> throws it instead of returning any result --
+    /// the shape real `git.exe` failures take when the process itself cannot be started or is torn
+    /// down (<see cref="System.ComponentModel.Win32Exception"/>,
+    /// <see cref="OperationCanceledException"/>), which <see cref="FailNextDiff"/>'s returned failure
+    /// result deliberately cannot simulate. Exists because an audit-only read must never abort an
+    /// attempt whose commit is ready to integrate (PR #116 review finding 1).</summary>
+    public Exception? DiffStatException { get; set; }
+
+    public Task<GitDiffStatResult> DiffStatAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken) =>
+        DiffStatException is { } failure
+            ? Task.FromException<GitDiffStatResult>(failure)
+            : Task.FromResult(
+                FailNextDiff ? GitDiffStatResult.Fail(DiffFailureCode) : GitDiffStatResult.Ok(DiffStat));
+
     public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
         heads.TryGetValue(path, out string? head)
             ? Task.FromResult(head)

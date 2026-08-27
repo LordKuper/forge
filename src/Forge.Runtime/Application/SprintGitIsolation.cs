@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using Forge.Compiler;
 using Forge.Domain;
+using Forge.Infrastructure;
 
 namespace Forge.Application;
 
@@ -163,6 +165,69 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     {
         string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
         return worktrees.DiffAsync(projectRoot, attemptPath, fromCommit, toCommit, cancellationToken);
+    }
+
+    /// <summary>
+    /// ADR 0059: the structural counterpart to <see cref="ReadDiffAsync"/> — the same two-commit
+    /// range read as per-file statistics, which is the only diff shape Forge ever persists. Applies
+    /// the two safety rules a durable record needs and the raw git surface deliberately does not:
+    /// every path must be syntactically safe and worktree-root-relative
+    /// (<see cref="RelativePathShape.IsSyntacticallySafe"/>), and every retained path is then run
+    /// through <see cref="SecretRedactor"/> anyway.
+    /// </summary>
+    /// <remarks>
+    /// The path check is normalization, not redaction: git reports repository-root-relative,
+    /// forward-slashed paths by construction, so an absolute, drive-prefixed, backslashed, or
+    /// `..`-traversing entry cannot arise from a healthy repository at all and is dropped rather
+    /// than rewritten — there is no safe interpretation of it to record. A dropped entry still
+    /// counts toward <see cref="DiffPayload.FilesChanged"/> and the insertion/deletion totals, and is
+    /// added to <see cref="DiffPayload.ElidedFiles"/>, so a reader is never told a change was smaller
+    /// than it was.
+    ///
+    /// Redaction runs BEFORE any bounding (ADR 0057): a redaction placeholder can be longer than the
+    /// text it replaces, so bounding first could leave a partial secret behind. Nothing here is
+    /// length-bounded after redaction — the per-file cap is applied on entry count by
+    /// <see cref="GitDiffStatParser"/> upstream, never by trimming a path — but the ordering is kept
+    /// explicit so a future bound cannot be added on the wrong side of it. A credential-shaped file
+    /// path is not expected in practice; this is the same belt-and-braces discipline every other
+    /// durable free-text field already gets.
+    /// </remarks>
+    public async Task<GitDiffStatResult> ReadDiffStatAsync(
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        AttemptId attemptId,
+        string fromCommit,
+        string toCommit,
+        CancellationToken cancellationToken)
+    {
+        string attemptPath = WorktreeLayout.AttemptPath(paths, projectId, sprintId, attemptId);
+        GitDiffStatResult result = await worktrees
+            .DiffStatAsync(projectRoot, attemptPath, fromCommit, toCommit, cancellationToken)
+            .ConfigureAwait(false);
+        return result.Stat is { } stat ? result with { Stat = Sanitize(stat) } : result;
+    }
+
+    private static DiffPayload Sanitize(DiffPayload stat)
+    {
+        List<DiffFileStat> safe = [];
+        int dropped = 0;
+        foreach (DiffFileStat file in stat.Files)
+        {
+            if (!RelativePathShape.IsSyntacticallySafe(file.Path))
+            {
+                dropped++;
+                continue;
+            }
+
+            safe.Add(file with
+            {
+                Path = SecretRedactor.Redact(file.Path),
+                ChangeKind = DiffChangeKinds.IsKnown(file.ChangeKind) ? file.ChangeKind : DiffChangeKinds.Modified,
+            });
+        }
+
+        return stat with { Files = safe, ElidedFiles = stat.ElidedFiles + dropped };
     }
 
     /// <summary>
