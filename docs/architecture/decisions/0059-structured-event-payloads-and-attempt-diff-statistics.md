@@ -103,8 +103,9 @@ unredacted one, pass 2 because that is the pass every surface's output actually 
 
 ### The per-file list is capped at 50, with the remainder counted
 
-`GitWorktreeManagerDiffStatBudget.MaxFiles` is 50, kept in sync by hand with `payload.diff.files`'s own
-`maxItems`. It is deliberately separate from `GitWorktreeManagerDiffBudget.MaxCharacters` (50,000),
+`GitWorktreeManagerDiffStatBudget.MaxFiles` is 50, matching `payload.diff.files`'s own `maxItems`;
+`ContractTests.TheEventSchemasDiffFileCapMatchesTheBoundTheProducerActuallyApplies` reads both values
+and fails if they ever drift apart. It is deliberately separate from `GitWorktreeManagerDiffBudget.MaxCharacters` (50,000),
 which sizes a raw diff for a *prompt*: this one bounds how many rows a single durable journal line may
 carry.
 
