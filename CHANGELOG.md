@@ -2,6 +2,38 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.85.0
+
+### Added
+
+- **Forge now asks Codex which model it would actually use, instead of guessing.** Codex's model is
+  read from your own Codex configuration through the vendor's own diagnostic command, so it reflects
+  a `model = "..."` you set in `~/.codex/config.toml` rather than a name Forge hardcoded. The lookup
+  runs as part of the provider check Forge already performs and is cached with the same cadence as
+  the update check — once a day after a success, once an hour after a failure — so it costs at most
+  one short extra vendor call per day. If the lookup fails for any reason, Forge falls back to
+  exactly the previous behaviour and nothing breaks.
+
+### Changed
+
+- **Codex attempts now receive an explicit model flag.** Previously Forge sent Codex no model at all
+  and let the CLI pick. It now sends the model it resolved, which is the same model Codex would have
+  chosen for itself — so what a sprint records is now what the sprint ran, not a prediction about it.
+- **A project whose `models.allowed_models` names a model Codex does not actually serve will now be
+  refused at sprint creation, where it previously passed.** Forge has always checked a sprint's model
+  against that allowlist; until now it was checking a placeholder rather than a real model, so the
+  check could not catch anything. If sprint creation starts being refused with a model-policy error
+  after this upgrade, the allowlist in that project's configuration is naming a model that no longer
+  exists — update it to the model your Codex configuration actually resolves.
+- Sprints created before this release keep the old placeholder in their stored profile. That value is
+  deliberately never sent to Codex, so those sprints resume and run exactly as they did before.
+
+### Fixed
+
+- **Sprint history now shows the real model for Codex sprints.** Every Codex sprint until now
+  recorded and displayed `gpt-5` — a model current Codex releases reject outright and which no
+  attempt ever actually ran on. The recorded model is now the one the attempt really used.
+
 ## v0.84.1
 
 ### Fixed

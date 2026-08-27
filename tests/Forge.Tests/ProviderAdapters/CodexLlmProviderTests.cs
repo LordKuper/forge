@@ -32,7 +32,11 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, request =>
         {
             Assert.Equal(executable, request.FileName);
-            Assert.Equal(["--version"], request.Arguments);
+            // ADR 0063 added a second, independent probe to the same discovery pass; both run on
+            // the same pinned executable and neither is a shell invocation.
+            Assert.True(
+                request.Arguments is ["--version"] or ["doctor", "--json"],
+                $"Unexpected discovery probe: {string.Join(' ', request.Arguments)}");
             return new(0, "codex-cli 0.146.0", string.Empty);
         });
 
@@ -151,13 +155,16 @@ public sealed class CodexLlmProviderTests
     {
         using TestPaths paths = new();
         WriteCodexExecutable(paths);
-        bool secondCall = false;
         CodexLlmProvider provider = CreateProvider(
             paths,
-            _ =>
+            request =>
             {
-                Assert.False(secondCall, "No install/update process should run when already current.");
-                secondCall = true;
+                // The version probe is the only INSTALL-related process an already-current install
+                // may spawn; ADR 0063's default-model probe rides the same pass and is excluded by
+                // name rather than by count, so it can never mask a real install/update regression.
+                Assert.True(
+                    request.Arguments is ["--version"] or ["doctor", "--json"],
+                    "No install/update process should run when already current.");
                 return new(0, "0.146.0", string.Empty);
             },
             releaseSource: new FakeReleaseSource(new(true, new Version(0, 146, 0))));
@@ -178,8 +185,16 @@ public sealed class CodexLlmProviderTests
         int processCalls = 0;
         CodexLlmProvider provider = CreateProvider(
             paths,
-            _ =>
+            request =>
             {
+                // ADR 0063's default-model probe rides the same pass but is counted separately —
+                // this test is about the install/update sequence, and folding an unrelated probe
+                // into its count would make the count stop meaning anything.
+                if (request.Arguments is ["doctor", "--json"])
+                {
+                    return new(0, string.Empty, string.Empty);
+                }
+
                 processCalls++;
                 // 1: the initial local probe. 2: the re-probe taken right after the lock is
                 // acquired (still OLD — no concurrent process updated it first). Both must report
@@ -207,8 +222,14 @@ public sealed class CodexLlmProviderTests
         int processCalls = 0;
         CodexLlmProvider provider = CreateProvider(
             paths,
-            _ =>
+            request =>
             {
+                // See the sibling test: ADR 0063's probe is deliberately outside this count.
+                if (request.Arguments is ["doctor", "--json"])
+                {
+                    return new(0, string.Empty, string.Empty);
+                }
+
                 processCalls++;
                 return new(0, "0.146.0", string.Empty);
             },
@@ -249,9 +270,11 @@ public sealed class CodexLlmProviderTests
             new HangingProcessRunner(),
             new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
+            new FakeDefaultModelCache(),
             new FakeInstallLock(),
             new FakeClock(),
-            versionProbeTimeout: TimeSpan.FromMilliseconds(50));
+            versionProbeTimeout: TimeSpan.FromMilliseconds(50),
+            defaultModelProbeTimeout: TimeSpan.FromMilliseconds(50));
 
         ProviderStatus status = await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
 
@@ -269,9 +292,11 @@ public sealed class CodexLlmProviderTests
             new HangingProcessRunner(),
             new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
+            new FakeDefaultModelCache(),
             new FakeInstallLock(),
             new FakeClock(),
-            installTimeout: TimeSpan.FromMilliseconds(50));
+            installTimeout: TimeSpan.FromMilliseconds(50),
+            defaultModelProbeTimeout: TimeSpan.FromMilliseconds(50));
 
         ProviderStatus status = await provider.InstallOrUpdateAsync(
             bypassReleaseCache: true, TestContext.Current.CancellationToken);
@@ -381,16 +406,28 @@ public sealed class CodexLlmProviderTests
         Assert.Equal(["exec", "--json", .. expectedTail], capturedArguments);
     }
 
-    /// <summary>ADR 0062: this adapter deliberately sends no model flag even when neutral code hands
-    /// it one. Codex publishes only version-pinned slugs and no stable alias, and the slug this
-    /// adapter's own <c>DefaultModel</c> still names -- the value frozen into every Codex
-    /// <c>ExecutionProfile</c> -- is one Codex 0.149.1 rejects outright (`400 invalid_request_error`).
-    /// Sending it would fail every Codex attempt, so the run is left on the model the user's own Codex
-    /// configuration resolves. This test pins that decision so it cannot be quietly reversed into a
-    /// broken `-m`.</summary>
-    [Fact]
+    /// <summary>
+    /// ADR 0063 replaces ADR 0062's "never send Codex a model flag" contract, and this test replaces
+    /// the one that pinned it (`RunAsyncNeverSendsAModelFlagBecauseCodexHasNoStableModelNameToSend`).
+    /// That contract existed only because <c>DefaultModel</c> was a hardcoded slug Codex rejects; now
+    /// that the value is resolved from the user's own Codex configuration, the frozen model is sent as
+    /// `-m` and the recorded profile becomes a fact rather than a prediction.
+    ///
+    /// The two suppressed values are the point of the theory. `vendor-default` means no probe has
+    /// succeeded, and `gpt-5` is the placeholder every release up to v0.84.1 froze into Codex sprints
+    /// and which Codex 0.149.1 rejects with `400 invalid_request_error` — sending either would fail a
+    /// run that otherwise works. Both degrade to the exact pre-ADR-0063 command line.
+    /// </summary>
+    [Theory]
     [Trait("Category", "Unit")]
-    public async Task RunAsyncNeverSendsAModelFlagBecauseCodexHasNoStableModelNameToSend()
+    [InlineData("gpt-5.6-sol", new[] { "-m", "gpt-5.6-sol" })]
+    [InlineData("  gpt-5.6-sol  ", new[] { "-m", "gpt-5.6-sol" })]
+    [InlineData("vendor-default", new string[0])]
+    [InlineData("gpt-5", new string[0])]
+    [InlineData("", new string[0])]
+    [InlineData(null, new string[0])]
+    public async Task RunAsyncSendsTheFrozenModelExceptTheTwoValuesCodexCannotBeGiven(
+        string? model, string[] expectedModelFlag)
     {
         using TestPaths paths = new();
         WriteCodexExecutable(paths);
@@ -401,10 +438,223 @@ public sealed class CodexLlmProviderTests
             return new(0, """{"type":"turn.completed"}""", string.Empty);
         });
 
+        await provider.RunAsync("prompt", "C:\\work", model, "high", TestContext.Current.CancellationToken);
+
+        // The model flag precedes the effort override, and the effort override is unaffected either way.
+        Assert.Equal(
+            ["exec", "--json", .. expectedModelFlag, "-c", "model_reasoning_effort=high"], capturedArguments);
+    }
+
+    /// <summary>ADR 0063, against a real captured `codex doctor --json` (Codex CLI 0.149.1, with local
+    /// paths replaced by placeholders): the resolved model is the one Codex reports at
+    /// `checks["config.load"].details.model` — the CONFIG-resolved model, which is what a run started
+    /// now would actually use — and it then reaches the run as `-m`, closing the loop this ADR
+    /// exists for.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task DiscoverResolvesTheDefaultModelFromARealCodexDoctorCaptureAndSendsItOnTheNextRun()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string doctor = ReadFixture("codex-doctor.json");
+        IReadOnlyList<string>? capturedArguments = null;
+        CodexLlmProvider provider = CreateProvider(paths, request => request.Arguments switch
+        {
+            ["doctor", "--json"] => new(0, doctor, string.Empty),
+            ["--version"] => new(0, "codex-cli 0.149.1", string.Empty),
+            _ => Capture(request),
+        });
+
+        Assert.Equal("vendor-default", provider.DefaultModel);
+        await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.Equal("gpt-5.6-sol", provider.DefaultModel);
+
+        await provider.RunAsync(
+            "prompt", "C:\\work", provider.DefaultModel, "medium", TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["exec", "--json", "-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=medium"], capturedArguments);
+
+        ProcessResult Capture(ProcessRequest request)
+        {
+            capturedArguments = request.Arguments;
+            return new(0, """{"type":"turn.completed"}""", string.Empty);
+        }
+    }
+
+    /// <summary>ADR 0063's safe-degradation regression test. Every way the vendor probe can fail — a
+    /// non-zero exit, output that is not JSON, a missing or wrongly-typed node at each of the four
+    /// levels of `checks.config.load.details.model`, and a value that is not a usable model id — must
+    /// leave <c>DefaultModel</c> at the unresolved sentinel and leave the run's command line byte-for-byte
+    /// identical to what it was before this ADR. A vendor shape surprise degrades; it never throws out
+    /// of a routine provider check, and it never puts an unusable value on a command line or into
+    /// durable sprint state.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(1, """{"checks":{"config.load":{"details":{"model":"gpt-5.6-sol"}}}}""")]
+    [InlineData(0, "not json at all")]
+    [InlineData(0, "")]
+    [InlineData(0, "[]")]
+    [InlineData(0, """{"codexVersion":"0.149.1"}""")]
+    [InlineData(0, """{"checks":42}""")]
+    [InlineData(0, """{"checks":{"auth.credentials":{}}}""")]
+    [InlineData(0, """{"checks":{"config.load":"ok"}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"status":"ok"}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model provider":"openai"}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":null}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":123}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":""}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":"   "}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":"gpt 5.6 sol"}}}}""")]
+    [InlineData(0, """{"checks":{"config.load":{"details":{"model":"gpt-5.6-sol\nrm -rf /"}}}}""")]
+    [InlineData(
+        0,
+        """{"checks":{"config.load":{"details":{"model":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}}}""")]
+    public async Task AnUnusableDoctorResponseLeavesTheModelUnresolvedAndTheRunUnchanged(
+        int exitCode, string doctorOutput)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        IReadOnlyList<string>? capturedArguments = null;
+        CodexLlmProvider provider = CreateProvider(paths, request => request.Arguments switch
+        {
+            ["doctor", "--json"] => new(exitCode, doctorOutput, string.Empty),
+            ["--version"] => new(0, "codex-cli 0.149.1", string.Empty),
+            _ => Capture(request),
+        });
+
+        await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.Equal("vendor-default", provider.DefaultModel);
+
         await provider.RunAsync(
             "prompt", "C:\\work", provider.DefaultModel, "high", TestContext.Current.CancellationToken);
 
         Assert.Equal(["exec", "--json", "-c", "model_reasoning_effort=high"], capturedArguments);
+
+        ProcessResult Capture(ProcessRequest request)
+        {
+            capturedArguments = request.Arguments;
+            return new(0, """{"type":"turn.completed"}""", string.Empty);
+        }
+    }
+
+    /// <summary>ADR 0063: with no vendor executable there is nothing to ask, so the probe is not
+    /// attempted at all — not spawned and not cached, so an uninstalled provider can never write a
+    /// failure entry that then throttles the first real probe after an install.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheDefaultModelProbeIsNeverAttemptedWithoutAnInstalledExecutable()
+    {
+        using TestPaths paths = new();
+        bool spawned = false;
+        FakeDefaultModelCache cache = new();
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                spawned = true;
+                return new(0, string.Empty, string.Empty);
+            },
+            defaultModelCache: cache);
+
+        await provider.DiscoverAsync(false, TestContext.Current.CancellationToken);
+
+        Assert.False(spawned);
+        Assert.Null(await cache.ReadAsync(CodexLlmProvider.Codex, TestContext.Current.CancellationToken));
+        Assert.Equal("vendor-default", provider.DefaultModel);
+    }
+
+    /// <summary>ADR 0063's throttle, which is the entire reason the probe may ride every provider check:
+    /// a fresh cached success is reused without spawning anything, a cached failure is honoured for its
+    /// own shorter window rather than retried, a stale entry of either kind triggers exactly one fresh
+    /// probe, and `--refresh` (`bypassCache`) always probes. The windows are deliberately the same
+    /// 24h/1h pair the release check uses.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    // A cached success inside its 24h window: reused, nothing spawned.
+    [InlineData(true, "cached-model", 1, false, 0, "cached-model")]
+    // The same entry past 24h: one fresh probe, which wins.
+    [InlineData(true, "cached-model", 25, false, 1, "gpt-5.6-sol")]
+    // A cached failure inside its 1h window: honoured, nothing spawned, still unresolved.
+    [InlineData(false, null, 0, false, 0, "vendor-default")]
+    // The same failure past 1h: retried exactly once.
+    [InlineData(false, null, 2, false, 1, "gpt-5.6-sol")]
+    // `--refresh` ignores a perfectly fresh entry.
+    [InlineData(true, "cached-model", 1, true, 1, "gpt-5.6-sol")]
+    public async Task TheDefaultModelProbeIsThrottledOnTheSameCadenceAsTheReleaseCheck(
+        bool cachedSuccess,
+        string? cachedModel,
+        int hoursSinceCached,
+        bool bypassCache,
+        int expectedProbes,
+        string expectedModel)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        FakeClock clock = new() { UtcNow = DateTimeOffset.UnixEpoch.AddDays(30) };
+        FakeDefaultModelCache cache = new();
+        await cache.WriteAsync(
+            CodexLlmProvider.Codex,
+            new(clock.UtcNow.AddHours(-hoursSinceCached), cachedSuccess, cachedModel),
+            TestContext.Current.CancellationToken);
+
+        int probes = 0;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            request =>
+            {
+                if (request.Arguments is not ["doctor", "--json"])
+                {
+                    return new(0, "codex-cli 0.149.1", string.Empty);
+                }
+
+                probes++;
+                return new(0, """{"checks":{"config.load":{"details":{"model":"gpt-5.6-sol"}}}}""", string.Empty);
+            },
+            defaultModelCache: cache,
+            clock: clock);
+
+        await provider.RefreshDefaultModelAsync(bypassCache, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expectedProbes, probes);
+        Assert.Equal(expectedModel, provider.DefaultModel);
+    }
+
+    /// <summary>ADR 0063: a probe that fails AFTER one has succeeded must not un-resolve the model.
+    /// Retry cadence is the cache's job; the last known-good value stays in force for the process
+    /// lifetime, so one flaky vendor invocation cannot silently drop a whole session back to the
+    /// unresolved sentinel — and back to sending no `-m`.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALaterFailedProbeKeepsTheLastSuccessfullyResolvedModel()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        bool firstProbe = true;
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            if (request.Arguments is not ["doctor", "--json"])
+            {
+                return new(0, "codex-cli 0.149.1", string.Empty);
+            }
+
+            if (firstProbe)
+            {
+                firstProbe = false;
+                return new(0, """{"checks":{"config.load":{"details":{"model":"gpt-5.6-sol"}}}}""", string.Empty);
+            }
+
+            return new(1, string.Empty, "doctor exploded");
+        });
+
+        await provider.RefreshDefaultModelAsync(bypassCache: true, TestContext.Current.CancellationToken);
+        Assert.Equal("gpt-5.6-sol", provider.DefaultModel);
+
+        await provider.RefreshDefaultModelAsync(bypassCache: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal("gpt-5.6-sol", provider.DefaultModel);
     }
 
     /// <summary>ADR 0060, against the real thing: `codex-exec-json-tool-calls.jsonl` is a verbatim
@@ -862,14 +1112,17 @@ public sealed class CodexLlmProviderTests
         TestPaths paths,
         Func<ProcessRequest, ProcessResult> respond,
         IProviderReleaseSource? releaseSource = null,
-        IProviderInstallLock? installLock = null) =>
+        IProviderInstallLock? installLock = null,
+        IProviderDefaultModelCache? defaultModelCache = null,
+        IClock? clock = null) =>
         new(
             paths,
             new StubProcessRunner(respond),
             releaseSource ?? new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
+            defaultModelCache ?? new FakeDefaultModelCache(),
             installLock ?? new FakeInstallLock(),
-            new FakeClock());
+            clock ?? new FakeClock());
 
     private static string WriteCodexExecutable(TestPaths paths)
     {

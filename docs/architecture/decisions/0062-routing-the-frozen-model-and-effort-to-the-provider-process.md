@@ -1,6 +1,6 @@
 # ADR 0062: Routing the frozen model and effort to the provider process
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-27)
 - Date: 2026-08-27
 - Contract version: unchanged (`execution-profile.schema.json` stays 1.0.0)
 
@@ -83,9 +83,10 @@ not understand, so no flag is sent and the vendor default explicitly stands. `nu
 genuinely has no frozen profile and means the same thing — leave the vendor default alone. An omitted
 flag is omitted entirely, never sent empty.
 
-Codex's accepted set stops at `xhigh` rather than `max` because this adapter does not send a model
-(below) and therefore does not know which model the run will resolve to; `xhigh` is the highest level
-every catalogued model accepts.
+Codex's accepted set stops at `xhigh` rather than `max` because only some catalogued models offer
+`max`/`ultra`; `xhigh` is the highest level every one of them accepts. It stays the common
+denominator even after ADR 0063 made the resolved model known, deliberately: widening the set per
+model would make a sprint's effort depend on a value resolved after its profile was frozen.
 
 ### `model` and `effort` are required parameters, not defaulted ones
 
@@ -118,16 +119,18 @@ resolves, which is what happens today and what happened before this ADR.
 
 The consequence is named rather than hidden: **`ExecutionProfile.Model` remains inaccurate for Codex
 sprints.** That is a pre-existing defect in what `CodexLlmProvider.DefaultModel` reports, not in how
-this ADR consumes it. Resolved: fix it by resolving Codex's real default model from the vendor at
-runtime (`codex debug models` returns a machine-readable catalog with a `priority` field; the
-lowest-numbered `visibility: "list"` entry is the vendor's own top pick — `gpt-5.6-sol` as of this
-writing) rather than pinning a slug or leaving it unconfigurable. This is deliberately a SEPARATE
-follow-up slice, not part of this ADR: it needs its own design for caching (the query is a real
-subprocess call, not something to run on every attempt), a refresh cadence, and a documented fallback
-when the query itself fails -- concerns this "route what's already frozen" fix does not have. It is
-recorded as a `ponytail:` note on the adapter, tracked for that follow-up, and once it lands the same
-`-m`-omission choice above should be revisited: a Codex model resolved and cached this way is exactly
-as safe to send explicitly as Claude's `sonnet` alias is today.
+this ADR consumes it. It was left to a separate follow-up slice, which needed its own design for
+caching (the query is a real subprocess call, not something to run on every attempt), a refresh
+cadence, and a documented fallback when the query itself fails -- concerns this "route what's already
+frozen" fix does not have.
+
+**Revised 2026-08-27 by ADR 0063**, which is now authoritative for everything in this section. Two
+things it changed: the source proposed here (`codex debug models`, taking the lowest-numbered
+`visibility: "list"` entry by `priority`) turned out to answer the wrong question -- it describes what
+the release serves, loses to the user's own `~/.codex/config.toml`, and its `priority` values are not
+unique -- so resolution reads `codex doctor --json` instead; and the `-m` omission above no longer
+holds, since a model resolved that way is exactly as safe to send explicitly as Claude's `sonnet`
+alias. Codex attempts from v0.85.0 carry `-m`, except for the two values ADR 0063 suppresses.
 
 ### Nothing about the frozen contract changes
 

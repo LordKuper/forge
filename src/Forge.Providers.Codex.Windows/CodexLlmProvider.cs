@@ -13,12 +13,14 @@ public sealed class CodexLlmProvider(
     IProcessRunner processRunner,
     IProviderReleaseSource releaseSource,
     IProviderReleaseCache releaseCache,
+    IProviderDefaultModelCache defaultModelCache,
     IProviderInstallLock installLock,
     IClock clock,
     TimeSpan? versionProbeTimeout = null,
     TimeSpan? installTimeout = null,
     TimeSpan? installLockTimeout = null,
-    TimeSpan? authenticationProbeTimeout = null) : ILlmProvider
+    TimeSpan? authenticationProbeTimeout = null,
+    TimeSpan? defaultModelProbeTimeout = null) : ILlmProvider
 {
     public static readonly ProviderId Codex = new("codex");
 
@@ -81,12 +83,39 @@ public sealed class CodexLlmProvider(
 
     public ProviderId Id => Codex;
 
-    // ponytail: fixed MVP default, not a per-project model choice — nothing selects a model yet
-    // (Stage 11, P11.13-P11.20). Revisit once real per-project model configuration exists.
-    public string DefaultModel => "gpt-5";
+    /// <summary>The value <see cref="DefaultModel"/> reports before any successful probe (ADR 0063).
+    /// Non-empty because `execution-profile.schema.json` requires `model` to have `minLength: 1`, and
+    /// worded to read correctly wherever a frozen profile is displayed: a sprint frozen in this state
+    /// really does run on whatever the user's own Codex configuration resolves. Never sent as
+    /// `-m`.</summary>
+    private const string UnresolvedModel = "vendor-default";
 
-    public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
-        ProviderInstallation.DiscoverAsync(
+    /// <summary>The placeholder every Forge release up to v0.84.1 hardcoded as this adapter's
+    /// <see cref="DefaultModel"/> and froze into every Codex sprint. Codex 0.149.1 rejects it
+    /// outright (`400 invalid_request_error, "The 'gpt-5' model is not supported"`), so a sprint
+    /// frozen before v0.85.0 must not have it sent on its next attempt — that would turn a value that
+    /// was merely inaccurate into one that fails the run. It is suppressed exactly like
+    /// <see cref="UnresolvedModel"/>: such a sprint keeps running on the user's own configured model,
+    /// which is what it has always actually done (ADR 0063).</summary>
+    private const string RetiredPlaceholderModel = "gpt-5";
+
+    /// <summary>The property path to the config-resolved model in `codex doctor --json`; see
+    /// <see cref="ParseDefaultModel"/>.</summary>
+    private static readonly IReadOnlyList<string> DefaultModelPath = ["checks", "config.load", "details", "model"];
+
+    /// <summary>Assigned only by a SUCCESSFUL <see cref="RefreshDefaultModelAsync"/>, so a transient
+    /// probe failure keeps the last known-good value for the process lifetime instead of regressing
+    /// to <see cref="UnresolvedModel"/>; retry cadence is the cache's job, not this field's.</summary>
+    private volatile string? resolvedDefaultModel;
+
+    /// <summary>The model Codex itself reports it would use for a run started right now, resolved
+    /// from the user's own configuration by <see cref="RefreshDefaultModelAsync"/> (ADR 0063), or
+    /// <see cref="UnresolvedModel"/> until one such probe has succeeded.</summary>
+    public string DefaultModel => resolvedDefaultModel ?? UnresolvedModel;
+
+    public async Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
+    {
+        ProviderStatus status = await ProviderInstallation.DiscoverAsync(
             Id,
             spec,
             processRunner,
@@ -95,10 +124,15 @@ public sealed class CodexLlmProvider(
             clock,
             bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        await RefreshDefaultModelAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
+        return status;
+    }
 
-    public Task<ProviderStatus> InstallOrUpdateAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
-        ProviderInstallation.InstallOrUpdateAsync(
+    public async Task<ProviderStatus> InstallOrUpdateAsync(
+        bool bypassReleaseCache, CancellationToken cancellationToken)
+    {
+        ProviderStatus status = await ProviderInstallation.InstallOrUpdateAsync(
             Id,
             spec,
             processRunner,
@@ -110,7 +144,93 @@ public sealed class CodexLlmProvider(
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
             installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,
-            cancellationToken);
+            cancellationToken).ConfigureAwait(false);
+        await RefreshDefaultModelAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
+        return status;
+    }
+
+    /// <summary>
+    /// Resolves <see cref="DefaultModel"/> from Codex's own `doctor --json` diagnostic (ADR 0063),
+    /// throttled on the same 24h/1h cadence as the release check. Called from
+    /// <see cref="DiscoverAsync"/> and <see cref="InstallOrUpdateAsync"/> and forwarding their own
+    /// bypass flag, so resolution rides the provider-capability pass that already runs before any
+    /// sprint can be created — no new call site, and <see cref="DefaultModel"/> stays a synchronous
+    /// property.
+    ///
+    /// The child environment is the same minimal one <see cref="RunAsync"/> builds, deliberately: the
+    /// probe must resolve the model under exactly the environment an attempt will run under, or the
+    /// answer would describe a run that never happens. Never throws and never reports failure — a
+    /// failed probe simply leaves the previous value in place.
+    /// </summary>
+    public async Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken)
+    {
+        try
+        {
+            Directory.CreateDirectory(probeDirectory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return;
+        }
+
+        string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
+        string? model = await ProviderInstallation.ResolveDefaultModelAsync(
+            Id,
+            executable,
+            processRunner,
+            ["doctor", "--json"],
+            probeDirectory,
+            defaultModelCache,
+            clock,
+            bypassCache,
+            defaultModelProbeTimeout ?? ProviderInstallation.DefaultModelProbeTimeout,
+            ParseDefaultModel,
+            cancellationToken,
+            ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames)).ConfigureAwait(false);
+        if (model is not null)
+        {
+            resolvedDefaultModel = model;
+        }
+    }
+
+    /// <summary>
+    /// Reads `checks["config.load"].details.model` from `codex doctor --json`, the one place Codex
+    /// 0.149.1 reports the CONFIG-RESOLVED model — the model an attempt started now would actually
+    /// use, including a `model = "..."` the user set in their own `~/.codex/config.toml`. Verified
+    /// against `tests/Forge.Tests/Unit/fixtures/providers/codex-doctor.json`, a real captured run.
+    ///
+    /// `codex debug models` was rejected as the source: it is a generic catalog of what the release
+    /// serves, not what this machine resolves, and it loses to the user's own configuration (ADR
+    /// 0063).
+    ///
+    /// Every step is a shape check. A vendor JSON surprise at any nesting level — invalid JSON, a
+    /// missing or non-object `checks`/`config.load`/`details`, a missing or non-string `model` — is a
+    /// failed probe, never an exception out of a routine provider check.
+    /// </summary>
+    private static string? ParseDefaultModel(ProcessResult result)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
+            JsonElement element = document.RootElement;
+            foreach (string property in DefaultModelPath)
+            {
+                if (element.ValueKind != JsonValueKind.Object ||
+                    !element.TryGetProperty(property, out JsonElement child))
+                {
+                    return null;
+                }
+
+                element = child;
+            }
+
+            return element.ValueKind == JsonValueKind.String ? element.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);
@@ -144,10 +264,16 @@ public sealed class CodexLlmProvider(
     /// reaches the run header verbatim and fails at the API — so this set comes from `codex debug
     /// models`, where each entry lists its `supported_reasoning_levels`. `low`/`medium`/`high`/`xhigh`
     /// are the levels common to all of them; `max` and `ultra` exist in the wire enum but only some
-    /// models offer them, and this adapter does not know which model the run will resolve to (see
-    /// <see cref="RunAsync"/>), so a profile frozen above `xhigh` clamps down to it rather than risking
-    /// a rejection. `none` and `minimal` are in the enum but offered by no catalogued model, and clamp
-    /// up to `low`.</summary>
+    /// models offer them, so a profile frozen above `xhigh` clamps down to it rather than risking a
+    /// rejection. `none` and `minimal` are in the enum but offered by no catalogued model, and clamp
+    /// up to `low`.
+    ///
+    /// This set stays model-INDEPENDENT even though ADR 0063 now resolves which model a run will use,
+    /// and that is a deliberate non-goal rather than an oversight: widening the accepted set per
+    /// resolved model would make the effort a sprint runs at depend on a value resolved after the
+    /// sprint's profile was frozen, which is the class of defect ADR 0062 exists to remove. The
+    /// common-denominator set is correct for every model Codex serves; per-model widening belongs
+    /// with real per-project model selection, not here.</summary>
     private static readonly IReadOnlyList<string> SupportedEffortLevels = ["low", "medium", "high", "xhigh"];
 
     /// <summary>
@@ -158,15 +284,16 @@ public sealed class CodexLlmProvider(
     /// ADR 0062: the frozen profile's effort is applied through `-c model_reasoning_effort=&lt;level&gt;`,
     /// verified against Codex 0.149.1 (the value reaches the run header's `reasoning effort:` line).
     ///
-    /// ponytail: <paramref name="model"/> is deliberately NOT sent. Codex exposes only
-    /// version-pinned slugs (`codex debug models`) and no stable alias, and this adapter's own
-    /// <see cref="DefaultModel"/> — the value neutral code freezes into every Codex
-    /// `ExecutionProfile` — names a slug that release no longer serves: `codex exec -m gpt-5` fails
-    /// with `400 invalid_request_error, "The 'gpt-5' model is not supported"`. Sending it would break
-    /// every Codex attempt, and replacing it with today's top slug would pin Forge to a name that
-    /// rots at the vendor's next release while overriding the model the user configured. Not sending
-    /// it leaves the run on the user's/vendor's own default. Revisit together with the stale
-    /// <see cref="DefaultModel"/> when real per-project model selection exists (ADR 0062).
+    /// ADR 0063: <paramref name="model"/> is now applied through `-m`, replacing this adapter's
+    /// earlier decision to send no model flag at all. That decision existed because
+    /// <see cref="DefaultModel"/> was a hardcoded slug Codex rejects; it is now resolved from the
+    /// user's own Codex configuration, so the value being sent is the one Codex would have resolved
+    /// anyway — sending it explicitly is what makes the recorded profile a fact rather than a
+    /// prediction. Two values are deliberately suppressed instead: <see cref="UnresolvedModel"/> (no
+    /// probe has succeeded, so there is nothing true to send) and
+    /// <see cref="RetiredPlaceholderModel"/> (frozen by a pre-v0.85.0 release and rejected by Codex).
+    /// Either one degrades to exactly the pre-ADR-0063 command line, leaving the run on the model the
+    /// user's own configuration resolves.
     /// </summary>
     public async Task<ProviderRunResult> RunAsync(
         string prompt,
@@ -181,6 +308,13 @@ public sealed class CodexLlmProvider(
         // The prompt travels on stdin, never a command-line argument (ADR 0006): `codex exec
         // --json` has no positional prompt argument at all (ADR 0002).
         List<string> arguments = ["exec", "--json"];
+        if (ProviderInstallation.NormalizeModelName(model) is { } sendableModel &&
+            sendableModel is not (UnresolvedModel or RetiredPlaceholderModel))
+        {
+            arguments.Add("-m");
+            arguments.Add(sendableModel);
+        }
+
         if (ProviderEffortLevels.Resolve(effort, SupportedEffortLevels) is { } resolvedEffort)
         {
             arguments.Add("-c");

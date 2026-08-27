@@ -43,6 +43,27 @@ public static partial class ProviderInstallation
     /// <summary>ADR 0008: "a failed check or update is retried after one hour."</summary>
     public static readonly TimeSpan ReleaseCheckFailureWindow = TimeSpan.FromHours(1);
 
+    /// <summary>ADR 0063: the default-model probe deliberately reuses the release check's exact
+    /// cadence rather than inventing a second one. Both answer "what does the vendor say today", both
+    /// are refreshed by the same provider-capability pass, and both are cheap to be a day stale — so
+    /// one cadence is one thing for a user to reason about instead of two.</summary>
+    public static readonly TimeSpan DefaultModelCheckSuccessWindow = ReleaseCheckSuccessWindow;
+
+    /// <summary>See <see cref="DefaultModelCheckSuccessWindow"/>: the same shorter retry window a
+    /// failed release check uses.</summary>
+    public static readonly TimeSpan DefaultModelCheckFailureWindow = ReleaseCheckFailureWindow;
+
+    /// <summary>The default-model probe runs the vendor's own diagnostic command, which is
+    /// materially heavier than a `--version` or authentication probe — Codex 0.149.1's `codex doctor
+    /// --json` runs two dozen checks including network reachability and measured 1.7-7.4 seconds.
+    /// Sized for that, not for the 15-second probes above (ADR 0063).</summary>
+    public static readonly TimeSpan DefaultModelProbeTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>A resolved model id becomes both a vendor command-line argument and durable sprint
+    /// state, so it is bounded before it is ever used. 64 characters comfortably exceeds every slug
+    /// either vendor publishes.</summary>
+    private const int MaxModelNameLength = 64;
+
     /// <summary>
     /// The local bounded probe, plus — only for an already-usable install — a throttled or
     /// explicit release-availability comparison. Never installs or updates anything; a release
@@ -234,6 +255,101 @@ public static partial class ProviderInstallation
         return result is null ? ProviderAuthenticationStatus.CheckFailed : parseResult(result);
     }
 
+    /// <summary>
+    /// Asks one vendor which model a run started right now would actually use, throttled through
+    /// <paramref name="cache"/> on the same 24h/1h cadence as the release check (ADR 0063). Returns
+    /// the resolved model id, or <see langword="null"/> for every failure mode there is: no install,
+    /// a non-zero exit, a timeout, an output shape <paramref name="parseResult"/> does not recognize,
+    /// or a value that is not a usable model name. A cached failure is honoured within its own window
+    /// rather than respawning the vendor process, exactly as a cached release-check failure is.
+    ///
+    /// Only <paramref name="parseResult"/> ever sees raw process output, matching
+    /// <see cref="CheckAuthenticationAsync"/> — a vendor diagnostic command's output routinely
+    /// contains local paths and account detail, and none of it survives past that delegate.
+    /// </summary>
+    public static async Task<string?> ResolveDefaultModelAsync(
+        ProviderId id,
+        string? executablePath,
+        IProcessRunner processRunner,
+        IReadOnlyList<string> arguments,
+        string probeDirectory,
+        IProviderDefaultModelCache cache,
+        IClock clock,
+        bool bypassCache,
+        TimeSpan timeout,
+        Func<ProcessResult, string?> parseResult,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
+    {
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(parseResult);
+        if (executablePath is null)
+        {
+            // Nothing to probe and nothing to learn: the cache is neither read nor written, so an
+            // uninstalled provider never poisons a later, installed one's window.
+            return null;
+        }
+
+        ProviderDefaultModelCacheEntry? entry = bypassCache
+            ? null
+            : await cache.ReadAsync(id, cancellationToken).ConfigureAwait(false);
+        if (entry is not null && !IsStale(entry.CheckedAt, entry.Succeeded, clock.UtcNow))
+        {
+            // Revalidated on the way out as well as on the way in: the cache is an ordinary file a
+            // user or another process can edit, and it must not be a path around the same checks a
+            // freshly probed value passes.
+            return entry.Succeeded ? NormalizeModelName(entry.Model) : null;
+        }
+
+        ProcessResult? result = await RunWithTimeoutAsync(
+            processRunner,
+            new(executablePath, arguments, probeDirectory, environmentVariables),
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+        string? model = result is { ExitCode: 0 } ? NormalizeModelName(parseResult(result)) : null;
+        await cache.WriteAsync(id, new(clock.UtcNow, model is not null, model), cancellationToken)
+            .ConfigureAwait(false);
+        return model;
+    }
+
+    /// <summary>
+    /// The one gate every model id a vendor reports must pass before Forge puts it on a command line
+    /// or freezes it into durable sprint state (ADR 0063). A model id is a single opaque token: it is
+    /// trimmed, then required to be non-empty, free of embedded whitespace, no longer than
+    /// <see cref="MaxModelNameLength"/>, and printable ASCII. Anything else is treated as a failed
+    /// probe rather than passed through — there is no shell between here and the child process, so
+    /// this is data hygiene on a durable value, not injection defence.
+    /// </summary>
+    public static string? NormalizeModelName(string? model)
+    {
+        if (model is null)
+        {
+            return null;
+        }
+
+        string trimmed = model.Trim();
+        if (trimmed.Length is 0 or > MaxModelNameLength)
+        {
+            return null;
+        }
+
+        foreach (char character in trimmed)
+        {
+            if (character is < ' ' or > '~')
+            {
+                return null;
+            }
+
+            if (char.IsWhiteSpace(character))
+            {
+                return null;
+            }
+        }
+
+        return trimmed;
+    }
+
     private static async Task<bool?> CheckUpdateAvailableAsync(
         ProviderId id,
         Version localVersion,
@@ -295,11 +411,11 @@ public static partial class ProviderInstallation
         return lookup;
     }
 
-    private static bool IsStale(ProviderReleaseCacheEntry entry, DateTimeOffset now)
-    {
-        TimeSpan window = entry.Succeeded ? ReleaseCheckSuccessWindow : ReleaseCheckFailureWindow;
-        return now - entry.CheckedAt >= window;
-    }
+    private static bool IsStale(ProviderReleaseCacheEntry entry, DateTimeOffset now) =>
+        IsStale(entry.CheckedAt, entry.Succeeded, now);
+
+    private static bool IsStale(DateTimeOffset checkedAt, bool succeeded, DateTimeOffset now) =>
+        now - checkedAt >= (succeeded ? ReleaseCheckSuccessWindow : ReleaseCheckFailureWindow);
 
     /// <summary>Reads a fixed vendor-owned path and runs `--version`. Never touches the network.</summary>
     private static async Task<(ProviderStatus Status, Version? Version)> DiscoverLocalAsync(

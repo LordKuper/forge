@@ -46,16 +46,27 @@ public static class ExecutionProfilePolicy
         (string reviewProvider, bool achievedIndependence) =
             SelectReviewProvider(frozenProviders, implementationProvider);
 
+        // Each DISTINCT provider's model is read exactly ONCE per freeze and reused everywhere it
+        // appears — including the single-provider case, where review falls back to the implementation
+        // provider and must therefore record the same model, not a second reading of it.
+        // ADR 0063 lets an adapter resolve its DefaultModel from the vendor during a provider check,
+        // so the property can change value within one process lifetime; re-reading it per profile
+        // would let a refresh landing mid-freeze produce a sprint whose implementation profile and
+        // review lineage disagree about which model the implementation ran on.
+        string implementationModel = ModelFor(implementationProvider, catalog);
+        string reviewModel = string.Equals(reviewProvider, implementationProvider, StringComparison.Ordinal)
+            ? implementationModel
+            : ModelFor(reviewProvider, catalog);
+
         return new Dictionary<ExecutionPhase, ExecutionProfile>
         {
             [ExecutionPhase.Planning] = BuildProfile(
-                ExecutionPhase.Planning, implementationProvider, catalog, "medium", 1800, 180, null),
+                ExecutionPhase.Planning, implementationProvider, implementationModel, "medium", 1800, 180, null),
             [ExecutionPhase.Implementation] = BuildProfile(
-                ExecutionPhase.Implementation, implementationProvider, catalog, "medium", 1800, 180, null),
+                ExecutionPhase.Implementation, implementationProvider, implementationModel, "medium", 1800, 180, null),
             [ExecutionPhase.Review] = BuildProfile(
-                ExecutionPhase.Review, reviewProvider, catalog, "high", 3600, 300,
-                new ExecutionLineage(
-                    implementationProvider, ModelFor(implementationProvider, catalog), achievedIndependence)),
+                ExecutionPhase.Review, reviewProvider, reviewModel, "high", 3600, 300,
+                new ExecutionLineage(implementationProvider, implementationModel, achievedIndependence)),
         };
     }
 
@@ -91,7 +102,7 @@ public static class ExecutionProfilePolicy
     private static ExecutionProfile BuildProfile(
         ExecutionPhase phase,
         string provider,
-        ProviderCatalog catalog,
+        string model,
         string effort,
         int sessionDeadlineSeconds,
         int idleDeadlineSeconds,
@@ -100,7 +111,7 @@ public static class ExecutionProfilePolicy
             ExecutionProfile.ContractVersion,
             phase,
             provider,
-            ModelFor(provider, catalog),
+            model,
             effort,
             SandboxPolicy,
             PermissionPolicy,

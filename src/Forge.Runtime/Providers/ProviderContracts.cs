@@ -228,7 +228,12 @@ public interface ILlmProvider
     /// <summary>The vendor's own default model id for an unattended, non-interactive run —
     /// vendor-owned, like <see cref="Id"/>; never chosen by neutral code (ADR 0008). Used to
     /// freeze an <c>ExecutionProfile.Model</c> for a sprint's chosen provider (Stage 11,
-    /// P11.13-P11.20) — a fixed MVP default until per-project model selection exists.</summary>
+    /// P11.13-P11.20) until per-project model selection exists. Always a non-empty string
+    /// (`execution-profile.schema.json` requires `minLength: 1`), read synchronously. An adapter MAY
+    /// resolve this from the user's real vendor configuration during its own
+    /// <see cref="DiscoverAsync"/>/<see cref="InstallOrUpdateAsync"/> pass (ADR 0063), so the value
+    /// can change from an unresolved placeholder to a real model id within one process lifetime — a
+    /// caller that needs two internally consistent readings must take one and reuse it.</summary>
     string DefaultModel { get; }
 
     /// <summary>
@@ -351,6 +356,25 @@ public interface IProviderReleaseCache
     Task<ProviderReleaseCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);
 
     Task WriteAsync(ProviderId id, ProviderReleaseCacheEntry entry, CancellationToken cancellationToken);
+}
+
+/// <summary><paramref name="CheckedAt"/> anchors the same 24-hour success / one-hour failure retry
+/// windows the release check uses (ADR 0063 reuses ADR 0008's cadence deliberately).
+/// <paramref name="Model"/> is only meaningful when <paramref name="Succeeded"/>; a failed probe
+/// caches the failure so the next caller honours the shorter retry window instead of respawning the
+/// vendor process on every provider check.</summary>
+public sealed record ProviderDefaultModelCacheEntry(DateTimeOffset CheckedAt, bool Succeeded, string? Model);
+
+/// <summary>A small per-user cache of the last resolved vendor default model for one provider (ADR
+/// 0063), so routine startup does not respawn the vendor's own diagnostic command on every provider
+/// check. Deliberately a sibling of <see cref="IProviderReleaseCache"/> rather than a generalization
+/// of it: the payload and its meaning differ, and the release entry's shape is load-bearing
+/// elsewhere. Read/write failures degrade to "no cache" rather than throwing.</summary>
+public interface IProviderDefaultModelCache
+{
+    Task<ProviderDefaultModelCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);
+
+    Task WriteAsync(ProviderId id, ProviderDefaultModelCacheEntry entry, CancellationToken cancellationToken);
 }
 
 /// <summary>One generated provider-native integration file's content and metadata (ADR 0010).
