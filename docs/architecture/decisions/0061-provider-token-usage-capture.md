@@ -81,11 +81,37 @@ the durable contract declares each count a non-negative integer, and a value tha
 clamped version of the truth.
 
 The one place the distinction is collapsed is the localized one-line summary
-(`workflow.attempt_usage_recorded`), whose `total_tokens`/`input_tokens`/`output_tokens` arguments
-substitute 0 for an unreported half. `UsagePayload` itself keeps the null, so a machine consumer
-reading the structured payload can always still tell the two apart — and the record is not written at
-all unless something was reported, so that summary can never be an all-zero line standing in for an
-observation that never happened.
+(`workflow.attempt_usage_recorded`), whose `usage_total`/`usage_input`/`usage_output`/
+`usage_cache_read`/`usage_cache_creation` arguments substitute 0 for an unreported counter.
+`UsagePayload` itself keeps the null, so a machine consumer reading the structured payload can always
+still tell the two apart — and the record is not written at all unless something was reported, so that
+summary can never be an all-zero line standing in for an observation that never happened.
+
+None of those five argument keys may contain the word `token`. `SecretRedactor` redacts any argument
+whose KEY NAME merely *contains* `token` (an unanchored match, so `input_tokens` matches as readily as
+`api_token`) and `SprintTimelineProjector.ToItem` runs every event's flat arguments through it, so the
+obvious `total_tokens`/`input_tokens`/`output_tokens` naming rendered as `[REDACTED:token]` on every
+surface during development. The `usage_*` names exist for exactly that reason and must not be renamed
+back. The structured payload's own field names are unaffected and stay explicit
+(`payload.usage.input_tokens`): it is redacted by the typed `SprintTimelineRedaction.RedactPayload`,
+never by the name-matching properties pass.
+
+### The summary counts every token, and names each kind
+
+PR #118 review finding 1. `usage_total` is the arithmetic sum of all four counters — input, output,
+cache-read, cache-creation — not input plus output. On the committed Claude capture that is
+`6 + 265 + 75,666 + 38,581 = 114,518`; an input-plus-output total would have rendered `Used 271
+token(s)` for an attempt that consumed roughly four hundred times that, on the one line whose entire
+purpose is reporting consumption. Cache tokens dominate every real Claude attempt, so dropping them is
+not an edge case.
+
+The four counters are rendered beside the total rather than folded silently into it, because they are
+not interchangeable: a cache read is typically billed well below fresh input, so a bare sum could
+mislead in the opposite direction. The line therefore states the footprint and its composition —
+`Used 114518 token(s): 6 in, 265 out, 75666 cache read, 38581 cache creation.` — and leaves any
+pricing judgement to the reader. "Cache creation" (never "cache write") is used throughout, matching
+the payload field and Claude's `cache_creation_input_tokens`, so it can never be read as a claim about
+Codex's unmapped `cache_write_input_tokens`.
 
 ### Nothing is recorded for a run that observed nothing
 
@@ -189,8 +215,9 @@ comment, and a test asserts a usage payload survives both passes intact.
   beside the existing `ExtractToolCall`.
 - `Forge.Runtime` (`Domain/WorkflowEvents.cs`): `UsagePayload`; `WorkflowEventPayload.Usage` (required,
   no default — four construction sites, re-counted rather than assumed); `AttemptUsageRecordedType`
-  plus its three argument constants; a non-folding `WorkflowFold.Apply` arm and a fail-closed
-  `IsTransitionRecord` arm.
+  plus its five argument constants (`usage_total`, `usage_input`, `usage_output`, `usage_cache_read`,
+  `usage_cache_creation` — none may contain `token`, see above); a non-folding `WorkflowFold.Apply` arm
+  and a fail-closed `IsTransitionRecord` arm requiring all five.
 - `Forge.Runtime` (`Application/WorkflowEventCodec.cs`): `PersistedUsage` and its per-family mapping;
   stamped version `1.2.0` -> `1.3.0`. Nullable fields are omitted rather than written as explicit
   nulls, which is why `usage_payload` requires nothing.

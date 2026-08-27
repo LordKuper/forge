@@ -1048,12 +1048,24 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 // itself keeps the honest null (see WorkflowEvent.UsageTotalTokensArgument).
                 new Dictionary<string, string?>(StringComparer.Ordinal)
                 {
-                    [WorkflowEvent.UsageTotalTokensArgument] =
-                        ((usage.InputTokens ?? 0) + (usage.OutputTokens ?? 0)).ToString(CultureInfo.InvariantCulture),
+                    // PR #118 review finding 1: the total is every counter the payload carries, not
+                    // input plus output -- on a real Claude attempt the two cache counters are the
+                    // overwhelming majority of the tokens spent, and a "used N token(s)" line that
+                    // omits them reports a small fraction of the attempt's actual footprint. The four
+                    // components ride alongside it because they are priced differently, so the total
+                    // is a footprint rather than an implied price.
+                    [WorkflowEvent.UsageTotalTokensArgument] = ((long)(usage.InputTokens ?? 0) +
+                        (usage.OutputTokens ?? 0) +
+                        (usage.CacheReadTokens ?? 0) +
+                        (usage.CacheCreationTokens ?? 0)).ToString(CultureInfo.InvariantCulture),
                     [WorkflowEvent.UsageInputTokensArgument] =
                         (usage.InputTokens ?? 0).ToString(CultureInfo.InvariantCulture),
                     [WorkflowEvent.UsageOutputTokensArgument] =
                         (usage.OutputTokens ?? 0).ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.UsageCacheReadTokensArgument] =
+                        (usage.CacheReadTokens ?? 0).ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.UsageCacheCreationTokensArgument] =
+                        (usage.CacheCreationTokens ?? 0).ToString(CultureInfo.InvariantCulture),
                 },
                 Payload: new(null, null, usage));
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)

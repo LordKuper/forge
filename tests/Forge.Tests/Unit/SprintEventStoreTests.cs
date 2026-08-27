@@ -834,6 +834,10 @@ public sealed class SprintEventStoreTests
         Assert.Equal("89185", recorded.Arguments[WorkflowEvent.UsageTotalTokensArgument]);
         Assert.Equal("88641", recorded.Arguments[WorkflowEvent.UsageInputTokensArgument]);
         Assert.Equal("544", recorded.Arguments[WorkflowEvent.UsageOutputTokensArgument]);
+        // Both collapse to 0 in the summary -- the reported zero and the unreported field alike -- while
+        // the payload above keeps them distinct.
+        Assert.Equal("0", recorded.Arguments[WorkflowEvent.UsageCacheReadTokensArgument]);
+        Assert.Equal("0", recorded.Arguments[WorkflowEvent.UsageCacheCreationTokensArgument]);
 
         // Recorded at most once per attempt: an attempt runs its provider exactly once, so a second
         // call is always a replay.
@@ -878,6 +882,8 @@ public sealed class SprintEventStoreTests
                     [WorkflowEvent.UsageTotalTokensArgument] = "12",
                     [WorkflowEvent.UsageInputTokensArgument] = "10",
                     [WorkflowEvent.UsageOutputTokensArgument] = "2",
+                    [WorkflowEvent.UsageCacheReadTokensArgument] = "0",
+                    [WorkflowEvent.UsageCacheCreationTokensArgument] = "0",
                 }
                 : new Dictionary<string, string?>(StringComparer.Ordinal),
             Payload: withPayload ? new(null, null, new UsagePayload(10, 2, null, null, null)) : null);

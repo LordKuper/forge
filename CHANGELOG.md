@@ -10,14 +10,25 @@ User-facing Forge changes are listed by release, newest first.
   already report their own token accounting on the event that ends a run, and Forge was discarding
   it; it is now appended as its own timeline entry once the attempt's commit reaches the sprint's
   integration branch. `forge sprint timeline <id>` shows it as a line like
-  `Used 89185 token(s): 88641 in, 544 out.`, and `--json` additionally carries the cached-input and
-  cache-write counts for API consumers.
+  `Used 114518 token(s): 6 in, 265 out, 75666 cache read, 38581 cache creation.`, and `--json`
+  carries the same counts as separate fields. The total is every token the provider reported, cache
+  included — on a real Claude attempt the cache counters are the overwhelming majority — and the four
+  kinds are always shown beside it, since they are priced differently and a single number would
+  misrepresent the run in one direction or the other.
+- Cache counts are recorded for a Claude attempt, which reports them. A Codex attempt records its
+  input and output counts only: Codex's own cache-related fields are deliberately not captured in
+  this release, because one recorded run is not enough to establish that they mean the same thing as
+  Claude's, so they read as absent rather than as a zero or a guess.
 - A Claude attempt's entry additionally reports the model's context-window size, so a consumer can
   show real usage against a real limit rather than a number with no scale. Codex publishes no such
   figure, so a Codex attempt reports it as absent rather than being given a guessed or hardcoded
   one. Every field is optional and reported only when the provider actually published it: nothing is
   inferred, defaulted to zero, or estimated, and an attempt whose provider reported nothing gets no
   entry at all.
+- Recording the summary is audit-only and never affects the work itself: if recording it fails, the
+  attempt's change is still integrated and the attempt still completes normally, with only the
+  timeline entry missing. Attempts that fail, time out, or are stopped record no usage entry, since
+  their work never reaches the integration branch.
 - No new Desktop rendering: the entry reaches Desktop through the same generic timeline path the
   previous two payload families already use, and its one-line summary is identical to the CLI's.
 

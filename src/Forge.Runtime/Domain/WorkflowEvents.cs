@@ -436,10 +436,20 @@ public sealed record WorkflowEvent(
     /// rides on this event's <see cref="Payload"/>.</summary>
     public const string AttemptUsageRecordedType = "AttemptUsageRecorded";
 
-    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event: input plus output tokens
-    /// as a base-10 integer. Derived from the event's own <see cref="Payload"/> by the single producing
-    /// store method, never supplied independently, so the rendered summary and the structured payload
-    /// cannot drift.
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event: every token the provider
+    /// reported for the attempt, as a base-10 integer — input plus output plus cache-read plus
+    /// cache-creation, the arithmetic sum of the four counters this event's other arguments break out
+    /// beside it. Derived from the event's own <see cref="Payload"/> by the single producing store
+    /// method, never supplied independently, so the rendered summary and the structured payload cannot
+    /// drift.
+    ///
+    /// PR #118 review finding 1: this deliberately sums ALL FOUR counters rather than input plus output
+    /// alone. On a real Claude attempt the cache counters dominate (the committed capture reports
+    /// 6 in / 265 out against 75,666 cache-read and 38,581 cache-creation), so an input-plus-output
+    /// total silently dropped 99.8% of the attempt's token footprint from the one line whose entire
+    /// purpose is reporting it. The four components are rendered alongside the total precisely because
+    /// they are not interchangeable — a cache read is typically billed well below fresh input — so the
+    /// summary states the footprint and its composition rather than implying a single price.
     ///
     /// A field the provider did not report contributes 0 to this ONE-LINE SUMMARY, which is the only
     /// place that substitution happens: <see cref="UsagePayload"/> itself keeps the honest
@@ -447,7 +457,7 @@ public sealed record WorkflowEvent(
     /// reported". The event is not written at all unless at least one field was reported (see
     /// <c>ProviderUsageReport.ToPayload</c>), so this summary can never be an all-zero line standing in
     /// for an observation that never happened.</summary>
-    /// <remarks>Named `usage_total` rather than the obvious `total_tokens`, and the same for its two
+    /// <remarks>Named `usage_total` rather than the obvious `total_tokens`, and the same for its four
     /// siblings: <see cref="Forge.Infrastructure.SecretRedactor"/> redacts an entry whose KEY NAME
     /// merely contains `token` (an unanchored match, so `input_tokens` matches as readily as
     /// `api_token`), and <c>SprintTimelineProjector.ToItem</c> runs every event's flat arguments through
@@ -469,6 +479,23 @@ public sealed record WorkflowEvent(
     /// <see cref="UsageTotalTokensArgument"/>, under the same reported-as-0 rule and the same
     /// no-`token`-in-the-key rule: output tokens, base-10.</summary>
     public const string UsageOutputTokensArgument = "usage_output";
+
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event alongside
+    /// <see cref="UsageTotalTokensArgument"/>, under the same reported-as-0 rule and the same
+    /// no-`token`-in-the-key rule: tokens read from the provider's prompt cache
+    /// (<c>payload.usage.cache_read_tokens</c>), base-10.</summary>
+    public const string UsageCacheReadTokensArgument = "usage_cache_read";
+
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event alongside
+    /// <see cref="UsageTotalTokensArgument"/>, under the same reported-as-0 rule and the same
+    /// no-`token`-in-the-key rule: tokens written into the provider's prompt cache
+    /// (<c>payload.usage.cache_creation_tokens</c>), base-10.</summary>
+    /// <remarks>Rendered and named "cache creation", matching the payload field and Claude's own
+    /// `cache_creation_input_tokens`, rather than the equally common "cache write": Codex publishes a
+    /// field literally named `cache_write_input_tokens` that ADR 0061 deliberately leaves UNMAPPED, and
+    /// borrowing its wording for a Claude-sourced count would suggest an equivalence this codebase has
+    /// not established.</remarks>
+    public const string UsageCacheCreationTokensArgument = "usage_cache_creation";
 }
 
 public sealed record SprintWorkflowState(
@@ -893,14 +920,16 @@ public static class WorkflowFold
         {
             // Fails closed exactly like AttemptDiffRecordedType/AttemptToolUseRecordedType above: an
             // AttemptUsageRecorded with no `payload.usage` carries nothing a reader could use, and the
-            // three summary arguments are what the localized template substitutes, so a line
+            // five summary arguments are what the localized template substitutes, so a line
             // hand-edited or written by a foreign producer must fail here rather than render with
             // blanks where its counts belong.
             bool hasUsage = current.Payload?.Usage is not null;
             bool hasCounts =
                 current.Arguments.GetValueOrDefault(WorkflowEvent.UsageTotalTokensArgument) is not null &&
                 current.Arguments.GetValueOrDefault(WorkflowEvent.UsageInputTokensArgument) is not null &&
-                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageOutputTokensArgument) is not null;
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageOutputTokensArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageCacheReadTokensArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageCacheCreationTokensArgument) is not null;
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasUsage || !hasCounts
                 ? throw new InvalidDataException($"Attempt-usage event '{current.EventId}' has an invalid envelope.")
                 : false;

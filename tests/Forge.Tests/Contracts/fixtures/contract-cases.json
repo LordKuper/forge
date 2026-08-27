@@ -437,7 +437,7 @@
         "type": "AttemptUsageRecorded",
         "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
         "message_key": "workflow.attempt_usage_recorded",
-        "arguments": {"usage_total": "271", "usage_input": "6", "usage_output": "265"},
+        "arguments": {"usage_total": "114518", "usage_input": "6", "usage_output": "265", "usage_cache_read": "75666", "usage_cache_creation": "38581"},
         "payload": {
           "usage": {
             "input_tokens": 6,
@@ -461,7 +461,7 @@
         "type": "AttemptUsageRecorded",
         "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
         "message_key": "workflow.attempt_usage_recorded",
-        "arguments": {"usage_total": "89185", "usage_input": "88641", "usage_output": "544"},
+        "arguments": {"usage_total": "89185", "usage_input": "88641", "usage_output": "544", "usage_cache_read": "0", "usage_cache_creation": "0"},
         "payload": {"usage": {"input_tokens": 88641, "output_tokens": 544}}
       }
     },
@@ -535,7 +535,7 @@
         "type": "AttemptUsageRecorded",
         "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
         "message_key": "workflow.attempt_usage_recorded",
-        "arguments": {"usage_total": "0", "usage_input": "-1", "usage_output": "1"},
+        "arguments": {"usage_total": "0", "usage_input": "-1", "usage_output": "1", "usage_cache_read": "0", "usage_cache_creation": "0"},
         "payload": {"usage": {"input_tokens": -1, "output_tokens": 1}}
       }
     },
@@ -551,7 +551,7 @@
         "type": "AttemptUsageRecorded",
         "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
         "message_key": "workflow.attempt_usage_recorded",
-        "arguments": {"usage_total": "271", "usage_input": "6", "usage_output": "265"},
+        "arguments": {"usage_total": "271", "usage_input": "6", "usage_output": "265", "usage_cache_read": "0", "usage_cache_creation": "0"},
         "payload": {"usage": {"input_tokens": 6, "output_tokens": 265, "cost_usd": 0.430298}}
       }
     },

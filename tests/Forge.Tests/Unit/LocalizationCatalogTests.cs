@@ -97,6 +97,42 @@ public sealed class LocalizationCatalogTests
             TimelineMessageFormatter.Format(russian, MessageKeys.WorkflowUserMessagePosted, arguments));
     }
 
+    /// <summary>PR #118 review finding 1 (regression): the token-usage summary line renders the whole
+    /// attempt's footprint, not the sliver of it that was fresh input and output. Fed with exactly what
+    /// the committed Claude capture reports (`tests/Forge.Tests/Unit/fixtures/providers/claude-stream-json-usage.jsonl`:
+    /// 6 in, 265 out, 75,666 cache-read, 38,581 cache-creation), a template summing only input and
+    /// output rendered `Used 271 token(s)` for an attempt that consumed 114,518 — the defect this pins,
+    /// and not an edge case, since cache tokens dominate every real Claude attempt. The four counters
+    /// are rendered beside the total in both languages because they are priced differently: the line
+    /// reports a footprint and its composition, never an implied price. The arguments below are the
+    /// exact ones <c>FileSprintEventLog.AppendAttemptUsageRecordedAsync</c> derives from that payload
+    /// (asserted there and in
+    /// <c>ImplementationExecutionHostedServiceTests.ASuccessfullyIntegratedAttemptRecordsExactlyOneTokenUsageSummaryFromItsProviderRun</c>).
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TimelineMessageFormatterRendersEveryTokenAnAttemptSpentIncludingItsCacheCounters()
+    {
+        SurfaceText english = new(new ResourceLocalizationCatalog(), new("en-US"));
+        SurfaceText russian = new(new ResourceLocalizationCatalog(), new("ru-RU"));
+        Dictionary<string, string?> arguments = new(StringComparer.Ordinal)
+        {
+            [WorkflowEvent.UsageTotalTokensArgument] = "114518",
+            [WorkflowEvent.UsageInputTokensArgument] = "6",
+            [WorkflowEvent.UsageOutputTokensArgument] = "265",
+            [WorkflowEvent.UsageCacheReadTokensArgument] = "75666",
+            [WorkflowEvent.UsageCacheCreationTokensArgument] = "38581",
+        };
+
+        Assert.Equal(
+            "Used 114518 token(s): 6 in, 265 out, 75666 cache read, 38581 cache creation.",
+            TimelineMessageFormatter.Format(english, MessageKeys.WorkflowAttemptUsageRecorded, arguments));
+        Assert.Equal(
+            "Израсходовано токенов: 114518; на входе: 6; на выходе: 265; чтение кэша: 75666; " +
+                "создание кэша: 38581.",
+            TimelineMessageFormatter.Format(russian, MessageKeys.WorkflowAttemptUsageRecorded, arguments));
+    }
+
     /// <summary>PR #107 review finding 1 (regression): <see cref="TimelineMessageFormatter.Format"/>
     /// used to call <see cref="SurfaceText.Resolve"/> unguarded, so any `workflow.`/`routing.`
     /// message key without a <c>Messages.resx</c> entry threw <see cref="System.Resources.MissingManifestResourceException"/>

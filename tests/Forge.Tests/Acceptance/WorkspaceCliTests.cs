@@ -406,7 +406,14 @@ public sealed class WorkspaceCliTests
         // `[REDACTED:token]` on every surface because it matches `token` anywhere in a KEY NAME (see
         // WorkflowEvent.UsageTotalTokensArgument's remarks). Seeing the actual line is the difference
         // between diagnosing that in a minute and in an hour.
-        Assert.True(text.Contains("Used 89185 token(s): 88641 in, 544 out.", StringComparison.Ordinal), text);
+        // PR #118 review finding 1: the total counts the cache counters too (88641 + 544 + 72448 + 0),
+        // and all four are broken out, so the line reports the attempt's whole token footprint rather
+        // than the fraction of it that was fresh input and output.
+        Assert.True(
+            text.Contains(
+                "Used 161633 token(s): 88641 in, 544 out, 72448 cache read, 0 cache creation.",
+                StringComparison.Ordinal),
+            text);
 
         using JsonDocument json = JsonDocument.Parse(jsonOutput.ToString());
         JsonElement usage = json.RootElement

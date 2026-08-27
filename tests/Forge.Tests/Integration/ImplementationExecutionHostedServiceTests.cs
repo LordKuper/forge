@@ -1029,9 +1029,15 @@ public sealed class ImplementationExecutionHostedServiceTests
         AttemptSnapshot attempt = Assert.Single(
             state.Attempts.Values, item => item.NodeId == ImplementationNodeId);
         Assert.Equal(attempt.Id.Value.ToString("D"), recorded.Aggregate.Id);
-        Assert.Equal("271", recorded.Arguments[WorkflowEvent.UsageTotalTokensArgument]);
+        // PR #118 review finding 1, asserted on the numbers the committed Claude capture actually
+        // reports: the total is 6 + 265 + 75,666 + 38,581, not the 271 an input-plus-output total
+        // produced -- which dropped 99.8% of what this attempt spent from the line that reports
+        // spending. Every counter is carried so the composition stays visible beside the footprint.
+        Assert.Equal("114518", recorded.Arguments[WorkflowEvent.UsageTotalTokensArgument]);
         Assert.Equal("6", recorded.Arguments[WorkflowEvent.UsageInputTokensArgument]);
         Assert.Equal("265", recorded.Arguments[WorkflowEvent.UsageOutputTokensArgument]);
+        Assert.Equal("75666", recorded.Arguments[WorkflowEvent.UsageCacheReadTokensArgument]);
+        Assert.Equal("38581", recorded.Arguments[WorkflowEvent.UsageCacheCreationTokensArgument]);
         UsagePayload payload = recorded.Payload!.Usage!;
         Assert.Equal(75_666, payload.CacheReadTokens);
         Assert.Equal(38_581, payload.CacheCreationTokens);
