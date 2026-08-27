@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Infrastructure;
 using Forge.Providers;
 using Forge.Tests.Support;
 
@@ -322,6 +323,36 @@ public sealed class SprintDefinitionTests
                 Title: new string('t', SprintOrchestrator.MaxSprintTitleLength + 1)),
             cancellationToken);
 
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintTitleTooLong, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // ADR 0057: "Redaction runs before the length check, not after." This is the case that ordering
+    // exists for, and the only one that can tell the two orderings apart -- the plain over-length
+    // title above is refused either way, because redaction does not touch it. Here the title is
+    // exactly at the bound as typed but its redaction placeholder pushes the stored value past it,
+    // so check-then-redact would accept the input and freeze a title that violates
+    // project-snapshot.schema.json's own maxLength: 200. Swapping the two steps in NormalizeTitle
+    // breaks this test.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATitleWithinTheBoundWhoseRedactionExceedsItIsRefused()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string secret = "token=qwerty";
+        string title =
+            $"{new string('t', SprintOrchestrator.MaxSprintTitleLength - secret.Length - 1)} {secret}";
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Title: title), cancellationToken);
+
+        // The premise: accepted by a length check on the raw input, refused by one on the redaction.
+        Assert.Equal(SprintOrchestrator.MaxSprintTitleLength, title.Length);
+        Assert.True(SecretRedactor.Redact(title).Length > SprintOrchestrator.MaxSprintTitleLength);
         Assert.False(result.Succeeded);
         Assert.Equal(DiagnosticCodes.SprintTitleTooLong, result.DiagnosticCode);
         Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));

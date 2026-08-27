@@ -95,6 +95,8 @@ root or directory name, which would render an identical label for every sprint i
 - `Forge.Host.Runtime` (`ControlPlaneHostedService.cs`): `DispatchCreateSprintAsync` deserializes the
   payload and tolerates its absence.
 - `Forge.Cli` (`CliApplication.cs`): `forge sprint create --title <text>`.
+- `Forge.Cli` (`ExitCodes.cs`): `SprintTitleTooLong` joins the `Usage` arm, alongside the other
+  bounded/required-input diagnostics, instead of falling through to `Internal`.
 - `Forge.Desktop.Presentation` (`SprintDisplayTitle.cs` -- new; `MainPageViewModel.cs`,
   `ProjectOverviewViewModel.cs`): the title parameter threads through, and
   `ProjectOverviewSprintCard.DisplayTitle` carries the resolved label.
@@ -102,6 +104,8 @@ root or directory name, which would render an identical label for every sprint i
   screen-reader-named title `Entry` above "Create sprint", and the title on each sprint card header.
 - `Forge.Runtime` (`Localization/`): `SprintTitleLabel` and `SprintUntitledFallback` in both
   `Messages.resx` and `Messages.ru.resx`.
+- `docs/contracts/v1/README.md`: a `2 | usage | sprint_title_too_long` row in the frozen exit-code
+  table, matching the `ExitCodes.For` arm above.
 - `docs/contracts/v1/schemas/project-snapshot.schema.json`: `$defs.sprint.title` (nullable,
   `maxLength: 200`, not required) and `1.5.0` added to the `schema_version` enum.
 - `docs/contracts/v1/capabilities.json`: `1.11.0` -> `1.12.0`; `sprint.manage`'s `cli` documents
