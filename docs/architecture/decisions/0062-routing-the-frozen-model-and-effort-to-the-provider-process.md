@@ -138,7 +138,7 @@ release resume with their existing frozen profiles and now have them applied, wh
 
 ## Consequences
 
-- **Behaviour and cost change from v0.85.0.** A phase whose frozen effort is above the vendor CLI's
+- **Behaviour and cost change from v0.84.1.** A phase whose frozen effort is above the vendor CLI's
   own default now thinks harder, runs longer, and spends more tokens. Review (`high`) is the largest
   change; planning and implementation (`medium`) change only where the vendor default is lower. This
   is not a silent internal correction and is stated as such in the changelog and release notes.
