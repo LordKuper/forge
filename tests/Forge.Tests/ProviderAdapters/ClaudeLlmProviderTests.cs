@@ -262,6 +262,118 @@ public sealed class ClaudeLlmProviderTests
         Assert.Equal(ProviderFailureKind.DuplicateTerminalResult, result.Failure);
     }
 
+    /// <summary>ADR 0061, against the real thing: `claude-stream-json-usage.jsonl` is a verbatim
+    /// `claude -p --output-format stream-json --verbose` stream recorded from Claude Code 2.1.233
+    /// driving a throwaway worktree, with only captured paths and identifiers replaced by
+    /// placeholders. The whole mapping was built from this capture and nothing else, so this is what
+    /// pins it — including the context window, which Claude alone publishes and which only exists on
+    /// the `modelUsage` entry named for the exact model that ran.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncCapturesTokenUsageFromARealRecordedClaudeStream()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        string jsonl = ReadFixture("claude-stream-json-usage.jsonl");
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "read the file", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        ProviderUsage usage = Assert.IsType<ProviderUsage>(result.Usage);
+        Assert.Equal(6, usage.InputTokens);
+        Assert.Equal(265, usage.OutputTokens);
+        Assert.Equal(75_666, usage.CacheReadTokens);
+        Assert.Equal(38_581, usage.CacheCreationTokens);
+        Assert.Equal(1_000_000, usage.ContextWindow);
+    }
+
+    /// <summary>ADR 0061's non-interference check. The same real capture carries a mid-stream
+    /// `rate_limit_event`, which is provider-quota territory (parity review finding B7) and entirely
+    /// unrelated to this slice. It must not be classified as terminal, must not be mistaken for the
+    /// usage-bearing event, and must not stop the genuine `result` that follows it from being found —
+    /// so a run over that stream still succeeds (exactly one terminal result) and still reports
+    /// usage.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARateLimitEventInTheStreamIsNeitherTerminalNorMistakenForTheUsageEvent()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        string jsonl = ReadFixture("claude-stream-json-usage.jsonl");
+        Assert.Contains("\"type\":\"rate_limit_event\"", jsonl, StringComparison.Ordinal);
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "read the file", "C:\\work", TestContext.Current.CancellationToken);
+
+        // Exactly one terminal result reached the uniqueness check: had the rate-limit line been
+        // classified as one too, this would have failed as DuplicateTerminalResult instead.
+        Assert.True(result.Succeeded);
+        Assert.NotEqual(ProviderFailureKind.DuplicateTerminalResult, result.Failure);
+        // The rate-limit line is ordinary unclassified content, never a Result.
+        Assert.Single(result.Events, item => item.Kind == ProviderEventKind.Result);
+        // And the real terminal event still supplied the usage, from after that line in the stream.
+        Assert.Equal(265, result.Usage?.OutputTokens);
+    }
+
+    /// <summary>ADR 0061: the context window is read only when `modelUsage` holds exactly one entry —
+    /// the only shape one attempt can produce, since an attempt runs one model. Zero entries, more
+    /// than one, or no `modelUsage` at all yields null rather than a pick: choosing "the first" of
+    /// several would be a guess presented as a measurement, and an absent denominator is honest while
+    /// a wrong one silently corrupts every reading built on it. The token counts beside it are
+    /// unaffected either way.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("""{"m":{"contextWindow":200000}}""", 200_000)]
+    [InlineData("""{}""", null)]
+    [InlineData("""{"a":{"contextWindow":200000},"b":{"contextWindow":1000000}}""", null)]
+    [InlineData("""{"m":{}}""", null)]
+    [InlineData("""{"m":{"contextWindow":-1}}""", null)]
+    [InlineData("""{"m":{"contextWindow":"200000"}}""", null)]
+    [InlineData("null", null)]
+    public async Task TheContextWindowIsReadOnlyFromAnUnambiguousSingleModelUsageEntry(
+        string modelUsage, int? expected)
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        string jsonl = """{"type":"result","usage":{"input_tokens":11,"output_tokens":22},"modelUsage":""" +
+            modelUsage + "}\n";
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expected, result.Usage?.ContextWindow);
+        // Never collateral damage: an unusable denominator must not cost the numerators beside it.
+        Assert.Equal(11, result.Usage?.InputTokens);
+        Assert.Equal(22, result.Usage?.OutputTokens);
+    }
+
+    /// <summary>ADR 0061: absence is never zero. A terminal event with no `usage` object at all
+    /// reports every count as not-reported, which <c>ProviderUsageReport.ToPayload</c> then declines to
+    /// record — a durable all-null row would claim an observation that never happened, and cannot even
+    /// be read as "spent nothing", since no provider reports a zero-token turn.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATerminalResultWithNoUsageObjectRecordsNothingRatherThanZeros()
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        ClaudeLlmProvider provider = CreateProvider(
+            paths, _ => new(0, """{"type":"result","subtype":"success","result":"done"}""" + "\n", string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.NotNull(result.Usage);
+        Assert.False(result.Usage!.HasAnyValue);
+        Assert.Null(ProviderUsageReport.ToPayload(result));
+    }
+
     private static string ReadFixture(string name) => File.ReadAllText(
         Path.Combine(RepositoryRoot.Find(), "tests", "Forge.Tests", "Unit", "fixtures", "providers", name));
 

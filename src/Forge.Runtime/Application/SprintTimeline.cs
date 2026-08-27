@@ -145,7 +145,8 @@ public sealed record SprintTimelinePage(
     // sense: it is null on every item a pre-1.2.0 consumer has ever seen.
     // 1.3.0: that Payload gained a second family, `tool_use` (ADR 0060) -- additive again: it is null
     // on every item a pre-1.3.0 consumer has ever seen, including every existing diff-only item.
-    public const string ContractVersion = "1.3.0";
+    // 1.4.0: and a third, `usage` (ADR 0061) -- additive on the same terms.
+    public const string ContractVersion = "1.4.0";
 
     public static SprintTimelinePage Empty(Guid sprintId, string? requestedCursor, string diagnosticCode)
     {
@@ -203,7 +204,15 @@ public static class SprintTimelineRedaction
     /// is pass 2), so the payload is never the one field that reaches a surface through only one of
     /// them. Every new string field added to a payload sub-object MUST be added here; the two passes
     /// share this helper deliberately (they are independent in field *coverage*, not in which
-    /// redactor they use -- both already share <see cref="SecretRedactor"/> itself).</summary>
+    /// redactor they use -- both already share <see cref="SecretRedactor"/> itself).
+    ///
+    /// ADR 0061's <see cref="UsagePayload"/> deliberately has NO arm below, and that is a decision
+    /// rather than an omission: every one of its fields is a nullable integer, so it contains no text
+    /// a secret could ever be spelled in, and a no-op arm rewriting each number onto itself would only
+    /// suggest that redaction had been considered per-field when there is nothing per-field to
+    /// consider. The `payload with { ... }` expression at the end carries `Usage` through untouched by
+    /// construction. Should that family ever gain a string member -- a model name, a service tier --
+    /// the rule above applies to it in full and an arm becomes mandatory.</summary>
     internal static WorkflowEventPayload? RedactPayload(WorkflowEventPayload? payload)
     {
         if (payload is null)

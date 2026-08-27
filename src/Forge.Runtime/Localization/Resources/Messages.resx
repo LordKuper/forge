@@ -354,6 +354,7 @@
   <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Summary: {0}</value></data>
   <data name="workflow.attempt_diff_recorded" xml:space="preserve"><value>Changed {0} file(s): +{1}/-{2} lines.</value></data>
   <data name="workflow.attempt_tool_use_recorded" xml:space="preserve"><value>Used {0} tool call(s): {1} command(s), {2} file edit(s).</value></data>
+  <data name="workflow.attempt_usage_recorded" xml:space="preserve"><value>Used {0} token(s): {1} in, {2} out, {3} cache read, {4} cache creation.</value></data>
   <data name="routing.decision_recorded" xml:space="preserve"><value>Routed to {0}/{1}: {2}.</value></data>
   <data name="workflow.sprint_failed" xml:space="preserve"><value>Sprint failed.</value></data>
   <data name="workflow.attempt_preparing" xml:space="preserve"><value>Attempt is preparing to run.</value></data>

@@ -64,6 +64,10 @@ public sealed class ImplementationExecutionHostedService(
 {
     private const string FallbackSummary = "Implemented the requested change; the provider returned no summary.";
 
+    // This service owns EventIds 2050-2069: the widest block in the 2000 range, because it is the
+    // only node executor that also records per-attempt payloads (diff, tool use, usage) and a plain
+    // 10-id block no longer holds them. Every id in the range is unique process-wide; the allocation
+    // map and its mechanical check live in ArchitectureTests.EveryLoggerEventIdNamesExactlyOneEvent.
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
         LogLevel.Warning,
         new EventId(2050, "ImplementationExecutionListFailed"),
@@ -129,6 +133,14 @@ public sealed class ImplementationExecutionHostedService(
             LogLevel.Warning,
             new EventId(2059, "ImplementationExecutionToolUseUnavailable"),
             "Recording the tool-call summary for sprint {SprintId}'s implementation attempt failed " +
+                "({DiagnosticCode}); the change itself is already integrated, so only the timeline " +
+                "entry is missing.");
+
+    private static readonly Action<ILogger, Guid, string, Exception?> LogUsageUnavailable =
+        LoggerMessage.Define<Guid, string>(
+            LogLevel.Warning,
+            new EventId(2060, "ImplementationExecutionUsageUnavailable"),
+            "Recording the token-usage summary for sprint {SprintId}'s implementation attempt failed " +
                 "({DiagnosticCode}); the change itself is already integrated, so only the timeline " +
                 "entry is missing.");
 
@@ -578,6 +590,7 @@ public sealed class ImplementationExecutionHostedService(
 
         await RecordAttemptDiffAsync(sprintId, attemptId, diffStat, cancellationToken).ConfigureAwait(false);
         await RecordAttemptToolUseAsync(sprintId, attemptId, result, cancellationToken).ConfigureAwait(false);
+        await RecordAttemptUsageAsync(sprintId, attemptId, result, cancellationToken).ConfigureAwait(false);
 
         return ImplementationAttemptOutcome.Success(
             NodeExecutionDiagnostics.Digest(integrated.Commit ?? string.Empty), effectiveSummary);
@@ -713,6 +726,48 @@ public sealed class ImplementationExecutionHostedService(
             or OperationCanceledException)
         {
             LogToolUseUnavailable(logger, sprintId.Value, DiagnosticCodes.ProviderToolUseUnavailable, exception);
+        }
+    }
+
+    /// <summary>ADR 0061: one <see cref="WorkflowEvent.AttemptUsageRecordedType"/> event per attempt,
+    /// appended beside its diff and tool-use siblings once the attempt's commit is actually on the
+    /// sprint's integration branch. Like the tool-use record it needs no read of its own -- the
+    /// provider adapter captured this from the run's own terminal event -- and it sits in the identical
+    /// risk position: before <see cref="SprintScheduler.CompleteAttemptAsync"/>, on an attempt whose
+    /// change is already integrated and durable. It therefore copies
+    /// <see cref="RecordAttemptDiffAsync"/>'s fail-open shape exactly, including the
+    /// <see cref="OperationCanceledException"/> the journal's own per-sprint gate raises (PR #116
+    /// review finding 2, and the same class of bug PR #117's review found again on the tool-use path):
+    /// an escaping exception here would strand an already-integrated attempt in `running`, costing work
+    /// rather than an audit record.
+    ///
+    /// Nothing is appended when the run observed no usage at all, or when every field of what it
+    /// observed was absent -- <see cref="ProviderUsageReport.ToPayload"/> owns that decision. An
+    /// all-null row would be a durable record that says nothing, and unlike ADR 0059's all-zero diff it
+    /// cannot even be read as "this attempt spent nothing": no provider reports a zero-token turn.
+    /// </summary>
+    private async Task RecordAttemptUsageAsync(
+        SprintId sprintId, AttemptId attemptId, ProviderRunResult result, CancellationToken cancellationToken)
+    {
+        if (ProviderUsageReport.ToPayload(result) is not { } usage)
+        {
+            return;
+        }
+
+        try
+        {
+            await store.AppendAttemptUsageRecordedAsync(
+                options.ProjectRoot, sprintId, attemptId, usage, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or JsonException
+            or OperationCanceledException)
+        {
+            LogUsageUnavailable(logger, sprintId.Value, DiagnosticCodes.ProviderUsageUnavailable, exception);
         }
     }
 

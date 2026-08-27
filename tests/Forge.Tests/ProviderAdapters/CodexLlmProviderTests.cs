@@ -729,6 +729,65 @@ public sealed class CodexLlmProviderTests
         Assert.False(spawned);
     }
 
+    /// <summary>ADR 0061, against the same real capture ADR 0060's mapping was built from: its last
+    /// line is `turn.completed`, whose `usage` carries the run's token counts. The context window is
+    /// asserted ABSENT deliberately — Codex's usage object has no such field anywhere, so a `ctx X / Y`
+    /// reading has no honest `Y` for this provider, and reporting null is the point rather than a gap
+    /// waiting to be filled by a hardcoded per-model table.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncCapturesTokenUsageFromARealRecordedCodexStreamWithNoContextWindow()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string jsonl = ReadFixture("codex-exec-json-tool-calls.jsonl");
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "append a line", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        ProviderUsage usage = Assert.IsType<ProviderUsage>(result.Usage);
+        Assert.Equal(88_641, usage.InputTokens);
+        Assert.Equal(544, usage.OutputTokens);
+        Assert.Null(usage.ContextWindow);
+        // Codex's own cache counters are deliberately unmapped: whether they mean what Claude's two
+        // cache fields mean is not something one capture per vendor establishes (ADR 0061).
+        Assert.Null(usage.CacheReadTokens);
+        Assert.Null(usage.CacheCreationTokens);
+    }
+
+    /// <summary>ADR 0061: a vendor number that is not a non-negative 32-bit integer is treated as
+    /// not-reported rather than coerced. The durable contract declares each count a non-negative
+    /// integer, and a negative, fractional, out-of-range, or non-numeric value is not a clamped
+    /// version of the truth. A `turn.failed` terminal event reports nothing at all — a failed turn's
+    /// work never reaches the integration branch.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("""{"type":"turn.completed","usage":{"input_tokens":5,"output_tokens":7}}""", 5, 7)]
+    [InlineData("""{"type":"turn.completed","usage":{"output_tokens":7}}""", null, 7)]
+    [InlineData("""{"type":"turn.completed","usage":{"input_tokens":-3,"output_tokens":7}}""", null, 7)]
+    [InlineData("""{"type":"turn.completed","usage":{"input_tokens":1.5,"output_tokens":7}}""", null, 7)]
+    [InlineData("""{"type":"turn.completed","usage":{"input_tokens":99999999999,"output_tokens":7}}""", null, 7)]
+    [InlineData("""{"type":"turn.completed","usage":{"input_tokens":"5","output_tokens":7}}""", null, 7)]
+    [InlineData("""{"type":"turn.completed","usage":[]}""", null, null)]
+    [InlineData("""{"type":"turn.completed"}""", null, null)]
+    [InlineData("""{"type":"turn.failed","usage":{"input_tokens":5,"output_tokens":7}}""", null, null)]
+    public async Task UnusableVendorTokenCountsAreReportedAsAbsentRatherThanCoerced(
+        string line, int? expectedInput, int? expectedOutput)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, line + "\n", string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedInput, result.Usage?.InputTokens);
+        Assert.Equal(expectedOutput, result.Usage?.OutputTokens);
+    }
+
     private static string ReadFixture(string name) => File.ReadAllText(
         Path.Combine(RepositoryRoot.Find(), "tests", "Forge.Tests", "Unit", "fixtures", "providers", name));
 

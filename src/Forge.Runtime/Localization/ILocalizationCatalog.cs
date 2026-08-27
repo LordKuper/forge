@@ -575,6 +575,20 @@ public static class MessageKeys
     /// </summary>
     public const string WorkflowAttemptToolUseRecorded = "workflow.attempt_tool_use_recorded";
 
+    /// <summary>ADR 0061. A <see cref="string.Format(IFormatProvider?, string, object?[])"/> template
+    /// taking the attempt's total token count (<see cref="WorkflowEvent.UsageTotalTokensArgument"/>),
+    /// then the four counters that total is the sum of, in order: input, output, cache-read, and
+    /// cache-creation
+    /// (<see cref="WorkflowEvent.UsageInputTokensArgument"/>, <see cref="WorkflowEvent.UsageOutputTokensArgument"/>,
+    /// <see cref="WorkflowEvent.UsageCacheReadTokensArgument"/>, <see cref="WorkflowEvent.UsageCacheCreationTokensArgument"/>).
+    /// All five are pure numbers, so nothing here needs a localized closed-set label -- no model,
+    /// provider, or vendor term is ever named in this sentence. PR #118 review finding 1: the total
+    /// counts the cache counters too (they dominate a real Claude attempt) and the sentence breaks all
+    /// four out, so it reports the attempt's whole token footprint AND its composition rather than a
+    /// number that silently drops most of it. Only the model's context-window size still rides on the
+    /// structured payload alone.</summary>
+    public const string WorkflowAttemptUsageRecorded = "workflow.attempt_usage_recorded";
+
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
     /// template taking the routed provider id, model id verbatim (proper identifiers, never
     /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by

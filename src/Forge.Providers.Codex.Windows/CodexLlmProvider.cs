@@ -165,8 +165,53 @@ public sealed class CodexLlmProvider(
             _ => null,
             cancellationToken,
             onActivity,
-            ExtractToolCall).ConfigureAwait(false);
+            ExtractToolCall,
+            ExtractUsage).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// ADR 0061. Reads the token accounting `codex exec --json` puts on its terminal `turn.completed`
+    /// event, verified against the last line of the same real capture ADR 0060's mapping was built
+    /// from (`tests/Forge.Tests/Unit/fixtures/providers/codex-exec-json-tool-calls.jsonl`):
+    /// `{"type":"turn.completed","usage":{"input_tokens":88641,...,"output_tokens":544,...}}`.
+    ///
+    /// Only `input_tokens` and `output_tokens` are mapped. Codex's usage object carries NO
+    /// context-window field of any kind, so <see cref="ProviderUsage.ContextWindow"/> is
+    /// unconditionally null for this provider -- reported honestly as absent rather than filled in from
+    /// a per-model table Forge would have to guess and then keep current. Codex's cache counters
+    /// (`cached_input_tokens`, `cache_write_input_tokens`) are likewise left unmapped for now: their
+    /// relationship to Claude's own two cache fields is not something one capture per vendor
+    /// establishes, and inventing an equivalence would be exactly the guess this slice refuses to make.
+    ///
+    /// `turn.failed` reaches this method too (<see cref="Classify"/> calls both terminal), and falls
+    /// through the type check to null: a failed turn's work never reaches the integration branch, so
+    /// nothing about it is ever recorded.
+    /// </summary>
+    private static ProviderUsage? ExtractUsage(JsonElement root)
+    {
+        if (TypeOf(root) != "turn.completed" ||
+            !root.TryGetProperty("usage", out JsonElement usage) || usage.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        return new(
+            NonNegativeInt32(usage, "input_tokens"),
+            NonNegativeInt32(usage, "output_tokens"),
+            CacheReadTokens: null,
+            CacheCreationTokens: null,
+            ContextWindow: null);
+    }
+
+    /// <summary>A vendor number that is missing, non-numeric, fractional, out of <see cref="int"/>
+    /// range, or negative is treated as "not reported" rather than coerced: the durable contract
+    /// declares every token count a non-negative integer, and a value that is not one is not a
+    /// smaller/clamped version of the truth.</summary>
+    private static int? NonNegativeInt32(JsonElement parent, string propertyName) =>
+        parent.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out int number) && number >= 0
+            ? number
+            : null;
 
     /// <summary>
     /// ADR 0060. Maps one already-`ToolUse`-classified `item.started`/`item.completed` line onto the

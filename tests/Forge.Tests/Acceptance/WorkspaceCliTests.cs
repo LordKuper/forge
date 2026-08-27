@@ -344,5 +344,92 @@ public sealed class WorkspaceCliTests
         Assert.Equal(JsonValueKind.Null, calls[2].GetProperty("exit_code").ValueKind);
     }
 
+    /// <summary>ADR 0061's "no CLI code change" claim, kept honest the same way ADR 0059/0060's were:
+    /// a third payload family reaches both CLI surfaces through the generic timeline rendering that
+    /// already existed. Also pins the absent-vs-zero distinction as it appears on THIS surface —
+    /// `--json` writes an unreported field as an explicit null (`StatusJson` uses
+    /// `JsonIgnoreCondition.Never`), so a consumer always sees one complete object shape and can still
+    /// tell a null from a 0. That is the opposite of the durable journal line, which omits an absent
+    /// field entirely; a different serializer on a different path, pinned by
+    /// `SprintEventStoreTests.AnAttemptUsagePayloadSurvivesTheJournalRoundTripKeepingAbsentAndZeroDistinct`.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintTimelineRendersTheTokenUsageSummaryAsTextAndCarriesItsStructuredPayloadInJsonMode()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await store.AppendAttemptUsageRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new UsagePayload(88_641, 544, 72_448, 0, null),
+            cancellationToken);
+
+        StringWriter textOutput = new(CultureInfo.InvariantCulture);
+        RootCommand textRoot = CliApplication.CreateRootCommand(Text(), textOutput, environment.Application);
+        int textExitCode = await textRoot
+            .Parse(["sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        StringWriter jsonOutput = new(CultureInfo.InvariantCulture);
+        RootCommand jsonRoot = CliApplication.CreateRootCommand(Text(), jsonOutput, environment.Application);
+        int jsonExitCode = await jsonRoot
+            .Parse([
+                "sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot, "--json",
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, textExitCode);
+        Assert.Equal(0, jsonExitCode);
+        string text = textOutput.ToString();
+        Assert.DoesNotContain(MessageKeys.WorkflowAttemptUsageRecorded, text, StringComparison.Ordinal);
+        // Asserted with the whole render as the failure message rather than through Assert.Contains,
+        // which truncates it: this assertion is what caught the argument keys originally being named
+        // `total_tokens`/`input_tokens`/`output_tokens`, which SecretRedactor rewrote to
+        // `[REDACTED:token]` on every surface because it matches `token` anywhere in a KEY NAME (see
+        // WorkflowEvent.UsageTotalTokensArgument's remarks). Seeing the actual line is the difference
+        // between diagnosing that in a minute and in an hour.
+        // PR #118 review finding 1: the total counts the cache counters too (88641 + 544 + 72448 + 0),
+        // and all four are broken out, so the line reports the attempt's whole token footprint rather
+        // than the fraction of it that was fresh input and output.
+        Assert.True(
+            text.Contains(
+                "Used 161633 token(s): 88641 in, 544 out, 72448 cache read, 0 cache creation.",
+                StringComparison.Ordinal),
+            text);
+
+        using JsonDocument json = JsonDocument.Parse(jsonOutput.ToString());
+        JsonElement usage = json.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("type").GetString() == WorkflowEvent.AttemptUsageRecordedType)
+            .GetProperty("payload")
+            .GetProperty("usage");
+        Assert.Equal(88_641, usage.GetProperty("input_tokens").GetInt32());
+        Assert.Equal(544, usage.GetProperty("output_tokens").GetInt32());
+        Assert.Equal(72_448, usage.GetProperty("cache_read_tokens").GetInt32());
+        // Reported as zero, and rendered as zero -- not conflated with the unreported field below it.
+        Assert.Equal(0, usage.GetProperty("cache_creation_tokens").GetInt32());
+        // Codex publishes no context window; absence stays absent rather than becoming a guessed number.
+        Assert.Equal(JsonValueKind.Null, usage.GetProperty("context_window").ValueKind);
+    }
+
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);
 }

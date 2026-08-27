@@ -123,6 +123,20 @@ public static class TimelineMessageFormatter
                     Value(arguments, WorkflowEvent.ToolEditsArgument),
                 ],
 
+            // All five always present: required by WorkflowFold.IsTransitionRecord for this event
+            // type, and derived from the event's own payload by the single producing store method
+            // (ISprintStore.AppendAttemptUsageRecordedAsync) rather than supplied independently. The
+            // total is the sum of the four components substituted after it, and every component is
+            // rendered because they are not interchangeable (PR #118 review finding 1).
+            MessageKeys.WorkflowAttemptUsageRecorded =>
+                [
+                    Value(arguments, WorkflowEvent.UsageTotalTokensArgument),
+                    Value(arguments, WorkflowEvent.UsageInputTokensArgument),
+                    Value(arguments, WorkflowEvent.UsageOutputTokensArgument),
+                    Value(arguments, WorkflowEvent.UsageCacheReadTokensArgument),
+                    Value(arguments, WorkflowEvent.UsageCacheCreationTokensArgument),
+                ],
+
             // All three always present: required by WorkflowFold.IsTransitionRecord for this event
             // type.
             MessageKeys.WorkflowStageRevisionRecorded =>

@@ -131,6 +131,11 @@ internal sealed class TiedTimestampSprintStore(ISprintStore inner, DateTimeOffse
         CancellationToken cancellationToken) =>
         inner.AppendAttemptToolUseRecordedAsync(projectRoot, sprintId, attemptId, toolUse, cancellationToken);
 
+    public Task AppendAttemptUsageRecordedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, UsagePayload usage,
+        CancellationToken cancellationToken) =>
+        inner.AppendAttemptUsageRecordedAsync(projectRoot, sprintId, attemptId, usage, cancellationToken);
+
     public Task AppendAgentSummaryRecordedAsync(
         string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
         CancellationToken cancellationToken) =>

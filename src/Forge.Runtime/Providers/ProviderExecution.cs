@@ -198,6 +198,33 @@ public sealed record ProviderToolCallTotals(int Calls, int Commands, int Edits)
     }
 }
 
+/// <summary>ADR 0061: the token accounting one provider CLI reported for one attempt, read from the
+/// same terminal event ADR 0006's uniqueness rule already identifies. Deliberately FLAT, with no
+/// per-model dictionary: Claude's CLI keys its `modelUsage` by the exact model string that ran
+/// (`"claude-opus-5[1m]"`), which is a vendor implementation detail — exactly one model runs per
+/// attempt, so Forge's contract carries the one set of numbers rather than a map nothing would ever
+/// have more than one entry in.
+///
+/// Every member is nullable because every member is genuinely optional: a vendor may report none,
+/// some, or all of them, and this contract never guesses a value it was not told.
+/// <paramref name="ContextWindow"/> in particular is the model's own context-window size, which only
+/// Claude reports — Codex's `turn.completed.usage` has no such field at all, so a Codex attempt leaves
+/// it <see langword="null"/> rather than being assigned a hardcoded per-model guess.</summary>
+public sealed record ProviderUsage(
+    int? InputTokens,
+    int? OutputTokens,
+    int? CacheReadTokens,
+    int? CacheCreationTokens,
+    int? ContextWindow)
+{
+    /// <summary>Whether this observation carries anything at all. An all-null usage record is
+    /// indistinguishable from having observed nothing, so the write path skips it (ADR 0061) rather
+    /// than recording a durable row that claims nothing.</summary>
+    public bool HasAnyValue =>
+        InputTokens is not null || OutputTokens is not null || CacheReadTokens is not null ||
+        CacheCreationTokens is not null || ContextWindow is not null;
+}
+
 public sealed record ProviderRunResult(
     bool Succeeded,
     IReadOnlyList<ProviderEvent> Events,
@@ -206,20 +233,24 @@ public sealed record ProviderRunResult(
     string? Detail,
     IReadOnlyList<ProviderToolCall> ToolCalls,
     int UnmappedItemCount,
-    ProviderToolCallTotals ToolCallTotals)
+    ProviderToolCallTotals ToolCallTotals,
+    ProviderUsage? Usage)
 {
-    /// <summary>ADR 0060's three trailing arguments are optional so the many call sites that have no
-    /// tool-call data to report (every non-Codex adapter, and every test double) stay unchanged; the
-    /// record's own members are required, so no producer can forget them by accident. An omitted
-    /// <paramref name="toolCallTotals"/> is derived from <paramref name="toolCalls"/>, which is correct
-    /// for exactly the producers that never capped that list — only the sink, which does, passes its
-    /// own.</summary>
+    /// <summary>ADR 0060's three trailing arguments and ADR 0061's fourth are optional so the many
+    /// call sites that have no such data to report (every adapter that extracts neither, and every
+    /// test double) stay unchanged; the record's own members are required, so no producer can forget
+    /// them by accident. An omitted <paramref name="toolCallTotals"/> is derived from
+    /// <paramref name="toolCalls"/>, which is correct for exactly the producers that never capped that
+    /// list — only the sink, which does, passes its own. <paramref name="usage"/> has no equivalent
+    /// derivation: there is at most one observation per attempt and it is either present or it is
+    /// not.</summary>
     public static ProviderRunResult Success(
         IReadOnlyList<ProviderEvent> events,
         ProviderTerminalResult terminalResult,
         IReadOnlyList<ProviderToolCall>? toolCalls = null,
         int unmappedItemCount = 0,
-        ProviderToolCallTotals? toolCallTotals = null) =>
+        ProviderToolCallTotals? toolCallTotals = null,
+        ProviderUsage? usage = null) =>
         new(
             true,
             events,
@@ -228,14 +259,15 @@ public sealed record ProviderRunResult(
             null,
             toolCalls ?? [],
             unmappedItemCount,
-            toolCallTotals ?? ProviderToolCallTotals.Of(toolCalls ?? []));
+            toolCallTotals ?? ProviderToolCallTotals.Of(toolCalls ?? []),
+            usage);
 
     /// <summary>`detail` may echo raw provider output, so it is redacted before it is stored.
-    /// Tool-call data is deliberately discarded on the failure path (ADR 0060): the attempt's work
-    /// never reaches the integration branch, exactly as ADR 0059 already decided for diff
-    /// statistics.</summary>
+    /// Tool-call data is deliberately discarded on the failure path (ADR 0060), and token usage with
+    /// it (ADR 0061): the attempt's work never reaches the integration branch, exactly as ADR 0059
+    /// already decided for diff statistics.</summary>
     public static ProviderRunResult Failed(ProviderFailureKind failure, string detail) =>
-        new(false, [], null, failure, SecretRedactor.Redact(detail), [], 0, ProviderToolCallTotals.None);
+        new(false, [], null, failure, SecretRedactor.Redact(detail), [], 0, ProviderToolCallTotals.None, null);
 }
 
 /// <summary>Maps a completed run's in-memory tool-call observations onto the durable
@@ -273,6 +305,31 @@ public static class ProviderToolUse
             ],
             Math.Max(0, totals.Calls - ProviderToolUseBudget.MaxCalls),
             result.UnmappedItemCount);
+    }
+}
+
+/// <summary>Maps a completed run's single token-usage observation onto the durable
+/// <see cref="UsagePayload"/> — the counterpart of <see cref="ProviderToolUse"/>, and far simpler:
+/// there is no cap, no elision arithmetic, and no list, because exactly one terminal event per attempt
+/// carries usage at all.</summary>
+public static class ProviderUsageReport
+{
+    /// <summary>Returns <see langword="null"/> when nothing usable was observed — either no terminal
+    /// usage object at all, or one whose every field was absent. Unlike ADR 0059's diff record, an
+    /// all-null usage row says nothing a reader could act on (it is not "this attempt used zero
+    /// tokens", which no provider ever reports), so recording it would be a durable claim about
+    /// something Forge never saw.</summary>
+    public static UsagePayload? ToPayload(ProviderRunResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        return result.Usage is { HasAnyValue: true } usage
+            ? new(
+                usage.InputTokens,
+                usage.OutputTokens,
+                usage.CacheReadTokens,
+                usage.CacheCreationTokens,
+                usage.ContextWindow)
+            : null;
     }
 }
 
@@ -325,7 +382,8 @@ public static class ProviderExecution
         Func<JsonElement, string?> extractText,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null,
-        Func<JsonElement, ProviderToolCallExtraction>? extractToolCall = null)
+        Func<JsonElement, ProviderToolCallExtraction>? extractToolCall = null,
+        Func<JsonElement, ProviderUsage?>? extractUsage = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(environmentVariables);
@@ -340,7 +398,13 @@ public static class ProviderExecution
         using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
         BoundedOutputSink sink = new(
-            classify, extractText, onActivity, linkedCancellation.Cancel, extractToolCall, workingDirectory);
+            classify,
+            extractText,
+            onActivity,
+            linkedCancellation.Cancel,
+            extractToolCall,
+            workingDirectory,
+            extractUsage);
 
         ProcessResult result;
         try
@@ -392,7 +456,12 @@ public static class ProviderExecution
                 ProviderFailureKind.DuplicateTerminalResult,
                 $"The provider emitted {sink.TerminalCount} terminal-result events for one run."),
             _ => ProviderRunResult.Success(
-                sink.Events, sink.TerminalResult!, sink.ToolCalls, sink.UnmappedItemCount, sink.ToolCallTotals),
+                sink.Events,
+                sink.TerminalResult!,
+                sink.ToolCalls,
+                sink.UnmappedItemCount,
+                sink.ToolCallTotals,
+                sink.Usage),
         };
     }
 
@@ -516,7 +585,8 @@ public static class ProviderExecution
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity,
         Action requestCancellation,
         Func<JsonElement, ProviderToolCallExtraction>? extractToolCall,
-        string workingDirectory) : IProcessOutputSink
+        string workingDirectory,
+        Func<JsonElement, ProviderUsage?>? extractUsage) : IProcessOutputSink
     {
         private readonly object gate = new();
         private readonly List<ProviderEvent> events = [];
@@ -580,6 +650,17 @@ public static class ProviderExecution
         public int TerminalCount { get; private set; }
 
         public ProviderTerminalResult? TerminalResult { get; private set; }
+
+        /// <summary>ADR 0061's single per-attempt token-usage observation, read from the FIRST event
+        /// classified <see cref="ProviderEventKind.Result"/> — the same event, chosen by the same
+        /// existing uniqueness logic, that <see cref="TerminalResult"/> itself is taken from, rather
+        /// than a second scan of its own. A run that emits more than one terminal result fails closed
+        /// before this is ever read (<see cref="ProviderFailureKind.DuplicateTerminalResult"/>), so
+        /// "first" and "only" are the same event on every path that reaches a caller. Same
+        /// read-after-completion rule as <see cref="Events"/>; <see langword="null"/> when no extractor
+        /// was supplied, when the terminal event carried no usage object, or when the extractor
+        /// threw.</summary>
+        public ProviderUsage? Usage { get; private set; }
 
         public (ProviderFailureKind Kind, string Detail)? Failure { get; private set; }
 
@@ -679,6 +760,10 @@ public static class ProviderExecution
             {
                 TerminalCount++;
                 TerminalResult ??= new ProviderTerminalResult(redactedText);
+                if (extractUsage is not null && Usage is null)
+                {
+                    RecordUsage(root);
+                }
             }
 
             if (kind == ProviderEventKind.ToolUse && extractToolCall is not null)
@@ -687,6 +772,30 @@ public static class ProviderExecution
             }
 
             return onActivity is not null ? kind : null;
+        }
+
+        /// <summary>Must run under <see cref="gate"/>. Fail-open exactly like
+        /// <see cref="RecordToolCall"/>, and for the identical reason (ADR 0059/0060/0061): token usage
+        /// is optional audit content read on the stdout pump, so an adapter extractor that throws on a
+        /// vendor-shape surprise must cost the usage record and nothing else. Unlike tool-call
+        /// extraction there is no drift counter to increment — a usage object is a leaf of one known
+        /// event, not a stream of items whose shapes could silently stop being recognized — so a
+        /// failure simply leaves <see cref="Usage"/> null. A genuine cancellation is still allowed
+        /// through, so a real Host shutdown is never swallowed.
+        ///
+        /// An extractor that returns an all-null <see cref="ProviderUsage"/> is stored as-is rather
+        /// than discarded here; <see cref="ProviderUsageReport.ToPayload"/> owns the "nothing worth
+        /// recording" decision, in one place, for every producer.</summary>
+        private void RecordUsage(JsonElement root)
+        {
+            try
+            {
+                Usage = extractUsage!(root);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                Usage = null;
+            }
         }
 
         /// <summary>Must run under <see cref="gate"/>. Fail-open by construction (ADR 0059's rule for

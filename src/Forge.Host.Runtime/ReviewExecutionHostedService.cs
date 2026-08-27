@@ -65,33 +65,35 @@ public sealed class ReviewExecutionHostedService(
     StopOperationCoordinator stopCoordinator,
     ILogger<ReviewExecutionHostedService> logger) : BackgroundService
 {
+    // This service owns EventIds 2080-2089; it vacated 2060-2069 so the implementation executor's
+    // block could be widened to hold its per-attempt payload events (see that service's own note).
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
         LogLevel.Warning,
-        new EventId(2060, "ReviewExecutionListFailed"),
+        new EventId(2080, "ReviewExecutionListFailed"),
         "Executing review nodes failed while listing this project's sprints; retrying next tick.");
 
     private static readonly Action<ILogger, Guid, Exception> LogSprintFailed = LoggerMessage.Define<Guid>(
         LogLevel.Warning,
-        new EventId(2061, "ReviewExecutionSprintFailed"),
+        new EventId(2081, "ReviewExecutionSprintFailed"),
         "Executing the review node failed for sprint {SprintId}; continuing with the rest.");
 
     private static readonly Action<ILogger, Guid, string, Exception?> LogStartRejected =
         LoggerMessage.Define<Guid, string>(
             LogLevel.Warning,
-            new EventId(2062, "ReviewExecutionStartRejected"),
+            new EventId(2082, "ReviewExecutionStartRejected"),
             "Starting the review attempt for sprint {SprintId} was rejected ({DiagnosticCode}); " +
                 "retrying next tick.");
 
     private static readonly Action<ILogger, Guid, string, Exception?> LogCompleteRejected =
         LoggerMessage.Define<Guid, string>(
             LogLevel.Warning,
-            new EventId(2063, "ReviewExecutionCompleteRejected"),
+            new EventId(2083, "ReviewExecutionCompleteRejected"),
             "Completing the review attempt for sprint {SprintId} was rejected ({DiagnosticCode}); " +
                 "retrying next tick.");
 
     private static readonly Action<ILogger, Guid, Exception?> LogDefinitionUnusable = LoggerMessage.Define<Guid>(
         LogLevel.Warning,
-        new EventId(2064, "ReviewExecutionDefinitionUnusable"),
+        new EventId(2084, "ReviewExecutionDefinitionUnusable"),
         "Sprint {SprintId}'s frozen definition is missing the review execution profile, a " +
             "candidate provider for it, or implementation's own handoff; its review node cannot " +
             "be executed.");
@@ -99,14 +101,14 @@ public sealed class ReviewExecutionHostedService(
     private static readonly Action<ILogger, Guid, Exception?> LogWorktreeUnavailable =
         LoggerMessage.Define<Guid>(
             LogLevel.Warning,
-            new EventId(2065, "ReviewExecutionWorktreeUnavailable"),
+            new EventId(2085, "ReviewExecutionWorktreeUnavailable"),
             "Preparing an isolated attempt worktree for sprint {SprintId}'s review node failed; " +
                 "the attempt is recorded as failed and will retry.");
 
     private static readonly Action<ILogger, Guid, Exception?> LogWorktreeDiscardFailed =
         LoggerMessage.Define<Guid>(
             LogLevel.Warning,
-            new EventId(2066, "ReviewExecutionWorktreeDiscardFailed"),
+            new EventId(2086, "ReviewExecutionWorktreeDiscardFailed"),
             "Discarding sprint {SprintId}'s review attempt worktree did not fully succeed; a " +
                 "future reconciliation pass must clean it up.");
 

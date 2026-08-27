@@ -165,6 +165,19 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
             ? Task.FromException(failure)
             : inner.AppendAttemptToolUseRecordedAsync(projectRoot, sprintId, attemptId, toolUse, cancellationToken);
 
+    /// <summary>The <see cref="DiffRecordFailure"/> equivalent for ADR 0061's token-usage record,
+    /// which sits in the identical risk position: appended after integration but before the attempt is
+    /// marked complete, so a throw escaping it strands an already-integrated attempt in `running`.
+    /// </summary>
+    public Exception? UsageRecordFailure { get; set; }
+
+    public Task AppendAttemptUsageRecordedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, UsagePayload usage,
+        CancellationToken cancellationToken) =>
+        UsageRecordFailure is { } failure
+            ? Task.FromException(failure)
+            : inner.AppendAttemptUsageRecordedAsync(projectRoot, sprintId, attemptId, usage, cancellationToken);
+
     public Task AppendAgentSummaryRecordedAsync(
         string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
         CancellationToken cancellationToken) =>
