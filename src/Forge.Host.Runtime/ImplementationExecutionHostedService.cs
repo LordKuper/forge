@@ -544,8 +544,8 @@ public sealed class ImplementationExecutionHostedService(
         // attempt's own worktree -- the very worktree this read resolves against. Recorded only
         // after that integrate succeeds, though (below): a diff summary for work that never reached
         // the integration branch would be a durable claim about a change the sprint does not have.
-        GitDiffStatResult diffStat = await gitIsolation.ReadDiffStatAsync(
-            options.ProjectRoot, projectId, sprintId, attemptId, expectedIntegrationTip,
+        GitDiffStatResult? diffStat = await TryReadDiffStatAsync(
+            sprintId, projectId, attemptId, expectedIntegrationTip,
             committed.Commit ?? expectedIntegrationTip, cancellationToken).ConfigureAwait(false);
 
         GitOperationResult integrated = await gitIsolation.IntegrateAsync(
@@ -574,17 +574,75 @@ public sealed class ImplementationExecutionHostedService(
             NodeExecutionDiagnostics.Digest(integrated.Commit ?? string.Empty), effectiveSummary);
     }
 
+    /// <summary>ADR 0059's diff-stat read, made fail-open (PR #116 review finding 1). The read is
+    /// audit-only: it exists solely to capture the attempt's diff summary while its worktree still
+    /// exists (a successful <see cref="SprintGitIsolation.IntegrateAsync"/> discards that worktree),
+    /// so a `git` process that throws outright (<see cref="Win32Exception"/>), a filesystem failure,
+    /// or an inner deadline's own <see cref="OperationCanceledException"/> must never abort an
+    /// attempt whose commit is ready to be published. Before this guard such a throw propagated out
+    /// of <see cref="RunImplementationAttemptAsync"/> and the attempt's commit never reached the
+    /// integration branch at all -- a regression against the behavior every earlier release had,
+    /// where integration always followed a successful commit unconditionally.
+    ///
+    /// A genuine Host shutdown is still honored rather than swallowed, drawing the same distinction
+    /// this service's own per-sprint boundary already draws: only a cancellation of THIS method's own
+    /// <paramref name="cancellationToken"/> means "the whole operation is being cancelled" (rethrown,
+    /// leaving the node `running` to be resumed on the next tick after restart); any other
+    /// <see cref="OperationCanceledException"/> means "this one optional step failed" and is logged.
+    /// Returns <see langword="null"/> for "no diff data available", already logged with its own
+    /// exception -- the same outcome as a failed <see cref="GitDiffStatResult"/>, so the caller keeps
+    /// going either way.</summary>
+    private async Task<GitDiffStatResult?> TryReadDiffStatAsync(
+        SprintId sprintId,
+        Guid projectId,
+        AttemptId attemptId,
+        string fromCommit,
+        string toCommit,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await gitIsolation.ReadDiffStatAsync(
+                options.ProjectRoot, projectId, sprintId, attemptId, fromCommit, toCommit, cancellationToken)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or JsonException or Win32Exception
+            or OperationCanceledException)
+        {
+            LogDiffStatUnavailable(logger, sprintId.Value, DiagnosticCodes.WorktreeDiffFailed, exception);
+            return null;
+        }
+    }
+
     /// <summary>ADR 0059: one <see cref="WorkflowEvent.AttemptDiffRecordedType"/> event per attempt,
     /// appended once the attempt's commit is actually on the sprint's integration branch. Never
     /// fails the attempt: the change itself is already integrated and durable by this point, so a
     /// `git` or journal failure here costs an audit record, not work -- the same accepted, named debt
-    /// <c>RecordHandoffAsync</c> already carries at this service's other post-success write. An
-    /// attempt whose diff is genuinely empty is still recorded (an all-zero payload): "this attempt
-    /// changed nothing" is itself a fact worth showing on the timeline, and skipping it would make an
-    /// absent record ambiguous between "empty" and "recorded before this feature existed".</summary>
+    /// <c>RecordHandoffAsync</c> already carries at this service's other post-success write. Unlike
+    /// that one, this call runs BEFORE <see cref="SprintScheduler.CompleteAttemptAsync"/>, so an
+    /// escaping exception would strand an already-integrated attempt in `running` (PR #116 review
+    /// finding 2) rather than merely cost a handoff -- hence the filter covers every shape the
+    /// journal append can actually throw, including the <see cref="OperationCanceledException"/> its
+    /// own per-sprint gate raises, and only a cancellation of this method's own
+    /// <paramref name="cancellationToken"/> (a real Host shutdown, which leaves the node `running`
+    /// to be resumed on the next tick after restart) is allowed through. An attempt whose diff is
+    /// genuinely empty is still recorded (an all-zero payload): "this attempt changed nothing" is
+    /// itself a fact worth showing on the timeline, and skipping it would make an absent record
+    /// ambiguous between "empty" and "recorded before this feature existed".</summary>
     private async Task RecordAttemptDiffAsync(
-        SprintId sprintId, AttemptId attemptId, GitDiffStatResult diffStat, CancellationToken cancellationToken)
+        SprintId sprintId, AttemptId attemptId, GitDiffStatResult? diffStat, CancellationToken cancellationToken)
     {
+        if (diffStat is null)
+        {
+            // The read itself threw; TryReadDiffStatAsync already logged it with its exception.
+            return;
+        }
+
         if (!diffStat.Succeeded || diffStat.Stat is not { } stat)
         {
             LogDiffStatUnavailable(logger, sprintId.Value, diffStat.DiagnosticCode, null);
@@ -596,8 +654,13 @@ public sealed class ImplementationExecutionHostedService(
             await store.AppendAttemptDiffRecordedAsync(
                 options.ProjectRoot, sprintId, attemptId, stat, cancellationToken).ConfigureAwait(false);
         }
-        catch (Exception exception) when (
-            exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or JsonException
+            or OperationCanceledException)
         {
             LogDiffStatUnavailable(logger, sprintId.Value, DiagnosticCodes.WorktreeDiffFailed, exception);
         }

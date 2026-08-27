@@ -706,6 +706,58 @@ public sealed class GitIsolationTests
         Assert.Equal(0, stat.Deletions);
     }
 
+    /// <summary>ADR 0059's path-shape safety rule, and the one part of <c>ReadDiffStatAsync</c> that
+    /// real `git.exe` cannot reach: git reports repository-root-relative, forward-slashed paths by
+    /// construction, so an absolute, drive-prefixed, backslashed, or `..`-traversing entry cannot
+    /// arise from a healthy repository at all. That makes the drop-and-count branch unreachable from
+    /// every other test in this file -- a bug that removed the check, or that dropped the running
+    /// count's own `+ dropped` term, would pass the whole suite undetected (PR #116 review finding
+    /// 4). Driven through the real <see cref="SprintGitIsolation.ReadDiffStatAsync"/> with a fake
+    /// worktree manager standing in for the unreachable git output, since the sanitizer is private
+    /// to that method by design.
+    ///
+    /// The retained-count assertion is what pins the two halves together: a dropped entry must be
+    /// ADDED to whatever <see cref="DiffPayload.ElidedFiles"/> the per-file cap already reported,
+    /// never replace it, and the totals must keep describing every changed file -- so a reader is
+    /// never told a change was smaller than it was.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ReadDiffStatDropsEveryPathThatIsNotWorktreeRootRelativeAndAddsItToTheElidedCount()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new()
+        {
+            DiffStat = new(
+                4,
+                10,
+                2,
+                [
+                    new DiffFileStat("src/kept.cs", 5, 1, DiffChangeKinds.Modified),
+                    // One entry per shape RelativePathShape.IsSyntacticallySafe rejects: an escaping
+                    // segment, a drive/root prefix, and a backslash separator.
+                    new DiffFileStat("../escaped.cs", 3, 1, DiffChangeKinds.Modified),
+                    new DiffFileStat("C:/absolute.cs", 1, 0, DiffChangeKinds.Added),
+                    new DiffFileStat("src\\backslashed.cs", 1, 0, DiffChangeKinds.Added),
+                ],
+                2),
+        };
+        using TestEnvironment environment = new(worktrees: worktrees);
+        SprintGitIsolation isolation = environment.Resolve<SprintGitIsolation>();
+
+        GitDiffStatResult result = await isolation.ReadDiffStatAsync(
+            environment.ProjectRoot, Guid.NewGuid(), SprintId.New(), AttemptId.New(),
+            new string('a', 40), new string('b', 40), cancellationToken);
+
+        Assert.True(result.Succeeded, $"ReadDiffStatAsync failed: {result.DiagnosticCode} ({result.Detail})");
+        DiffPayload stat = result.Stat!;
+        DiffFileStat kept = Assert.Single(stat.Files);
+        Assert.Equal("src/kept.cs", kept.Path);
+        Assert.Equal(2 + 3, stat.ElidedFiles);
+        Assert.Equal(4, stat.FilesChanged);
+        Assert.Equal(10, stat.Insertions);
+        Assert.Equal(2, stat.Deletions);
+    }
+
     /// <summary>A `git` failure's own `stderr` (<see cref="GitOperationResult.Detail"/>) is what
     /// actually diagnoses a CI-only failure that cannot be reproduced locally; every success
     /// assertion in this file goes through this helper instead of a bare `Assert.True` so that text

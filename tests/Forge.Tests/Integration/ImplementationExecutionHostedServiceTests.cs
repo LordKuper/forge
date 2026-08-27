@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using System.Diagnostics;
 using Forge.Application;
 using Forge.Compiler;
@@ -565,6 +566,294 @@ public sealed class ImplementationExecutionHostedServiceTests
             item => item.NodeId.Value == ImplementationNodeId);
         Assert.Empty(await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
         Assert.NotEmpty(worktrees.RemovedPaths);
+    }
+
+    // ADR 0059's ordering property, end to end through the real executor: the diff is READ before
+    // IntegrateAsync (which discards the very worktree the read resolves against) and RECORDED only
+    // after that integrate succeeded. Asserted through the durable journal rather than a spy, so it
+    // also proves the flat summary the timeline renders is derived from the same payload.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASuccessfullyIntegratedAttemptRecordsExactlyOneDiffSummaryMatchingTheReadTakenBeforeIntegration()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new()
+        {
+            DiffStat = new(
+                3,
+                12,
+                4,
+                [
+                    new DiffFileStat("src/Forge.Runtime/A.cs", 10, 4, DiffChangeKinds.Modified),
+                    new DiffFileStat("docs/b.md", 2, 0, DiffChangeKinds.Added),
+                ],
+                1),
+        };
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(
+                    ProviderRunResult.Success([], new ProviderTerminalResult("Added the feature module.")));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForAttemptDiffRecordedAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        WorkflowEvent recorded = Assert.Single(
+            await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
+        // Recorded against the attempt that actually integrated, not some other aggregate.
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot attempt = Assert.Single(
+            state.Attempts.Values, item => item.NodeId == ImplementationNodeId);
+        Assert.Equal(attempt.Id.Value.ToString("D"), recorded.Aggregate.Id);
+        Assert.Equal("3", recorded.Arguments[WorkflowEvent.DiffFilesChangedArgument]);
+        Assert.Equal("12", recorded.Arguments[WorkflowEvent.DiffInsertionsArgument]);
+        Assert.Equal("4", recorded.Arguments[WorkflowEvent.DiffDeletionsArgument]);
+        DiffPayload payload = recorded.Payload!.Diff!;
+        Assert.Equal(worktrees.DiffStat.Files, payload.Files);
+        Assert.Equal(1, payload.ElidedFiles);
+    }
+
+    // The other half of the same ordering property: a diff summary for work that never reached the
+    // integration branch would be a durable claim about a change the sprint does not have. A stop
+    // landing right as the provider succeeds discards the attempt before IntegrateAsync, so nothing
+    // may be recorded -- reusing the exact race the stop-path test above already sets up.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AStoppedAttemptRecordsNoDiffSummaryBecauseItsWorkNeverReachedTheIntegrationBranch()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        ISprintStore? store = null;
+        TestEnvironment? environmentRef = null;
+        SprintId sprintId = default!;
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            async (_, workingDirectory, token, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                SprintWorkflowState state =
+                    (await store!.LoadAsync(environmentRef!.ProjectRoot, sprintId, token))!;
+                string attemptIdText = state.Nodes[ImplementationNodeId].CurrentAttemptId!;
+                AttemptSnapshot attempt = state.Attempts[attemptIdText];
+                await store.AppendAttemptStopRequestedAsync(
+                    environmentRef.ProjectRoot, sprintId, new AttemptId(Guid.Parse(attemptIdText)),
+                    attempt.Version, token);
+                return ProviderRunResult.Success([], new ProviderTerminalResult("Added the feature module."));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        environmentRef = environment;
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        store = environment.Resolve<ISprintStore>();
+        sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForAttemptStopConvergedAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Empty(worktrees.Commits);
+        Assert.Empty(await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    // Same rule for the failure path: the executor discards the attempt worktree and never reaches
+    // IntegrateAsync at all, so no diff summary may be recorded for any of its retries either.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AFailedAttemptRecordsNoDiffSummaryForAnyOfItsRetries()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            // Never marks the worktree dirty -- the provider ran but left nothing to commit, so the
+            // attempt fails with ImplementationNoChanges long before any integrate.
+            (_, _, _, _) => Task.FromResult(
+                ProviderRunResult.Success([], new ProviderTerminalResult("Nothing needed changing."))));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForTerminalFailureAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Empty(await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    // PR #116 review finding 1 (regression proof): the diff-stat read is audit-only and runs BEFORE
+    // IntegrateAsync, so whichever way it fails -- a returned failure result or a raw throw from the
+    // `git` process itself (Win32Exception, or an inner deadline's OperationCanceledException) -- the
+    // attempt's already-made commit must still reach the sprint's integration branch and complete
+    // normally. Before the fix the `throws` case propagated out of RunImplementationAttemptAsync,
+    // was swallowed by this service's own per-sprint boundary, and left the node stuck `running`
+    // with its commit never integrated at all.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [Trait("Category", "Integration")]
+    public async Task ADiffReadThatFailsNeverPreventsTheAttemptFromIntegratingAndSucceeding(bool throws)
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        if (throws)
+        {
+            worktrees.DiffStatException = new Win32Exception("git could not be started.");
+        }
+        else
+        {
+            worktrees.FailNextDiff = true;
+        }
+
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success([], new ProviderTerminalResult(summary)));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForHandoffAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        Assert.Empty(result.Diagnostics);
+        Assert.Single(worktrees.Commits);
+        // Only the audit record is lost -- never the work itself.
+        Assert.Empty(await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    // PR #116 review finding 2 (regression proof): the diff record is appended AFTER a successful
+    // integrate but BEFORE CompleteAttemptAsync, so a throw escaping it strands an attempt whose
+    // change is already on the integration branch in `running` forever. OperationCanceledException
+    // is the realistic shape (FileSprintEventLog's own per-sprint gate raises it) and the one the
+    // original catch filter -- IOException/UnauthorizedAccessException/InvalidDataException -- did
+    // not cover.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ADiffRecordThatThrowsNeverStrandsAnAlreadyIntegratedAttemptInRunning()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success([], new ProviderTerminalResult(summary)));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        store.DiffRecordFailure = new OperationCanceledException("The journal gate was cancelled.");
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForHandoffAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        Assert.Single(worktrees.Commits);
+        Assert.Empty(await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    private static async Task<IReadOnlyList<WorkflowEvent>> AttemptDiffEventsAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken) =>
+        [.. (await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken))
+            .Where(item => item.Type == WorkflowEvent.AttemptDiffRecordedType)];
+
+    /// <summary>The diff record is appended after the node already reached `succeeded`, so polling
+    /// for that node state alone would race this separate, later append.</summary>
+    private static async Task WaitForAttemptDiffRecordedAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < PollTimeout)
+        {
+            if ((await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken)).Count > 0)
+            {
+                return;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+
+        Assert.Fail($"Sprint {sprintId.Value:D}'s implementation attempt never recorded a diff summary.");
     }
 
     private static ImplementationExecutionHostedService NewService(

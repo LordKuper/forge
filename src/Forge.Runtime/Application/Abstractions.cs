@@ -211,9 +211,12 @@ public static class GitWorktreeManagerDiffBudget
 /// bounds how many per-file rows a single durable journal line may carry. Sized to stay well inside
 /// <see cref="Forge.Application.SprintTimelineProjector.MaxItemsPerPage"/>-scale rendering while
 /// still covering the overwhelming majority of real single-attempt changes; anything beyond it is
-/// reported as <see cref="Forge.Domain.DiffPayload.ElidedFiles"/> rather than dropped silently. Kept
-/// in sync by hand with `payload.diff.files`'s own `maxItems` in
-/// docs/contracts/v1/schemas/event.schema.json.</summary>
+/// reported as <see cref="Forge.Domain.DiffPayload.ElidedFiles"/> rather than dropped silently. Must
+/// equal `payload.diff.files`'s own `maxItems` in docs/contracts/v1/schemas/event.schema.json --
+/// raising one without the other would make every diff record fail its own schema validation, which
+/// the audit-only write path catches and logs rather than surfaces, so the two are pinned together
+/// by a contract test (`TheEventSchemasDiffFileCapMatchesTheBoundTheProducerActuallyApplies`)
+/// instead of by hand.</summary>
 public static class GitWorktreeManagerDiffStatBudget
 {
     public const int MaxFiles = 50;

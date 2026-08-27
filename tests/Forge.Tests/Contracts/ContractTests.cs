@@ -335,4 +335,32 @@ public sealed class ContractTests
 
         Assert.Empty(failures);
     }
+
+    /// <summary>ADR 0059's per-file cap lives in two places that must agree: the producer bounds the
+    /// rows it emits by <see cref="GitWorktreeManagerDiffStatBudget.MaxFiles"/>, and
+    /// `event.schema.json` bounds what the journal will accept by `maxItems`. They were hand-synced,
+    /// with a silent failure mode if they ever drifted (PR #116 review finding 5): a producer bound
+    /// raised above the schema's would make every write fail its own schema validation, and that
+    /// throw is caught and logged by the executor's audit-only diff path, so diff recording would
+    /// simply stop working with nothing failing. Read from both actual sources — never a literal
+    /// repeated on both sides, which a change to either one could still coincidentally satisfy — so
+    /// raising one without the other trips here instead.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void TheEventSchemasDiffFileCapMatchesTheBoundTheProducerActuallyApplies()
+    {
+        string schemaPath = Path.Combine(
+            Forge.UnitTests.RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "event.schema.json");
+        using JsonDocument schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+
+        int maxItems = schema.RootElement
+            .GetProperty("$defs")
+            .GetProperty("diff_payload")
+            .GetProperty("properties")
+            .GetProperty("files")
+            .GetProperty("maxItems")
+            .GetInt32();
+
+        Assert.Equal(GitWorktreeManagerDiffStatBudget.MaxFiles, maxItems);
+    }
 }

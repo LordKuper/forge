@@ -14,9 +14,11 @@ User-facing Forge changes are listed by release, newest first.
   binary) for other API consumers. The per-file list is capped at 50 entries; the totals still cover
   every changed file, and any remainder is reported as a count so a large change is never shown as a
   small one. Diff content itself is never stored -- only these structural statistics -- and file
-  paths are redacted like every other recorded text. Desktop's timeline shows the same one-line
-  summary as the command line; it does not yet render the per-file breakdown, which is separate,
-  later work.
+  paths are redacted like every other recorded text. Recording the summary is audit-only and never
+  affects the work itself: if reading or recording it fails, the attempt's change is still
+  integrated and the attempt still completes normally, with only the timeline entry missing.
+  Desktop's timeline shows the same one-line summary as the command line; it does not yet render the
+  per-file breakdown, which is separate, later work.
 
 ## v0.81.0
 
