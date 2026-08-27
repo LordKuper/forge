@@ -1,6 +1,6 @@
 # ADR 0014: Frozen execution profiles
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-27)
 - Date: 2026-08-17
 - Contract version: 1.0.0
 
@@ -60,23 +60,28 @@ on that type.
 Rather than naming a model anywhere in neutral code, `ILlmProvider` gains
 one new member, `string DefaultModel { get; }` — vendor-owned, exactly like
 `Id`, implemented once per adapter: `ClaudeLlmProvider.DefaultModel =>
-"sonnet"` and `CodexLlmProvider.DefaultModel => "gpt-5"`. These are not new
-vendor knowledge invented for this ADR — they are the exact
-provider/model pairing `ExecutionProfileTests.cs` and
+"sonnet"` and (as originally shipped) `CodexLlmProvider.DefaultModel =>
+"gpt-5"`. These are not new vendor knowledge invented for this ADR — they
+are the exact provider/model pairing `ExecutionProfileTests.cs` and
 `contract-cases.json` already established as this repository's own
-canonical example values when the schema was written at Stage 8. Each is a
+canonical example values when the schema was written at Stage 8. Each was a
 `ponytail:`-marked fixed MVP default ("no per-project model policy
 configuration exists yet") to revisit once one does, not a claim that these
-are the only or best models available. `ExecutionProfilePolicy` resolves a
-frozen profile's `Model` by looking up its chosen provider's `DefaultModel`
-in `ProviderCatalog` — the vendor string never appears in `Forge.Domain` or
-`Forge.Application` source, only inside each adapter project.
+are the only or best models available.
+
+> **Revised by ADR 0063** (2026-08-27): the Codex default of `"gpt-5"` was a
+> non-working placeholder — the real CLI rejects it outright. `DefaultModel`
+> is no longer a fixed constant for Codex; it resolves the vendor's real
+> effective, config-resolved model at runtime (`codex doctor --json`), cached
+> and revalidated on read. `ExecutionProfilePolicy` no longer looks it up
+> from inside `Freeze` — see the revision note below.
 
 ### `ExecutionProfilePolicy.Freeze`
 
 `Forge.Application.ExecutionProfilePolicy.Freeze(frozenProviders,
-providerCatalog)` is a pure, deterministic function (no I/O, no clock) that
-builds exactly three profiles from already-frozen inputs:
+providerCatalog)` was, as originally shipped, a pure, deterministic function
+(no I/O, no clock) that builds exactly three profiles from already-frozen
+inputs:
 
 - **Planning** and **Implementation** both use `frozenProviders[0]` — the
   highest-priority already-ordered candidate ADR 0008 resolved. Nothing in
@@ -119,6 +124,18 @@ even if enablement or configuration changes while the sprint runs (ADR
 `execution_profiles` to an empty set on read, the same
 "shape now, tolerant of older data" rule `NodeRole` already established for
 this exact file.
+
+> **Revised by ADR 0063** (2026-08-27): `Freeze` no longer takes a
+> `ProviderCatalog` or resolves `DefaultModel` internally — that overload is
+> gone. `CodexLlmProvider.DefaultModel` is no longer a pure, no-I/O lookup
+> once Codex's real model is resolved from a live probe, so
+> `SprintOrchestrator.CreateSprintAsync` now calls
+> `ExecutionProfilePolicy.ResolveModels` exactly once per sprint creation,
+> before `ModelPolicyGate` validation, and passes that single resolved map
+> into `Freeze` — so the model the gate approves and the model `Freeze`
+> records are guaranteed identical, with no window for a concurrent
+> resolution refresh to change the answer in between. `Freeze` itself is
+> still pure over its inputs; only where those inputs come from changed.
 
 ### `NodeRole` → `ExecutionPhase`, and why no capability guard exists yet
 

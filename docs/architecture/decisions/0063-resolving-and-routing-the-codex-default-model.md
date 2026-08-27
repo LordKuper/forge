@@ -45,7 +45,7 @@ usable as a routine probe:
 - It does **not** require authentication. `config.load` is independent of `auth.credentials`, so the
   probe is safe from a freshly installed, not-yet-logged-in state — the exact state a first provider
   check runs in.
-- It costs about 1.7 seconds and runs two dozen checks including network reachability probes. That
+- It costs 1.7-7.4 seconds (measured across several live runs) and runs two dozen checks including network reachability probes. That
   is far heavier than a `--version` or authentication probe, so it gets a 30-second deadline of its
   own rather than the 15-second one those use, and it is throttled (below).
 
