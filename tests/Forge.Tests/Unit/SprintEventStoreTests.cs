@@ -789,9 +789,10 @@ public sealed class SprintEventStoreTests
     /// <summary>ADR 0061's durable half. A usage payload's whole point is the distinction between "not
     /// reported" and "reported as zero", so the round trip is asserted with BOTH present: an absent
     /// field must come back a real <see langword="null"/> (the codec omits it from the line rather than
-    /// writing an explicit null), and a genuine 0 must come back as 0. The three flat summary
-    /// arguments are derived from the payload by this one producing method, and collapse an unreported
-    /// half to 0 for the rendered sentence only — the payload beside them keeps the honest null.
+    /// writing an explicit null), and a genuine 0 must come back as 0. The five flat summary arguments
+    /// (total, input, output, cache read, cache creation) are derived from the payload by this one
+    /// producing method, and collapse an unreported counter to 0 for the rendered sentence only — the
+    /// payload beside them keeps the honest null.
     /// </summary>
     [Fact]
     [Trait("Category", "Unit")]

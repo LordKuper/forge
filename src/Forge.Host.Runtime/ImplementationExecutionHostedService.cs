@@ -64,6 +64,10 @@ public sealed class ImplementationExecutionHostedService(
 {
     private const string FallbackSummary = "Implemented the requested change; the provider returned no summary.";
 
+    // This service owns EventIds 2050-2069: the widest block in the 2000 range, because it is the
+    // only node executor that also records per-attempt payloads (diff, tool use, usage) and a plain
+    // 10-id block no longer holds them. Every id in the range is unique process-wide; the allocation
+    // map and its mechanical check live in ArchitectureTests.EveryLoggerEventIdNamesExactlyOneEvent.
     private static readonly Action<ILogger, Exception> LogListFailed = LoggerMessage.Define(
         LogLevel.Warning,
         new EventId(2050, "ImplementationExecutionListFailed"),

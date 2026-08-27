@@ -32,6 +32,13 @@ User-facing Forge changes are listed by release, newest first.
 - No new Desktop rendering: the entry reaches Desktop through the same generic timeline path the
   previous two payload families already use, and its one-line summary is identical to the CLI's.
 
+### Changed
+
+- The Host log's review-executor event ids moved from 2060-2066 to 2080-2086, so that the
+  implementation executor — the only one that also records per-attempt payloads, and now out of
+  room — could grow into 2060-2069 without two unrelated events sharing an id. A log filter or alert
+  rule keyed on the old review numbers must be repointed; every event's name is unchanged.
+
 ## v0.83.0
 
 ### Added

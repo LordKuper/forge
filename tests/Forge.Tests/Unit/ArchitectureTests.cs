@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
 using Forge.Configuration;
@@ -262,6 +263,65 @@ public sealed class ArchitectureTests
 
         Assert.Equal(expected, actual);
     }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
+    public void EveryLoggerEventIdNamesExactlyOneEvent()
+    {
+        // PR #118 review round 2 finding 1: every hosted service and adapter that logs owns a block of
+        // ids in one flat numeric space, because they all log into the same Host process -- a log
+        // filter, alert rule, or telemetry query keyed on an id must select exactly one event:
+        //
+        //   2000-2009  ControlPlaneHostedService          2050-2069  ImplementationExecutionHostedService
+        //   2010-2019  ResumeSchedulerHostedService        2070-2079  WindowsJobObjectProcessContainment
+        //   2020-2029  NotificationDeliveryHostedService   2080-2089  ReviewExecutionHostedService
+        //   2030-2039  IntakeExecutionHostedService
+        //   2040-2049  PlanningExecutionHostedService
+        //
+        // The blocks themselves are a convention this test deliberately does not encode (a service
+        // outgrowing one is legitimate -- implementation already did, which is how the collision
+        // arose). What it pins is the invariant the blocks exist to protect: id and name are one
+        // another's key. LoggerMessage.Define captures the EventId in a closure, so the declarations
+        // are read from source rather than reflected off the compiled delegates.
+        (int Id, string Name, string File)[] declarations = Directory
+            .EnumerateFiles(Path.Combine(RepositoryRoot.Find(), "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .SelectMany(path => EventIdPattern.Matches(File.ReadAllText(path))
+                .Select(match => (
+                    Id: int.Parse(match.Groups["id"].Value, CultureInfo.InvariantCulture),
+                    Name: match.Groups["name"].Value,
+                    File: Path.GetFileName(path))))
+            .ToArray();
+        Assert.NotEmpty(declarations);
+
+        string[] reusedIds = declarations
+            .GroupBy(declaration => declaration.Id)
+            .Where(group => group.Select(declaration => declaration.Name).Distinct(StringComparer.Ordinal).Count() > 1)
+            .Select(group => $"{group.Key} names " +
+                string.Join(", ", group.Select(declaration => $"{declaration.Name} ({declaration.File})")))
+            .ToArray();
+        Assert.True(
+            reusedIds.Length == 0,
+            $"EventId(s) reused for unrelated events: {string.Join("; ", reusedIds)}.");
+
+        string[] splitNames = declarations
+            .GroupBy(declaration => declaration.Name, StringComparer.Ordinal)
+            .Where(group => group.Select(declaration => declaration.Id).Distinct().Count() > 1)
+            .Select(group => $"{group.Key} declared as " +
+                string.Join(", ", group.Select(declaration => declaration.Id).Distinct()))
+            .ToArray();
+        Assert.True(
+            splitNames.Length == 0,
+            $"Event name(s) declared with more than one id: {string.Join("; ", splitNames)}.");
+    }
+
+    private static bool IsBuildOutput(string path) =>
+        path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Any(segment => segment is "bin" or "obj");
+
+    // new EventId(<id>, "<name>") -- the only shape this codebase declares them in.
+    private static readonly Regex EventIdPattern =
+        new(@"new EventId\(\s*(?<id>\d+)\s*,\s*""(?<name>[^""]+)""", RegexOptions.Compiled);
 
     // Every OS adapter in this codebase today is Windows-only (ADR 0008; see also ADR 0056 for
     // IProcessContainment, whose POSIX investigation ended in removal rather than a real adapter).
