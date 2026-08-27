@@ -413,7 +413,11 @@ public sealed class PlanningExecutionHostedService(
             {
                 try
                 {
-                    return await provider.RunAsync(prompt, worktreePath, token, onActivity)
+                    // ADR 0062: the same frozen profile that already supplies this attempt's two
+                    // deadlines above also supplies its model and effort — recorded, shown to the
+                    // user, and until ADR 0062 never actually applied to the run.
+                    return await provider
+                        .RunAsync(prompt, worktreePath, profile.Model, profile.Effort, token, onActivity)
                         .ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)

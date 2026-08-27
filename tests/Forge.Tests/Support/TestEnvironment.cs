@@ -368,6 +368,8 @@ internal sealed class FakeLlmProvider(
     public Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
+        string? model,
+        string? effort,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null) =>
         throw new NotSupportedException("This fake only exercises discovery/install orchestration.");
@@ -377,14 +379,14 @@ internal sealed class FakeLlmProvider(
 /// <see cref="RunAsync"/> — it exists only to exercise discovery/install orchestration), this fake
 /// actually runs a caller-supplied delegate, for tests of a node executor that calls
 /// <see cref="ILlmProvider.RunAsync"/> for real (Stage 11's planning executor). Records every
-/// invocation's prompt and working directory so a test can assert on them without the delegate
-/// itself needing to.</summary>
+/// invocation's prompt, working directory, and the frozen model/effort it was routed (ADR 0062) so a
+/// test can assert on them without the delegate itself needing to.</summary>
 internal sealed class FakeRunnableLlmProvider(
     ProviderId id,
     Func<string, string, CancellationToken, Func<AttemptActivityKind, CancellationToken, Task>?, Task<ProviderRunResult>> run)
     : ILlmProvider
 {
-    public List<(string Prompt, string WorkingDirectory)> Calls { get; } = [];
+    public List<(string Prompt, string WorkingDirectory, string? Model, string? Effort)> Calls { get; } = [];
 
     public ProviderId Id => id;
 
@@ -405,10 +407,12 @@ internal sealed class FakeRunnableLlmProvider(
     public Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
+        string? model,
+        string? effort,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
     {
-        Calls.Add((prompt, workingDirectory));
+        Calls.Add((prompt, workingDirectory, model, effort));
         return run(prompt, workingDirectory, cancellationToken, onActivity);
     }
 }

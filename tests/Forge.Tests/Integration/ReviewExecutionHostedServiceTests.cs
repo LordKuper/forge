@@ -81,6 +81,51 @@ public sealed class ReviewExecutionHostedServiceTests
         Assert.Empty(iteration.ExternalFindings);
     }
 
+    /// <summary>ADR 0062. Review is the one phase <see cref="ExecutionProfilePolicy"/> freezes above
+    /// the others, and until ADR 0062 that `high` was recorded, shown to the user, and then dropped:
+    /// every attempt actually ran at whatever the vendor CLI defaulted to. This asserts the frozen
+    /// pair genuinely reaches the provider call, which is the whole of the defect.</summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task TheFrozenProfilesModelAndEffortReachTheProviderCall()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, _, _, _) => Task.FromResult(ProviderRunResult.Success(
+                [], new ProviderTerminalResult("APPROVED"))));
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForReviewAsync(
+            environment, orchestrator, scheduler, store, cancellationToken);
+
+        ReviewExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        SprintDefinition definition =
+            (await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ExecutionProfile profile = definition.ExecutionProfiles[ExecutionPhase.Review];
+        (_, _, string? model, string? effort) = Assert.Single(provider.Calls);
+        Assert.Equal(profile.Model, model);
+        Assert.Equal(profile.Effort, effort);
+        // Named rather than only compared to the profile, so a future policy change that silently
+        // lowered review's effort would have to be an explicit edit here.
+        Assert.Equal("high", effort);
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task AChangesRequestedVerdictLeavesTheNodeRunningForTheNextIteration()

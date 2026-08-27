@@ -402,7 +402,11 @@ public sealed class ReviewExecutionHostedService(
             {
                 try
                 {
-                    return await provider.RunAsync(prompt, worktreePath, token, onActivity)
+                    // ADR 0062: model and effort come from the same frozen profile as the deadlines.
+                    // This is the phase ExecutionProfilePolicy freezes at "high", so it is also the
+                    // phase whose real behaviour and cost change most from applying it.
+                    return await provider
+                        .RunAsync(prompt, worktreePath, profile.Model, profile.Effort, token, onActivity)
                         .ConfigureAwait(false);
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)

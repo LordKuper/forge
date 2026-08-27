@@ -134,7 +134,8 @@ public sealed class ClaudeLlmProviderTests
             return new(0, string.Empty, string.Empty);
         });
 
-        await provider.RunAsync("say hi", "C:\\work", TestContext.Current.CancellationToken);
+        await provider.RunAsync(
+            "say hi", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.NotNull(capturedEnvironment);
         Assert.Equal("1", capturedEnvironment!["DISABLE_AUTOUPDATER"]);
@@ -197,6 +198,8 @@ public sealed class ClaudeLlmProviderTests
         ProviderRunResult result = await provider.RunAsync(
             "say hi",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
@@ -206,6 +209,39 @@ public sealed class ClaudeLlmProviderTests
         Assert.Equal("Hello world", result.Events[1].Text);
         Assert.Equal(ProviderEventKind.Result, result.Events[2].Kind);
         Assert.NotNull(result.TerminalResult);
+    }
+
+    [Theory]
+    [Trait("Category", "Unit")]
+    // ADR 0062. The frozen profile's model reaches `--model` verbatim: Claude Code accepts both an
+    // alias and a full model name there, and `sonnet` is exactly what this adapter declares as its
+    // DefaultModel and therefore what neutral code freezes.
+    [InlineData("sonnet", "high", new[] { "--model", "sonnet", "--effort", "high" })]
+    [InlineData("claude-sonnet-5", "medium", new[] { "--model", "claude-sonnet-5", "--effort", "medium" })]
+    // Claude offers no tier below `low`, so a profile frozen there clamps up rather than being
+    // dropped or forwarded as a value the CLI would warn about and then ignore.
+    [InlineData("sonnet", "minimal", new[] { "--model", "sonnet", "--effort", "low" })]
+    // Either half is independently omittable; an absent value must produce no flag at all, never an
+    // empty argument.
+    [InlineData(null, "high", new[] { "--effort", "high" })]
+    [InlineData("sonnet", null, new[] { "--model", "sonnet" })]
+    [InlineData("sonnet", "aggressive", new[] { "--model", "sonnet" })]
+    public async Task RunAsyncAppliesTheFrozenModelAndEffortToTheCommandLine(
+        string? model, string? effort, string[] expectedTail)
+    {
+        using TestPaths paths = new();
+        WriteClaudeExecutable(paths);
+        IReadOnlyList<string>? capturedArguments = null;
+        ClaudeLlmProvider provider = CreateProvider(paths, request =>
+        {
+            capturedArguments = request.Arguments;
+            return new(0, """{"type":"result"}""", string.Empty);
+        });
+
+        await provider.RunAsync("say hi", "C:\\work", model, effort, TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["-p", "--output-format", "stream-json", "--verbose", .. expectedTail], capturedArguments);
     }
 
     [Fact]
@@ -224,6 +260,8 @@ public sealed class ClaudeLlmProviderTests
         await provider.RunAsync(
             "--dangerously-skip-permissions",
             "C:\\work",
+            model: null,
+            effort: null,
             TestContext.Current.CancellationToken);
     }
 
@@ -236,7 +274,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, string.Empty, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+            "say hi", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal(ProviderFailureKind.MissingTerminalResult, result.Failure);
@@ -256,7 +294,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+            "say hi", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.False(result.Succeeded);
         Assert.Equal(ProviderFailureKind.DuplicateTerminalResult, result.Failure);
@@ -278,7 +316,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "read the file", "C:\\work", TestContext.Current.CancellationToken);
+            "read the file", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         ProviderUsage usage = Assert.IsType<ProviderUsage>(result.Usage);
@@ -306,7 +344,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "read the file", "C:\\work", TestContext.Current.CancellationToken);
+            "read the file", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         // Exactly one terminal result reached the uniqueness check: had the rate-limit line been
         // classified as one too, this would have failed as DuplicateTerminalResult instead.
@@ -343,7 +381,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+            "say hi", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.Equal(expected, result.Usage?.ContextWindow);
@@ -366,7 +404,7 @@ public sealed class ClaudeLlmProviderTests
             paths, _ => new(0, """{"type":"result","subtype":"success","result":"done"}""" + "\n", string.Empty));
 
         ProviderRunResult result = await provider.RunAsync(
-            "say hi", "C:\\work", TestContext.Current.CancellationToken);
+            "say hi", "C:\\work", model: null, effort: null, TestContext.Current.CancellationToken);
 
         Assert.True(result.Succeeded);
         Assert.NotNull(result.Usage);

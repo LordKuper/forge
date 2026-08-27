@@ -135,16 +135,30 @@ public sealed class ClaudeLlmProvider(
             ExecutionEnvironmentVariables).ConfigureAwait(false);
     }
 
+    /// <summary>The effort levels `claude --effort &lt;level&gt;` lists, lowest to highest, verified against
+    /// Claude Code 2.1.233's own `--help` (and against the CLI's rejection message, which names the
+    /// same five). Claude offers no equivalent of Codex's `none`/`minimal` tiers, so a profile frozen
+    /// at either clamps up to `low` — see <see cref="ProviderEffortLevels"/>.</summary>
+    private static readonly IReadOnlyList<string> SupportedEffortLevels =
+        ["low", "medium", "high", "xhigh", "max"];
+
     /// <summary>
     /// Event shape per Claude Code's `--output-format stream-json` (`claude -p ... --verbose`):
     /// top-level `type` is `system`, `assistant`, `user`, or `result` — there is no top-level
     /// `tool_use` type. `assistant` events wrap an Anthropic Messages API message object, whose
     /// `content` array can mix text blocks with `tool_use` content blocks; text is read from the
     /// `text`-typed blocks in `message.content[]`.
+    ///
+    /// ADR 0062: the frozen profile's model and effort are applied here through `--model` and
+    /// `--effort`, both verified against a real Claude Code 2.1.233 run. Either flag is omitted
+    /// entirely when its value is absent — never sent empty — so the vendor default is left standing
+    /// rather than overridden with nothing.
     /// </summary>
     public async Task<ProviderRunResult> RunAsync(
         string prompt,
         string workingDirectory,
+        string? model,
+        string? effort,
         CancellationToken cancellationToken,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
     {
@@ -153,10 +167,23 @@ public sealed class ClaudeLlmProvider(
         // `--verbose` is required by `claude -p` whenever `--output-format stream-json` is used.
         // The prompt travels on stdin, never a command-line argument (ADR 0006) — `claude -p`
         // with no positional prompt reads it from stdin.
+        List<string> arguments = ["-p", "--output-format", "stream-json", "--verbose"];
+        if (!string.IsNullOrWhiteSpace(model))
+        {
+            arguments.Add("--model");
+            arguments.Add(model.Trim());
+        }
+
+        if (ProviderEffortLevels.Resolve(effort, SupportedEffortLevels) is { } resolvedEffort)
+        {
+            arguments.Add("--effort");
+            arguments.Add(resolvedEffort);
+        }
+
         return await ProviderExecution.RunAsync(
             executable,
             processRunner,
-            ["-p", "--output-format", "stream-json", "--verbose"],
+            arguments,
             prompt,
             workingDirectory,
             ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames, ExecutionEnvironmentVariables),
