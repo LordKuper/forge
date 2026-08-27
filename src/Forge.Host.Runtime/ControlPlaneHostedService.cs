@@ -731,12 +731,22 @@ public sealed class ControlPlaneHostedService(
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);
     }
 
+    /// <summary>
+    /// Unlike every sibling dispatcher above, a null or absent payload is NOT an error here and must
+    /// never become one: `create_sprint` carried no payload at all before ADR 0057 added the optional
+    /// title, and the protocol matches on major version only (<see cref="ControlProtocol.IsCompatible"/>),
+    /// so any pre-0057 client is still a legitimate, compatible peer of this Host. Throwing for
+    /// "consistency" with <c>DispatchRunSprintAsync</c> would break every one of them.
+    /// </summary>
     private async Task<ControlResponse> DispatchCreateSprintAsync(
         ControlRequest request,
         CancellationToken cancellationToken)
     {
+        CreateSprintRequest? payload = request.Payload is { } value
+            ? value.Deserialize<CreateSprintRequest>(ControlProtocol.JsonOptions)
+            : null;
         CreateSprintResult result = await application
-            .CreateSprintAsync(options.ProjectRoot, cancellationToken)
+            .CreateSprintAsync(options.ProjectRoot, payload?.Title, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

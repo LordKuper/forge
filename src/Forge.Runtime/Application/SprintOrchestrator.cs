@@ -4,16 +4,22 @@ using System.Text.RegularExpressions;
 using Forge.Compiler;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Infrastructure;
 using Forge.Providers;
 
 namespace Forge.Application;
 
+/// <summary><see cref="Title"/> is the operator's optional short label for the new sprint, frozen
+/// into <see cref="SprintDefinition.Title"/> after normalization/redaction (see
+/// <see cref="SprintOrchestrator.CreateSprintAsync"/>). Last, and optional, so every existing
+/// positional call site stays valid.</summary>
 public sealed record CreateSprintCommand(
     string? ProjectRoot,
     long ExpectedStateVersion,
     Guid IdempotencyKey,
     IReadOnlyList<SprintDependency>? Dependencies = null,
-    IReadOnlyList<NodeDefinition>? Graph = null);
+    IReadOnlyList<NodeDefinition>? Graph = null,
+    string? Title = null);
 
 public sealed record CreateSprintResult(bool Succeeded, SprintId? SprintId, string DiagnosticCode);
 
@@ -63,6 +69,13 @@ public sealed class SprintOrchestrator(
     ProviderCatalog providerCatalog,
     IProviderEnablementSource providerEnablement)
 {
+    /// <summary>The bound on <see cref="SprintDefinition.Title"/> — the same 200 characters
+    /// <see cref="ProjectCatalogStore.MaxAliasLength"/> allows, and for the same reason: both are
+    /// short display names for one entity, not the long-form free text
+    /// <see cref="SprintScheduler.MaxUserMessageLength"/> bounds. Also the `maxLength` on
+    /// `project-snapshot.schema.json`'s own `$defs.sprint.title`.</summary>
+    public const int MaxSprintTitleLength = 200;
+
     public const string CreateSprintAction = "create_sprint";
     public const string RunSprintAction = "run_sprint";
     public const string CancelSprintAction = "cancel_sprint";
@@ -123,6 +136,14 @@ public sealed class SprintOrchestrator(
         if (dependencyDiagnostic != DiagnosticCodes.None)
         {
             return new(false, null, dependencyDiagnostic);
+        }
+
+        // Refused before any event is written, the same fail-closed placement the empty-candidates
+        // and model-policy checks below already use.
+        (string? title, string titleDiagnostic) = NormalizeTitle(command.Title);
+        if (titleDiagnostic != DiagnosticCodes.None)
+        {
+            return new(false, null, titleDiagnostic);
         }
 
         // ADR 0001: `implementation-critical` is the only enabled workflow, so a caller with no
@@ -243,7 +264,8 @@ public sealed class SprintOrchestrator(
                 ArtifactPolicySnapshotHash(configurationSnapshot),
                 clock.UtcNow,
                 frozenProviders,
-                ExecutionProfilePolicy.Freeze(frozenProviders, providerCatalog));
+                ExecutionProfilePolicy.Freeze(frozenProviders, providerCatalog),
+                title);
             await store.SaveDefinitionAsync(status.Root, definition, cancellationToken).ConfigureAwait(false);
         }
 
@@ -477,6 +499,34 @@ public sealed class SprintOrchestrator(
         }
 
         return DiagnosticCodes.None;
+    }
+
+    /// <summary>
+    /// Normalizes an operator-supplied sprint title into exactly what may be frozen into
+    /// <see cref="SprintDefinition.Title"/>. Surrounding whitespace is trimmed and a
+    /// blank result becomes <see langword="null"/> — no title, rather than an empty one — mirroring
+    /// <see cref="ProjectCatalogStore.SetAliasAsync"/>'s own "empty/whitespace clears" rule.
+    /// A title is free-typed user text that could carry a pasted token, so it runs through
+    /// <see cref="SecretRedactor"/> before it is ever persisted or projected.
+    /// </summary>
+    /// <remarks>
+    /// Redaction runs BEFORE the length check, not after, so the bound applies to the value that
+    /// actually gets stored: a redaction placeholder is longer than most of what it replaces, and
+    /// checking the raw input instead could freeze — and later serialize — a title past
+    /// `project-snapshot.schema.json`'s own `maxLength`.
+    /// </remarks>
+    private static (string? Title, string DiagnosticCode) NormalizeTitle(string? title)
+    {
+        string trimmed = (title ?? string.Empty).Trim();
+        if (trimmed.Length == 0)
+        {
+            return (null, DiagnosticCodes.None);
+        }
+
+        string redacted = SecretRedactor.Redact(trimmed);
+        return redacted.Length > MaxSprintTitleLength
+            ? (null, DiagnosticCodes.SprintTitleTooLong)
+            : (redacted, DiagnosticCodes.None);
     }
 
     private static SprintId DeriveSprintId(Guid projectId, Guid idempotencyKey)

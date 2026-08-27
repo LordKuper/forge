@@ -153,6 +153,8 @@
   <data name="IntegrationGenerateAction" xml:space="preserve"><value>Preview integration</value></data>
   <data name="IntegrationInstallAction" xml:space="preserve"><value>Install integration</value></data>
   <data name="IntegrationRemoveAction" xml:space="preserve"><value>Remove integration</value></data>
+  <data name="SprintTitleLabel" xml:space="preserve"><value>Sprint title (optional)</value></data>
+  <data name="SprintUntitledFallback" xml:space="preserve"><value>Sprint {0}</value></data>
   <data name="SprintCreateAction" xml:space="preserve"><value>Create sprint</value></data>
   <data name="SprintRunAction" xml:space="preserve"><value>Run sprint</value></data>
   <data name="SprintResumeAction" xml:space="preserve"><value>Resume sprint</value></data>

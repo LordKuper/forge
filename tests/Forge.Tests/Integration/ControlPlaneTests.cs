@@ -326,6 +326,44 @@ public sealed class ControlPlaneTests
         Assert.Equal(ControlDiagnosticCode.None, response.Diagnostic.Code);
     }
 
+    /// <summary>ADR 0057 regression: `create_sprint` carried no payload at all until that ADR added
+    /// the optional title, and <see cref="ControlProtocol.IsCompatible"/> matches on major version
+    /// only, so every pre-0057 client is still a compatible peer that sends exactly this request --
+    /// no payload. If <c>DispatchCreateSprintAsync</c> ever grows the `payload is null -&gt; throw`
+    /// guard its sibling dispatchers use, every one of those clients breaks, and nothing else in this
+    /// suite would notice. The transport diagnostic must stay <see cref="ControlDiagnosticCode.None"/>
+    /// (a throw would surface as <see cref="ControlDiagnosticCode.Malformed"/>) and the request must
+    /// reach the orchestrator, evidenced by its own business diagnostic in the response payload.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task CreateSprintWithNoPayloadAtAllStillReachesTheOrchestrator()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        string instanceId = InstanceIdentity.CreateEphemeral();
+        Guid projectId = await ProjectIdentity
+            .ReadProjectIdAsync(environment.ProjectRoot, new ConfigurationRegistry(), cancellationToken);
+
+        await using ControlPlaneHost host = await ControlPlaneHost.StartAsync(
+            environment.ProjectRoot,
+            instanceId,
+            cancellationToken);
+        await using ForgeHostClient client = new(
+            new NamedPipeControlTransport(),
+            new ForgeHostClientOptions(projectId, instanceId, "1.0.0-test"));
+        Assert.Equal(ControlDiagnosticCode.None, (await client.EnsureConnectedAsync(null, cancellationToken)).Code);
+
+        ControlResponse response =
+            await client.SendAsync(ControlProtocol.CreateSprintKind, null, cancellationToken);
+
+        Assert.Equal(ControlDiagnosticCode.None, response.Diagnostic.Code);
+        Assert.Equal(
+            DiagnosticCodes.SprintProviderCandidatesEmpty,
+            response.Payload!.Value.GetProperty("diagnostic_code").GetString());
+    }
+
     [Fact]
     [Trait("Category", "Integration")]
     public async Task AJournalReadFailureReportsAnInternalErrorInsteadOfHangingTheConnection()
@@ -966,7 +1004,7 @@ public sealed class ControlPlaneTests
         // are still proven here, on its natural failure path in this harness rather than its success
         // one: a transport/serialization bug would surface as `HostUnavailable`/a thrown exception, not
         // this specific business-logic diagnostic.
-        CreateSprintResult created = await mutations.CreateSprintAsync(environment.ProjectRoot, cancellationToken);
+        CreateSprintResult created = await mutations.CreateSprintAsync(environment.ProjectRoot, null, cancellationToken);
         Assert.False(created.Succeeded);
         Assert.Equal(DiagnosticCodes.SprintProviderCandidatesEmpty, created.DiagnosticCode);
 

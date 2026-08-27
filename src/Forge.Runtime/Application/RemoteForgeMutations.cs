@@ -248,9 +248,11 @@ public sealed class RemoteForgeMutations(
             : new(false, DiagnosticCodeFor(response.Diagnostic));
     }
 
-    public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    public async Task<CreateSprintResult> CreateSprintAsync(
+        string? projectRoot, string? title, CancellationToken cancellationToken)
     {
-        JsonElement payload = JsonSerializer.SerializeToElement(new CreateSprintRequest(), ControlProtocol.JsonOptions);
+        JsonElement payload =
+            JsonSerializer.SerializeToElement(new CreateSprintRequest(title), ControlProtocol.JsonOptions);
         ControlResponse response =
             await SendAsync(ControlProtocol.CreateSprintKind, payload, cancellationToken).ConfigureAwait(false);
         return response.Diagnostic.Code == ControlDiagnosticCode.None && response.Payload is { } responsePayload

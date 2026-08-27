@@ -645,14 +645,17 @@ public sealed class MainPageViewModel(
 
     /// <summary>ADR 0027's `sprint.manage` capability -- the `create` verb. Not confirmable
     /// (additive, not destructive), matching the CLI's own `forge sprint create`. No sprint id to
-    /// resolve: create always mints a new one.</summary>
-    public async Task<string> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    /// resolve: create always mints a new one. <paramref name="title"/> (ADR 0057) is passed
+    /// through untouched -- the orchestrator owns trimming, blank-means-none, redaction, and the
+    /// length bound, so no surface re-implements any of it.</summary>
+    public async Task<string> CreateSprintAsync(
+        string? projectRoot, string? title, CancellationToken cancellationToken)
     {
         IForgeMutations mutations = await resolveMutations(projectRoot, cancellationToken).ConfigureAwait(false);
         return await UseMutationsAsync(mutations, async () =>
         {
             CreateSprintResult result = await mutations
-                .CreateSprintAsync(projectRoot, cancellationToken)
+                .CreateSprintAsync(projectRoot, title, cancellationToken)
                 .ConfigureAwait(false);
             return Message(
                 SurfaceFormatting.SprintCreatedMessage(text, result) ?? text.Resolve(MessageKeys.SprintManageFailed),

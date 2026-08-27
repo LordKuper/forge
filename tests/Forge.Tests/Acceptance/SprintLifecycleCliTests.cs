@@ -42,6 +42,30 @@ public sealed class SprintLifecycleCliTests
         Assert.NotEmpty(definition!.Graph);
     }
 
+    /// <summary>ADR 0057: `--title` is parsed by the real CLI pipeline and reaches the sprint's own
+    /// durable, frozen definition -- not merely the command's option table.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintCreateCommandFreezesTheSuppliedTitle()
+    {
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, TestContext.Current.CancellationToken);
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        StringWriter output = new(CultureInfo.InvariantCulture);
+        RootCommand root = CliApplication.CreateRootCommand(Text(new ResourceLocalizationCatalog()), output, environment.Application);
+
+        int exitCode = await root
+            .Parse(["sprint", "create", "--project-root", environment.ProjectRoot, "--title", "Close the parity gap"])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, exitCode);
+        SprintId sprintId = Assert.Single(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+        SprintDefinition? definition =
+            await store.LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        Assert.Equal("Close the parity gap", definition!.Title);
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task SprintRunCommandAdvancesOneLegalHopPerCall()

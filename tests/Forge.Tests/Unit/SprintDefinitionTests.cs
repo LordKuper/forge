@@ -240,6 +240,123 @@ public sealed class SprintDefinitionTests
         Assert.Empty(definition.FrozenProviders);
     }
 
+    // ADR 0057: the optional title is frozen with everything else and survives the definition.json
+    // round trip. Whitespace is trimmed on the way in -- normalization belongs to the orchestrator,
+    // so no surface has to do it (or forget to).
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task CreationFreezesTheSuppliedTitleAndItSurvivesTheDefinitionRoundTrip()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Title: "  Close the sidebar parity gap  "),
+            cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.Equal("Close the sidebar parity gap", definition!.Title);
+    }
+
+    // ADR 0057: a blank title is not an error -- it freezes no title at all, never an empty string a
+    // surface would then have to re-detect as "untitled" (ProjectCatalogStore.SetAliasAsync's own
+    // "empty/whitespace clears" rule).
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task CreationWithABlankTitleFreezesNoTitleRatherThanAnEmptyOne(string? title)
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Title: title), cancellationToken);
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, result.SprintId!, cancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Null(definition!.Title);
+    }
+
+    // ADR 0057: a title is free-typed user text that can carry a pasted credential, so it is
+    // redacted before it is ever written to definition.json or projected into a snapshot.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATitleCarryingASecretIsRedactedBeforeItIsFrozen()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Title: "rotate api_key=qwerty"),
+            cancellationToken)).SprintId!;
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.DoesNotContain("qwerty", definition!.Title!, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:", definition.Title!, StringComparison.Ordinal);
+    }
+
+    // ADR 0057: refused before any event is written, the same fail-closed shape
+    // CreationWithNoEnabledProvidersFailsWithoutRegisteringASprint proves for the adjacent gates.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ATitleLongerThanTheBoundIsRefusedWithoutRegisteringASprint()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(
+                environment.ProjectRoot,
+                1,
+                Guid.NewGuid(),
+                Title: new string('t', SprintOrchestrator.MaxSprintTitleLength + 1)),
+            cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintTitleTooLong, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // ADR 0057's actual compatibility guarantee, and the most important assertion in that slice: a
+    // definition.json written before the field existed has no "title" key at all. Same shape as
+    // ALegacyDefinitionWithNoFrozenProvidersFieldLoadsWithAnEmptyList above, and for the same reason
+    // -- every already-durable sprint in every existing project takes this path on its next read.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ALegacyDefinitionWithNoTitleFieldLoadsWithANullTitleInsteadOfThrowing()
+    {
+        using TestEnvironment environment = await InitializedAsync();
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Title: "Titled once"), cancellationToken)).SprintId!;
+
+        string definitionPath = Path.Combine(
+            FileSprintEventLog.SprintDirectory(environment.ProjectRoot, sprintId), "definition.json");
+        JsonNode definitionRoot = JsonNode.Parse(await File.ReadAllTextAsync(definitionPath, cancellationToken))!;
+        JsonObject definitionObject = definitionRoot.AsObject();
+        string titleKey = definitionObject.Select(property => property.Key)
+            .First(key => string.Equals(key, "title", StringComparison.OrdinalIgnoreCase));
+        definitionObject.Remove(titleKey);
+        await File.WriteAllTextAsync(definitionPath, definitionRoot.ToJsonString(), cancellationToken);
+
+        SprintDefinition? definition =
+            await orchestrator.GetDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken);
+
+        Assert.NotNull(definition);
+        Assert.Null(definition.Title);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task CreationFreezesTheBaseCommitWorkflowAndConfigurationSnapshot()

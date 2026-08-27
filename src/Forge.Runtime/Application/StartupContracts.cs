@@ -168,6 +168,13 @@ public static class DiagnosticCodes
     /// <summary>ADR 0054's bounded user-message timeline artifact was empty or whitespace-only.</summary>
     public const string UserMessageRequired = "user_message_required";
 
+    /// <summary>ADR 0057's optional sprint title exceeded
+    /// <see cref="SprintOrchestrator.MaxSprintTitleLength"/>, measured after redaction (see
+    /// <c>SprintOrchestrator.NormalizeTitle</c>). Refused before any creation event is written; a
+    /// blank title is never an error, it simply freezes no title at all, so there is no
+    /// `sprint_title_required` counterpart to <see cref="UserMessageRequired"/>.</summary>
+    public const string SprintTitleTooLong = "sprint_title_too_long";
+
     /// <summary>ADR 0005: the Host owns every project mutation; a client that cannot reach or
     /// start one reports this instead of ever falling back to mutating `.forge/` locally.</summary>
     public const string HostUnavailable = "host_unavailable";

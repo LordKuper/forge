@@ -49,7 +49,8 @@ public sealed class ExecutionProfilePersistenceTests
             "sha256:" + new string('0', 64),
             DateTimeOffset.UnixEpoch,
             ["claude_code", "codex"],
-            profiles);
+            profiles,
+            null);
 
         await log.SaveDefinitionAsync(root.Path, definition, cancellationToken);
         SprintDefinition? reloaded = await log.LoadDefinitionAsync(root.Path, sprintId, cancellationToken);

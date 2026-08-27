@@ -66,7 +66,7 @@ sprint work fail-closed; a failed check leaves recovery as the only safe action.
 | `forge config <show\|user\|project>` | Read scoped configuration with provenance, or write one key. |
 | `forge project <add\|list\|remove\|relink\|alias\|select>` | Manage the local, user-scoped project catalog; never modifies a project's own repository or `.forge/` directory. |
 | `forge workspace <summary\|actions> [--json]` | Show the bounded sidebar/status-header summary across every cataloged project, or the Host's own contextual-action list. |
-| `forge sprint <create\|run\|resume\|cancel\|inspect\|timeline\|assess-stage\|move-stage>` | Manage one sprint's lifecycle and workflow stage; `assess-stage`/`move-stage` implement the read-then-commit stage-transition protocol (ADR 0045/0046/0048). |
+| `forge sprint <create\|run\|resume\|cancel\|inspect\|timeline\|assess-stage\|move-stage>` | Manage one sprint's lifecycle and workflow stage; `create` accepts an optional `--title <text>` frozen with the sprint (ADR 0057), and `assess-stage`/`move-stage` implement the read-then-commit stage-transition protocol (ADR 0045/0046/0048). |
 | `forge attempt <supersede\|stop> <id> --sprint <id>` | Supersede a non-terminal attempt with a replacement, or stop the sprint's exact active operation without cancelling the sprint (ADR 0044/0047). |
 | `forge gate \| forge confirm \| forge test-work \| forge finalize` | The human-only workflow gates: approve/reject a review gate, record implementation confirmation, record a test-work decision, and finalize a sprint. |
 | `forge integration skill <generate\|install\|remove>` | Preview, write, or remove each enabled provider's native integration file. |

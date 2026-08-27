@@ -52,6 +52,14 @@ public sealed record SprintDependency(SprintDependencyKind Kind, string Referenc
 /// either way, finalization has nothing to merge into and fails closed. The diagnostic code is
 /// `sprint_default_branch_unavailable` (`Forge.Application.DiagnosticCodes.SprintDefaultBranchUnavailable`).
 /// </summary>
+/// <summary>
+/// <see cref="Title"/> is the operator's own short, optional label for this sprint, supplied once at
+/// creation and frozen with everything else here — Forge has no rename capability, so a sprint's
+/// title never changes after this record exists (ADR 0057). <see langword="null"/> for a sprint
+/// created without a title, or one frozen before this field existed; every surface that must show
+/// something regardless falls back on its own (see <c>Forge.Desktop.Presentation.SprintDisplayTitle</c>),
+/// so the durable contract stays honestly nullable rather than carrying a synthesized value.
+/// </summary>
 public sealed record SprintDefinition(
     SprintId Id,
     string BaseCommit,
@@ -65,4 +73,5 @@ public sealed record SprintDefinition(
     string ArtifactPolicySnapshotHash,
     DateTimeOffset FrozenAt,
     IReadOnlyList<string> FrozenProviders,
-    IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> ExecutionProfiles);
+    IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> ExecutionProfiles,
+    string? Title);

@@ -16,7 +16,9 @@ namespace Forge.Application;
 /// </summary>
 public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedger routingLedger)
 {
-    public const string ContractVersion = "1.4.0";
+    /// <summary>`1.5.0` adds the nullable `title` to `project-snapshot.schema.json`'s own
+    /// `$defs.sprint` (ADR 0057).</summary>
+    public const string ContractVersion = "1.5.0";
 
     /// <summary>Kept separate from <see cref="ContractVersion"/>: `suggested-action.schema.json`
     /// did not change when the snapshot's own contract gained provider/startup-check fields, so
@@ -78,7 +80,13 @@ public sealed class StatusAdvisor(IClock clock, ISprintStore store, RoutingLedge
 
             states[entry.Id.Value] = state;
             definitions[entry.Id.Value] = definition;
-            sprints.Add(new(entry.Id.Value, index + 1, state.Sprint.State, definition.Workflow, definition.BaseCommit));
+            sprints.Add(new(
+                entry.Id.Value,
+                index + 1,
+                state.Sprint.State,
+                definition.Workflow,
+                definition.BaseCommit,
+                definition.Title));
         }
 
         Guid? activeSprintId = DetermineActiveSprint(sprints);

@@ -103,6 +103,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
             FrozenAt = definition.FrozenAt,
             FrozenProviders = [.. definition.FrozenProviders],
             ExecutionProfiles = [.. definition.ExecutionProfiles.Values.Select(ToPersisted)],
+            Title = definition.Title,
         };
         await AtomicConfigurationFile.WriteAsync(
             DefinitionPath(directory),
@@ -179,7 +180,8 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                 persisted.ArtifactPolicySnapshotHash,
                 persisted.FrozenAt,
                 persisted.FrozenProviders,
-                executionProfiles.ToDictionary(profile => profile.Phase, profile => profile));
+                executionProfiles.ToDictionary(profile => profile.Phase, profile => profile),
+                persisted.Title);
         }
         catch (Exception error) when (error is JsonException or FormatException or OverflowException
             or NullReferenceException or ArgumentNullException)
@@ -2467,6 +2469,11 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
         public List<string> FrozenProviders { get; set; } = [];
 
         public List<PersistedExecutionProfile>? ExecutionProfiles { get; set; } = [];
+
+        // Deliberately no default value: an absent "title" key -- every sprint frozen before this
+        // field existed -- must stay null rather than degrade into an empty string a surface would
+        // then have to re-detect as "no title". Same reasoning as DefaultBranch above.
+        public string? Title { get; set; }
     }
 
     private sealed class PersistedDependency

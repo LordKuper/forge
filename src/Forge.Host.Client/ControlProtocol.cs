@@ -127,10 +127,14 @@ public sealed record RecordTestWorkRequest(
 /// <see cref="ResolveGateRequest"/>.</summary>
 public sealed record FinalizeSprintRequest(Guid SprintId, string NodeId, bool Confirmed);
 
-/// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. Empty: the Host
-/// always creates from its own project's canonical graph, and mints its own idempotency key, so
-/// nothing travels on the wire — see <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>.</summary>
-public sealed record CreateSprintRequest;
+/// <summary><see cref="ControlProtocol.CreateSprintKind"/>'s request payload. The Host always
+/// creates from its own project's canonical graph and mints its own idempotency key, so
+/// <see cref="Title"/> — the operator's optional short label for the new sprint (ADR 0057) — is the
+/// only field that travels on the wire; see
+/// <c>Forge.Application.ForgeApplication.CreateSprintAsync</c>. Additive and optional: a
+/// pre-ADR-0057 client sends no payload at all, which the Host tolerates as "no title" rather than
+/// rejecting.</summary>
+public sealed record CreateSprintRequest(string? Title = null);
 
 /// <summary>Shared by <see cref="ControlProtocol.RunSprintKind"/> and
 /// <see cref="ControlProtocol.ResumeSprintKind"/> — neither is confirmable, so the target sprint id
@@ -269,8 +273,10 @@ public static class ControlProtocol
     public const string FinalizeSprintKind = "finalize_sprint";
 
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph (ADR
-    /// 0001). Request payload: a <see cref="CreateSprintRequest"/>. Response payload: a
-    /// `CreateSprintResult` instance (<c>{"succeeded": bool, "sprint_id"?: uuid, "diagnostic_code": string}</c>).</summary>
+    /// 0001), optionally under an operator-supplied title (ADR 0057). Request payload: a
+    /// <see cref="CreateSprintRequest"/>, or none at all from a client predating that title.
+    /// Response payload: a `CreateSprintResult` instance
+    /// (<c>{"succeeded": bool, "sprint_id"?: uuid, "diagnostic_code": string}</c>).</summary>
     public const string CreateSprintKind = "create_sprint";
 
     /// <summary>Advances a sprint one legal hop (`draft` to `ready`, then `ready` to `running`).

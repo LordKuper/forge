@@ -169,8 +169,13 @@ public interface IForgeMutations
     /// <summary>Creates a sprint from the project's canonical `implementation-critical` graph
     /// (ADR 0001). Not confirmable/destructive — each call is a stateless attempt to create one new
     /// sprint, so a caller that wants a crash-safe retry to resume rather than mint a second sprint
-    /// must not simply re-invoke this method (see the ADR for this slice).</summary>
-    Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken);
+    /// must not simply re-invoke this method (see the ADR for this slice).
+    /// <paramref name="title"/> is the operator's optional short label for the new sprint (ADR
+    /// 0057), frozen once into <see cref="Forge.Domain.SprintDefinition.Title"/> and never renamed
+    /// afterward. <see langword="null"/> or blank means no title; anything longer than
+    /// <see cref="SprintOrchestrator.MaxSprintTitleLength"/> (measured after redaction) is refused
+    /// with <see cref="DiagnosticCodes.SprintTitleTooLong"/> before anything is written.</summary>
+    Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, string? title, CancellationToken cancellationToken);
 
     /// <summary>Advances a sprint one legal hop (`draft` to `ready`, then `ready` to `running`) —
     /// not a single call to a running sprint, matching <see cref="SprintOrchestrator"/>'s own
@@ -1469,7 +1474,8 @@ public sealed class ForgeApplication(
         return AvailableActionProjector.ForProject(snapshot.Project.Root, snapshot.SuggestedActions);
     }
 
-    public async Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    public async Task<CreateSprintResult> CreateSprintAsync(
+        string? projectRoot, string? title, CancellationToken cancellationToken)
     {
         ProjectRootStatus status =
             await rootResolver.ResolveAsync(projectRoot, cancellationToken).ConfigureAwait(false);
@@ -1480,7 +1486,8 @@ public sealed class ForgeApplication(
 
         return await orchestrator
             .CreateSprintAsync(
-                new(status.Root, StatusAdvisor.StateVersion(status), Guid.NewGuid()), cancellationToken)
+                new(status.Root, StatusAdvisor.StateVersion(status), Guid.NewGuid(), Title: title),
+                cancellationToken)
             .ConfigureAwait(false);
     }
 

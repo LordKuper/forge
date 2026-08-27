@@ -31,7 +31,7 @@ public sealed class SidebarViewModelTests
         // SidebarViewModel actually wires that rule to real backend state.
         Guid running1 = await CreateAndRunAsync(application, environment.ProjectRoot, cancellationToken);
         Guid running2 = await CreateAndRunAsync(application, environment.ProjectRoot, cancellationToken);
-        Guid draft = (await application.CreateSprintAsync(environment.ProjectRoot, cancellationToken)).SprintId!.Value;
+        Guid draft = (await application.CreateSprintAsync(environment.ProjectRoot, null, cancellationToken)).SprintId!.Value;
 
         ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
         await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
@@ -48,7 +48,7 @@ public sealed class SidebarViewModelTests
     private static async Task<Guid> CreateAndRunAsync(
         ForgeApplication application, string root, CancellationToken cancellationToken)
     {
-        CreateSprintResult created = await application.CreateSprintAsync(root, cancellationToken);
+        CreateSprintResult created = await application.CreateSprintAsync(root, null, cancellationToken);
         Guid sprintId = created.SprintId!.Value;
         await application.RunSprintAsync(root, sprintId, cancellationToken);
         await application.RunSprintAsync(root, sprintId, cancellationToken);

@@ -840,9 +840,13 @@ internal sealed class FakeForgeMutations : IForgeMutations
 
     public bool? LastCancelSprintConfirmed { get; private set; }
 
-    public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken)
+    public string? LastCreateSprintTitle { get; private set; }
+
+    public Task<CreateSprintResult> CreateSprintAsync(
+        string? projectRoot, string? title, CancellationToken cancellationToken)
     {
         CreateSprintCalls++;
+        LastCreateSprintTitle = title;
         return Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));
     }
 
@@ -973,7 +977,8 @@ internal sealed class DisposableFakeForgeMutations : IForgeMutations, IAsyncDisp
         CancellationToken cancellationToken) =>
         Task.FromResult(new FinalizeSprintResult(true, null, null, DiagnosticCodes.None));
 
-    public Task<CreateSprintResult> CreateSprintAsync(string? projectRoot, CancellationToken cancellationToken) =>
+    public Task<CreateSprintResult> CreateSprintAsync(
+        string? projectRoot, string? title, CancellationToken cancellationToken) =>
         Task.FromResult(new CreateSprintResult(true, new(Guid.NewGuid()), DiagnosticCodes.None));
 
     public Task<SprintTransitionResult> RunSprintAsync(

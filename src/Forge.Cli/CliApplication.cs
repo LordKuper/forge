@@ -638,14 +638,19 @@ public static class CliApplication
         Func<string?, CancellationToken, Task<IForgeMutations>> resolveMutations)
     {
         Option<string?> projectRoot = CreateProjectRootOption();
+        // ADR 0057: optional, and deliberately not defaulted -- an omitted --title freezes no title
+        // at all rather than a synthesized one (the surfaces fall back for display instead).
+        Option<string?> title = new("--title") { Description = text.Resolve(MessageKeys.SprintTitleLabel) };
         Command command = new("create", text.Resolve(MessageKeys.SprintCreateDescription));
         command.Options.Add(projectRoot);
+        command.Options.Add(title);
         command.SetAction(async (parseResult, cancellationToken) =>
         {
             string? root = parseResult.GetValue(projectRoot);
             IForgeMutations mutations = await resolveMutations(root, cancellationToken).ConfigureAwait(false);
-            CreateSprintResult result =
-                await mutations.CreateSprintAsync(root, cancellationToken).ConfigureAwait(false);
+            CreateSprintResult result = await mutations
+                .CreateSprintAsync(root, parseResult.GetValue(title), cancellationToken)
+                .ConfigureAwait(false);
             if (SurfaceFormatting.SprintCreatedMessage(text, result) is { } message)
             {
                 output.WriteLine(message);
