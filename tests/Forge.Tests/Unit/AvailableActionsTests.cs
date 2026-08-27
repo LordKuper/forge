@@ -310,6 +310,88 @@ public sealed class AvailableActionsTests
                 action.ActionId.StartsWith(AvailableActionProjector.RejectGateActionPrefix, StringComparison.Ordinal));
     }
 
+    /// <summary>ADR 0058 links a gate row to the node's *most recent* transition into
+    /// `awaiting_human`, never its first. A rejected gate is retried back into a second decision by an
+    /// already-supported path (`SprintSchedulerTests
+    /// .ApprovingARetriedGateAfterAnEarlierRejectionRecordsAFreshApproval`), leaving the first round's
+    /// request in the journal forever; a projector keyed on the first match would still report a real,
+    /// plausible-looking sequence -- the stale one -- and anchor the pending decision to the request
+    /// that has already been answered.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARetriedGateLinksToItsSecondAwaitingHumanTransitionNotItsFirst()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: [new("gate", NodeKind.HumanGate, [])]),
+            cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        IReadOnlyList<AvailableAction> firstRound = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+        long firstLinked = Assert.NotNull(
+            Assert.Single(
+                    firstRound,
+                    action => action.ActionId == $"{AvailableActionProjector.ApproveGateActionPrefix}gate")
+                .Target.TimelineSequence);
+
+        // Reject, retry the failed node, then resume and re-run the blocked sprint -- the one path that
+        // re-arms the same gate for a second decision, so the node reaches `awaiting_human` twice.
+        Assert.True((await environment.Application.ResolveGateAsync(
+            environment.ProjectRoot, sprintId.Value, "gate", false, true, cancellationToken)).Succeeded);
+        NodeSnapshot failed =
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"];
+        Assert.True((await scheduler.RetryNodeAsync(
+            environment.ProjectRoot, sprintId, "gate", failed.Version,
+            SprintScheduler.RetryNodeKey(sprintId, failed), cancellationToken)).Succeeded);
+        SprintSnapshot blocked =
+            (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        SprintTransitionResult resumed = await orchestrator.ResumeSprintAsync(
+            new(environment.ProjectRoot, sprintId, blocked.Version, SprintOrchestrator.ResumeSprintKey(blocked)),
+            cancellationToken);
+        Assert.True(resumed.Succeeded);
+        Assert.True((await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, resumed.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(resumed.Sprint)),
+            cancellationToken)).Succeeded);
+
+        IReadOnlyList<AvailableAction> secondRound = await environment.Application.GetAvailableActionsAsync(
+            environment.ProjectRoot, sprintId.Value, cancellationToken);
+
+        // Both requests are resolved from the real journal, so the expectation is derived from the
+        // recorded history rather than from the projector's own lookup.
+        IReadOnlyList<WorkflowEvent> events =
+            await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken);
+        long[] requests =
+        [
+            .. events
+                .Where(item => item.Aggregate.Kind == AggregateKind.Node &&
+                    string.Equals(item.Aggregate.Id, "gate", StringComparison.Ordinal) &&
+                    item.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) &&
+                    string.Equals(
+                        toState,
+                        WorkflowStateNames.ToSnakeCase(NodeState.AwaitingHuman),
+                        StringComparison.Ordinal))
+                .Select(item => item.Sequence)
+                .OrderBy(sequence => sequence),
+        ];
+        Assert.Equal(2, requests.Length);
+        Assert.Equal(requests[0], firstLinked);
+        Assert.Equal(
+            NodeState.AwaitingHuman,
+            (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!.Nodes["gate"].State);
+        foreach (string prefix in (string[])
+            [AvailableActionProjector.ApproveGateActionPrefix, AvailableActionProjector.RejectGateActionPrefix])
+        {
+            AvailableAction gate = Assert.Single(secondRound, action => action.ActionId == $"{prefix}gate");
+            Assert.Equal(requests[1], gate.Target.TimelineSequence);
+        }
+    }
+
     private static async Task RunToRunningAsync(
         SprintOrchestrator orchestrator,
         string root,

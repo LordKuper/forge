@@ -45,10 +45,13 @@ other classification here would misdescribe the mutation.
 
 ### `TimelineSequence` names the requesting event, never the sprint's last sequence
 
-`AvailableActionTarget` gains a nullable `long? TimelineSequence` (last positional, no default -- all
-three construction sites live in `AvailableActions.cs` and were each reviewed, following
-`SprintDefinition.Title`'s precedent from ADR 0057). For a gate row it carries the `Sequence` of that
-node's own most recent `NodeChanged` transition into `awaiting_human`, resolved from the raw journal.
+`AvailableActionTarget` gains a nullable `long? TimelineSequence` (last positional, no default,
+following `SprintDefinition.Title`'s precedent from ADR 0057). Six construction sites were each
+reviewed: five in `AvailableActions.cs` -- `ForProject`, the sprint-lifecycle target, the
+`stop_current_operation` target, `BuildMoveToStage`, and this ADR's own gate target -- plus one test
+builder in `tests/Forge.Tests/Unit/SprintActionsViewModelTests.cs`. For a gate row the field carries
+the `Sequence` of that node's own most recent `NodeChanged` transition into `awaiting_human`, resolved
+from the raw journal.
 
 It is emphatically not `SprintWorkflowState.LastSequence`. That value names whatever happened last
 anywhere in the sprint -- another node's progress, an operator message posted while the gate waited --

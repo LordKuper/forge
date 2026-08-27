@@ -293,23 +293,20 @@ public sealed class AvailableActionProjector(ISprintStore store, StageTransition
     /// which names whatever happened last anywhere in the sprint (another node's progress, an
     /// operator message) and would anchor the decision to an unrelated timeline item. The most recent
     /// such transition, not the first: a rejected gate can be retried back to `awaiting_human` for a
-    /// second decision, and only the current round's request is the one being answered.</summary>
-    private static long? FindGateRequestSequence(IReadOnlyList<WorkflowEvent> events, string nodeId)
-    {
-        long? sequence = null;
-        foreach (WorkflowEvent candidate in events)
-        {
-            if (candidate.Aggregate.Kind == AggregateKind.Node &&
+    /// second decision, and only the current round's request is the one being answered.
+    /// <para>"Most recent" is the maximum <see cref="WorkflowEvent.Sequence"/>, selected explicitly
+    /// rather than taken as the last match in stream order: every other reader of this stream orders
+    /// by sequence itself, and no invariant this code may rely on asserts that the stored order is
+    /// strictly ascending.</para></summary>
+    private static long? FindGateRequestSequence(IReadOnlyList<WorkflowEvent> events, string nodeId) =>
+        events
+            .Where(candidate => candidate.Aggregate.Kind == AggregateKind.Node &&
                 string.Equals(candidate.Aggregate.Id, nodeId, StringComparison.Ordinal) &&
                 candidate.Arguments.TryGetValue(WorkflowEvent.ToStateArgument, out string? toState) &&
-                string.Equals(toState, WorkflowStateNames.ToSnakeCase(NodeState.AwaitingHuman), StringComparison.Ordinal))
-            {
-                sequence = candidate.Sequence;
-            }
-        }
-
-        return sequence;
-    }
+                string.Equals(
+                    toState, WorkflowStateNames.ToSnakeCase(NodeState.AwaitingHuman), StringComparison.Ordinal))
+            .Select(candidate => (long?)candidate.Sequence)
+            .Max();
 
     /// <summary><see cref="AvailableAction.ExpectedStateVersion"/> is the sprint's journal position,
     /// matching <see cref="StopCurrentOperationActionId"/>'s own choice and for the same reason:
