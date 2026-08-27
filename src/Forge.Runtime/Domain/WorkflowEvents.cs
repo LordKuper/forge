@@ -92,20 +92,39 @@ public sealed record ToolUsePayload(
     int ElidedCalls,
     int UnmappedItems);
 
+/// <summary>ADR 0061: what one implementation attempt's provider reported spending, read from the one
+/// terminal stream event that carries it. Every member is nullable and independently optional — a
+/// vendor reports none, some, or all of them, and nothing here is ever derived, defaulted to zero, or
+/// guessed. <paramref name="ContextWindow"/> is the model's own context-window size, the honest
+/// denominator for a "used X of Y" reading; it is <see langword="null"/> for every provider that does
+/// not publish one (Codex's usage object has no such field), which is deliberately reported as absent
+/// rather than filled in from a hardcoded per-model table.
+///
+/// Carries no free text at all: every field is a plain number, so unlike <see cref="DiffPayload"/> and
+/// <see cref="ToolUsePayload"/> there is nothing here for
+/// <c>SprintTimelineRedaction.RedactPayload</c> to walk.</summary>
+public sealed record UsagePayload(
+    int? InputTokens,
+    int? OutputTokens,
+    int? CacheReadTokens,
+    int? CacheCreationTokens,
+    int? ContextWindow);
+
 /// <summary>ADR 0059: the typed, structured half of a <see cref="WorkflowEvent"/> —
 /// `payload` in docs/contracts/v1/schemas/event.schema.json. Exists because
 /// <see cref="WorkflowEvent.Arguments"/> is a deliberately flat
 /// <c>IReadOnlyDictionary&lt;string, string?&gt;</c> that genuinely cannot carry a nested list, and
 /// the envelope declares `additionalProperties: false`. One optional sub-object per family:
-/// <see cref="Diff"/> (ADR 0059) and <see cref="ToolUse"/> (ADR 0060). Always <see langword="null"/>
-/// for every event type that predates this field, and omitted from the serialized line entirely when
-/// null, so every journal line already on disk stays byte-for-byte valid.</summary>
-/// <remarks>Both members are required, with no default — ADR 0057/0058's "review every construction
-/// site" discipline, which is affordable here (three sites: the two producing store methods and the
-/// codec's own read path) in a way it was not for <see cref="WorkflowEvent.Payload"/> itself. A new
-/// family must therefore be considered at every existing producer rather than silently defaulting to
-/// absent.</remarks>
-public sealed record WorkflowEventPayload(DiffPayload? Diff, ToolUsePayload? ToolUse);
+/// <see cref="Diff"/> (ADR 0059), <see cref="ToolUse"/> (ADR 0060), and <see cref="Usage"/>
+/// (ADR 0061). Always <see langword="null"/> for every event type that predates this field, and
+/// omitted from the serialized line entirely when null, so every journal line already on disk stays
+/// byte-for-byte valid.</summary>
+/// <remarks>Every member is required, with no default — ADR 0057/0058's "review every construction
+/// site" discipline, which ADR 0060 confirmed is still affordable here and ADR 0061 re-counted rather
+/// than assumed: four sites today (the three producing store methods and the codec's own read path).
+/// A new family must therefore be considered at every existing producer rather than silently
+/// defaulting to absent.</remarks>
+public sealed record WorkflowEventPayload(DiffPayload? Diff, ToolUsePayload? ToolUse, UsagePayload? Usage);
 
 /// <summary>
 /// One append-only, localization-safe transition record. Mirrors
@@ -405,6 +424,51 @@ public sealed record WorkflowEvent(
     /// <summary>Carried on an <see cref="AttemptToolUseRecordedType"/> event alongside
     /// <see cref="ToolCallsArgument"/>: files edited, base-10.</summary>
     public const string ToolEditsArgument = "edits";
+
+    /// <summary>ADR 0061: what one implementation attempt's provider reported spending in tokens,
+    /// recorded once per attempt on that attempt's own aggregate, alongside (never instead of)
+    /// <see cref="AttemptDiffRecordedType"/> and <see cref="AttemptToolUseRecordedType"/>. Never a
+    /// transition (no <see cref="ToStateArgument"/>) and never folded into any snapshot, exactly like
+    /// both siblings: token accounting is durable timeline/audit content, not workflow state — nothing
+    /// in the scheduler, an executor, or a prerequisite check decides anything from it. Exactly one
+    /// event per attempt, which here is not merely a cost decision but the shape of the data itself:
+    /// each provider reports usage on exactly one terminal stream event per run. The per-field detail
+    /// rides on this event's <see cref="Payload"/>.</summary>
+    public const string AttemptUsageRecordedType = "AttemptUsageRecorded";
+
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event: input plus output tokens
+    /// as a base-10 integer. Derived from the event's own <see cref="Payload"/> by the single producing
+    /// store method, never supplied independently, so the rendered summary and the structured payload
+    /// cannot drift.
+    ///
+    /// A field the provider did not report contributes 0 to this ONE-LINE SUMMARY, which is the only
+    /// place that substitution happens: <see cref="UsagePayload"/> itself keeps the honest
+    /// <see langword="null"/>, so a machine consumer can always still tell "reported zero" from "never
+    /// reported". The event is not written at all unless at least one field was reported (see
+    /// <c>ProviderUsageReport.ToPayload</c>), so this summary can never be an all-zero line standing in
+    /// for an observation that never happened.</summary>
+    /// <remarks>Named `usage_total` rather than the obvious `total_tokens`, and the same for its two
+    /// siblings: <see cref="Forge.Infrastructure.SecretRedactor"/> redacts an entry whose KEY NAME
+    /// merely contains `token` (an unanchored match, so `input_tokens` matches as readily as
+    /// `api_token`), and <c>SprintTimelineProjector.ToItem</c> runs every event's flat arguments through
+    /// that check. An argument named `*_tokens` therefore renders as `[REDACTED:token]` on every
+    /// surface — caught here by the CLI acceptance test, which asserted the real numbers. The
+    /// structured payload's own field names are unaffected and stay explicit
+    /// (`payload.usage.input_tokens`): it is redacted by the typed
+    /// <c>SprintTimelineRedaction.RedactPayload</c>, never by the name-matching properties pass. The
+    /// word "token" still appears in the rendered sentence, from the localized template rather than
+    /// from a key.</remarks>
+    public const string UsageTotalTokensArgument = "usage_total";
+
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event alongside
+    /// <see cref="UsageTotalTokensArgument"/>, under the same reported-as-0 rule and the same
+    /// no-`token`-in-the-key rule: input tokens, base-10.</summary>
+    public const string UsageInputTokensArgument = "usage_input";
+
+    /// <summary>Carried on an <see cref="AttemptUsageRecordedType"/> event alongside
+    /// <see cref="UsageTotalTokensArgument"/>, under the same reported-as-0 rule and the same
+    /// no-`token`-in-the-key rule: output tokens, base-10.</summary>
+    public const string UsageOutputTokensArgument = "usage_output";
 }
 
 public sealed record SprintWorkflowState(
@@ -548,6 +612,16 @@ public static class WorkflowFold
                 // Same treatment as AttemptDiffRecordedType, for the same reason: what an attempt's
                 // provider did is durable timeline content, not workflow state -- nothing in the
                 // scheduler, an executor, or a prerequisite check ever decides anything from it.
+                _ = IsTransitionRecord(current);
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.AttemptUsageRecordedType)
+            {
+                // Same treatment as AttemptDiffRecordedType/AttemptToolUseRecordedType, for the same
+                // reason: what an attempt's provider spent is durable timeline content, not workflow
+                // state -- nothing in the scheduler, an executor, or a prerequisite check decides
+                // anything from it.
                 _ = IsTransitionRecord(current);
                 continue;
             }
@@ -812,6 +886,23 @@ public static class WorkflowFold
                 current.Arguments.GetValueOrDefault(WorkflowEvent.ToolEditsArgument) is not null;
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasToolUse || !hasCounts
                 ? throw new InvalidDataException($"Attempt-tool-use event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptUsageRecordedType)
+        {
+            // Fails closed exactly like AttemptDiffRecordedType/AttemptToolUseRecordedType above: an
+            // AttemptUsageRecorded with no `payload.usage` carries nothing a reader could use, and the
+            // three summary arguments are what the localized template substitutes, so a line
+            // hand-edited or written by a foreign producer must fail here rather than render with
+            // blanks where its counts belong.
+            bool hasUsage = current.Payload?.Usage is not null;
+            bool hasCounts =
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageTotalTokensArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageInputTokensArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.UsageOutputTokensArgument) is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasUsage || !hasCounts
+                ? throw new InvalidDataException($"Attempt-usage event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

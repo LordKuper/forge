@@ -2,6 +2,25 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.84.0
+
+### Added
+
+- The sprint timeline now also records what an implementation attempt *cost*. Both provider CLIs
+  already report their own token accounting on the event that ends a run, and Forge was discarding
+  it; it is now appended as its own timeline entry once the attempt's commit reaches the sprint's
+  integration branch. `forge sprint timeline <id>` shows it as a line like
+  `Used 89185 token(s): 88641 in, 544 out.`, and `--json` additionally carries the cached-input and
+  cache-write counts for API consumers.
+- A Claude attempt's entry additionally reports the model's context-window size, so a consumer can
+  show real usage against a real limit rather than a number with no scale. Codex publishes no such
+  figure, so a Codex attempt reports it as absent rather than being given a guessed or hardcoded
+  one. Every field is optional and reported only when the provider actually published it: nothing is
+  inferred, defaulted to zero, or estimated, and an attempt whose provider reported nothing gets no
+  entry at all.
+- No new Desktop rendering: the entry reaches Desktop through the same generic timeline path the
+  previous two payload families already use, and its one-line summary is identical to the CLI's.
+
 ## v0.83.0
 
 ### Added

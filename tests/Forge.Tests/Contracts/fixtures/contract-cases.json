@@ -426,6 +426,136 @@
       }
     },
     {
+      "name": "event 1.3.0 accepts a usage payload on its own",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.3.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 10,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptUsageRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_usage_recorded",
+        "arguments": {"usage_total": "271", "usage_input": "6", "usage_output": "265"},
+        "payload": {
+          "usage": {
+            "input_tokens": 6,
+            "output_tokens": 265,
+            "cache_read_tokens": 75666,
+            "cache_creation_tokens": 38581,
+            "context_window": 1000000
+          }
+        }
+      }
+    },
+    {
+      "name": "event 1.3.0 accepts a usage payload reporting only what its provider published",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.3.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 11,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptUsageRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_usage_recorded",
+        "arguments": {"usage_total": "89185", "usage_input": "88641", "usage_output": "544"},
+        "payload": {"usage": {"input_tokens": 88641, "output_tokens": 544}}
+      }
+    },
+    {
+      "name": "event 1.3.0 accepts all three payload families on the same line",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.3.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 12,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "1", "insertions": "1", "deletions": "0"},
+        "payload": {
+          "diff": {
+            "files_changed": 1,
+            "insertions": 1,
+            "deletions": 0,
+            "files": [{"path": "src/a.cs", "added": 1, "deleted": 0, "change_kind": "modified"}],
+            "elided_files": 0
+          },
+          "tool_use": {
+            "tool_calls": 1,
+            "commands": 0,
+            "edits": 1,
+            "calls": [{"kind": "edit", "target": "src/a.cs"}],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          },
+          "usage": {"input_tokens": 6, "output_tokens": 265, "context_window": 1000000}
+        }
+      }
+    },
+    {
+      "name": "event still accepts a 1.2.0 tool-use-only line, so journals written before usage stay valid",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.2.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 13,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptToolUseRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_tool_use_recorded",
+        "arguments": {"tool_calls": "1", "commands": "1", "edits": "0"},
+        "payload": {
+          "tool_use": {
+            "tool_calls": 1,
+            "commands": 1,
+            "edits": 0,
+            "calls": [{"kind": "command", "exit_code": 0, "succeeded": true}],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event rejects a usage payload carrying a negative token count",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.3.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 14,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptUsageRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_usage_recorded",
+        "arguments": {"usage_total": "0", "usage_input": "-1", "usage_output": "1"},
+        "payload": {"usage": {"input_tokens": -1, "output_tokens": 1}}
+      }
+    },
+    {
+      "name": "event rejects an unverified vendor field smuggled onto a usage payload",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.3.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 15,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptUsageRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_usage_recorded",
+        "arguments": {"usage_total": "271", "usage_input": "6", "usage_output": "265"},
+        "payload": {"usage": {"input_tokens": 6, "output_tokens": 265, "cost_usd": 0.430298}}
+      }
+    },
+    {
       "name": "handoff requires language for human artifacts and none for machine artifacts",
       "schema": "handoff",
       "valid": true,

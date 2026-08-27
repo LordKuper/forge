@@ -786,6 +786,143 @@ public sealed class SprintEventStoreTests
         Assert.Equal(AttemptState.Created, state!.Attempts[attemptKey].State);
     }
 
+    /// <summary>ADR 0061's durable half. A usage payload's whole point is the distinction between "not
+    /// reported" and "reported as zero", so the round trip is asserted with BOTH present: an absent
+    /// field must come back a real <see langword="null"/> (the codec omits it from the line rather than
+    /// writing an explicit null), and a genuine 0 must come back as 0. The three flat summary
+    /// arguments are derived from the payload by this one producing method, and collapse an unreported
+    /// half to 0 for the rendered sentence only — the payload beside them keeps the honest null.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnAttemptUsagePayloadSurvivesTheJournalRoundTripKeepingAbsentAndZeroDistinct()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        UsagePayload usage = new(
+            InputTokens: 88_641,
+            OutputTokens: 544,
+            CacheReadTokens: 0,
+            CacheCreationTokens: null,
+            ContextWindow: null);
+
+        await log.AppendAttemptUsageRecordedAsync(root.Path, sprintId, attemptId, usage, cancellationToken);
+
+        IReadOnlyList<WorkflowEvent> events = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        WorkflowEvent recorded = Assert.Single(
+            events, item => item.Type == WorkflowEvent.AttemptUsageRecordedType);
+        UsagePayload actual = recorded.Payload!.Usage!;
+        Assert.Equal(88_641, actual.InputTokens);
+        Assert.Equal(544, actual.OutputTokens);
+        // Reported as zero, and still zero -- not conflated with the two below it.
+        Assert.Equal(0, actual.CacheReadTokens);
+        Assert.Null(actual.CacheCreationTokens);
+        Assert.Null(actual.ContextWindow);
+        Assert.Null(recorded.Payload.Diff);
+        Assert.Null(recorded.Payload.ToolUse);
+        Assert.Equal(attemptKey, recorded.Aggregate.Id);
+        Assert.Equal("89185", recorded.Arguments[WorkflowEvent.UsageTotalTokensArgument]);
+        Assert.Equal("88641", recorded.Arguments[WorkflowEvent.UsageInputTokensArgument]);
+        Assert.Equal("544", recorded.Arguments[WorkflowEvent.UsageOutputTokensArgument]);
+
+        // Recorded at most once per attempt: an attempt runs its provider exactly once, so a second
+        // call is always a replay.
+        await log.AppendAttemptUsageRecordedAsync(root.Path, sprintId, attemptId, usage, cancellationToken);
+        IReadOnlyList<WorkflowEvent> replayed = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        Assert.Single(replayed, item => item.Type == WorkflowEvent.AttemptUsageRecordedType);
+
+        // Never folded, exactly like both siblings.
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptState.Created, state!.Attempts[attemptKey].State);
+    }
+
+    /// <summary>ADR 0061's fail-closed fold arm, mirroring its two siblings: an AttemptUsageRecorded
+    /// line with no `payload.usage` (or with its summary arguments stripped) is syntactically
+    /// constructible, and would otherwise render as a token summary with blanks where its counts
+    /// belong. Replay must reject it as corruption instead.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ReplayRejectsAUsageEventMissingEitherHalfOfItsRecord(bool withPayload, bool withArguments)
+    {
+        SprintId sprintId = SprintId.New();
+        WorkflowEvent sprintCreated = new(
+            Guid.NewGuid(),
+            0,
+            DateTimeOffset.UnixEpoch,
+            "SprintChanged",
+            new(AggregateKind.Sprint, sprintId.Value.ToString("D"), 1),
+            "workflow.sprint_created",
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.ToStateArgument] = "draft" });
+        WorkflowEvent malformed = new(
+            Guid.NewGuid(),
+            1,
+            DateTimeOffset.UnixEpoch,
+            WorkflowEvent.AttemptUsageRecordedType,
+            new(AggregateKind.Attempt, Guid.NewGuid().ToString("D"), 1),
+            "workflow.attempt_usage_recorded",
+            withArguments
+                ? new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.UsageTotalTokensArgument] = "12",
+                    [WorkflowEvent.UsageInputTokensArgument] = "10",
+                    [WorkflowEvent.UsageOutputTokensArgument] = "2",
+                }
+                : new Dictionary<string, string?>(StringComparer.Ordinal),
+            Payload: withPayload ? new(null, null, new UsagePayload(10, 2, null, null, null)) : null);
+
+        Assert.Throws<InvalidDataException>(() => WorkflowFold.Apply(sprintId, [sprintCreated, malformed]));
+    }
+
+    /// <summary>ADR 0061 is additive on an envelope two other families already share, so the three must
+    /// be able to ride the same line and survive it independently. The codec's per-family mapping is
+    /// what makes that true (an either/or early return keyed on one family would silently discard the
+    /// others), and this drives it through the real serializer, the real schema, and back.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void AllThreePayloadFamiliesSurviveTheCodecOnOneLineWithoutDiscardingEachOther()
+    {
+        WorkflowEvent source = new(
+            Guid.NewGuid(),
+            3,
+            DateTimeOffset.UnixEpoch,
+            WorkflowEvent.AttemptDiffRecordedType,
+            new(AggregateKind.Attempt, Guid.NewGuid().ToString("D"), 1),
+            "workflow.attempt_diff_recorded",
+            new Dictionary<string, string?>(StringComparer.Ordinal)
+            {
+                [WorkflowEvent.DiffFilesChangedArgument] = "1",
+                [WorkflowEvent.DiffInsertionsArgument] = "1",
+                [WorkflowEvent.DiffDeletionsArgument] = "0",
+            },
+            Payload: new(
+                new DiffPayload(1, 1, 0, [new DiffFileStat("src/a.cs", 1, 0, DiffChangeKinds.Modified)], 0),
+                new ToolUsePayload(1, 0, 1, [new ToolCallStat(ProviderToolCallKinds.Edit, "src/a.cs", 1, null, null)], 0, 0),
+                new UsagePayload(6, 265, 75_666, 38_581, 1_000_000)));
+
+        WorkflowEvent round = WorkflowEventCodec.Deserialize(WorkflowEventCodec.Serialize(source));
+
+        Assert.NotNull(round.Payload!.Diff);
+        Assert.NotNull(round.Payload.ToolUse);
+        UsagePayload usage = round.Payload.Usage!;
+        Assert.Equal(6, usage.InputTokens);
+        Assert.Equal(265, usage.OutputTokens);
+        Assert.Equal(75_666, usage.CacheReadTokens);
+        Assert.Equal(38_581, usage.CacheCreationTokens);
+        Assert.Equal(1_000_000, usage.ContextWindow);
+    }
+
     /// <summary>ADR 0060's fail-closed fold arm: <c>WorkflowEvent.Payload</c> is defaulted, so an
     /// AttemptToolUseRecorded line with no `payload.tool_use` (or with its summary arguments stripped)
     /// is syntactically constructible and would otherwise render as a tool-call summary with blanks
@@ -820,7 +957,7 @@ public sealed class SprintEventStoreTests
                     [WorkflowEvent.ToolEditsArgument] = "0",
                 }
                 : new Dictionary<string, string?>(StringComparer.Ordinal),
-            Payload: withPayload ? new(null, new ToolUsePayload(1, 1, 0, [], 0, 0)) : null);
+            Payload: withPayload ? new(null, new ToolUsePayload(1, 1, 0, [], 0, 0), null) : null);
 
         Assert.Throws<InvalidDataException>(() => WorkflowFold.Apply(sprintId, [sprintCreated, malformed]));
     }

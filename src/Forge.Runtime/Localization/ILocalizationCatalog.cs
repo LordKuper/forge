@@ -575,6 +575,16 @@ public static class MessageKeys
     /// </summary>
     public const string WorkflowAttemptToolUseRecorded = "workflow.attempt_tool_use_recorded";
 
+    /// <summary>ADR 0061. A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the attempt's total token count
+    /// (<see cref="WorkflowEvent.UsageTotalTokensArgument"/>), then its input and output halves
+    /// (<see cref="WorkflowEvent.UsageInputTokensArgument"/>/<see cref="WorkflowEvent.UsageOutputTokensArgument"/>).
+    /// All three are pure numbers, so nothing here needs a localized closed-set label -- no model,
+    /// provider, or vendor term is ever named in this sentence. The cache counters and the model's
+    /// context-window size ride on the event's structured payload rather than this one-line
+    /// summary.</summary>
+    public const string WorkflowAttemptUsageRecorded = "workflow.attempt_usage_recorded";
+
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
     /// template taking the routed provider id, model id verbatim (proper identifiers, never
     /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by

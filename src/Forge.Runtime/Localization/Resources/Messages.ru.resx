@@ -354,6 +354,7 @@
   <data name="workflow.agent_summary_recorded" xml:space="preserve"><value>Итог: {0}</value></data>
   <data name="workflow.attempt_diff_recorded" xml:space="preserve"><value>Изменено файлов: {0}; строк: +{1}/-{2}.</value></data>
   <data name="workflow.attempt_tool_use_recorded" xml:space="preserve"><value>Вызовов инструментов: {0}; команд: {1}; правок файлов: {2}.</value></data>
+  <data name="workflow.attempt_usage_recorded" xml:space="preserve"><value>Израсходовано токенов: {0}; на входе: {1}; на выходе: {2}.</value></data>
   <data name="routing.decision_recorded" xml:space="preserve"><value>Маршрутизировано на {0}/{1}: {2}.</value></data>
   <data name="workflow.sprint_failed" xml:space="preserve"><value>Спринт завершился ошибкой.</value></data>
   <data name="workflow.attempt_preparing" xml:space="preserve"><value>Попытка готовится к выполнению.</value></data>

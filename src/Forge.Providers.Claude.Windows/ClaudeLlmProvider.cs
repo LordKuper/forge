@@ -163,8 +163,86 @@ public sealed class ClaudeLlmProvider(
             Classify,
             ExtractText,
             cancellationToken,
-            onActivity).ConfigureAwait(false);
+            onActivity,
+            // This adapter still extracts no tool calls (deferred by ADR 0060: `Classify` cannot
+            // return `ProviderEventKind.ToolUse` at all, so there would be no line to hand an
+            // extractor). Named rather than positional so ADR 0061's own trailing argument lands in
+            // the right slot with the skipped one explicit rather than counted out by hand.
+            extractToolCall: null,
+            extractUsage: ExtractUsage).ConfigureAwait(false);
     }
+
+    /// <summary>
+    /// ADR 0061. Reads the token accounting `claude -p --output-format stream-json` puts on its
+    /// terminal `result` event -- the same event, identified by the same top-level `type` check, that
+    /// <see cref="Classify"/> already calls <see cref="ProviderEventKind.Result"/>. Verified against a
+    /// real capture (`tests/Forge.Tests/Unit/fixtures/providers/claude-stream-json-usage.jsonl`, Claude
+    /// Code 2.1.233); nothing here is mapped from documentation alone.
+    ///
+    /// Non-`result` lines fall through to null, including the mid-stream `rate_limit_event` that same
+    /// capture contains: `Classify` already returns <see cref="ProviderEventKind.Unknown"/> for it, so
+    /// it never reaches this method at all, and the type check here is the second, independent reason
+    /// it could never be mistaken for the terminal event. Provider quota/rate-limit signalling is a
+    /// separate concern entirely and is deliberately not touched here.
+    /// </summary>
+    private static ProviderUsage? ExtractUsage(JsonElement root)
+    {
+        if (TypeOf(root) != "result")
+        {
+            return null;
+        }
+
+        root.TryGetProperty("usage", out JsonElement usage);
+        return new(
+            NonNegativeInt32(usage, "input_tokens"),
+            NonNegativeInt32(usage, "output_tokens"),
+            NonNegativeInt32(usage, "cache_read_input_tokens"),
+            NonNegativeInt32(usage, "cache_creation_input_tokens"),
+            ExtractContextWindow(root));
+    }
+
+    /// <summary>The context window lives on `modelUsage`, an object keyed by the exact model string
+    /// that ran (`"claude-opus-5[1m]"` in the capture) -- a key that varies per run and is never
+    /// assumed here. Exactly one entry is the only shape with an unambiguous answer, and it is the only
+    /// shape one attempt can produce, since an attempt runs one model.
+    ///
+    /// Zero entries, more than one, or no `modelUsage` at all yields <see langword="null"/>: this
+    /// codebase has never observed a multi-entry `modelUsage`, and picking "the first" or "the largest"
+    /// of several would be a guess dressed as a measurement -- an absent denominator is honest, a wrong
+    /// one is not.</summary>
+    private static int? ExtractContextWindow(JsonElement root)
+    {
+        if (!root.TryGetProperty("modelUsage", out JsonElement modelUsage) ||
+            modelUsage.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        JsonElement? only = null;
+        foreach (JsonProperty entry in modelUsage.EnumerateObject())
+        {
+            if (only is not null)
+            {
+                return null;
+            }
+
+            only = entry.Value;
+        }
+
+        return only is { ValueKind: JsonValueKind.Object } single ? NonNegativeInt32(single, "contextWindow") : null;
+    }
+
+    /// <summary>A vendor number that is missing, non-numeric, fractional, out of <see cref="int"/>
+    /// range, or negative is treated as "not reported" rather than coerced: the durable contract
+    /// declares every token count a non-negative integer, and a value that is not one is not a
+    /// smaller/clamped version of the truth. An undefined <paramref name="parent"/> (the whole `usage`
+    /// object absent) reports every field as not-reported, which is the same answer.</summary>
+    private static int? NonNegativeInt32(JsonElement parent, string propertyName) =>
+        parent.ValueKind == JsonValueKind.Object &&
+            parent.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.Number &&
+            value.TryGetInt32(out int number) && number >= 0
+            ? number
+            : null;
 
     private static ProviderAuthenticationStatus ParseAuthenticationStatus(ProcessResult result)
     {

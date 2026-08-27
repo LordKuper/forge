@@ -935,7 +935,7 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.DiffDeletionsArgument] =
                         diff.Deletions.ToString(CultureInfo.InvariantCulture),
                 },
-                Payload: new(diff, null));
+                Payload: new(diff, null, null));
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
                 .ConfigureAwait(false);
         }
@@ -994,7 +994,68 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.ToolEditsArgument] =
                         toolUse.Edits.ToString(CultureInfo.InvariantCulture),
                 },
-                Payload: new(null, toolUse));
+                Payload: new(null, toolUse, null));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendAttemptUsageRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        UsagePayload usage,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(usage);
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // An attempt runs its provider exactly once, so a second call for the same attempt is
+            // always a replay -- deduplicated the same way AppendAttemptDiffRecordedAsync is, and for
+            // the same reason: skipping outright keeps whichever record actually landed first rather
+            // than letting a replay silently overwrite it.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptUsageRecordedType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent recorded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptUsageRecordedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_usage_recorded",
+                // Derived here, from the payload itself, so the flat summary every surface renders
+                // and the structured payload a machine consumer reads can never disagree. A field the
+                // provider never reported counts as 0 in this rendered summary ONLY -- the payload
+                // itself keeps the honest null (see WorkflowEvent.UsageTotalTokensArgument).
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.UsageTotalTokensArgument] =
+                        ((usage.InputTokens ?? 0) + (usage.OutputTokens ?? 0)).ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.UsageInputTokensArgument] =
+                        (usage.InputTokens ?? 0).ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.UsageOutputTokensArgument] =
+                        (usage.OutputTokens ?? 0).ToString(CultureInfo.InvariantCulture),
+                },
+                Payload: new(null, null, usage));
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
                 .ConfigureAwait(false);
         }

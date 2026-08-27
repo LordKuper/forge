@@ -613,6 +613,23 @@ public interface ISprintStore
         ToolUsePayload toolUse,
         CancellationToken cancellationToken);
 
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptUsageRecordedType"/> event carrying
+    /// <paramref name="usage"/> on <paramref name="attemptId"/>'s own aggregate (ADR 0061) -- the exact
+    /// contract <see cref="AppendAttemptDiffRecordedAsync"/> already documents, applied to the third
+    /// payload family: not gated by optimistic concurrency, recorded at most once per attempt
+    /// (deduplicated by scanning the journal for this event type on this attempt, since an attempt runs
+    /// its provider exactly once and a second call is always a replay of the same finished run), and
+    /// with the event's flat <see cref="WorkflowEvent.Arguments"/> summary
+    /// (<see cref="WorkflowEvent.UsageTotalTokensArgument"/> and friends) derived here from
+    /// <paramref name="usage"/> itself rather than supplied separately, so the rendered summary and the
+    /// structured payload cannot drift apart.</summary>
+    Task AppendAttemptUsageRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        UsagePayload usage,
+        CancellationToken cancellationToken);
+
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for
     /// <paramref name="attemptId"/> (plan section 7.3's durable stop intent) -- recorded once per
     /// attempt, like <see cref="AppendAttemptSupersededAsync"/>: a second call for the same attempt

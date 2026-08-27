@@ -63,22 +63,23 @@ internal static class WorkflowEventCodec
 
     private static void Validate(JsonElement element) => SchemaValidation.Validate(element, Schema, "workflow event");
 
-    /// <summary>ADR 0059/0060. <see cref="JsonSerializerOptions.DefaultIgnoreCondition"/> is
+    /// <summary>ADR 0059/0060/0061. <see cref="JsonSerializerOptions.DefaultIgnoreCondition"/> is
     /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull"/> on
     /// <see cref="JsonOptions"/>, so a <see langword="null"/> payload (every event type except
-    /// <see cref="WorkflowEvent.AttemptDiffRecordedType"/> and
-    /// <see cref="WorkflowEvent.AttemptToolUseRecordedType"/>) is omitted from the line entirely
+    /// <see cref="WorkflowEvent.AttemptDiffRecordedType"/>,
+    /// <see cref="WorkflowEvent.AttemptToolUseRecordedType"/>, and
+    /// <see cref="WorkflowEvent.AttemptUsageRecordedType"/>) is omitted from the line entirely
     /// rather than written as `"payload": null` — which the envelope's own
     /// `additionalProperties: false`/typed `payload` object would reject. The same condition omits
     /// whichever families a given event does not carry, so a diff-only line stays byte-identical to
     /// what ADR 0059 wrote.
     ///
     /// Deliberately a per-family check rather than the either/or `payload?.Diff is not { }` shape ADR
-    /// 0059 could get away with while `diff` was the only family: once two exist, an early return
-    /// keyed on one of them would silently discard the other.</summary>
+    /// 0059 could get away with while `diff` was the only family: once more than one exists, an early
+    /// return keyed on one of them would silently discard the others.</summary>
     private static PersistedPayload? ToPersisted(WorkflowEventPayload? payload)
     {
-        if (payload is null || (payload.Diff is null && payload.ToolUse is null))
+        if (payload is null || (payload.Diff is null && payload.ToolUse is null && payload.Usage is null))
         {
             return null;
         }
@@ -125,12 +126,22 @@ internal static class WorkflowEventCodec
                     ElidedCalls = toolUse.ElidedCalls,
                     UnmappedItems = toolUse.UnmappedItems,
                 },
+            Usage = payload.Usage is not { } usage
+                ? null
+                : new()
+                {
+                    InputTokens = usage.InputTokens,
+                    OutputTokens = usage.OutputTokens,
+                    CacheReadTokens = usage.CacheReadTokens,
+                    CacheCreationTokens = usage.CacheCreationTokens,
+                    ContextWindow = usage.ContextWindow,
+                },
         };
     }
 
     private static WorkflowEventPayload? FromPersisted(PersistedPayload? payload)
     {
-        if (payload is null || (payload.Diff is null && payload.ToolUse is null))
+        if (payload is null || (payload.Diff is null && payload.ToolUse is null && payload.Usage is null))
         {
             return null;
         }
@@ -159,19 +170,27 @@ internal static class WorkflowEventCodec
                 ],
                 persistedToolUse.ElidedCalls,
                 persistedToolUse.UnmappedItems);
-        return new(diff, toolUse);
+        UsagePayload? usage = payload.Usage is not { } persistedUsage
+            ? null
+            : new(
+                persistedUsage.InputTokens,
+                persistedUsage.OutputTokens,
+                persistedUsage.CacheReadTokens,
+                persistedUsage.CacheCreationTokens,
+                persistedUsage.ContextWindow);
+        return new(diff, toolUse, usage);
     }
 
     private sealed class Persisted
     {
         /// <summary>ADR 0059 raised this from `1.0.0` to `1.1.0` (the optional `payload` object);
-        /// ADR 0060 raises it again to `1.2.0` (`payload.tool_use`, a second family beside `diff`).
-        /// The schema accepts ALL THREE values -- lines already on disk carry `1.0.0` or `1.1.0` and
-        /// are re-validated on every read, so a bare bump would invalidate every existing journal.
-        /// New lines are stamped `1.2.0` unconditionally, payload or not: the version describes the
-        /// envelope this producer writes to, not whether one particular optional field happens to be
-        /// populated.</summary>
-        public string SchemaVersion { get; set; } = "1.2.0";
+        /// ADR 0060 raised it to `1.2.0` (`payload.tool_use`, a second family beside `diff`); ADR 0061
+        /// raises it to `1.3.0` (`payload.usage`, a third). The schema accepts ALL FOUR values -- lines
+        /// already on disk carry `1.0.0`, `1.1.0`, or `1.2.0` and are re-validated on every read, so a
+        /// bare bump would invalidate every existing journal. New lines are stamped `1.3.0`
+        /// unconditionally, payload or not: the version describes the envelope this producer writes to,
+        /// not whether one particular optional field happens to be populated.</summary>
+        public string SchemaVersion { get; set; } = "1.3.0";
 
         public Guid EventId { get; set; }
 
@@ -208,6 +227,27 @@ internal static class WorkflowEventCodec
         public PersistedDiff? Diff { get; set; }
 
         public PersistedToolUse? ToolUse { get; set; }
+
+        public PersistedUsage? Usage { get; set; }
+    }
+
+    /// <summary>ADR 0061. Every member is nullable and
+    /// <see cref="System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull"/> omits it from
+    /// the line rather than writing an explicit null -- which is why `event.schema.json`'s
+    /// `usage_payload` requires nothing at all and declares each property as a plain non-negative
+    /// integer. A field the provider never reported is therefore ABSENT from the durable line, never
+    /// present as a zero.</summary>
+    private sealed class PersistedUsage
+    {
+        public int? InputTokens { get; set; }
+
+        public int? OutputTokens { get; set; }
+
+        public int? CacheReadTokens { get; set; }
+
+        public int? CacheCreationTokens { get; set; }
+
+        public int? ContextWindow { get; set; }
     }
 
     private sealed class PersistedDiff

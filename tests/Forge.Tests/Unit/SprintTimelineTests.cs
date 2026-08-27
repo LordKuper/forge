@@ -290,6 +290,52 @@ public sealed class SprintTimelineTests
         Assert.DoesNotContain(secret, StatusJson.Serialize(page), StringComparison.Ordinal);
     }
 
+    /// <summary>ADR 0061's deliberate NON-arm in <c>SprintTimelineRedaction.RedactPayload</c>. That
+    /// method's contract requires every new STRING field on a payload sub-object to be walked
+    /// explicitly; <see cref="UsagePayload"/> has none, so no arm was added and the closing
+    /// `payload with { ... }` carries it through by construction. This pins the consequence that
+    /// decision rests on: a usage payload reaches a serialized page with every number intact, through
+    /// both passes, rather than being silently nulled out or dropped by a helper that only knows about
+    /// the two families that do need walking.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AUsagePayloadPassesThroughBothRedactionPassesWithEveryNumberIntact()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, started.DiagnosticCode);
+
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        await store.AppendAttemptUsageRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new UsagePayload(6, 265, 75_666, 38_581, 1_000_000),
+            cancellationToken);
+
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        SprintTimelineItem recorded = Assert.Single(
+            page.Items, item => item.Type == WorkflowEvent.AttemptUsageRecordedType);
+        UsagePayload usage = recorded.Payload!.Usage!;
+        Assert.Equal(6, usage.InputTokens);
+        Assert.Equal(265, usage.OutputTokens);
+        Assert.Equal(75_666, usage.CacheReadTokens);
+        Assert.Equal(38_581, usage.CacheCreationTokens);
+        Assert.Equal(1_000_000, usage.ContextWindow);
+        // And the siblings a per-family helper could have clobbered stay absent rather than fabricated.
+        Assert.Null(recorded.Payload.Diff);
+        Assert.Null(recorded.Payload.ToolUse);
+    }
+
     // Regression (PR #97 review round 2, finding 1): the test above proves the Apply *method*
     // redacts MessageKey, but calls it directly on a locally-built page -- it never exercises
     // ForgeApplication.GetSprintTimelineAsync, so it cannot observe whether that method still calls
