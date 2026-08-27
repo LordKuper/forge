@@ -935,7 +935,66 @@ public sealed class FileSprintEventLog(IClock clock) : ISprintStore
                     [WorkflowEvent.DiffDeletionsArgument] =
                         diff.Deletions.ToString(CultureInfo.InvariantCulture),
                 },
-                Payload: new(diff));
+                Payload: new(diff, null));
+            await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
+                .ConfigureAwait(false);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task AppendAttemptToolUseRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        ToolUsePayload toolUse,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(toolUse);
+        string directory = SprintDirectory(projectRoot, sprintId);
+        Directory.CreateDirectory(directory);
+        string eventsPath = EventsPath(directory);
+        SemaphoreSlim gate = Locks.GetOrAdd(directory, static _ => new SemaphoreSlim(1, 1));
+        await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            IReadOnlyList<WorkflowEvent> events =
+                await ReadEventsAsync(eventsPath, cancellationToken, callerHoldsLock: true).ConfigureAwait(false);
+            ValidateJournal(events);
+            string attemptKey = attemptId.Value.ToString("D");
+
+            // An attempt runs its provider exactly once, so a second call for the same attempt is
+            // always a replay -- deduplicated the same way AppendAttemptDiffRecordedAsync is, and for
+            // the same reason: skipping outright keeps whichever record actually landed first rather
+            // than letting a replay silently overwrite it.
+            if (events.Any(item =>
+                item.Type == WorkflowEvent.AttemptToolUseRecordedType && item.Aggregate.Id == attemptKey))
+            {
+                return;
+            }
+
+            long attemptVersion = CurrentVersion(events, AggregateKind.Attempt, attemptKey);
+            WorkflowEvent recorded = new(
+                Guid.NewGuid(),
+                events.Count,
+                clock.UtcNow,
+                WorkflowEvent.AttemptToolUseRecordedType,
+                new(AggregateKind.Attempt, attemptKey, attemptVersion),
+                "workflow.attempt_tool_use_recorded",
+                // Derived here, from the payload itself, so the flat summary every surface renders
+                // and the structured payload a machine consumer reads can never disagree.
+                new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.ToolCallsArgument] =
+                        toolUse.ToolCalls.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.ToolCommandsArgument] =
+                        toolUse.Commands.ToString(CultureInfo.InvariantCulture),
+                    [WorkflowEvent.ToolEditsArgument] =
+                        toolUse.Edits.ToString(CultureInfo.InvariantCulture),
+                },
+                Payload: new(null, toolUse));
             await AppendLineAsync(eventsPath, WorkflowEventCodec.Serialize(recorded), cancellationToken)
                 .ConfigureAwait(false);
         }

@@ -2,6 +2,32 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.83.0
+
+### Added
+
+- The sprint timeline now also records what an implementation attempt's agent actually *did*, beside
+  what it changed. For attempts run through the Codex provider, Forge appends a tool-call summary
+  entry once the attempt's commit reaches the sprint's integration branch.
+  `forge sprint timeline <id>` shows it as a line like
+  `Used 3 tool call(s): 2 command(s), 1 file edit(s).`, and `--json` additionally carries a per-call
+  breakdown for other API consumers: for each call, whether it was a command or a file edit, how long
+  Forge observed it running, and — for a command — its exit code and whether it succeeded. A file
+  edit also carries its path, relative to the attempt's own worktree and redacted like every other
+  recorded text; a path that does not resolve safely inside that worktree is dropped rather than
+  recorded. The per-call list is capped at 50 entries; the totals still cover every call, and any
+  remainder is reported as a count. Command lines and command output are never stored in any form —
+  only the fact that a command ran and how it ended. If the agent emits an item Forge does not
+  recognize, that is counted and reported too, so an unnoticed provider change shows up instead of
+  silently shrinking the summary.
+- Tool-call capture for the Claude provider is separate, later work and is not included here; a
+  Claude attempt records no tool-call entry at all rather than an empty one. Desktop shows the same
+  one-line summary the command line does and does not yet render the per-call breakdown.
+- Recording the summary is audit-only and never affects the work itself: if recording it fails, the
+  attempt's change is still integrated and the attempt still completes normally, with only the
+  timeline entry missing. Attempts that fail, time out, or are stopped record no tool-call entry,
+  since their work never reaches the integration branch.
+
 ## v0.82.0
 
 ### Added

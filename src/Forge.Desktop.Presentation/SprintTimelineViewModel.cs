@@ -8,12 +8,14 @@ namespace Forge.Desktop.Presentation;
 /// <summary>One rendered timeline row (plan section 4.3). <see cref="Unread"/> and
 /// <see cref="CopyText"/> are computed once here so the page never re-derives either from raw
 /// <see cref="SprintTimelineItem"/> fields itself.</summary>
-/// <remarks><c>Payload</c> is ADR 0059's already-redacted structured payload, carried through
+/// <remarks><c>Payload</c> is ADR 0059/0060's already-redacted structured payload, carried through
 /// verbatim so the page has it available. Nothing renders it yet -- a diff-statistics card is
-/// deliberately separate follow-up work (finding D1 of the desktop design-parity review), and this
-/// slice adds no Desktop UI at all. <see cref="MessageText"/> already carries the localized one-line
-/// summary for an <c>AttemptDiffRecorded</c> item, identical to the CLI's, because it resolves the
-/// same <c>workflow.attempt_diff_recorded</c> template from the event's own flat arguments.</remarks>
+/// deliberately separate follow-up work (finding D1 of the desktop design-parity review), and neither
+/// slice adds any Desktop UI. <see cref="MessageText"/> already carries the localized one-line summary
+/// for an <c>AttemptDiffRecorded</c> or <c>AttemptToolUseRecorded</c> item, identical to the CLI's,
+/// because it resolves the same <c>workflow.attempt_diff_recorded</c>/
+/// <c>workflow.attempt_tool_use_recorded</c> template from the event's own flat arguments -- so ADR
+/// 0060's second payload family reaches Desktop with no code change here at all.</remarks>
 public sealed record TimelineItemView(
     Guid Id,
     DateTimeOffset OccurredAt,

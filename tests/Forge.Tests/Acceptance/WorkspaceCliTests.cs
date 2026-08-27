@@ -5,6 +5,7 @@ using Forge.Application;
 using Forge.Cli;
 using Forge.Domain;
 using Forge.Localization;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.AcceptanceTests;
@@ -250,6 +251,96 @@ public sealed class WorkspaceCliTests
         Assert.Equal(2, files.Length);
         Assert.Equal("src/Widget.cs", files[0].GetProperty("path").GetString());
         Assert.Equal(DiffChangeKinds.Binary, files[1].GetProperty("change_kind").GetString());
+    }
+
+    /// <summary>ADR 0060, at the same rendered CLI surface and for the same reason: the slice adds no
+    /// CLI code at all, so this is what proves the claim -- the localized one-line summary appears in
+    /// the plain-text render and the structured per-call rows ride out through `--json`, both purely
+    /// by virtue of the generic timeline rendering that already existed. Also pins the nullable
+    /// per-call fields' wire shape: a row with no target/exit code omits those properties entirely
+    /// rather than writing explicit nulls.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintTimelineRendersTheToolUseSummaryAsTextAndCarriesItsStructuredPayloadInJsonMode()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await store.AppendAttemptToolUseRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new ToolUsePayload(
+                3,
+                2,
+                1,
+                [
+                    new ToolCallStat(ProviderToolCallKinds.Command, null, 812, 0, true),
+                    new ToolCallStat(ProviderToolCallKinds.Command, null, 91, 137, false),
+                    new ToolCallStat(ProviderToolCallKinds.Edit, "src/Widget.cs", 40, null, null),
+                ],
+                0,
+                0),
+            cancellationToken);
+
+        StringWriter textOutput = new(CultureInfo.InvariantCulture);
+        RootCommand textRoot = CliApplication.CreateRootCommand(Text(), textOutput, environment.Application);
+        int textExitCode = await textRoot
+            .Parse(["sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        StringWriter jsonOutput = new(CultureInfo.InvariantCulture);
+        RootCommand jsonRoot = CliApplication.CreateRootCommand(Text(), jsonOutput, environment.Application);
+        int jsonExitCode = await jsonRoot
+            .Parse([
+                "sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot, "--json",
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, textExitCode);
+        Assert.Equal(0, jsonExitCode);
+        string text = textOutput.ToString();
+        Assert.DoesNotContain(MessageKeys.WorkflowAttemptToolUseRecorded, text, StringComparison.Ordinal);
+        Assert.Contains("Used 3 tool call(s): 2 command(s), 1 file edit(s).", text, StringComparison.Ordinal);
+
+        using JsonDocument json = JsonDocument.Parse(jsonOutput.ToString());
+        JsonElement toolUse = json.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("type").GetString() == WorkflowEvent.AttemptToolUseRecordedType)
+            .GetProperty("payload")
+            .GetProperty("tool_use");
+        Assert.Equal(3, toolUse.GetProperty("tool_calls").GetInt32());
+        Assert.Equal(2, toolUse.GetProperty("commands").GetInt32());
+        Assert.Equal(1, toolUse.GetProperty("edits").GetInt32());
+        Assert.Equal(0, toolUse.GetProperty("elided_calls").GetInt32());
+        Assert.Equal(0, toolUse.GetProperty("unmapped_items").GetInt32());
+        JsonElement[] calls = [.. toolUse.GetProperty("calls").EnumerateArray()];
+        Assert.Equal(3, calls.Length);
+        Assert.Equal(ProviderToolCallKinds.Command, calls[0].GetProperty("kind").GetString());
+        // Explicit nulls here, unlike the journal line: `StatusJson` serializes with
+        // JsonIgnoreCondition.Never so a `--json` consumer sees a stable, complete object shape,
+        // whereas the durable envelope omits an absent field (see the store round-trip test).
+        Assert.Equal(JsonValueKind.Null, calls[0].GetProperty("target").ValueKind);
+        Assert.Equal(137, calls[1].GetProperty("exit_code").GetInt32());
+        Assert.False(calls[1].GetProperty("succeeded").GetBoolean());
+        Assert.Equal("src/Widget.cs", calls[2].GetProperty("target").GetString());
+        Assert.Equal(JsonValueKind.Null, calls[2].GetProperty("exit_code").ValueKind);
     }
 
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);

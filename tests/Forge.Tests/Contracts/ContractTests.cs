@@ -363,4 +363,28 @@ public sealed class ContractTests
 
         Assert.Equal(GitWorktreeManagerDiffStatBudget.MaxFiles, maxItems);
     }
+
+    /// <summary>ADR 0060's per-call cap, pinned exactly the way ADR 0059's per-file cap above is and
+    /// for the identical silent failure mode: the tool-use write path is audit-only, so a producer
+    /// bound raised past the schema's would make every record fail its own schema validation, be
+    /// caught and logged, and simply stop recording with nothing failing. Both values are read from
+    /// their actual sources, never a literal repeated on both sides.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void TheEventSchemasToolCallCapMatchesTheBoundTheProducerActuallyApplies()
+    {
+        string schemaPath = Path.Combine(
+            Forge.UnitTests.RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "event.schema.json");
+        using JsonDocument schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+
+        int maxItems = schema.RootElement
+            .GetProperty("$defs")
+            .GetProperty("tool_use_payload")
+            .GetProperty("properties")
+            .GetProperty("calls")
+            .GetProperty("maxItems")
+            .GetInt32();
+
+        Assert.Equal(ProviderToolUseBudget.MaxCalls, maxItems);
+    }
 }

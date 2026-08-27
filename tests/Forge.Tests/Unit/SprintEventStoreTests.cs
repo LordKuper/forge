@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Domain;
+using Forge.Providers;
 
 namespace Forge.UnitTests;
 
@@ -720,6 +721,108 @@ public sealed class SprintEventStoreTests
         // disturb the attempt's own state or version.
         SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
         Assert.Equal(AttemptState.Created, state!.Attempts[attemptKey].State);
+    }
+
+    /// <summary>ADR 0060, the same round trip for the second payload family: nullable per-call fields
+    /// are omitted from the line entirely rather than written as explicit nulls, so this also proves
+    /// the schema accepts a row that carries only its `kind` and that the omission survives the read
+    /// back as a real <see langword="null"/>.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnAttemptToolUsePayloadSurvivesTheJournalRoundTripWithItsPerCallRowsIntact()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        ToolUsePayload toolUse = new(
+            5,
+            3,
+            2,
+            [
+                new ToolCallStat(ProviderToolCallKinds.Command, null, 812, 0, true),
+                new ToolCallStat(ProviderToolCallKinds.Command, null, 91, 137, false),
+                new ToolCallStat(ProviderToolCallKinds.Edit, "src/Forge.Runtime/A.cs", 40, null, null),
+                new ToolCallStat(ProviderToolCallKinds.Edit, null, null, null, null),
+            ],
+            1,
+            2);
+
+        await log.AppendAttemptToolUseRecordedAsync(root.Path, sprintId, attemptId, toolUse, cancellationToken);
+
+        IReadOnlyList<WorkflowEvent> events = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        WorkflowEvent recorded = Assert.Single(
+            events, item => item.Type == WorkflowEvent.AttemptToolUseRecordedType);
+        // Field by field rather than record equality, for the reason the diff test above states.
+        ToolUsePayload actual = recorded.Payload!.ToolUse!;
+        Assert.Equal(toolUse.ToolCalls, actual.ToolCalls);
+        Assert.Equal(toolUse.Commands, actual.Commands);
+        Assert.Equal(toolUse.Edits, actual.Edits);
+        Assert.Equal(toolUse.ElidedCalls, actual.ElidedCalls);
+        Assert.Equal(toolUse.UnmappedItems, actual.UnmappedItems);
+        Assert.Equal(toolUse.Calls, actual.Calls);
+        Assert.Null(recorded.Payload.Diff);
+        Assert.Equal(attemptKey, recorded.Aggregate.Id);
+        Assert.Equal("5", recorded.Arguments[WorkflowEvent.ToolCallsArgument]);
+        Assert.Equal("3", recorded.Arguments[WorkflowEvent.ToolCommandsArgument]);
+        Assert.Equal("2", recorded.Arguments[WorkflowEvent.ToolEditsArgument]);
+
+        // Recorded at most once per attempt: an attempt runs its provider exactly once, so a second
+        // call is always a replay.
+        await log.AppendAttemptToolUseRecordedAsync(root.Path, sprintId, attemptId, toolUse, cancellationToken);
+        IReadOnlyList<WorkflowEvent> replayed = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        Assert.Single(replayed, item => item.Type == WorkflowEvent.AttemptToolUseRecordedType);
+
+        // Never folded, exactly like its diff sibling.
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptState.Created, state!.Attempts[attemptKey].State);
+    }
+
+    /// <summary>ADR 0060's fail-closed fold arm: <c>WorkflowEvent.Payload</c> is defaulted, so an
+    /// AttemptToolUseRecorded line with no `payload.tool_use` (or with its summary arguments stripped)
+    /// is syntactically constructible and would otherwise render as a tool-call summary with blanks
+    /// where its counts belong. Replay must reject it as corruption instead.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public void ReplayRejectsAToolUseEventMissingEitherHalfOfItsRecord(bool withPayload, bool withArguments)
+    {
+        SprintId sprintId = SprintId.New();
+        WorkflowEvent sprintCreated = new(
+            Guid.NewGuid(),
+            0,
+            DateTimeOffset.UnixEpoch,
+            "SprintChanged",
+            new(AggregateKind.Sprint, sprintId.Value.ToString("D"), 1),
+            "workflow.sprint_created",
+            new Dictionary<string, string?>(StringComparer.Ordinal) { [WorkflowEvent.ToStateArgument] = "draft" });
+        WorkflowEvent malformed = new(
+            Guid.NewGuid(),
+            1,
+            DateTimeOffset.UnixEpoch,
+            WorkflowEvent.AttemptToolUseRecordedType,
+            new(AggregateKind.Attempt, Guid.NewGuid().ToString("D"), 1),
+            "workflow.attempt_tool_use_recorded",
+            withArguments
+                ? new Dictionary<string, string?>(StringComparer.Ordinal)
+                {
+                    [WorkflowEvent.ToolCallsArgument] = "1",
+                    [WorkflowEvent.ToolCommandsArgument] = "1",
+                    [WorkflowEvent.ToolEditsArgument] = "0",
+                }
+                : new Dictionary<string, string?>(StringComparer.Ordinal),
+            Payload: withPayload ? new(null, new ToolUsePayload(1, 1, 0, [], 0, 0)) : null);
+
+        Assert.Throws<InvalidDataException>(() => WorkflowFold.Apply(sprintId, [sprintCreated, malformed]));
     }
 }
 

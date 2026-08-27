@@ -210,6 +210,159 @@ public sealed class ProviderExecutionTests
             observed);
     }
 
+    /// <summary>ADR 0060's path rule, exercised through the real sink on whichever OS this runs:
+    /// an in-worktree absolute path becomes a forward-slashed relative target; a path that escapes the
+    /// worktree, or that no path API can even parse, is REJECTED rather than rewritten -- the call is
+    /// still recorded, just with no target, so a reader never sees a path that is not really inside
+    /// the attempt's own worktree.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncNormalizesAnInWorktreeToolCallTargetAndRejectsEveryOtherShape()
+    {
+        string worktree = Path.Combine(Path.GetTempPath(), "forge-tool-use-worktree");
+        string inside = Path.Combine(worktree, "src", "a.cs");
+        string outside = Path.Combine(Path.GetTempPath(), "forge-tool-use-elsewhere", "secret.env");
+        string unparsable = Path.Combine(worktree, "bad\0name.cs");
+
+        IReadOnlyList<ProviderToolCall> calls = await CaptureToolCallsAsync(
+            worktree, [inside, outside, unparsable, "   "]);
+
+        Assert.Equal(4, calls.Count);
+        Assert.Equal("src/a.cs", calls[0].Target);
+        // Relativizing this one yields a `..` segment, which RelativePathShape rejects outright.
+        Assert.Null(calls[1].Target);
+        Assert.Null(calls[2].Target);
+        Assert.Null(calls[3].Target);
+    }
+
+    /// <summary>A credential-shaped path survives normalization only in redacted form, because
+    /// redaction runs inside the sink (ADR 0057/0059's "redact before bounding") rather than being
+    /// left to the timeline passes alone.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncRedactsAToolCallTargetBeforeItEverLeavesTheSink()
+    {
+        const string secret = "password=Sup3rSecretValue";
+        string worktree = Path.Combine(Path.GetTempPath(), "forge-tool-use-worktree");
+
+        IReadOnlyList<ProviderToolCall> calls =
+            await CaptureToolCallsAsync(worktree, [Path.Combine(worktree, "config", $"{secret}.env")]);
+
+        ProviderToolCall call = Assert.Single(calls);
+        Assert.NotNull(call.Target);
+        Assert.DoesNotContain(secret, call.Target, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:credential]", call.Target, StringComparison.Ordinal);
+    }
+
+    /// <summary>An adapter is untrusted input like any other: a kind outside the closed set is drift
+    /// to be counted, never a row to be fabricated onto the durable envelope. Same for an extractor
+    /// that throws outright -- tool-call capture is optional enrichment, so it fails open and the run
+    /// still succeeds.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RunAsyncCountsAnUnusableExtractorResultAsDriftInsteadOfFailingTheRun(bool throws)
+    {
+        StreamingProcessRunner runner = new(_ => Result(
+            """{"type":"tool_use"}""" + "\n" + """{"type":"result"}"""));
+
+        ProviderRunResult result = await ProviderExecution.RunAsync(
+            "provider.exe",
+            runner,
+            [],
+            "prompt",
+            "C:\\work",
+            Environment,
+            Classify,
+            _ => null,
+            TestContext.Current.CancellationToken,
+            extractToolCall: throws
+                ? _ => throw new InvalidOperationException("the vendor shape surprised this adapter")
+                : _ => ProviderToolCallExtraction.Of(
+                    [new ProviderToolCallCandidate("invented_kind", null, "c", true, null, null)]));
+
+        Assert.True(result.Succeeded);
+        Assert.Empty(result.ToolCalls);
+        Assert.Equal(1, result.UnmappedItemCount);
+    }
+
+    /// <summary>ADR 0060's cap and elision arithmetic: only the per-call rows are bounded. The three
+    /// totals stay honest over every observed call, so a chatty attempt is never reported as a quiet
+    /// one -- ADR 0059's own rule for the diff payload's per-file list.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void ToPayloadCapsTheCallRowsWhileKeepingTheTotalsOverEveryObservedCall()
+    {
+        const int total = ProviderToolUseBudget.MaxCalls + 7;
+        List<ProviderToolCall> calls =
+        [
+            .. Enumerable.Range(0, total).Select(index => new ProviderToolCall(
+                index % 2 == 0 ? ProviderToolCallKinds.Command : ProviderToolCallKinds.Edit,
+                index % 2 == 0 ? null : $"src/f{index}.cs",
+                12,
+                index % 2 == 0 ? 0 : null,
+                index % 2 == 0 ? true : null)),
+        ];
+
+        ToolUsePayload payload = Assert.IsType<ToolUsePayload>(
+            ProviderToolUse.ToPayload(ProviderRunResult.Success([], new ProviderTerminalResult(null), calls, 3)));
+
+        Assert.Equal(ProviderToolUseBudget.MaxCalls, payload.Calls.Count);
+        Assert.Equal(7, payload.ElidedCalls);
+        Assert.Equal(total, payload.ToolCalls);
+        Assert.Equal(calls.Count(call => call.Kind == ProviderToolCallKinds.Command), payload.Commands);
+        Assert.Equal(calls.Count(call => call.Kind == ProviderToolCallKinds.Edit), payload.Edits);
+        Assert.Equal(3, payload.UnmappedItems);
+    }
+
+    /// <summary>Nothing observed means nothing recorded -- otherwise every attempt run through a
+    /// provider whose adapter does not extract tool calls at all (Claude today) would publish an
+    /// all-zero record implying it made none. A non-zero drift count alone still produces a payload:
+    /// that is itself the signal worth keeping.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(0, false)]
+    [InlineData(2, true)]
+    public void ToPayloadRecordsNothingForARunThatObservedNothingAtAll(int unmappedItems, bool expectPayload)
+    {
+        ToolUsePayload? payload = ProviderToolUse.ToPayload(
+            ProviderRunResult.Success([], new ProviderTerminalResult(null), [], unmappedItems));
+
+        Assert.Equal(expectPayload, payload is not null);
+    }
+
+    /// <summary>Drives the real <see cref="ProviderExecution"/> sink with one completion per supplied
+    /// vendor path, so path handling is exercised end to end (through the lock, the extractor
+    /// contract, and the normalization helper) rather than against the helper in isolation.</summary>
+    private static async Task<IReadOnlyList<ProviderToolCall>> CaptureToolCallsAsync(
+        string workingDirectory, IReadOnlyList<string> rawTargets)
+    {
+        StreamingProcessRunner runner = new(_ => Result(string.Join(
+            '\n',
+            [.. Enumerable.Repeat("""{"type":"tool_use"}""", rawTargets.Count), """{"type":"result"}"""])));
+        int next = 0;
+
+        ProviderRunResult result = await ProviderExecution.RunAsync(
+            "provider.exe",
+            runner,
+            [],
+            "prompt",
+            workingDirectory,
+            Environment,
+            Classify,
+            _ => null,
+            TestContext.Current.CancellationToken,
+            extractToolCall: _ => ProviderToolCallExtraction.Of(
+                [
+                    new ProviderToolCallCandidate(
+                        ProviderToolCallKinds.Edit, rawTargets[next++], null, true, null, null),
+                ]));
+
+        Assert.True(result.Succeeded);
+        return result.ToolCalls;
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public void BuildMinimalEnvironmentExcludesANestedSessionMarkerEvenWhenSetOnTheHostProcess()

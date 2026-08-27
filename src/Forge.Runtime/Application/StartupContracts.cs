@@ -124,6 +124,13 @@ public static class DiagnosticCodes
 
     public const string WorktreeUnavailable = "worktree_unavailable";
 
+    /// <summary>ADR 0060: appending an implementation attempt's tool-call summary to the journal
+    /// failed. Audit-only and always logged, never surfaced as a node diagnostic: by the time this
+    /// write runs the attempt's change is already integrated, so the cost is a timeline entry, not
+    /// work. Distinct from <see cref="WorktreeDiffFailed"/>, which names a `git` failure — nothing
+    /// here reads git at all.</summary>
+    public const string ProviderToolUseUnavailable = "provider_tool_use_unavailable";
+
     /// <summary>The implementation node executor's own outcome: the provider run succeeded (a
     /// schema-valid terminal result, no timeout, no failure) but left the attempt worktree exactly
     /// as clean as it started — nothing to commit for a role whose whole job is producing an edit.

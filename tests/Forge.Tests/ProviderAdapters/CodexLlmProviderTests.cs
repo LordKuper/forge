@@ -1,4 +1,6 @@
+using System.Text.Json;
 using Forge.Application;
+using Forge.Domain;
 using Forge.Providers;
 using Forge.Providers.Codex;
 using Forge.Tests.Support;
@@ -347,6 +349,156 @@ public sealed class CodexLlmProviderTests
         Assert.Equal(ProviderEventKind.Result, result.Events[3].Kind);
         Assert.NotNull(result.TerminalResult);
     }
+
+    /// <summary>ADR 0060, against the real thing: `codex-exec-json-tool-calls.jsonl` is a verbatim
+    /// `codex exec --json` stream recorded from Codex CLI 0.149.1 driving a throwaway worktree
+    /// (read a file, run a command, edit a file), with only the captured absolute path replaced by a
+    /// placeholder. The entire mapping was built from this capture and nothing else, so this test is
+    /// what actually pins it: the two `agent_message` items must be recognized and ignored (never
+    /// counted as drift), both `command_execution` completions must produce a targetless command row
+    /// carrying its exit code, and the `file_change` completion must produce an edit row whose
+    /// absolute vendor path has been relativized against the attempt's working directory.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncCapturesToolCallsFromARealRecordedCodexStream()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string jsonl = ReadFixture("codex-exec-json-tool-calls.jsonl");
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, jsonl, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "append a line",
+            CapturedWorktree,
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        // Two agent_message items rode in the same stream; neither may be counted as drift, or a
+        // perfectly healthy run would look broken.
+        Assert.Equal(0, result.UnmappedItemCount);
+        Assert.Equal(3, result.ToolCalls.Count);
+
+        ProviderToolCall[] commands =
+            [.. result.ToolCalls.Where(call => call.Kind == ProviderToolCallKinds.Command)];
+        Assert.Equal(2, commands.Length);
+        Assert.All(commands, call =>
+        {
+            Assert.Null(call.Target);
+            Assert.Equal(0, call.ExitCode);
+            Assert.True(call.Succeeded);
+            // Paired against its own `item.started`, so a Forge-observed duration exists.
+            Assert.NotNull(call.DurationMilliseconds);
+        });
+
+        ProviderToolCall edit = Assert.Single(
+            result.ToolCalls, call => call.Kind == ProviderToolCallKinds.Edit);
+        Assert.Equal("sample.txt", edit.Target);
+        Assert.Null(edit.ExitCode);
+        Assert.Null(edit.Succeeded);
+    }
+
+    /// <summary>ADR 0060's three-way split, stated as one table: a mapped tool-call subtype produces a
+    /// row, a recognized-but-not-a-tool-call subtype produces nothing at all, and only a genuinely
+    /// unrecognized shape increments the drift counter. The malformed cases must not throw out of the
+    /// sink either -- tool-call capture is optional enrichment and fails open.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("""{"type":"item.completed","item":{"id":"i","type":"agent_message","text":"hi"}}""", 0, 0)]
+    [InlineData("""{"type":"item.completed","item":{"id":"i","type":"reasoning","text":"hmm"}}""", 0, 0)]
+    [InlineData("""{"type":"item.completed","item":{"id":"i","type":"totally_unknown_thing"}}""", 0, 1)]
+    [InlineData("""{"type":"item.completed","item":{"id":"i","type":"web_search","query":"x"}}""", 0, 1)]
+    [InlineData("""{"type":"item.completed","id":"i"}""", 0, 1)]
+    [InlineData("""{"type":"item.completed","item":42}""", 0, 1)]
+    [InlineData("""{"type":"item.command_execution","command":"echo hi"}""", 0, 1)]
+    [InlineData(
+        """{"type":"item.completed","item":{"id":"i","type":"file_change","changes":[]}}""", 0, 1)]
+    [InlineData(
+        """{"type":"item.completed","item":{"id":"i","type":"command_execution","exit_code":0,"status":"completed"}}""",
+        1,
+        0)]
+    public async Task RunAsyncSeparatesMappedToolCallsFromNarrationAndFromGenuineDrift(
+        string line, int expectedToolCalls, int expectedUnmapped)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(
+            0, line + "\n" + """{"type":"turn.completed"}""", string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(expectedToolCalls, result.ToolCalls.Count);
+        Assert.Equal(expectedUnmapped, result.UnmappedItemCount);
+    }
+
+    /// <summary>The invariant this whole slice hangs on (ADR 0006 via ADR 0060): a
+    /// `command_execution` item carries the full command line and its full stdout, both of which
+    /// routinely contain secrets. Neither field is ever read into anything durable. Asserted against
+    /// the SERIALIZED journal line, not only the typed objects, so a field added to any layer between
+    /// here and disk cannot reintroduce the leak unnoticed.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncNeverCarriesCommandTextOrCommandOutputIntoTheDurableRecord()
+    {
+        const string commandText = "curl -H 'Authorization: Bearer sk-live-fake123' https://example.test";
+        const string outputText = "leaked-output-token-9f3c21";
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        // Assembled by concatenation rather than interpolation: the JSON's own trailing `}}` collides
+        // with a raw interpolated literal's closing braces.
+        string escapedCommand = commandText.Replace("\"", "\\\"", StringComparison.Ordinal);
+        string stream = string.Join(
+            '\n',
+            "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\"," +
+                "\"command\":\"" + escapedCommand + "\",\"aggregated_output\":\"\",\"exit_code\":null," +
+                "\"status\":\"in_progress\"}}",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\"," +
+                "\"command\":\"" + escapedCommand + "\",\"aggregated_output\":\"" + outputText + "\"," +
+                "\"exit_code\":0,\"status\":\"completed\"}}",
+            """{"type":"turn.completed"}""");
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        ProviderToolCall call = Assert.Single(result.ToolCalls);
+        Assert.Equal(ProviderToolCallKinds.Command, call.Kind);
+        Assert.Null(call.Target);
+
+        // All the way to the real journal file on disk, not merely to the typed record: everything
+        // between the adapter and that line (payload mapping, codec, schema) is exercised, so a field
+        // added at any of those layers cannot reintroduce the leak unnoticed.
+        ToolUsePayload payload = Assert.IsType<ToolUsePayload>(ProviderToolUse.ToPayload(result));
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptId.Value.ToString("D"), "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendAttemptToolUseRecordedAsync(root.Path, sprintId, attemptId, payload, cancellationToken);
+
+        string journal = string.Concat(
+            Directory.EnumerateFiles(root.Path, "*.jsonl", SearchOption.AllDirectories)
+                .Select(File.ReadAllText));
+        Assert.Contains(WorkflowEvent.AttemptToolUseRecordedType, journal, StringComparison.Ordinal);
+        foreach (string serialized in new[] { JsonSerializer.Serialize(call, StatusJson.Options), journal })
+        {
+            Assert.DoesNotContain("Authorization", serialized, StringComparison.Ordinal);
+            Assert.DoesNotContain("sk-live-fake123", serialized, StringComparison.Ordinal);
+            Assert.DoesNotContain("curl", serialized, StringComparison.Ordinal);
+            Assert.DoesNotContain(outputText, serialized, StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>The placeholder worktree root the recorded fixture's absolute `file_change` path sits
+    /// under, so relativizing it produces a real, in-worktree relative target.</summary>
+    private const string CapturedWorktree = @"C:\Users\example\codex-worktree";
 
     [Fact]
     [Trait("Category", "Unit")]

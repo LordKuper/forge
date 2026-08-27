@@ -296,7 +296,132 @@
         "arguments": {"files_changed": "0", "insertions": "0", "deletions": "0"},
         "payload": {
           "diff": {"files_changed": 0, "insertions": 0, "deletions": 0, "files": [], "elided_files": 0},
-          "tool_use": {"name": "Edit"}
+          "test_run": {"name": "unit"}
+        }
+      }
+    },
+    {
+      "name": "event 1.2.0 accepts a tool-use payload on its own",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.2.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 8,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptToolUseRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_tool_use_recorded",
+        "arguments": {"tool_calls": "3", "commands": "2", "edits": "1"},
+        "payload": {
+          "tool_use": {
+            "tool_calls": 3,
+            "commands": 2,
+            "edits": 1,
+            "calls": [
+              {"kind": "command", "duration_ms": 812, "exit_code": 0, "succeeded": true},
+              {"kind": "command", "duration_ms": 91, "exit_code": 1, "succeeded": false},
+              {"kind": "edit", "target": "src/a.cs", "duration_ms": 40}
+            ],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event 1.2.0 accepts a diff and a tool-use payload on the same line",
+      "schema": "event",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.2.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 9,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptDiffRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_diff_recorded",
+        "arguments": {"files_changed": "1", "insertions": "1", "deletions": "0"},
+        "payload": {
+          "diff": {
+            "files_changed": 1,
+            "insertions": 1,
+            "deletions": 0,
+            "files": [{"path": "src/a.cs", "added": 1, "deleted": 0, "change_kind": "modified"}],
+            "elided_files": 0
+          },
+          "tool_use": {
+            "tool_calls": 1,
+            "commands": 0,
+            "edits": 1,
+            "calls": [{"kind": "edit", "target": "src/a.cs"}],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event rejects a tool-use call with an unverified kind",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.2.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 8,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptToolUseRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_tool_use_recorded",
+        "arguments": {"tool_calls": "1", "commands": "0", "edits": "0"},
+        "payload": {
+          "tool_use": {
+            "tool_calls": 1,
+            "commands": 0,
+            "edits": 0,
+            "calls": [{"kind": "web_search"}],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          }
+        }
+      }
+    },
+    {
+      "name": "event rejects a tool-use payload carrying more calls than the per-attempt cap",
+      "schema": "event",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.2.0",
+        "event_id": "22222222-2222-4222-8222-222222222222",
+        "sequence": 8,
+        "occurred_at": "2026-08-27T12:00:00Z",
+        "type": "AttemptToolUseRecorded",
+        "aggregate": {"kind": "attempt", "id": "55555555-5555-4555-8555-555555555555", "version": 3},
+        "message_key": "workflow.attempt_tool_use_recorded",
+        "arguments": {"tool_calls": "51", "commands": "51", "edits": "0"},
+        "payload": {
+          "tool_use": {
+            "tool_calls": 51,
+            "commands": 51,
+            "edits": 0,
+            "calls": [
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}, {"kind": "command"},
+              {"kind": "command"}, {"kind": "command"}, {"kind": "command"}
+            ],
+            "elided_calls": 0,
+            "unmapped_items": 0
+          }
         }
       }
     },

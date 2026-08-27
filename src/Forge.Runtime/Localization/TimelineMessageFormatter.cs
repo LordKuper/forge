@@ -114,6 +114,16 @@ public static class TimelineMessageFormatter
                 ],
 
             // All three always present: required by WorkflowFold.IsTransitionRecord for this event
+            // type, and derived from the event's own payload by the single producing store method
+            // (ISprintStore.AppendAttemptToolUseRecordedAsync) rather than supplied independently.
+            MessageKeys.WorkflowAttemptToolUseRecorded =>
+                [
+                    Value(arguments, WorkflowEvent.ToolCallsArgument),
+                    Value(arguments, WorkflowEvent.ToolCommandsArgument),
+                    Value(arguments, WorkflowEvent.ToolEditsArgument),
+                ],
+
+            // All three always present: required by WorkflowFold.IsTransitionRecord for this event
             // type.
             MessageKeys.WorkflowStageRevisionRecorded =>
                 [

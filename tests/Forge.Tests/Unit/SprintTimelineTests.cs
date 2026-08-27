@@ -1,5 +1,6 @@
 using Forge.Application;
 using Forge.Domain;
+using Forge.Providers;
 using Forge.Tests.Support;
 
 namespace Forge.UnitTests;
@@ -230,6 +231,62 @@ public sealed class SprintTimelineTests
         DiffFileStat file = Assert.Single(recorded.Payload!.Diff!.Files);
         Assert.DoesNotContain(secret, file.Path, StringComparison.Ordinal);
         Assert.Contains("[REDACTED:credential]", file.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, StatusJson.Serialize(page), StringComparison.Ordinal);
+    }
+
+    /// <summary>ADR 0060: the same two-pass guarantee for the second payload family. Written as its
+    /// own test rather than folded into the diff one above because the failure it guards against is
+    /// specifically a per-family omission -- a redaction helper that returns early on the family it
+    /// happens to check first would leave this one untouched and still pass that test.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AToolUsePayloadsTargetIsRedactedByBothPassesAndNeverReachesASerializedPage()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, started.DiagnosticCode);
+
+        const string secret = "password=Sup3rSecretValue";
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        await store.AppendAttemptToolUseRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new ToolUsePayload(
+                2,
+                1,
+                1,
+                [
+                    new ToolCallStat(ProviderToolCallKinds.Command, null, 12, 0, true),
+                    new ToolCallStat(ProviderToolCallKinds.Edit, $"config/{secret}.env", 3, null, null),
+                ],
+                0,
+                0),
+            cancellationToken);
+
+        // Pass 1, on its own: a projector built directly on the real store, with no Apply call.
+        SprintTimelinePage pass1Only = await new SprintTimelineProjector(store)
+            .CreateAsync(environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Contains(pass1Only.Items, item => item.Payload?.ToolUse is not null);
+        Assert.DoesNotContain(secret, StatusJson.Serialize(pass1Only), StringComparison.Ordinal);
+
+        // The shared read path every surface actually calls (pass 1 then pass 2).
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        SprintTimelineItem recorded = Assert.Single(
+            page.Items, item => item.Type == WorkflowEvent.AttemptToolUseRecordedType);
+        ToolCallStat edit = Assert.Single(
+            recorded.Payload!.ToolUse!.Calls, call => call.Target is not null);
+        Assert.DoesNotContain(secret, edit.Target, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:credential]", edit.Target, StringComparison.Ordinal);
         Assert.DoesNotContain(secret, StatusJson.Serialize(page), StringComparison.Ordinal);
     }
 

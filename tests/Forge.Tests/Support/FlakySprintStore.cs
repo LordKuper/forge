@@ -152,6 +152,19 @@ internal sealed class FlakySprintStore(ISprintStore inner) : ISprintStore
             ? Task.FromException(failure)
             : inner.AppendAttemptDiffRecordedAsync(projectRoot, sprintId, attemptId, diff, cancellationToken);
 
+    /// <summary>The <see cref="DiffRecordFailure"/> equivalent for ADR 0060's tool-call record, which
+    /// sits in the identical risk position: appended after integration but before the attempt is
+    /// marked complete, so a throw escaping it strands an already-integrated attempt in `running`.
+    /// </summary>
+    public Exception? ToolUseRecordFailure { get; set; }
+
+    public Task AppendAttemptToolUseRecordedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, ToolUsePayload toolUse,
+        CancellationToken cancellationToken) =>
+        ToolUseRecordFailure is { } failure
+            ? Task.FromException(failure)
+            : inner.AppendAttemptToolUseRecordedAsync(projectRoot, sprintId, attemptId, toolUse, cancellationToken);
+
     public Task AppendAgentSummaryRecordedAsync(
         string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
         CancellationToken cancellationToken) =>

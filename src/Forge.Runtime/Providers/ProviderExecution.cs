@@ -1,6 +1,8 @@
+using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Forge.Application;
+using Forge.Compiler;
 using Forge.Domain;
 using Forge.Infrastructure;
 
@@ -60,20 +62,149 @@ public enum ProviderFailureKind
     Unknown,
 }
 
+/// <summary>The closed set <see cref="ProviderToolCall.Kind"/> may take, mirroring
+/// `payload.tool_use.calls.items.kind` in docs/contracts/v1/schemas/event.schema.json. Plain strings
+/// rather than an enum, following <see cref="Forge.Domain.DiffChangeKinds"/>'s own precedent (ADR
+/// 0059): this value crosses the durable JSON envelope verbatim. Deliberately only the two kinds a
+/// real recorded `codex exec --json` stream actually produced (ADR 0060) — no `read`, `search`, or
+/// generic `tool` member exists, because no capture has ever demonstrated one.</summary>
+public static class ProviderToolCallKinds
+{
+    /// <summary>A shell command the provider ran. Never carries a target: the only thing that would
+    /// identify *which* command is the command text itself, which is never persisted (ADR 0006).</summary>
+    public const string Command = "command";
+
+    /// <summary>A file the provider created, modified, or deleted.</summary>
+    public const string Edit = "edit";
+
+    public static bool IsKnown(string? kind) => kind is Command or Edit;
+}
+
+/// <summary>What an adapter's own tool-call extractor concluded about one `ToolUse`-classified line.
+/// Three outcomes, not two: a vendor stream interleaves genuine tool calls with ordinary agent
+/// narration (`agent_message`, `reasoning`), and counting that narration as drift would make
+/// <see cref="ProviderRunResult.UnmappedItemCount"/> non-zero on every healthy run (ADR 0060).</summary>
+public enum ProviderToolCallOutcome
+{
+    /// <summary>Recognized provider content that is simply not a tool call. Produces no row and is
+    /// never counted as drift.</summary>
+    Ignored,
+
+    /// <summary>At least one tool-call candidate was recognized.</summary>
+    Extracted,
+
+    /// <summary>The line's shape was not recognized at all — a real drift signal worth recording,
+    /// since it means the vendor emitted something this adapter's mapping does not cover.</summary>
+    Unmapped,
+}
+
+/// <summary>One tool-call observation exactly as the adapter read it, before any core-owned
+/// normalization. <paramref name="RawTarget"/> is verbatim vendor text (an absolute path, or
+/// <see langword="null"/>): relativizing, safety-checking, and redacting it is the core's job, not
+/// the adapter's (ADR 0008's adapter/core split). <paramref name="CorrelationId"/> is used in memory
+/// only, to pair a start with its completion and measure a duration; it is never persisted.
+/// <paramref name="ExitCode"/>/<paramref name="Succeeded"/> are meaningful only when
+/// <paramref name="IsCompletion"/> is <see langword="true"/>.</summary>
+public sealed record ProviderToolCallCandidate(
+    string Kind,
+    string? RawTarget,
+    string? CorrelationId,
+    bool IsCompletion,
+    int? ExitCode,
+    bool? Succeeded);
+
+/// <summary>One extractor call's verdict. A single vendor line may legitimately describe more than
+/// one tool call (Codex's `file_change` carries a `changes` array), so this returns a list rather
+/// than a single candidate — an entry beyond the first is never silently dropped.</summary>
+public sealed record ProviderToolCallExtraction(
+    ProviderToolCallOutcome Outcome,
+    IReadOnlyList<ProviderToolCallCandidate> Candidates)
+{
+    public static readonly ProviderToolCallExtraction Ignored = new(ProviderToolCallOutcome.Ignored, []);
+
+    public static readonly ProviderToolCallExtraction Unmapped = new(ProviderToolCallOutcome.Unmapped, []);
+
+    /// <summary>An empty candidate list is <see cref="Unmapped"/>, never
+    /// <see cref="ProviderToolCallOutcome.Extracted"/>: an adapter that recognized the subtype but
+    /// found nothing inside it saw a shape its mapping does not actually cover.</summary>
+    public static ProviderToolCallExtraction Of(IReadOnlyList<ProviderToolCallCandidate> candidates)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+        return candidates.Count == 0 ? Unmapped : new(ProviderToolCallOutcome.Extracted, candidates);
+    }
+}
+
+/// <summary>A normalized, safety-checked, redacted tool call — what actually reaches durable state.
+/// <paramref name="Target"/> is worktree-relative and forward-slashed, or <see langword="null"/>
+/// when the vendor supplied none (every <see cref="ProviderToolCallKinds.Command"/>) or supplied one
+/// that failed the syntactic safety check (rejected, never rewritten — ADR 0059's rule for diff
+/// paths, reused). <paramref name="DurationMilliseconds"/> is Forge-observed wall time between the
+/// vendor's start and completion lines arriving on stdout, never a vendor-reported timing field
+/// (neither vendor publishes one); it is <see langword="null"/> when no matching start was seen.
+/// </summary>
+public sealed record ProviderToolCall(
+    string Kind,
+    string? Target,
+    int? DurationMilliseconds,
+    int? ExitCode,
+    bool? Succeeded);
+
 public sealed record ProviderRunResult(
     bool Succeeded,
     IReadOnlyList<ProviderEvent> Events,
     ProviderTerminalResult? TerminalResult,
     ProviderFailureKind Failure,
-    string? Detail)
+    string? Detail,
+    IReadOnlyList<ProviderToolCall> ToolCalls,
+    int UnmappedItemCount)
 {
+    /// <summary>ADR 0060's two trailing arguments are optional so the many call sites that have no
+    /// tool-call data to report (every non-Codex adapter, and every test double) stay unchanged; the
+    /// record's own members are required, so no producer can forget them by accident.</summary>
     public static ProviderRunResult Success(
-        IReadOnlyList<ProviderEvent> events, ProviderTerminalResult terminalResult) =>
-        new(true, events, terminalResult, ProviderFailureKind.None, null);
+        IReadOnlyList<ProviderEvent> events,
+        ProviderTerminalResult terminalResult,
+        IReadOnlyList<ProviderToolCall>? toolCalls = null,
+        int unmappedItemCount = 0) =>
+        new(true, events, terminalResult, ProviderFailureKind.None, null, toolCalls ?? [], unmappedItemCount);
 
-    /// <summary>`detail` may echo raw provider output, so it is redacted before it is stored.</summary>
+    /// <summary>`detail` may echo raw provider output, so it is redacted before it is stored.
+    /// Tool-call data is deliberately discarded on the failure path (ADR 0060): the attempt's work
+    /// never reaches the integration branch, exactly as ADR 0059 already decided for diff
+    /// statistics.</summary>
     public static ProviderRunResult Failed(ProviderFailureKind failure, string detail) =>
-        new(false, [], null, failure, SecretRedactor.Redact(detail));
+        new(false, [], null, failure, SecretRedactor.Redact(detail), [], 0);
+}
+
+/// <summary>Maps a completed run's in-memory tool-call observations onto the durable
+/// <see cref="ToolUsePayload"/> — the one place the per-attempt cap and its elision arithmetic live,
+/// so the totals a reader sees and the rows actually written can never drift apart.</summary>
+public static class ProviderToolUse
+{
+    /// <summary>Returns <see langword="null"/> when there is genuinely nothing to record (no tool
+    /// calls and no unmapped items). A non-zero unmapped count alone still produces a payload: that
+    /// is a drift signal worth being durable, even with no mapped call beside it.</summary>
+    public static ToolUsePayload? ToPayload(ProviderRunResult result)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        if (result.ToolCalls.Count == 0 && result.UnmappedItemCount == 0)
+        {
+            return null;
+        }
+
+        return new(
+            result.ToolCalls.Count,
+            result.ToolCalls.Count(call => call.Kind == ProviderToolCallKinds.Command),
+            result.ToolCalls.Count(call => call.Kind == ProviderToolCallKinds.Edit),
+            [
+                .. result.ToolCalls
+                    .Take(ProviderToolUseBudget.MaxCalls)
+                    .Select(call => new ToolCallStat(
+                        call.Kind, call.Target, call.DurationMilliseconds, call.ExitCode, call.Succeeded)),
+            ],
+            Math.Max(0, result.ToolCalls.Count - ProviderToolUseBudget.MaxCalls),
+            result.UnmappedItemCount);
+    }
 }
 
 /// <summary>
@@ -112,7 +243,8 @@ public static class ProviderExecution
         Func<JsonElement, ProviderEventKind> classify,
         Func<JsonElement, string?> extractText,
         CancellationToken cancellationToken,
-        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null)
+        Func<AttemptActivityKind, CancellationToken, Task>? onActivity = null,
+        Func<JsonElement, ProviderToolCallExtraction>? extractToolCall = null)
     {
         ArgumentNullException.ThrowIfNull(processRunner);
         ArgumentNullException.ThrowIfNull(environmentVariables);
@@ -126,7 +258,8 @@ public static class ProviderExecution
         // helper triggers itself by cancelling its own token — never the caller's.
         using CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(
             cancellationToken);
-        BoundedOutputSink sink = new(classify, extractText, onActivity, linkedCancellation.Cancel);
+        BoundedOutputSink sink = new(
+            classify, extractText, onActivity, linkedCancellation.Cancel, extractToolCall, workingDirectory);
 
         ProcessResult result;
         try
@@ -177,8 +310,46 @@ public static class ProviderExecution
             > 1 => ProviderRunResult.Failed(
                 ProviderFailureKind.DuplicateTerminalResult,
                 $"The provider emitted {sink.TerminalCount} terminal-result events for one run."),
-            _ => ProviderRunResult.Success(sink.Events, sink.TerminalResult!),
+            _ => ProviderRunResult.Success(
+                sink.Events, sink.TerminalResult!, sink.ToolCalls, sink.UnmappedItemCount),
         };
+    }
+
+    /// <summary>ADR 0060's core-owned path normalization: an adapter hands back whatever the vendor
+    /// wrote (Codex reports an absolute, OS-native path), and this decides what — if anything — may
+    /// be recorded for it. Lives here rather than in an adapter because
+    /// <see cref="RelativePathShape"/> is `Forge.Runtime`-internal and because path safety is core
+    /// policy, not vendor translation (ADR 0008).
+    ///
+    /// A path that escapes <paramref name="workingDirectory"/>, keeps a separator the current OS does
+    /// not own, or is otherwise syntactically unsafe is REJECTED (null), never rewritten — ADR 0059's
+    /// rule for diff paths, reused verbatim: there is no safe interpretation of such an entry, and the
+    /// call itself is still recorded, just without a target. A malformed path can make
+    /// <see cref="Path.GetRelativePath"/> throw outright (an embedded null character, for one); that
+    /// is treated as "no usable target" rather than allowed to reach the sink's caller. The surviving
+    /// relative path is redacted BEFORE any bounding (ADR 0057/0059), since a redaction placeholder
+    /// can be longer than the text it replaces.</summary>
+    internal static string? NormalizeToolCallTarget(string? rawTarget, string workingDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(rawTarget))
+        {
+            return null;
+        }
+
+        string candidate;
+        try
+        {
+            candidate = Path.IsPathRooted(rawTarget)
+                ? Path.GetRelativePath(workingDirectory, rawTarget)
+                : rawTarget;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
+
+        candidate = candidate.Replace(Path.DirectorySeparatorChar, '/');
+        return RelativePathShape.IsSyntacticallySafe(candidate) ? SecretRedactor.Redact(candidate) : null;
     }
 
     /// <summary>
@@ -255,16 +426,39 @@ public static class ProviderExecution
         Func<JsonElement, ProviderEventKind> classify,
         Func<JsonElement, string?> extractText,
         Func<AttemptActivityKind, CancellationToken, Task>? onActivity,
-        Action requestCancellation) : IProcessOutputSink
+        Action requestCancellation,
+        Func<JsonElement, ProviderToolCallExtraction>? extractToolCall,
+        string workingDirectory) : IProcessOutputSink
     {
         private readonly object gate = new();
         private readonly List<ProviderEvent> events = [];
         private readonly StringBuilder safeTail = new();
+        private readonly List<ProviderToolCall> toolCalls = [];
+
+        /// <summary>Correlation id -> <see cref="Stopwatch.GetTimestamp"/> at the moment that tool
+        /// call's `started` line arrived, so a completion can report how long Forge actually observed
+        /// it running. In-memory only: the vendor's raw item id is never persisted. Bounded by the
+        /// same <see cref="MaxEventCount"/> that bounds <see cref="events"/>, since every entry comes
+        /// from exactly one retained event.</summary>
+        private readonly Dictionary<string, long> toolCallStarts = new(StringComparer.Ordinal);
+
         private long aggregateBytes;
 
         /// <summary>Read only after both stream tasks have completed (ADR 0006 stream consumption
         /// has finished by the time a caller inspects this), so no lock is needed here.</summary>
         public IReadOnlyList<ProviderEvent> Events => events;
+
+        /// <summary>ADR 0060. Same read-after-completion rule as <see cref="Events"/>. Deliberately
+        /// carries no cap of its own: every entry originates from one retained
+        /// <see cref="ProviderEvent"/>, so <see cref="MaxEventCount"/> already bounds it, and a
+        /// second bound here would silently under-report the totals the durable payload derives from
+        /// this list.</summary>
+        public IReadOnlyList<ProviderToolCall> ToolCalls => toolCalls;
+
+        /// <summary>ADR 0060's drift counter: `ToolUse`-classified lines whose subtype this adapter's
+        /// mapping does not cover at all. Never incremented for recognized non-tool-call content
+        /// (agent narration), which would make it non-zero on every healthy run.</summary>
+        public int UnmappedItemCount { get; private set; }
 
         public int TerminalCount { get; private set; }
 
@@ -370,7 +564,85 @@ public static class ProviderExecution
                 TerminalResult ??= new ProviderTerminalResult(redactedText);
             }
 
+            if (kind == ProviderEventKind.ToolUse && extractToolCall is not null)
+            {
+                RecordToolCall(root);
+            }
+
             return onActivity is not null ? kind : null;
+        }
+
+        /// <summary>Must run under <see cref="gate"/>. Fail-open by construction (ADR 0059's rule for
+        /// this whole class of optional enrichment data, restated by ADR 0060): tool-call capture is
+        /// audit content, so a vendor-shape surprise — including an outright throw from an adapter's
+        /// own extractor — is counted as drift and never allowed to fail the attempt. A genuine
+        /// cancellation is still allowed through; nothing here is expected to raise one, but
+        /// swallowing one would hide a real Host shutdown.</summary>
+        private void RecordToolCall(JsonElement root)
+        {
+            ProviderToolCallExtraction extraction;
+            try
+            {
+                extraction = extractToolCall!(root);
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                UnmappedItemCount++;
+                return;
+            }
+
+            if (extraction is null || extraction.Outcome == ProviderToolCallOutcome.Unmapped)
+            {
+                UnmappedItemCount++;
+                return;
+            }
+
+            if (extraction.Outcome == ProviderToolCallOutcome.Ignored)
+            {
+                return;
+            }
+
+            foreach (ProviderToolCallCandidate candidate in extraction.Candidates)
+            {
+                RecordToolCallCandidate(candidate);
+            }
+        }
+
+        /// <summary>Must run under <see cref="gate"/>.</summary>
+        private void RecordToolCallCandidate(ProviderToolCallCandidate candidate)
+        {
+            // An adapter is untrusted input like any other: a kind outside the closed set is drift to
+            // be counted, never a row to be fabricated on the durable envelope.
+            if (!ProviderToolCallKinds.IsKnown(candidate.Kind))
+            {
+                UnmappedItemCount++;
+                return;
+            }
+
+            if (!candidate.IsCompletion)
+            {
+                if (candidate.CorrelationId is { Length: > 0 } startId)
+                {
+                    toolCallStarts[startId] = Stopwatch.GetTimestamp();
+                }
+
+                return;
+            }
+
+            int? duration = null;
+            if (candidate.CorrelationId is { Length: > 0 } completionId &&
+                toolCallStarts.Remove(completionId, out long startedAt))
+            {
+                duration = (int)Math.Clamp(
+                    Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds, 0, int.MaxValue);
+            }
+
+            toolCalls.Add(new(
+                candidate.Kind,
+                NormalizeToolCallTarget(candidate.RawTarget, workingDirectory),
+                duration,
+                candidate.ExitCode,
+                candidate.Succeeded));
         }
 
         /// <summary>Must run under <see cref="gate"/>. Appends to the safe tail and enforces the
