@@ -12,12 +12,76 @@ public enum AggregateKind
 
 public sealed record AggregateRef(AggregateKind Kind, string Id, long Version);
 
+/// <summary>The closed set <see cref="DiffFileStat.ChangeKind"/> may take, mirroring
+/// `payload.diff.files.items.change_kind` in docs/contracts/v1/schemas/event.schema.json. Plain
+/// strings rather than an enum: this value crosses the durable JSON envelope verbatim, and every
+/// other closed-set value on that envelope (`to_state`, `blocked_reason`, `outcome`) is already a
+/// snake_case string there. <see cref="Binary"/> is not a git status of its own — it is what
+/// `git diff --numstat` reports (`-`/`-` instead of line counts) for a file with no textual diff,
+/// and it takes precedence over whatever add/delete/modify status that same file also has, because
+/// "how many lines changed" is the only question the other kinds answer.</summary>
+public static class DiffChangeKinds
+{
+    public const string Added = "added";
+    public const string Deleted = "deleted";
+    public const string Modified = "modified";
+    public const string Renamed = "renamed";
+    public const string Binary = "binary";
+
+    public static bool IsKnown(string? kind) =>
+        kind is Added or Deleted or Modified or Renamed or Binary;
+}
+
+/// <summary>One changed file inside a <see cref="DiffPayload"/>. <paramref name="Path"/> is always
+/// relative to the attempt worktree's root and forward-slashed (git's own `--numstat` output shape),
+/// never an absolute or traversing path — see
+/// <c>Forge.Application.SprintGitIsolation.ReadDiffStatAsync</c>, which drops any entry that is not
+/// syntactically safe rather than recording it. <paramref name="Added"/>/<paramref name="Deleted"/>
+/// are both 0 for <see cref="DiffChangeKinds.Binary"/>.</summary>
+public sealed record DiffFileStat(string Path, int Added, int Deleted, string ChangeKind);
+
+/// <summary>ADR 0059: structural git statistics for exactly one attempt's own commit — never diff
+/// hunk content, which is deliberately not persisted anywhere (it is re-read from git on demand at
+/// render time). <paramref name="Files"/> is capped at
+/// <see cref="Forge.Application.GitWorktreeManagerDiffStatBudget.MaxFiles"/>;
+/// <paramref name="ElidedFiles"/> counts the changed files beyond that cap, so a reader can always
+/// tell a genuinely small change from a truncated view of a large one.
+/// <paramref name="FilesChanged"/> is the *total* changed-file count (including elided ones), and
+/// <paramref name="Insertions"/>/<paramref name="Deletions"/> are likewise totals over every changed
+/// file, not only the retained ones.</summary>
+public sealed record DiffPayload(
+    int FilesChanged,
+    int Insertions,
+    int Deletions,
+    IReadOnlyList<DiffFileStat> Files,
+    int ElidedFiles);
+
+/// <summary>ADR 0059: the typed, structured half of a <see cref="WorkflowEvent"/> —
+/// `payload` in docs/contracts/v1/schemas/event.schema.json. Exists because
+/// <see cref="WorkflowEvent.Arguments"/> is a deliberately flat
+/// <c>IReadOnlyDictionary&lt;string, string?&gt;</c> that genuinely cannot carry a nested list, and
+/// the envelope declares `additionalProperties: false`. One optional sub-object per family; only
+/// <see cref="Diff"/> exists today (tool-call and test-run payloads are explicitly deferred, see
+/// ADR 0059). Always <see langword="null"/> for every event type that predates this field, and
+/// omitted from the serialized line entirely when null, so every journal line already on disk stays
+/// byte-for-byte valid.</summary>
+public sealed record WorkflowEventPayload(DiffPayload? Diff);
+
 /// <summary>
 /// One append-only, localization-safe transition record. Mirrors
 /// docs/contracts/v1/schemas/event.schema.json; `Arguments["to_state"]` carries the resulting
 /// state so a stream of these can be folded back into current sprint/node/attempt state without
 /// any transcript or free-text dependency.
 /// </summary>
+/// <remarks><c>Payload</c> is ADR 0059's structured envelope half — see
+/// <see cref="WorkflowEventPayload"/>. Declared last, nullable, and defaulted rather than required:
+/// this type is constructed at well over thirty call sites, all but one of which have nothing
+/// structured to carry, so ADR 0057/0058's "review every construction site explicitly" discipline
+/// would produce thirty-odd mechanical `Payload: null` arguments and no new safety. The one producer
+/// that does carry a payload (<c>ISprintStore.AppendAttemptDiffRecordedAsync</c>) is the only place
+/// that may set it, and <see cref="WorkflowFold.IsTransitionRecord"/> fails closed on an
+/// <see cref="AttemptDiffRecordedType"/> event whose payload is missing, so the default can never
+/// silently produce a valid-looking but empty diff record.</remarks>
 public sealed record WorkflowEvent(
     Guid EventId,
     long Sequence,
@@ -27,7 +91,8 @@ public sealed record WorkflowEvent(
     string MessageKey,
     IReadOnlyDictionary<string, string?> Arguments,
     Guid? CorrelationId = null,
-    Guid? CausationId = null)
+    Guid? CausationId = null,
+    WorkflowEventPayload? Payload = null)
 {
     public const string ToStateArgument = "to_state";
     public const string RouteDecisionRecordedType = "RouteDecisionRecorded";
@@ -244,6 +309,35 @@ public sealed record WorkflowEvent(
     /// <see cref="WorkflowEvent.CorrelationId"/> carries the exact <c>Handoff.HandoffId</c> this
     /// summary corresponds to, so that superseded check can still find it.</summary>
     public const string AgentSummaryTextArgument = "summary";
+
+    /// <summary>ADR 0059: the structural git statistics of exactly one implementation attempt's own
+    /// commit, recorded once per attempt on that attempt's own aggregate the moment its work reaches
+    /// the sprint's integration branch. Never a transition itself (no <see cref="ToStateArgument"/>)
+    /// and never folded into any snapshot, matching <see cref="AttemptSupersededType"/>'s own shape:
+    /// a diff summary is durable timeline/audit content, not workflow state. Exactly one event per
+    /// attempt (never one per changed file) because
+    /// <see cref="Forge.Application.FileSprintEventLog"/> re-reads and re-validates the entire
+    /// journal on every append, so per-file events would make an attempt's append cost quadratic in
+    /// the size of its own change. The per-file detail rides on this event's
+    /// <see cref="Payload"/> instead.</summary>
+    public const string AttemptDiffRecordedType = "AttemptDiffRecorded";
+
+    /// <summary>Carried on an <see cref="AttemptDiffRecordedType"/> event: the changed-file count as
+    /// a base-10 integer. Derived from the event's own <see cref="Payload"/> by the single producing
+    /// store method, never supplied independently, so the two can never disagree. Present in
+    /// <see cref="Arguments"/> as well as the payload because that is what the localized timeline
+    /// template (<c>workflow.attempt_diff_recorded</c>) substitutes — every surface renders a
+    /// timeline item through <c>TimelineMessageFormatter</c>, which reads
+    /// <see cref="Arguments"/>.</summary>
+    public const string DiffFilesChangedArgument = "files_changed";
+
+    /// <summary>Carried on an <see cref="AttemptDiffRecordedType"/> event alongside
+    /// <see cref="DiffFilesChangedArgument"/>: total added lines, base-10.</summary>
+    public const string DiffInsertionsArgument = "insertions";
+
+    /// <summary>Carried on an <see cref="AttemptDiffRecordedType"/> event alongside
+    /// <see cref="DiffFilesChangedArgument"/>: total deleted lines, base-10.</summary>
+    public const string DiffDeletionsArgument = "deletions";
 }
 
 public sealed record SprintWorkflowState(
@@ -367,6 +461,17 @@ public static class WorkflowFold
                 // Validated (throws loudly on corruption) but, like UserMessagePostedType, never a
                 // transition and never projected into the folded snapshot itself: the summary it
                 // carries is durable timeline content, not workflow state.
+                _ = IsTransitionRecord(current);
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.AttemptDiffRecordedType)
+            {
+                // Validated (throws loudly on corruption) but, like AttemptSupersededType, never a
+                // transition and never projected into the folded snapshot itself: an attempt's diff
+                // statistics are durable timeline content, not workflow state -- nothing in the
+                // scheduler, an executor, or a prerequisite check ever needs to ask "what did this
+                // attempt change" to decide what happens next.
                 _ = IsTransitionRecord(current);
                 continue;
             }
@@ -596,6 +701,24 @@ public static class WorkflowFold
             return hasState || current.Aggregate.Kind != AggregateKind.Node || !hasSummary ||
                 current.CorrelationId is null
                 ? throw new InvalidDataException($"Agent-summary event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptDiffRecordedType)
+        {
+            // The payload is what makes this event type meaningful at all -- an AttemptDiffRecorded
+            // with no `payload.diff` carries nothing a reader could use, so it is corruption, not a
+            // degraded-but-usable record. The three summary arguments are validated too (not merely
+            // derived and trusted): they are what the localized timeline template substitutes, and a
+            // line hand-edited or written by an older/foreign producer must fail here rather than
+            // render as a diff summary with blanks where its counts belong.
+            bool hasDiff = current.Payload?.Diff is not null;
+            bool hasCounts =
+                current.Arguments.GetValueOrDefault(WorkflowEvent.DiffFilesChangedArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.DiffInsertionsArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.DiffDeletionsArgument) is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasDiff || !hasCounts
+                ? throw new InvalidDataException($"Attempt-diff event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

@@ -206,6 +206,36 @@ public static class GitWorktreeManagerDiffBudget
     public const int MaxCharacters = 50_000;
 }
 
+/// <summary>ADR 0059's own bound, deliberately separate from
+/// <see cref="GitWorktreeManagerDiffBudget"/>: that one sizes a raw diff for a *prompt*, this one
+/// bounds how many per-file rows a single durable journal line may carry. Sized to stay well inside
+/// <see cref="Forge.Application.SprintTimelineProjector.MaxItemsPerPage"/>-scale rendering while
+/// still covering the overwhelming majority of real single-attempt changes; anything beyond it is
+/// reported as <see cref="Forge.Domain.DiffPayload.ElidedFiles"/> rather than dropped silently. Kept
+/// in sync by hand with `payload.diff.files`'s own `maxItems` in
+/// docs/contracts/v1/schemas/event.schema.json.</summary>
+public static class GitWorktreeManagerDiffStatBudget
+{
+    public const int MaxFiles = 50;
+}
+
+/// <summary>The structural counterpart to <see cref="GitDiffResult"/>: `git diff --numstat` parsed
+/// into per-file statistics, never diff hunk content. <paramref name="Stat"/> is
+/// <see langword="null"/> exactly when <paramref name="Succeeded"/> is
+/// <see langword="false"/>.</summary>
+public sealed record GitDiffStatResult(bool Succeeded, DiffPayload? Stat, string DiagnosticCode, string? Detail = null)
+{
+    public static GitDiffStatResult Ok(DiffPayload stat) => new(true, stat, DiagnosticCodes.None);
+
+    public static GitDiffStatResult Fail(string diagnosticCode, string? detail = null) =>
+        new(false, null, diagnosticCode, Truncate(detail));
+
+    private static string? Truncate(string? text) =>
+        string.IsNullOrWhiteSpace(text)
+            ? null
+            : text.Length <= 500 ? text.Trim() : string.Concat(text.AsSpan(0, 500), "…");
+}
+
 /// <summary>
 /// Low-level, real-Git worktree operations. Every method targets a linked worktree by its absolute
 /// path; <c>projectRoot</c> is the main repository every worktree links back to. No method leaves
@@ -271,6 +301,20 @@ public interface IWorktreeManager
     /// happens to have checked out.
     /// </summary>
     Task<GitDiffResult> DiffAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// ADR 0059: the same two-commit range as <see cref="DiffAsync"/>, read as per-file statistics
+    /// (`git diff --numstat` plus `git diff --name-status`) instead of diff text — the only diff
+    /// shape Forge persists. Paths come back exactly as git reports them: repository-root-relative
+    /// and forward-slashed on every OS. A binary file (`-`/`-` in `--numstat`) is reported as
+    /// <see cref="Forge.Domain.DiffChangeKinds.Binary"/> with zero counts. At most
+    /// <see cref="GitWorktreeManagerDiffStatBudget.MaxFiles"/> per-file rows are returned; the
+    /// remainder is counted in <see cref="Forge.Domain.DiffPayload.ElidedFiles"/> while
+    /// <see cref="Forge.Domain.DiffPayload.FilesChanged"/> and the insertion/deletion totals still
+    /// cover every changed file.
+    /// </summary>
+    Task<GitDiffStatResult> DiffStatAsync(
         string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken);
 
     /// <summary>Discards every uncommitted change and untracked file in <paramref name="path"/>,
@@ -515,6 +559,25 @@ public interface ISprintStore
         string nodeId,
         Guid handoffId,
         string summaryText,
+        CancellationToken cancellationToken);
+
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptDiffRecordedType"/> event carrying
+    /// <paramref name="diff"/> on <paramref name="attemptId"/>'s own aggregate (ADR 0059) -- like
+    /// <see cref="AppendAttemptSupersededAsync"/>, not gated by <see cref="AppendTransitionAsync"/>'s
+    /// optimistic concurrency: a diff record augments an outcome the caller has already committed to
+    /// git and never competes with concurrent workflow progress. Recorded at most once per attempt
+    /// (an attempt produces exactly one commit), deduplicated by scanning the journal for this event
+    /// type on this attempt rather than by a caller-supplied idempotency key -- a second call is
+    /// always a replay of the same already-landed commit. The event's flat
+    /// <see cref="WorkflowEvent.Arguments"/> summary (<see cref="WorkflowEvent.DiffFilesChangedArgument"/>
+    /// and friends, which is what the localized timeline template substitutes) is derived here from
+    /// <paramref name="diff"/> itself, never supplied separately, so the rendered summary and the
+    /// structured payload cannot drift apart.</summary>
+    Task AppendAttemptDiffRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        DiffPayload diff,
         CancellationToken cancellationToken);
 
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for

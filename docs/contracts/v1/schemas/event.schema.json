@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "event_id", "sequence", "occurred_at", "type", "aggregate", "message_key", "arguments"],
   "properties": {
-    "schema_version": {"const": "1.0.0"},
+    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
     "event_id": {"type": "string", "format": "uuid"},
     "sequence": {"type": "integer", "minimum": 0},
     "occurred_at": {"type": "string", "format": "date-time"},
@@ -24,6 +24,41 @@
     "message_key": {"type": "string", "pattern": "^[a-z0-9_.-]+$"},
     "arguments": {"type": "object", "additionalProperties": {"type": ["string", "number", "integer", "boolean", "null"]}},
     "correlation_id": {"type": "string", "format": "uuid"},
-    "causation_id": {"type": "string", "format": "uuid"}
+    "causation_id": {"type": "string", "format": "uuid"},
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "diff": {"$ref": "#/$defs/diff_payload"}
+      }
+    }
+  },
+  "$defs": {
+    "diff_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files_changed", "insertions", "deletions", "files", "elided_files"],
+      "properties": {
+        "files_changed": {"type": "integer", "minimum": 0},
+        "insertions": {"type": "integer", "minimum": 0},
+        "deletions": {"type": "integer", "minimum": 0},
+        "files": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "added", "deleted", "change_kind"],
+            "properties": {
+              "path": {"type": "string", "minLength": 1},
+              "added": {"type": "integer", "minimum": 0},
+              "deleted": {"type": "integer", "minimum": 0},
+              "change_kind": {"enum": ["added", "deleted", "modified", "renamed", "binary"]}
+            }
+          }
+        },
+        "elided_files": {"type": "integer", "minimum": 0}
+      }
+    }
   }
 }

@@ -1,5 +1,6 @@
 using System.CommandLine;
 using System.Globalization;
+using System.Text.Json;
 using Forge.Application;
 using Forge.Cli;
 using Forge.Domain;
@@ -170,6 +171,85 @@ public sealed class WorkspaceCliTests
         Assert.Equal(0, jsonExitCode);
         Assert.DoesNotContain("sk-live-1234567890ABCDEFGH", textOutput.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain("sk-live-1234567890ABCDEFGH", jsonOutput.ToString(), StringComparison.Ordinal);
+    }
+
+    /// <summary>ADR 0059, proven at the actual rendered CLI surface in both modes: the plain-text
+    /// render must show the localized one-line summary (never the raw
+    /// <c>workflow.attempt_diff_recorded</c> journal key), and `--json` must carry the full structured
+    /// payload -- the per-file rows are the whole reason the envelope gained a `payload` object, and
+    /// they are the one thing the text line deliberately does not show.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task SprintTimelineRendersTheDiffSummaryAsTextAndCarriesItsStructuredPayloadInJsonMode()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        SprintTransitionResult toReady = await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, 1, SprintOrchestrator.RunSprintKey(
+                (await orchestrator.GetSprintAsync(environment.ProjectRoot, sprintId, cancellationToken))!)),
+            cancellationToken);
+        await orchestrator.RunSprintAsync(
+            new(environment.ProjectRoot, sprintId, toReady.Sprint!.Version,
+                SprintOrchestrator.RunSprintKey(toReady.Sprint)),
+            cancellationToken);
+        StartAttemptResult started =
+            await scheduler.StartAttemptAsync(environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        await store.AppendAttemptDiffRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new DiffPayload(
+                2,
+                12,
+                3,
+                [
+                    new DiffFileStat("src/Widget.cs", 12, 3, DiffChangeKinds.Modified),
+                    new DiffFileStat("assets/icon.png", 0, 0, DiffChangeKinds.Binary),
+                ],
+                0),
+            cancellationToken);
+
+        StringWriter textOutput = new(CultureInfo.InvariantCulture);
+        RootCommand textRoot = CliApplication.CreateRootCommand(Text(), textOutput, environment.Application);
+        int textExitCode = await textRoot
+            .Parse(["sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        StringWriter jsonOutput = new(CultureInfo.InvariantCulture);
+        RootCommand jsonRoot = CliApplication.CreateRootCommand(Text(), jsonOutput, environment.Application);
+        int jsonExitCode = await jsonRoot
+            .Parse([
+                "sprint", "timeline", sprintId.Value.ToString(), "--project-root", environment.ProjectRoot, "--json",
+            ])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, textExitCode);
+        Assert.Equal(0, jsonExitCode);
+        string text = textOutput.ToString();
+        Assert.DoesNotContain(MessageKeys.WorkflowAttemptDiffRecorded, text, StringComparison.Ordinal);
+        Assert.Contains("Changed 2 file(s): +12/-3 lines.", text, StringComparison.Ordinal);
+
+        using JsonDocument json = JsonDocument.Parse(jsonOutput.ToString());
+        JsonElement diff = json.RootElement
+            .GetProperty("items")
+            .EnumerateArray()
+            .Single(item => item.GetProperty("type").GetString() == WorkflowEvent.AttemptDiffRecordedType)
+            .GetProperty("payload")
+            .GetProperty("diff");
+        Assert.Equal(2, diff.GetProperty("files_changed").GetInt32());
+        Assert.Equal(12, diff.GetProperty("insertions").GetInt32());
+        Assert.Equal(3, diff.GetProperty("deletions").GetInt32());
+        Assert.Equal(0, diff.GetProperty("elided_files").GetInt32());
+        JsonElement[] files = [.. diff.GetProperty("files").EnumerateArray()];
+        Assert.Equal(2, files.Length);
+        Assert.Equal("src/Widget.cs", files[0].GetProperty("path").GetString());
+        Assert.Equal(DiffChangeKinds.Binary, files[1].GetProperty("change_kind").GetString());
     }
 
     private static SurfaceText Text() => new(new ResourceLocalizationCatalog(), CultureInfo.InvariantCulture);

@@ -657,6 +657,70 @@ public sealed class SprintEventStoreTests
         Assert.True(cancelled.Succeeded, "Validating -> Cancelled must be a valid attempt transition.");
         Assert.Equal(AttemptState.Cancelled, cancelled.State!.Attempts[attemptKey].State);
     }
+
+    /// <summary>ADR 0059: the whole point of the `payload` envelope is carrying a nested list the
+    /// flat <see cref="WorkflowEvent.Arguments"/> map genuinely cannot. This proves the structured
+    /// payload survives the full durable round trip (serialize -> schema-validate -> JSONL ->
+    /// re-read -> schema-validate -> deserialize) with per-file rows intact, and that the flat
+    /// summary the timeline template renders is derived from that same payload rather than supplied
+    /// independently, so the two can never disagree.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnAttemptDiffPayloadSurvivesTheJournalRoundTripWithItsPerFileRowsIntact()
+    {
+        using TestRoot root = new();
+        FileSprintEventLog log = new(new FakeClock());
+        SprintId sprintId = SprintId.New();
+        AttemptId attemptId = AttemptId.New();
+        string attemptKey = attemptId.Value.ToString("D");
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Sprint, sprintId.Value.ToString("D"), "SprintChanged",
+            "workflow.sprint_created", "draft", 0, Guid.NewGuid(), cancellationToken);
+        await log.AppendTransitionAsync(
+            root.Path, sprintId, AggregateKind.Attempt, attemptKey, "AttemptChanged",
+            "workflow.attempt_created", "created", 0, Guid.NewGuid(), cancellationToken);
+        DiffPayload diff = new(
+            3,
+            12,
+            4,
+            [
+                new DiffFileStat("src/Forge.Runtime/A.cs", 10, 4, DiffChangeKinds.Modified),
+                new DiffFileStat("docs/b.md", 2, 0, DiffChangeKinds.Added),
+                new DiffFileStat("assets/logo.png", 0, 0, DiffChangeKinds.Binary),
+            ],
+            1);
+
+        await log.AppendAttemptDiffRecordedAsync(root.Path, sprintId, attemptId, diff, cancellationToken);
+
+        IReadOnlyList<WorkflowEvent> events = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        WorkflowEvent recorded = Assert.Single(
+            events, item => item.Type == WorkflowEvent.AttemptDiffRecordedType);
+        // Compared field by field, not with record equality: a record's synthesized Equals compares
+        // its IReadOnlyList member by reference, so `Assert.Equal(diff, ...)` would fail on an
+        // otherwise perfect round trip and pass on nothing useful.
+        DiffPayload actual = recorded.Payload!.Diff!;
+        Assert.Equal(diff.FilesChanged, actual.FilesChanged);
+        Assert.Equal(diff.Insertions, actual.Insertions);
+        Assert.Equal(diff.Deletions, actual.Deletions);
+        Assert.Equal(diff.ElidedFiles, actual.ElidedFiles);
+        Assert.Equal(diff.Files, actual.Files);
+        Assert.Equal(attemptKey, recorded.Aggregate.Id);
+        Assert.Equal("3", recorded.Arguments[WorkflowEvent.DiffFilesChangedArgument]);
+        Assert.Equal("12", recorded.Arguments[WorkflowEvent.DiffInsertionsArgument]);
+        Assert.Equal("4", recorded.Arguments[WorkflowEvent.DiffDeletionsArgument]);
+
+        // Recorded at most once per attempt: an attempt produces exactly one commit, so a second
+        // call is always a replay of the same already-landed one.
+        await log.AppendAttemptDiffRecordedAsync(root.Path, sprintId, attemptId, diff, cancellationToken);
+        IReadOnlyList<WorkflowEvent> replayed = await log.GetEventsAsync(root.Path, sprintId, cancellationToken);
+        Assert.Single(replayed, item => item.Type == WorkflowEvent.AttemptDiffRecordedType);
+
+        // Never folded: a diff summary is durable audit content, not workflow state, so it must not
+        // disturb the attempt's own state or version.
+        SprintWorkflowState? state = await log.LoadAsync(root.Path, sprintId, cancellationToken);
+        Assert.Equal(AttemptState.Created, state!.Attempts[attemptKey].State);
+    }
 }
 
 internal sealed class FakeClock : IClock

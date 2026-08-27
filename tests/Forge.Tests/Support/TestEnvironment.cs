@@ -520,6 +520,19 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
         Task.FromResult(
             FailNextDiff ? GitDiffResult.Fail(DiffFailureCode) : GitDiffResult.Ok(Diff, DiffTruncated));
 
+    /// <summary>Returned by every <see cref="DiffStatAsync"/> call (ADR 0059); a test overrides it to
+    /// exercise what an executor records for a specific change. Shares
+    /// <see cref="FailNextDiff"/>/<see cref="DiffFailureCode"/> with <see cref="DiffAsync"/> -- both
+    /// read the same two commits through the same `git`, so a failure that hides one hides the
+    /// other. The real `--numstat` parsing itself belongs to <c>GitIsolationTests</c>, against real
+    /// `git.exe`.</summary>
+    public DiffPayload DiffStat { get; set; } = new(1, 1, 0, [new DiffFileStat("file.txt", 1, 0, "modified")], 0);
+
+    public Task<GitDiffStatResult> DiffStatAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken) =>
+        Task.FromResult(
+            FailNextDiff ? GitDiffStatResult.Fail(DiffFailureCode) : GitDiffStatResult.Ok(DiffStat));
+
     public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
         heads.TryGetValue(path, out string? head)
             ? Task.FromResult(head)

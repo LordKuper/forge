@@ -182,6 +182,57 @@ public sealed class SprintTimelineTests
         Assert.DoesNotContain(secret, serialized, StringComparison.Ordinal);
     }
 
+    /// <summary>ADR 0059: the structured payload is a brand-new string-bearing field on
+    /// <see cref="SprintTimelineItem"/>, and <see cref="Forge.Infrastructure.SecretRedactor.RedactProperties"/>
+    /// -- which is all pass 1 applied before this -- only ever walks
+    /// <see cref="SprintTimelineItem.Arguments"/>. A payload that bypassed redaction is exactly the
+    /// class of gap the two review rounds above already caught once for
+    /// <see cref="SprintTimelineItem.MessageKey"/>, so it is pinned here before it can recur: a
+    /// credential-shaped file path inside the payload must be gone from BOTH the projector's own
+    /// pass-1 output and the shared <see cref="ForgeApplication.GetSprintTimelineAsync"/> read path
+    /// every surface uses, including that page's serialized `--json`/wire form.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADiffPayloadsFilePathIsRedactedByBothPassesAndNeverReachesASerializedPage()
+    {
+        using TestEnvironment environment = new();
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        SprintId sprintId = (await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        StartAttemptResult started = await scheduler.StartAttemptAsync(
+            environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        Assert.True(started.Succeeded, started.DiagnosticCode);
+
+        const string secret = "password=Sup3rSecretValue";
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        await store.AppendAttemptDiffRecordedAsync(
+            environment.ProjectRoot,
+            sprintId,
+            started.AttemptId!,
+            new DiffPayload(1, 1, 0, [new DiffFileStat($"config/{secret}.env", 1, 0, DiffChangeKinds.Added)], 0),
+            cancellationToken);
+
+        // Pass 1, on its own: a projector built directly on the real store, with no Apply call.
+        SprintTimelinePage pass1Only = await new SprintTimelineProjector(store)
+            .CreateAsync(environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        Assert.Contains(pass1Only.Items, item => item.Payload?.Diff is not null);
+        Assert.DoesNotContain(secret, StatusJson.Serialize(pass1Only), StringComparison.Ordinal);
+
+        // The shared read path every surface actually calls (pass 1 then pass 2).
+        SprintTimelinePage page = await environment.Application.GetSprintTimelineAsync(
+            environment.ProjectRoot, sprintId.Value, null, cancellationToken);
+        SprintTimelineItem recorded = Assert.Single(
+            page.Items, item => item.Type == WorkflowEvent.AttemptDiffRecordedType);
+        DiffFileStat file = Assert.Single(recorded.Payload!.Diff!.Files);
+        Assert.DoesNotContain(secret, file.Path, StringComparison.Ordinal);
+        Assert.Contains("[REDACTED:credential]", file.Path, StringComparison.Ordinal);
+        Assert.DoesNotContain(secret, StatusJson.Serialize(page), StringComparison.Ordinal);
+    }
+
     // Regression (PR #97 review round 2, finding 1): the test above proves the Apply *method*
     // redacts MessageKey, but calls it directly on a locally-built page -- it never exercises
     // ForgeApplication.GetSprintTimelineAsync, so it cannot observe whether that method still calls

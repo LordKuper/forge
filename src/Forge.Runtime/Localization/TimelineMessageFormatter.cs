@@ -104,6 +104,16 @@ public static class TimelineMessageFormatter
                 [Value(arguments, WorkflowEvent.AgentSummaryTextArgument)],
 
             // All three always present: required by WorkflowFold.IsTransitionRecord for this event
+            // type, and derived from the event's own payload by the single producing store method
+            // (ISprintStore.AppendAttemptDiffRecordedAsync) rather than supplied independently.
+            MessageKeys.WorkflowAttemptDiffRecorded =>
+                [
+                    Value(arguments, WorkflowEvent.DiffFilesChangedArgument),
+                    Value(arguments, WorkflowEvent.DiffInsertionsArgument),
+                    Value(arguments, WorkflowEvent.DiffDeletionsArgument),
+                ],
+
+            // All three always present: required by WorkflowFold.IsTransitionRecord for this event
             // type.
             MessageKeys.WorkflowStageRevisionRecorded =>
                 [

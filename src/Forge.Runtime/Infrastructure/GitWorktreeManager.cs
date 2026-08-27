@@ -190,6 +190,41 @@ public sealed partial class GitWorktreeManager(IProcessRunner processRunner) : I
         return GitDiffResult.Ok(truncated ? TruncateSafely(diff, GitWorktreeManagerDiffBudget.MaxCharacters) : diff, truncated);
     }
 
+    /// <summary>ADR 0059. Two `git diff` invocations, not one: `--numstat` alone cannot distinguish
+    /// an added file from a modified one whose change happens to be additions only, and combining
+    /// `--numstat` with `--name-status` makes git emit only the latter (verified directly against
+    /// real git). Both run with `-z`, so a path containing a space, a quote, or a non-ASCII byte
+    /// arrives verbatim instead of in git's C-quoted form, and a rename arrives as two separate
+    /// NUL-terminated fields instead of the `old =&gt; new` (or `dir/{a =&gt; b}`) shorthand plain
+    /// `--numstat` produces.</summary>
+    public async Task<GitDiffStatResult> DiffStatAsync(
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken)
+    {
+        if (!CommitPattern().IsMatch(fromCommit) || !CommitPattern().IsMatch(toCommit))
+        {
+            return GitDiffStatResult.Fail(DiagnosticCodes.WorktreeCommitInvalid);
+        }
+
+        ProcessResult numstat = await RunInWorktreeAsync(
+            path, ["diff", "--numstat", "-z", "--no-color", fromCommit, toCommit], cancellationToken)
+            .ConfigureAwait(false);
+        if (numstat.ExitCode != 0)
+        {
+            return GitDiffStatResult.Fail(DiagnosticCodes.WorktreeDiffFailed, numstat.StandardError);
+        }
+
+        ProcessResult nameStatus = await RunInWorktreeAsync(
+            path, ["diff", "--name-status", "-z", "--no-color", fromCommit, toCommit], cancellationToken)
+            .ConfigureAwait(false);
+        if (nameStatus.ExitCode != 0)
+        {
+            return GitDiffStatResult.Fail(DiagnosticCodes.WorktreeDiffFailed, nameStatus.StandardError);
+        }
+
+        return GitDiffStatResult.Ok(
+            GitDiffStatParser.Parse(numstat.StandardOutput, nameStatus.StandardOutput));
+    }
+
     /// <summary>Never splits a UTF-16 surrogate pair at the truncation boundary: cutting a string at
     /// a fixed code-unit count with a bare slice can land between a high and low surrogate, producing
     /// a malformed string with an unpaired high surrogate at its end -- the same bound and safety rule

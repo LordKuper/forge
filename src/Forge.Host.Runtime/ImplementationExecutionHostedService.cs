@@ -116,6 +116,14 @@ public sealed class ImplementationExecutionHostedService(
             "Integrating sprint {SprintId}'s implementation commit failed ({DiagnosticCode}); the " +
                 "attempt is recorded as failed and will retry.");
 
+    private static readonly Action<ILogger, Guid, string, Exception?> LogDiffStatUnavailable =
+        LoggerMessage.Define<Guid, string>(
+            LogLevel.Warning,
+            new EventId(2058, "ImplementationExecutionDiffStatUnavailable"),
+            "Recording the diff summary for sprint {SprintId}'s implementation attempt failed " +
+                "({DiagnosticCode}); the change itself is already integrated, so only the timeline " +
+                "entry is missing.");
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using PeriodicTimer timer = new(options.Interval);
@@ -532,6 +540,14 @@ public sealed class ImplementationExecutionHostedService(
             return ImplementationAttemptOutcome.Stopped;
         }
 
+        // ADR 0059: read BEFORE IntegrateAsync, because a successful integrate discards this
+        // attempt's own worktree -- the very worktree this read resolves against. Recorded only
+        // after that integrate succeeds, though (below): a diff summary for work that never reached
+        // the integration branch would be a durable claim about a change the sprint does not have.
+        GitDiffStatResult diffStat = await gitIsolation.ReadDiffStatAsync(
+            options.ProjectRoot, projectId, sprintId, attemptId, expectedIntegrationTip,
+            committed.Commit ?? expectedIntegrationTip, cancellationToken).ConfigureAwait(false);
+
         GitOperationResult integrated = await gitIsolation.IntegrateAsync(
             options.ProjectRoot, projectId, sprintId, attemptId, expectedIntegrationTip, cancellationToken)
             .ConfigureAwait(false);
@@ -552,8 +568,39 @@ public sealed class ImplementationExecutionHostedService(
             LogWorktreeDiscardFailed(logger, sprintId.Value, null);
         }
 
+        await RecordAttemptDiffAsync(sprintId, attemptId, diffStat, cancellationToken).ConfigureAwait(false);
+
         return ImplementationAttemptOutcome.Success(
             NodeExecutionDiagnostics.Digest(integrated.Commit ?? string.Empty), effectiveSummary);
+    }
+
+    /// <summary>ADR 0059: one <see cref="WorkflowEvent.AttemptDiffRecordedType"/> event per attempt,
+    /// appended once the attempt's commit is actually on the sprint's integration branch. Never
+    /// fails the attempt: the change itself is already integrated and durable by this point, so a
+    /// `git` or journal failure here costs an audit record, not work -- the same accepted, named debt
+    /// <c>RecordHandoffAsync</c> already carries at this service's other post-success write. An
+    /// attempt whose diff is genuinely empty is still recorded (an all-zero payload): "this attempt
+    /// changed nothing" is itself a fact worth showing on the timeline, and skipping it would make an
+    /// absent record ambiguous between "empty" and "recorded before this feature existed".</summary>
+    private async Task RecordAttemptDiffAsync(
+        SprintId sprintId, AttemptId attemptId, GitDiffStatResult diffStat, CancellationToken cancellationToken)
+    {
+        if (!diffStat.Succeeded || diffStat.Stat is not { } stat)
+        {
+            LogDiffStatUnavailable(logger, sprintId.Value, diffStat.DiagnosticCode, null);
+            return;
+        }
+
+        try
+        {
+            await store.AppendAttemptDiffRecordedAsync(
+                options.ProjectRoot, sprintId, attemptId, stat, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (
+            exception is IOException or UnauthorizedAccessException or InvalidDataException)
+        {
+            LogDiffStatUnavailable(logger, sprintId.Value, DiagnosticCodes.WorktreeDiffFailed, exception);
+        }
     }
 
     private async Task DiscardAsync(
