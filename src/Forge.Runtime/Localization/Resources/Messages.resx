@@ -298,6 +298,8 @@
   <data name="workspace_action.move_to_stage.rewind" xml:space="preserve"><value>Rewind to this stage.</value></data>
   <data name="workspace_action.move_to_stage.same" xml:space="preserve"><value>This is already the current stage.</value></data>
   <data name="workspace_action.move_to_stage.resume_rewind" xml:space="preserve"><value>Resume the interrupted rewind to this stage.</value></data>
+  <data name="workspace_action.approve_gate" xml:space="preserve"><value>Approve the human gate this node is waiting on.</value></data>
+  <data name="workspace_action.reject_gate" xml:space="preserve"><value>Reject the human gate this node is waiting on.</value></data>
   <data name="ModelsQuotaDescription" xml:space="preserve"><value>Show provider/model account quota status.</value></data>
   <data name="ModelsQuotaTitle" xml:space="preserve"><value>Provider quota:</value></data>
   <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Quota status: not yet available.</value></data>
