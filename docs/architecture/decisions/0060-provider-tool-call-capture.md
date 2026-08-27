@@ -171,10 +171,21 @@ attempt runs its provider exactly once and a second call is always a replay.
 The per-call list is capped at `ProviderToolUseBudget.MaxCalls` (50), matching
 `payload.tool_use.calls`'s own `maxItems`, with `ContractTests.TheEventSchemasToolCallCapMatchesTheBoundTheProducerActuallyApplies`
 reading both actual sources and failing if they drift. Only the rows are bounded; `tool_calls`,
-`commands`, and `edits` are totals over every observed call, with the remainder in `elided_calls`. The
-sink itself carries no second cap: every tool call originates from one retained `ProviderEvent`, so
-`ProviderExecution.MaxEventCount` (20,000) already bounds the list, and a second bound there would
-silently under-report the very totals the payload derives from it.
+`commands`, and `edits` are totals over every observed call, with the remainder in `elided_calls`.
+
+The sink carries a second, larger cap of its own — `ProviderExecution.MaxRetainedToolCalls`, four
+times the durable one — because `MaxEventCount` (20,000) does **not** bound the row list: one
+extraction returns a *list* of candidates, and a `file_change` completion becomes one row per
+`changes` entry, so a single line fans out into as many rows as that array holds inside the 1 MiB
+frame bound. "Every entry originates from one retained event" was never true of this design and is not
+the bound in place. Capping the rows costs the durable record nothing: it is larger than the durable
+cap, and `ProviderRunResult.ToolCallTotals` counts each call *before* the retention check — the payload
+reads every total and `elided_calls` from those counters, never from the retained list — so a call past
+the cap is elided, never silently subtracted from the totals. The sink's two in-memory id collections
+(pending starts for duration pairing, and the ids already counted as drift) do not follow event count
+either, and are capped at `MaxEventCount` entries each: a dropped pending start costs only a duration
+the record already declares nullable, and a full drift set stops deduplicating new ids, which can
+over-count drift but never under-count it — the direction an id-less line already accepts.
 
 ### `WorkflowEventPayload`'s new member is required, with no default
 
@@ -211,11 +222,12 @@ would still pass the diff test.
 
 - `Forge.Runtime` (`Providers/ProviderExecution.cs`): `ProviderToolCallKinds`,
   `ProviderToolCallOutcome`, `ProviderToolCallCandidate`, `ProviderToolCallExtraction`,
-  `ProviderToolCall`, `ProviderToolUse.ToPayload`; `ProviderRunResult.ToolCalls`/`UnmappedItemCount`
-  (positional, last, with `Success`'s two new arguments optional so unrelated call sites are
-  unchanged); `RunAsync`'s trailing optional `extractToolCall`; `BoundedOutputSink`'s accumulation,
-  start/completion pairing, and drift counting under its existing lock;
-  `NormalizeToolCallTarget`.
+  `ProviderToolCall`, `ProviderToolCallTotals`, `ProviderToolUse.ToPayload`;
+  `ProviderRunResult.ToolCalls`/`UnmappedItemCount`/`ToolCallTotals` (positional, last, with `Success`'s
+  three new arguments optional so unrelated call sites are unchanged, and the totals derived from the
+  list for every producer that never capped it); `MaxRetainedToolCalls`; `RunAsync`'s trailing optional
+  `extractToolCall`; `BoundedOutputSink`'s accumulation, start/completion pairing, and drift counting
+  under its existing lock; `NormalizeToolCallTarget`.
 - `Forge.Providers.Codex.Windows` (`CodexLlmProvider.cs`): `ExtractToolCall` and its helpers, wired as
   `RunAsync`'s new argument. `Classify` and the text extractor are untouched.
 - `Forge.Runtime` (`Domain/WorkflowEvents.cs`): `ToolCallStat`, `ToolUsePayload`;

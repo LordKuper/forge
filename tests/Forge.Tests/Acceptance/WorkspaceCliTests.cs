@@ -257,8 +257,10 @@ public sealed class WorkspaceCliTests
     /// CLI code at all, so this is what proves the claim -- the localized one-line summary appears in
     /// the plain-text render and the structured per-call rows ride out through `--json`, both purely
     /// by virtue of the generic timeline rendering that already existed. Also pins the nullable
-    /// per-call fields' wire shape: a row with no target/exit code omits those properties entirely
-    /// rather than writing explicit nulls.</summary>
+    /// per-call fields' shape on THIS surface: `--json` writes them as explicit nulls, so a consumer
+    /// always sees one complete object shape. That is the opposite of the durable journal line, which
+    /// omits an absent field -- a different serializer on a different path, pinned by
+    /// `SprintEventStoreTests.AnAttemptToolUsePayloadSurvivesTheJournalRoundTripWithItsPerCallRowsIntact`.</summary>
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task SprintTimelineRendersTheToolUseSummaryAsTextAndCarriesItsStructuredPayloadInJsonMode()
@@ -333,9 +335,8 @@ public sealed class WorkspaceCliTests
         JsonElement[] calls = [.. toolUse.GetProperty("calls").EnumerateArray()];
         Assert.Equal(3, calls.Length);
         Assert.Equal(ProviderToolCallKinds.Command, calls[0].GetProperty("kind").GetString());
-        // Explicit nulls here, unlike the journal line: `StatusJson` serializes with
-        // JsonIgnoreCondition.Never so a `--json` consumer sees a stable, complete object shape,
-        // whereas the durable envelope omits an absent field (see the store round-trip test).
+        // Explicit, not omitted: `StatusJson` serializes with JsonIgnoreCondition.Never. See the
+        // summary above for the contrast with the journal's own shape.
         Assert.Equal(JsonValueKind.Null, calls[0].GetProperty("target").ValueKind);
         Assert.Equal(137, calls[1].GetProperty("exit_code").GetInt32());
         Assert.False(calls[1].GetProperty("succeeded").GetBoolean());

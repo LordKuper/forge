@@ -470,6 +470,49 @@ public sealed class CodexLlmProviderTests
         Assert.Single(payload.Calls.Select(stat => stat.DurationMilliseconds).Distinct());
     }
 
+    /// <summary>Regression test (PR #117 review): `changes` is an array of arbitrary length and every
+    /// entry becomes its own row, so ONE stream line can fan out into many tool calls — which is why the
+    /// sink's list was never bounded by `MaxEventCount` the way its doc comment once claimed. It is now
+    /// capped at <see cref="ProviderExecution.MaxRetainedToolCalls"/>, and the point of this test is
+    /// that the cap costs the durable record nothing: the totals and the elision count are taken from
+    /// counters that see every observed call, so a fanned-out line is reported at its true size with the
+    /// remainder elided, never quietly shrunk to whatever survived in memory.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RunAsyncCapsTheRowsOneFannedOutStreamLineRetainsWithoutShrinkingItsDurableTotals()
+    {
+        const int entries = ProviderExecution.MaxRetainedToolCalls + 17;
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string changes = string.Join(
+            ',',
+            Enumerable.Range(0, entries).Select(index =>
+                "{\"path\":\"" + CapturedWorktreeJson + "\\\\f" + index + ".txt\",\"kind\":\"update\"}"));
+        string stream = string.Join(
+            '\n',
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"file_change\",\"changes\":[" +
+                changes + "],\"status\":\"completed\"}}",
+            """{"type":"turn.completed"}""");
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(0, stream, string.Empty));
+
+        ProviderRunResult result = await provider.RunAsync(
+            "prompt", CapturedWorktree, TestContext.Current.CancellationToken);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(ProviderExecution.MaxRetainedToolCalls, result.ToolCalls.Count);
+        Assert.Equal(new ProviderToolCallTotals(entries, 0, entries), result.ToolCallTotals);
+
+        ToolUsePayload payload = Assert.IsType<ToolUsePayload>(ProviderToolUse.ToPayload(result));
+        Assert.Equal(entries, payload.ToolCalls);
+        Assert.Equal(entries, payload.Edits);
+        Assert.Equal(0, payload.Commands);
+        Assert.Equal(ProviderToolUseBudget.MaxCalls, payload.Calls.Count);
+        Assert.Equal(entries - ProviderToolUseBudget.MaxCalls, payload.ElidedCalls);
+        // The rows that did survive are ordinary, fully normalized rows, not truncated stand-ins.
+        Assert.Equal("f0.txt", payload.Calls[0].Target);
+        Assert.Equal(0, result.UnmappedItemCount);
+    }
+
     /// <summary>Regression test (PR #117 review): `unmapped_items` is a durable, versioned, publicly
     /// documented field counted in ITEMS, but Codex describes one logical item across TWO stream lines
     /// — `item.started` then `item.completed`, sharing `item.id`, exactly as the recorded fixture shows

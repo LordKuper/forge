@@ -173,6 +173,31 @@ public sealed record ProviderToolCall(
     int? ExitCode,
     bool? Succeeded);
 
+/// <summary>How many tool calls a run OBSERVED, which is deliberately not the same as how many rows
+/// <see cref="ProviderRunResult.ToolCalls"/> retained: the sink stops retaining rows at
+/// <see cref="ProviderExecution.MaxRetainedToolCalls"/>, so one stream line whose candidate list fans
+/// out (Codex's `file_change` `changes` array is an array of arbitrary length) cannot grow that list
+/// without limit. Past the cap a call survives only as these counters, which is what keeps ADR
+/// 0059/0060's "honest totals plus an explicit elision count" rule true:
+/// <see cref="ProviderToolUse.ToPayload"/> derives every total from here and never from the retained
+/// list. <see cref="ProviderExecution.MaxAggregateBytes"/> bounds them far below
+/// <see cref="int.MaxValue"/>, since every counted call had to occupy bytes on the wire.</summary>
+public sealed record ProviderToolCallTotals(int Calls, int Commands, int Edits)
+{
+    public static readonly ProviderToolCallTotals None = new(0, 0, 0);
+
+    /// <summary>The totals of a list that was never capped — the right answer for every producer that
+    /// builds its rows in memory (a test double, any adapter that does not run through the sink).</summary>
+    public static ProviderToolCallTotals Of(IReadOnlyList<ProviderToolCall> calls)
+    {
+        ArgumentNullException.ThrowIfNull(calls);
+        return new(
+            calls.Count,
+            calls.Count(call => call.Kind == ProviderToolCallKinds.Command),
+            calls.Count(call => call.Kind == ProviderToolCallKinds.Edit));
+    }
+}
+
 public sealed record ProviderRunResult(
     bool Succeeded,
     IReadOnlyList<ProviderEvent> Events,
@@ -180,24 +205,37 @@ public sealed record ProviderRunResult(
     ProviderFailureKind Failure,
     string? Detail,
     IReadOnlyList<ProviderToolCall> ToolCalls,
-    int UnmappedItemCount)
+    int UnmappedItemCount,
+    ProviderToolCallTotals ToolCallTotals)
 {
-    /// <summary>ADR 0060's two trailing arguments are optional so the many call sites that have no
+    /// <summary>ADR 0060's three trailing arguments are optional so the many call sites that have no
     /// tool-call data to report (every non-Codex adapter, and every test double) stay unchanged; the
-    /// record's own members are required, so no producer can forget them by accident.</summary>
+    /// record's own members are required, so no producer can forget them by accident. An omitted
+    /// <paramref name="toolCallTotals"/> is derived from <paramref name="toolCalls"/>, which is correct
+    /// for exactly the producers that never capped that list — only the sink, which does, passes its
+    /// own.</summary>
     public static ProviderRunResult Success(
         IReadOnlyList<ProviderEvent> events,
         ProviderTerminalResult terminalResult,
         IReadOnlyList<ProviderToolCall>? toolCalls = null,
-        int unmappedItemCount = 0) =>
-        new(true, events, terminalResult, ProviderFailureKind.None, null, toolCalls ?? [], unmappedItemCount);
+        int unmappedItemCount = 0,
+        ProviderToolCallTotals? toolCallTotals = null) =>
+        new(
+            true,
+            events,
+            terminalResult,
+            ProviderFailureKind.None,
+            null,
+            toolCalls ?? [],
+            unmappedItemCount,
+            toolCallTotals ?? ProviderToolCallTotals.Of(toolCalls ?? []));
 
     /// <summary>`detail` may echo raw provider output, so it is redacted before it is stored.
     /// Tool-call data is deliberately discarded on the failure path (ADR 0060): the attempt's work
     /// never reaches the integration branch, exactly as ADR 0059 already decided for diff
     /// statistics.</summary>
     public static ProviderRunResult Failed(ProviderFailureKind failure, string detail) =>
-        new(false, [], null, failure, SecretRedactor.Redact(detail), [], 0);
+        new(false, [], null, failure, SecretRedactor.Redact(detail), [], 0, ProviderToolCallTotals.None);
 }
 
 /// <summary>Maps a completed run's in-memory tool-call observations onto the durable
@@ -207,26 +245,33 @@ public static class ProviderToolUse
 {
     /// <summary>Returns <see langword="null"/> when there is genuinely nothing to record (no tool
     /// calls and no unmapped items). A non-zero unmapped count alone still produces a payload: that
-    /// is a drift signal worth being durable, even with no mapped call beside it.</summary>
+    /// is a drift signal worth being durable, even with no mapped call beside it.
+    ///
+    /// Every total comes from <see cref="ProviderRunResult.ToolCallTotals"/> rather than from the row
+    /// list, because that list is itself capped in memory
+    /// (<see cref="ProviderExecution.MaxRetainedToolCalls"/>): counting the rows would silently report
+    /// a run that fanned out past the cap as a quieter one than it was, and would under-report the
+    /// elision count that exists precisely to say so.</summary>
     public static ToolUsePayload? ToPayload(ProviderRunResult result)
     {
         ArgumentNullException.ThrowIfNull(result);
-        if (result.ToolCalls.Count == 0 && result.UnmappedItemCount == 0)
+        ProviderToolCallTotals totals = result.ToolCallTotals;
+        if (totals.Calls == 0 && result.UnmappedItemCount == 0)
         {
             return null;
         }
 
         return new(
-            result.ToolCalls.Count,
-            result.ToolCalls.Count(call => call.Kind == ProviderToolCallKinds.Command),
-            result.ToolCalls.Count(call => call.Kind == ProviderToolCallKinds.Edit),
+            totals.Calls,
+            totals.Commands,
+            totals.Edits,
             [
                 .. result.ToolCalls
                     .Take(ProviderToolUseBudget.MaxCalls)
                     .Select(call => new ToolCallStat(
                         call.Kind, call.Target, call.DurationMilliseconds, call.ExitCode, call.Succeeded)),
             ],
-            Math.Max(0, result.ToolCalls.Count - ProviderToolUseBudget.MaxCalls),
+            Math.Max(0, totals.Calls - ProviderToolUseBudget.MaxCalls),
             result.UnmappedItemCount);
     }
 }
@@ -247,6 +292,18 @@ public static class ProviderExecution
     /// applied to event count, so a runaway provider process cannot grow memory or durable state
     /// without limit.</summary>
     public const int MaxEventCount = 20_000;
+
+    /// <summary>Tool-call rows one run keeps in memory. A separate bound from
+    /// <see cref="MaxEventCount"/> because one retained event does NOT produce at most one row: a
+    /// single line's extraction may carry an arbitrarily long candidate list (Codex's `file_change`
+    /// `changes` is an array whose entries each become a row), so without this the list would be
+    /// bounded only by how many array entries fit inside the 1 MiB frame bound, times every line.
+    /// Sized at four times the durable per-record cap
+    /// (<see cref="Forge.Application.ProviderToolUseBudget.MaxCalls"/>) so it can never discard a row
+    /// the durable payload would have written, while still leaving room for the retained set to be
+    /// inspected beyond it; a call past the cap is not lost, it is counted into
+    /// <see cref="ProviderToolCallTotals"/> and reported as an elision.</summary>
+    public const int MaxRetainedToolCalls = ProviderToolUseBudget.MaxCalls * 4;
 
     /// <summary>Total stdout+stderr bytes read for one run before the adapter fails closed —
     /// ADR 0006's aggregate-output bound.</summary>
@@ -335,7 +392,7 @@ public static class ProviderExecution
                 ProviderFailureKind.DuplicateTerminalResult,
                 $"The provider emitted {sink.TerminalCount} terminal-result events for one run."),
             _ => ProviderRunResult.Success(
-                sink.Events, sink.TerminalResult!, sink.ToolCalls, sink.UnmappedItemCount),
+                sink.Events, sink.TerminalResult!, sink.ToolCalls, sink.UnmappedItemCount, sink.ToolCallTotals),
         };
     }
 
@@ -468,9 +525,12 @@ public static class ProviderExecution
 
         /// <summary>Correlation id -> <see cref="Stopwatch.GetTimestamp"/> at the moment that tool
         /// call's `started` line arrived, so a completion can report how long Forge actually observed
-        /// it running. In-memory only: the vendor's raw item id is never persisted. Bounded by the
-        /// same <see cref="MaxEventCount"/> that bounds <see cref="events"/>, since every entry comes
-        /// from exactly one retained event.</summary>
+        /// it running. In-memory only: the vendor's raw item id is never persisted. Explicitly capped
+        /// at <see cref="MaxEventCount"/> entries rather than merely assumed to be bounded by it: one
+        /// line's extraction may carry many candidates, so entry count does not follow event count.
+        /// A start past the cap is dropped, which costs its completion nothing but the duration — a
+        /// field <see cref="ProviderToolCall"/> already declares nullable — while an id already
+        /// pending is always re-stamped, full or not.</summary>
         private readonly Dictionary<string, long> toolCallStarts = new(StringComparer.Ordinal);
 
         /// <summary>Correlation ids already counted in <see cref="UnmappedItemCount"/>. One logical
@@ -479,23 +539,38 @@ public static class ProviderExecution
         /// unrecognized item counts once, on whichever of its lines arrives first, not once per line.
         /// A line carrying no usable id is not recorded here at all and always counts on its own:
         /// there is nothing to deduplicate on, and under-counting real drift would be worse than the
-        /// double-count this set exists to prevent. In-memory only and bounded by the same
-        /// <see cref="MaxEventCount"/> that bounds <see cref="toolCallStarts"/>, for the same reason —
-        /// every entry comes from exactly one retained event.</summary>
+        /// double-count this set exists to prevent. In-memory only, and capped at
+        /// <see cref="MaxEventCount"/> entries exactly like <see cref="toolCallStarts"/> and for the
+        /// same reason. An id already in the set still deduplicates once the set is full; only a NEW
+        /// id stops being remembered, so a full set can over-count drift and never under-count it —
+        /// the same direction the id-less case already accepts.</summary>
         private readonly HashSet<string> unmappedItemIds = new(StringComparer.Ordinal);
 
         private long aggregateBytes;
+
+        private int observedToolCalls;
+
+        private int observedCommands;
+
+        private int observedEdits;
 
         /// <summary>Read only after both stream tasks have completed (ADR 0006 stream consumption
         /// has finished by the time a caller inspects this), so no lock is needed here.</summary>
         public IReadOnlyList<ProviderEvent> Events => events;
 
-        /// <summary>ADR 0060. Same read-after-completion rule as <see cref="Events"/>. Deliberately
-        /// carries no cap of its own: every entry originates from one retained
-        /// <see cref="ProviderEvent"/>, so <see cref="MaxEventCount"/> already bounds it, and a
-        /// second bound here would silently under-report the totals the durable payload derives from
-        /// this list.</summary>
+        /// <summary>ADR 0060. Same read-after-completion rule as <see cref="Events"/>. Capped at
+        /// <see cref="MaxRetainedToolCalls"/> rows: an entry here does NOT correspond one-to-one to a
+        /// retained <see cref="ProviderEvent"/>, because one line's extraction may carry an
+        /// arbitrarily long candidate list, so <see cref="MaxEventCount"/> alone would leave this list
+        /// bounded only by how many candidates fit inside the frame bound. Capping the rows costs the
+        /// durable payload nothing, because a call past the cap is still counted in
+        /// <see cref="ToolCallTotals"/> — which is where <see cref="ProviderToolUse.ToPayload"/> reads
+        /// every total and the elision count from.</summary>
         public IReadOnlyList<ProviderToolCall> ToolCalls => toolCalls;
+
+        /// <summary>Totals over every observed call, retained or not. Same read-after-completion rule
+        /// as <see cref="Events"/>.</summary>
+        public ProviderToolCallTotals ToolCallTotals => new(observedToolCalls, observedCommands, observedEdits);
 
         /// <summary>ADR 0060's drift counter: `ToolUse`-classified lines whose subtype this adapter's
         /// mapping does not cover at all. Never incremented for recognized non-tool-call content
@@ -694,11 +769,29 @@ public static class ProviderExecution
 
             if (!candidate.IsCompletion)
             {
-                if (candidate.CorrelationId is { Length: > 0 } startId)
+                if (candidate.CorrelationId is { Length: > 0 } startId &&
+                    (toolCallStarts.Count < MaxEventCount || toolCallStarts.ContainsKey(startId)))
                 {
                     toolCallStarts[startId] = Stopwatch.GetTimestamp();
                 }
 
+                return;
+            }
+
+            // Counted before the retention check, never after it: the totals must cover every observed
+            // call even when the row itself is elided from the retained list.
+            observedToolCalls++;
+            if (candidate.Kind == ProviderToolCallKinds.Command)
+            {
+                observedCommands++;
+            }
+            else if (candidate.Kind == ProviderToolCallKinds.Edit)
+            {
+                observedEdits++;
+            }
+
+            if (toolCalls.Count >= MaxRetainedToolCalls)
+            {
                 return;
             }
 
@@ -719,9 +812,17 @@ public static class ProviderExecution
         /// unrecognized ITEM, not one unrecognized stream line.</summary>
         private void CountUnmappedItem(string? correlationId)
         {
-            if (correlationId is { Length: > 0 } id && !unmappedItemIds.Add(id))
+            if (correlationId is { Length: > 0 } id)
             {
-                return;
+                if (unmappedItemIds.Contains(id))
+                {
+                    return;
+                }
+
+                if (unmappedItemIds.Count < MaxEventCount)
+                {
+                    unmappedItemIds.Add(id);
+                }
             }
 
             UnmappedItemCount++;
