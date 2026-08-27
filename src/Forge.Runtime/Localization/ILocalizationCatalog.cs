@@ -566,6 +566,15 @@ public static class MessageKeys
     /// per-file breakdown rides on the event's structured payload, not this sentence.</summary>
     public const string WorkflowAttemptDiffRecorded = "workflow.attempt_diff_recorded";
 
+    /// <summary>ADR 0060. A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
+    /// template taking the attempt's total tool-call count
+    /// (<see cref="WorkflowEvent.ToolCallsArgument"/>), then its command and edit counts
+    /// (<see cref="WorkflowEvent.ToolCommandsArgument"/>/<see cref="WorkflowEvent.ToolEditsArgument"/>).
+    /// All three are pure numbers, so nothing here needs a localized closed-set label -- no tool kind
+    /// is ever named in this sentence. The per-call detail rides on the event's structured payload.
+    /// </summary>
+    public const string WorkflowAttemptToolUseRecorded = "workflow.attempt_tool_use_recorded";
+
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?, object?, object?)"/>
     /// template taking the routed provider id, model id verbatim (proper identifiers, never
     /// translated), then a localized <see cref="Domain.RouteOutcome"/> label resolved by

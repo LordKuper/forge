@@ -28,6 +28,23 @@ public sealed class CodexLlmProvider(
     /// guessing an unverified vendor variable name.</summary>
     private static readonly IReadOnlyList<string> AuthenticationVariableNames = [];
 
+    /// <summary>The nested item subtype `codex exec --json` reports for a shell command it ran.</summary>
+    private const string CommandExecutionItemType = "command_execution";
+
+    /// <summary>The nested item subtype `codex exec --json` reports for a file it created, modified,
+    /// or deleted.</summary>
+    private const string FileChangeItemType = "file_change";
+
+    /// <summary>Nested item subtypes that are real, recognized provider content but not tool calls:
+    /// ordinary model narration. They must produce neither a tool-call row nor an unmapped-drift
+    /// increment -- a normal Codex run emits several of them, so counting them as drift would make
+    /// <see cref="ProviderRunResult.UnmappedItemCount"/> non-zero on every healthy run (ADR 0060).
+    /// `reasoning` is allowlisted defensively: it is a documented sibling of `agent_message` and is
+    /// unambiguously narration, even though the capture this mapping was built from did not contain
+    /// one.</summary>
+    private static readonly HashSet<string> NonToolCallItemTypes =
+        new(StringComparer.Ordinal) { "agent_message", "reasoning" };
+
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
     /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
     private readonly string probeDirectory = FileProviderReleaseCache.ProviderStateDirectory(paths);
@@ -147,7 +164,127 @@ public sealed class CodexLlmProvider(
             Classify,
             _ => null,
             cancellationToken,
-            onActivity).ConfigureAwait(false);
+            onActivity,
+            ExtractToolCall).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ADR 0060. Maps one already-`ToolUse`-classified `item.started`/`item.completed` line onto the
+    /// neutral tool-call contract. Built strictly from a real recorded `codex exec --json` stream
+    /// (`tests/Forge.Tests/Unit/fixtures/providers/codex-exec-json-tool-calls.jsonl`, captured from
+    /// Codex CLI 0.149.1): the wrapper's `type` is the lifecycle marker and the actual subtype is
+    /// nested one level deeper, at `item.type`. Subtypes that appear in vendor documentation but in no
+    /// real capture (`mcp_tool_call`, `web_search`, `patch_apply`) are deliberately left unmapped
+    /// rather than guessed -- they fall through to <see cref="ProviderToolCallExtraction.Unmapped"/>,
+    /// which is exactly the drift signal that would tell us a capture is now worth taking.
+    ///
+    /// Reads only the specific named fields below and never enumerates the item generically. In
+    /// particular it never reads `command` or `aggregated_output`, which routinely contain secrets
+    /// (an `Authorization:` header, an inline environment assignment, whatever the command printed)
+    /// and which ADR 0006 forbids persisting in any form. A command is therefore recorded as the bare
+    /// fact that one ran, plus its exit code and success -- there is no safe "which command" summary
+    /// short of the banned text itself, so <c>RawTarget</c> is unconditionally null for one.
+    /// </summary>
+    private static ProviderToolCallExtraction ExtractToolCall(JsonElement root)
+    {
+        string wrapperType = TypeOf(root);
+        if (wrapperType is not ("item.started" or "item.completed"))
+        {
+            return ProviderToolCallExtraction.Unmapped;
+        }
+
+        if (!root.TryGetProperty("item", out JsonElement item) || item.ValueKind != JsonValueKind.Object)
+        {
+            return ProviderToolCallExtraction.Unmapped;
+        }
+
+        string itemType = TypeOf(item);
+        if (NonToolCallItemTypes.Contains(itemType))
+        {
+            return ProviderToolCallExtraction.Ignored;
+        }
+
+        bool isCompletion = wrapperType == "item.completed";
+        string? correlationId = item.TryGetProperty("id", out JsonElement id) && id.ValueKind == JsonValueKind.String
+            ? id.GetString()
+            : null;
+        return itemType switch
+        {
+            CommandExecutionItemType => ProviderToolCallExtraction.Of(
+                [
+                    new ProviderToolCallCandidate(
+                        ProviderToolCallKinds.Command,
+                        RawTarget: null,
+                        correlationId,
+                        isCompletion,
+                        isCompletion ? ExitCodeOf(item) : null,
+                        isCompletion ? SucceededOf(item) : null),
+                ]),
+            FileChangeItemType => ExtractFileChanges(item, correlationId, isCompletion),
+            // Carries the id, so the core counts this unrecognized ITEM once even though Codex
+            // describes it on both an `item.started` and an `item.completed` line.
+            _ => ProviderToolCallExtraction.UnmappedItem(correlationId),
+        };
+    }
+
+    /// <summary>`file_change` carries `changes` as an ARRAY. Every real capture so far held exactly
+    /// one entry, but the shape allows more, so each entry becomes its own candidate sharing the
+    /// item's correlation id (and therefore its measured duration) -- an entry past the first is never
+    /// silently dropped. Paths are handed back verbatim; relativizing, safety-checking, and redacting
+    /// them is core policy, not this adapter's (ADR 0008). `kind` (`"update"`, ...) is deliberately
+    /// NOT read: one capture cannot responsibly define a change-kind vocabulary.</summary>
+    private static ProviderToolCallExtraction ExtractFileChanges(
+        JsonElement item, string? correlationId, bool isCompletion)
+    {
+        if (!item.TryGetProperty("changes", out JsonElement changes) || changes.ValueKind != JsonValueKind.Array)
+        {
+            return ProviderToolCallExtraction.UnmappedItem(correlationId);
+        }
+
+        List<ProviderToolCallCandidate> candidates = [];
+        foreach (JsonElement change in changes.EnumerateArray())
+        {
+            if (change.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            string? path = change.TryGetProperty("path", out JsonElement pathValue) &&
+                pathValue.ValueKind == JsonValueKind.String
+                ? pathValue.GetString()
+                : null;
+            candidates.Add(new(
+                ProviderToolCallKinds.Edit,
+                path,
+                correlationId,
+                isCompletion,
+                ExitCode: null,
+                Succeeded: null));
+        }
+
+        // An empty or entirely malformed `changes` array is a shape this mapping does not actually
+        // cover, so `Of` reports it as drift rather than as a recognized item with nothing in it --
+        // still as one identifiable item, so its start and completion lines count once between them.
+        return ProviderToolCallExtraction.Of(candidates, correlationId);
+    }
+
+    private static int? ExitCodeOf(JsonElement item) =>
+        item.TryGetProperty("exit_code", out JsonElement exitCode) && exitCode.ValueKind == JsonValueKind.Number &&
+            exitCode.TryGetInt32(out int value)
+            ? value
+            : null;
+
+    /// <summary>Codex reports `status` (`in_progress`/`completed`/...) beside `exit_code`. Only a
+    /// `completed` status carries a decidable outcome: zero is success, anything else is failure.
+    /// Every other status -- including a `completed` item that somehow reported no exit code at all --
+    /// stays <see langword="null"/> ("unknown") rather than being guessed either way.</summary>
+    private static bool? SucceededOf(JsonElement item)
+    {
+        string? status = item.TryGetProperty("status", out JsonElement statusValue) &&
+            statusValue.ValueKind == JsonValueKind.String
+            ? statusValue.GetString()
+            : null;
+        return status == "completed" && ExitCodeOf(item) is { } exitCode ? exitCode == 0 : null;
     }
 
     /// <summary>

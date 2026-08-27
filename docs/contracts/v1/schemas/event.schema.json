@@ -6,7 +6,7 @@
   "additionalProperties": false,
   "required": ["schema_version", "event_id", "sequence", "occurred_at", "type", "aggregate", "message_key", "arguments"],
   "properties": {
-    "schema_version": {"enum": ["1.0.0", "1.1.0"]},
+    "schema_version": {"enum": ["1.0.0", "1.1.0", "1.2.0"]},
     "event_id": {"type": "string", "format": "uuid"},
     "sequence": {"type": "integer", "minimum": 0},
     "occurred_at": {"type": "string", "format": "date-time"},
@@ -29,7 +29,8 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "diff": {"$ref": "#/$defs/diff_payload"}
+        "diff": {"$ref": "#/$defs/diff_payload"},
+        "tool_use": {"$ref": "#/$defs/tool_use_payload"}
       }
     }
   },
@@ -58,6 +59,34 @@
           }
         },
         "elided_files": {"type": "integer", "minimum": 0}
+      }
+    },
+    "tool_use_payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tool_calls", "commands", "edits", "calls", "elided_calls", "unmapped_items"],
+      "properties": {
+        "tool_calls": {"type": "integer", "minimum": 0},
+        "commands": {"type": "integer", "minimum": 0},
+        "edits": {"type": "integer", "minimum": 0},
+        "calls": {
+          "type": "array",
+          "maxItems": 50,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["kind"],
+            "properties": {
+              "kind": {"enum": ["command", "edit"]},
+              "target": {"type": "string", "minLength": 1},
+              "duration_ms": {"type": "integer", "minimum": 0},
+              "exit_code": {"type": "integer"},
+              "succeeded": {"type": "boolean"}
+            }
+          }
+        },
+        "elided_calls": {"type": "integer", "minimum": 0},
+        "unmapped_items": {"type": "integer", "minimum": 0}
       }
     }
   }

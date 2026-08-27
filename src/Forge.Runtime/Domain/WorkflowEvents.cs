@@ -56,16 +56,56 @@ public sealed record DiffPayload(
     IReadOnlyList<DiffFileStat> Files,
     int ElidedFiles);
 
+/// <summary>ADR 0060: one tool call an implementation attempt's provider made, as durably recorded.
+/// <paramref name="Target"/> is the attempt-worktree-relative, forward-slashed, redacted file path a
+/// <see cref="Forge.Providers.ProviderToolCallKinds.Edit"/> touched — or <see langword="null"/>, both
+/// for every <see cref="Forge.Providers.ProviderToolCallKinds.Command"/> (whose only identifying text
+/// would be the command line itself, which ADR 0006 forbids persisting) and for an edit whose vendor
+/// path failed the syntactic safety check and was rejected rather than rewritten.
+/// <paramref name="DurationMilliseconds"/> is Forge-observed wall time between the vendor's own start
+/// and completion lines, never a vendor-reported measurement.
+/// <paramref name="ExitCode"/>/<paramref name="Succeeded"/> are the command's own outcome, both
+/// <see langword="null"/> when the vendor did not report one.
+/// Deliberately carries no change-kind vocabulary of its own, unlike
+/// <see cref="DiffFileStat.ChangeKind"/>: a single real capture cannot responsibly define one.</summary>
+public sealed record ToolCallStat(
+    string Kind,
+    string? Target,
+    int? DurationMilliseconds,
+    int? ExitCode,
+    bool? Succeeded);
+
+/// <summary>ADR 0060: what one implementation attempt's provider actually did, never the content it
+/// did it with — no command text, no command output, no file content. <paramref name="Calls"/> is
+/// capped at <see cref="Forge.Application.ProviderToolUseBudget.MaxCalls"/> with the remainder counted
+/// in <paramref name="ElidedCalls"/>, while <paramref name="ToolCalls"/>/<paramref name="Commands"/>/
+/// <paramref name="Edits"/> stay totals over every observed call — ADR 0059's "honest totals plus an
+/// explicit elision count" rule. Only two per-kind totals exist because only two tool-call kinds are
+/// verified by a real recorded provider stream. <paramref name="UnmappedItems"/> counts vendor items
+/// this adapter's mapping did not recognize at all; ordinary agent narration is never counted there,
+/// or the signal would be noise on every healthy run.</summary>
+public sealed record ToolUsePayload(
+    int ToolCalls,
+    int Commands,
+    int Edits,
+    IReadOnlyList<ToolCallStat> Calls,
+    int ElidedCalls,
+    int UnmappedItems);
+
 /// <summary>ADR 0059: the typed, structured half of a <see cref="WorkflowEvent"/> —
 /// `payload` in docs/contracts/v1/schemas/event.schema.json. Exists because
 /// <see cref="WorkflowEvent.Arguments"/> is a deliberately flat
 /// <c>IReadOnlyDictionary&lt;string, string?&gt;</c> that genuinely cannot carry a nested list, and
-/// the envelope declares `additionalProperties: false`. One optional sub-object per family; only
-/// <see cref="Diff"/> exists today (tool-call and test-run payloads are explicitly deferred, see
-/// ADR 0059). Always <see langword="null"/> for every event type that predates this field, and
-/// omitted from the serialized line entirely when null, so every journal line already on disk stays
-/// byte-for-byte valid.</summary>
-public sealed record WorkflowEventPayload(DiffPayload? Diff);
+/// the envelope declares `additionalProperties: false`. One optional sub-object per family:
+/// <see cref="Diff"/> (ADR 0059) and <see cref="ToolUse"/> (ADR 0060). Always <see langword="null"/>
+/// for every event type that predates this field, and omitted from the serialized line entirely when
+/// null, so every journal line already on disk stays byte-for-byte valid.</summary>
+/// <remarks>Both members are required, with no default — ADR 0057/0058's "review every construction
+/// site" discipline, which is affordable here (three sites: the two producing store methods and the
+/// codec's own read path) in a way it was not for <see cref="WorkflowEvent.Payload"/> itself. A new
+/// family must therefore be considered at every existing producer rather than silently defaulting to
+/// absent.</remarks>
+public sealed record WorkflowEventPayload(DiffPayload? Diff, ToolUsePayload? ToolUse);
 
 /// <summary>
 /// One append-only, localization-safe transition record. Mirrors
@@ -338,6 +378,33 @@ public sealed record WorkflowEvent(
     /// <summary>Carried on an <see cref="AttemptDiffRecordedType"/> event alongside
     /// <see cref="DiffFilesChangedArgument"/>: total deleted lines, base-10.</summary>
     public const string DiffDeletionsArgument = "deletions";
+
+    /// <summary>ADR 0060: what one implementation attempt's provider actually did — how many shell
+    /// commands it ran and how many files it edited — recorded once per attempt on that attempt's own
+    /// aggregate, alongside (never instead of) <see cref="AttemptDiffRecordedType"/>. Never a
+    /// transition (no <see cref="ToStateArgument"/>) and never folded into any snapshot, exactly like
+    /// its diff sibling: tool-call statistics are durable timeline/audit content, not workflow state.
+    /// Exactly one event per attempt for the same reason
+    /// (<see cref="Forge.Application.FileSprintEventLog"/> re-reads the whole journal on every
+    /// append); the per-call detail rides on this event's <see cref="Payload"/>. Recorded only for a
+    /// provider whose adapter actually extracts tool calls — Codex today; Claude capture is separate,
+    /// deferred work (ADR 0060).</summary>
+    public const string AttemptToolUseRecordedType = "AttemptToolUseRecorded";
+
+    /// <summary>Carried on an <see cref="AttemptToolUseRecordedType"/> event: the total tool-call
+    /// count as a base-10 integer, counting every observed call and not only the retained rows.
+    /// Derived from the event's own <see cref="Payload"/> by the single producing store method, never
+    /// supplied independently, so the rendered summary and the structured payload cannot drift.
+    /// </summary>
+    public const string ToolCallsArgument = "tool_calls";
+
+    /// <summary>Carried on an <see cref="AttemptToolUseRecordedType"/> event alongside
+    /// <see cref="ToolCallsArgument"/>: shell commands run, base-10.</summary>
+    public const string ToolCommandsArgument = "commands";
+
+    /// <summary>Carried on an <see cref="AttemptToolUseRecordedType"/> event alongside
+    /// <see cref="ToolCallsArgument"/>: files edited, base-10.</summary>
+    public const string ToolEditsArgument = "edits";
 }
 
 public sealed record SprintWorkflowState(
@@ -472,6 +539,15 @@ public static class WorkflowFold
                 // statistics are durable timeline content, not workflow state -- nothing in the
                 // scheduler, an executor, or a prerequisite check ever needs to ask "what did this
                 // attempt change" to decide what happens next.
+                _ = IsTransitionRecord(current);
+                continue;
+            }
+
+            if (current.Type == WorkflowEvent.AttemptToolUseRecordedType)
+            {
+                // Same treatment as AttemptDiffRecordedType, for the same reason: what an attempt's
+                // provider did is durable timeline content, not workflow state -- nothing in the
+                // scheduler, an executor, or a prerequisite check ever decides anything from it.
                 _ = IsTransitionRecord(current);
                 continue;
             }
@@ -719,6 +795,23 @@ public static class WorkflowFold
                 current.Arguments.GetValueOrDefault(WorkflowEvent.DiffDeletionsArgument) is not null;
             return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasDiff || !hasCounts
                 ? throw new InvalidDataException($"Attempt-diff event '{current.EventId}' has an invalid envelope.")
+                : false;
+        }
+
+        if (current.Type == WorkflowEvent.AttemptToolUseRecordedType)
+        {
+            // Fails closed exactly like AttemptDiffRecordedType above: an AttemptToolUseRecorded with
+            // no `payload.tool_use` carries nothing a reader could use, and the three summary
+            // arguments are what the localized template substitutes, so a line hand-edited or written
+            // by a foreign producer must fail here rather than render with blanks where its counts
+            // belong.
+            bool hasToolUse = current.Payload?.ToolUse is not null;
+            bool hasCounts =
+                current.Arguments.GetValueOrDefault(WorkflowEvent.ToolCallsArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.ToolCommandsArgument) is not null &&
+                current.Arguments.GetValueOrDefault(WorkflowEvent.ToolEditsArgument) is not null;
+            return hasState || current.Aggregate.Kind != AggregateKind.Attempt || !hasToolUse || !hasCounts
+                ? throw new InvalidDataException($"Attempt-tool-use event '{current.EventId}' has an invalid envelope.")
                 : false;
         }
 

@@ -143,7 +143,9 @@ public sealed record SprintTimelinePage(
     // pre-1.1.0 consumer that ignores unknown fields still round-trips every other field unchanged.
     // 1.2.0: SprintTimelineItem gained the optional Payload (ADR 0059) -- additive in the same
     // sense: it is null on every item a pre-1.2.0 consumer has ever seen.
-    public const string ContractVersion = "1.2.0";
+    // 1.3.0: that Payload gained a second family, `tool_use` (ADR 0060) -- additive again: it is null
+    // on every item a pre-1.3.0 consumer has ever seen, including every existing diff-only item.
+    public const string ContractVersion = "1.3.0";
 
     public static SprintTimelinePage Empty(Guid sprintId, string? requestedCursor, string diagnosticCode)
     {
@@ -202,23 +204,45 @@ public static class SprintTimelineRedaction
     /// them. Every new string field added to a payload sub-object MUST be added here; the two passes
     /// share this helper deliberately (they are independent in field *coverage*, not in which
     /// redactor they use -- both already share <see cref="SecretRedactor"/> itself).</summary>
-    internal static WorkflowEventPayload? RedactPayload(WorkflowEventPayload? payload) =>
-        payload?.Diff is not { } diff
-            ? payload
-            : payload with
+    internal static WorkflowEventPayload? RedactPayload(WorkflowEventPayload? payload)
+    {
+        if (payload is null)
+        {
+            return null;
+        }
+
+        // Per family, never an either/or early return: an event may legitimately carry more than one,
+        // and a check keyed on the first would leave the second unredacted.
+        DiffPayload? diff = payload.Diff is not { } sourceDiff
+            ? null
+            : sourceDiff with
             {
-                Diff = diff with
-                {
-                    Files =
-                    [
-                        .. diff.Files.Select(file => file with
-                        {
-                            Path = SecretRedactor.Redact(file.Path),
-                            ChangeKind = SecretRedactor.Redact(file.ChangeKind),
-                        }),
-                    ],
-                },
+                Files =
+                [
+                    .. sourceDiff.Files.Select(file => file with
+                    {
+                        Path = SecretRedactor.Redact(file.Path),
+                        ChangeKind = SecretRedactor.Redact(file.ChangeKind),
+                    }),
+                ],
             };
+        ToolUsePayload? toolUse = payload.ToolUse is not { } sourceToolUse
+            ? null
+            : sourceToolUse with
+            {
+                Calls =
+                [
+                    // Kind is redacted too, belt and braces, exactly as ChangeKind above is: both are
+                    // closed sets by construction, and neither is trusted to be one on the way out.
+                    .. sourceToolUse.Calls.Select(call => call with
+                    {
+                        Kind = SecretRedactor.Redact(call.Kind),
+                        Target = call.Target is null ? null : SecretRedactor.Redact(call.Target),
+                    }),
+                ],
+            };
+        return payload with { Diff = diff, ToolUse = toolUse };
+    }
 }
 
 /// <summary>

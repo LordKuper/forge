@@ -124,6 +124,14 @@ public sealed class ImplementationExecutionHostedService(
                 "({DiagnosticCode}); the change itself is already integrated, so only the timeline " +
                 "entry is missing.");
 
+    private static readonly Action<ILogger, Guid, string, Exception?> LogToolUseUnavailable =
+        LoggerMessage.Define<Guid, string>(
+            LogLevel.Warning,
+            new EventId(2059, "ImplementationExecutionToolUseUnavailable"),
+            "Recording the tool-call summary for sprint {SprintId}'s implementation attempt failed " +
+                "({DiagnosticCode}); the change itself is already integrated, so only the timeline " +
+                "entry is missing.");
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         using PeriodicTimer timer = new(options.Interval);
@@ -569,6 +577,7 @@ public sealed class ImplementationExecutionHostedService(
         }
 
         await RecordAttemptDiffAsync(sprintId, attemptId, diffStat, cancellationToken).ConfigureAwait(false);
+        await RecordAttemptToolUseAsync(sprintId, attemptId, result, cancellationToken).ConfigureAwait(false);
 
         return ImplementationAttemptOutcome.Success(
             NodeExecutionDiagnostics.Digest(integrated.Commit ?? string.Empty), effectiveSummary);
@@ -663,6 +672,47 @@ public sealed class ImplementationExecutionHostedService(
             or OperationCanceledException)
         {
             LogDiffStatUnavailable(logger, sprintId.Value, DiagnosticCodes.WorktreeDiffFailed, exception);
+        }
+    }
+
+    /// <summary>ADR 0060: one <see cref="WorkflowEvent.AttemptToolUseRecordedType"/> event per
+    /// attempt, appended beside its diff sibling once the attempt's commit is actually on the
+    /// sprint's integration branch. Needs no read of its own -- unlike the diff statistics, this data
+    /// was captured by the provider adapter while the run was happening and is already in hand -- but
+    /// it sits in the identical risk position: before
+    /// <see cref="SprintScheduler.CompleteAttemptAsync"/>, on an attempt whose change is already
+    /// integrated and durable. It therefore copies <see cref="RecordAttemptDiffAsync"/>'s fail-open
+    /// shape exactly, including the <see cref="OperationCanceledException"/> the journal's own
+    /// per-sprint gate raises (PR #116 review finding 2): an escaping exception here would strand an
+    /// already-integrated attempt in `running`, costing work rather than an audit record.
+    ///
+    /// Nothing is appended when the run observed no tool calls AND no unmapped items -- there is
+    /// simply nothing to say, and a provider whose adapter does not extract tool calls at all (Claude
+    /// today) must not produce an all-zero record implying it made none. A non-zero unmapped count
+    /// alone IS recorded: that is a durable drift signal that the vendor emitted an item shape the
+    /// adapter's mapping does not cover.</summary>
+    private async Task RecordAttemptToolUseAsync(
+        SprintId sprintId, AttemptId attemptId, ProviderRunResult result, CancellationToken cancellationToken)
+    {
+        if (ProviderToolUse.ToPayload(result) is not { } toolUse)
+        {
+            return;
+        }
+
+        try
+        {
+            await store.AppendAttemptToolUseRecordedAsync(
+                options.ProjectRoot, sprintId, attemptId, toolUse, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or JsonException
+            or OperationCanceledException)
+        {
+            LogToolUseUnavailable(logger, sprintId.Value, DiagnosticCodes.ProviderToolUseUnavailable, exception);
         }
     }
 

@@ -172,6 +172,11 @@ internal sealed class GatedSprintStore(ISprintStore inner) : ISprintStore
         CancellationToken cancellationToken) =>
         inner.AppendAttemptDiffRecordedAsync(projectRoot, sprintId, attemptId, diff, cancellationToken);
 
+    public Task AppendAttemptToolUseRecordedAsync(
+        string projectRoot, SprintId sprintId, AttemptId attemptId, ToolUsePayload toolUse,
+        CancellationToken cancellationToken) =>
+        inner.AppendAttemptToolUseRecordedAsync(projectRoot, sprintId, attemptId, toolUse, cancellationToken);
+
     public Task AppendAgentSummaryRecordedAsync(
         string projectRoot, SprintId sprintId, string nodeId, Guid handoffId, string summaryText,
         CancellationToken cancellationToken) =>

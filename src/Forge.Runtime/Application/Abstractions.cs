@@ -222,6 +222,20 @@ public static class GitWorktreeManagerDiffStatBudget
     public const int MaxFiles = 50;
 }
 
+/// <summary>ADR 0060's counterpart to <see cref="GitWorktreeManagerDiffStatBudget"/>, and sized the
+/// same way and for the same reason: it bounds how many per-call rows a single durable journal line
+/// may carry, while the totals in <see cref="Forge.Domain.ToolUsePayload"/> still cover every observed
+/// call and the remainder is reported as <see cref="Forge.Domain.ToolUsePayload.ElidedCalls"/> rather
+/// than dropped silently. Must equal `payload.tool_use.calls`'s own `maxItems` in
+/// docs/contracts/v1/schemas/event.schema.json -- raising one without the other would make every
+/// tool-use record fail its own schema validation, which the audit-only write path catches and logs
+/// rather than surfaces, so the two are pinned together by a contract test
+/// (`TheEventSchemasToolCallCapMatchesTheBoundTheProducerActuallyApplies`) instead of by hand.</summary>
+public static class ProviderToolUseBudget
+{
+    public const int MaxCalls = 50;
+}
+
 /// <summary>The structural counterpart to <see cref="GitDiffResult"/>: `git diff --numstat` parsed
 /// into per-file statistics, never diff hunk content. <paramref name="Stat"/> is
 /// <see langword="null"/> exactly when <paramref name="Succeeded"/> is
@@ -581,6 +595,22 @@ public interface ISprintStore
         SprintId sprintId,
         AttemptId attemptId,
         DiffPayload diff,
+        CancellationToken cancellationToken);
+
+    /// <summary>Appends one <see cref="WorkflowEvent.AttemptToolUseRecordedType"/> event carrying
+    /// <paramref name="toolUse"/> on <paramref name="attemptId"/>'s own aggregate (ADR 0060) -- the
+    /// exact contract <see cref="AppendAttemptDiffRecordedAsync"/> already documents, applied to the
+    /// second payload family: not gated by optimistic concurrency, recorded at most once per attempt
+    /// (deduplicated by scanning the journal for this event type on this attempt, since a second call
+    /// is always a replay of the same already-finished provider run), and with the event's flat
+    /// <see cref="WorkflowEvent.Arguments"/> summary (<see cref="WorkflowEvent.ToolCallsArgument"/>
+    /// and friends) derived here from <paramref name="toolUse"/> itself rather than supplied
+    /// separately, so the rendered summary and the structured payload cannot drift apart.</summary>
+    Task AppendAttemptToolUseRecordedAsync(
+        string projectRoot,
+        SprintId sprintId,
+        AttemptId attemptId,
+        ToolUsePayload toolUse,
         CancellationToken cancellationToken);
 
     /// <summary>Appends one <see cref="WorkflowEvent.AttemptStopRequestedType"/> event for

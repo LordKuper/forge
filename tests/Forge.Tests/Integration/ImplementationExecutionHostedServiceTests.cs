@@ -832,6 +832,183 @@ public sealed class ImplementationExecutionHostedServiceTests
         Assert.Empty(await AttemptDiffEventsAsync(store, environment, sprintId, cancellationToken));
     }
 
+    // ADR 0060: an attempt whose provider reported tool calls records exactly one tool-use summary,
+    // on the attempt that actually integrated, with the flat arguments derived from the same payload.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task ASuccessfullyIntegratedAttemptRecordsExactlyOneToolUseSummaryFromItsProviderRun()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success(
+                    [],
+                    new ProviderTerminalResult("Added the feature module."),
+                    [
+                        new ProviderToolCall(ProviderToolCallKinds.Command, null, 812, 0, true),
+                        new ProviderToolCall(ProviderToolCallKinds.Command, null, 91, 1, false),
+                        new ProviderToolCall(ProviderToolCallKinds.Edit, "src/A.cs", 40, null, null),
+                    ],
+                    2));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForAttemptToolUseRecordedAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        WorkflowEvent recorded = Assert.Single(
+            await AttemptToolUseEventsAsync(store, environment, sprintId, cancellationToken));
+        SprintWorkflowState state = (await store.LoadAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        AttemptSnapshot attempt = Assert.Single(
+            state.Attempts.Values, item => item.NodeId == ImplementationNodeId);
+        Assert.Equal(attempt.Id.Value.ToString("D"), recorded.Aggregate.Id);
+        Assert.Equal("3", recorded.Arguments[WorkflowEvent.ToolCallsArgument]);
+        Assert.Equal("2", recorded.Arguments[WorkflowEvent.ToolCommandsArgument]);
+        Assert.Equal("1", recorded.Arguments[WorkflowEvent.ToolEditsArgument]);
+        ToolUsePayload payload = recorded.Payload!.ToolUse!;
+        Assert.Equal(3, payload.Calls.Count);
+        Assert.Equal(0, payload.ElidedCalls);
+        Assert.Equal(2, payload.UnmappedItems);
+    }
+
+    // The other half: a provider that reported nothing at all must leave no record, or every attempt
+    // run through an adapter that does not extract tool calls (Claude today) would publish an
+    // all-zero summary claiming it made none. A stopped attempt records nothing either, for the same
+    // reason its diff summary is skipped -- its work never reached the integration branch.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AnAttemptRecordsNoToolUseSummaryWhenItsProviderReportedNoToolCallsAtAll()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(
+                    ProviderRunResult.Success([], new ProviderTerminalResult("Added the feature module.")));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        SprintScheduler scheduler = environment.Resolve<SprintScheduler>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForHandoffAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        Assert.Empty(await AttemptToolUseEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    // ADR 0060 inherits PR #116 review finding 2's regression class verbatim: the tool-use record is
+    // appended after a successful integrate but BEFORE CompleteAttemptAsync, so a throw escaping it
+    // strands an attempt whose change is already on the integration branch in `running` forever.
+    // OperationCanceledException is the realistic shape (FileSprintEventLog's own per-sprint gate
+    // raises it) and the one a naive IOException-only filter would not cover.
+    [Fact]
+    [Trait("Category", "Integration")]
+    public async Task AToolUseRecordThatThrowsNeverStrandsAnAlreadyIntegratedAttemptInRunning()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        const string summary = "Added the feature module.";
+        FakeWorktreeManager worktrees = new();
+        FakeRunnableLlmProvider provider = new(
+            new ProviderId("fake"),
+            (_, workingDirectory, _, _) =>
+            {
+                worktrees.Dirty.Add(workingDirectory);
+                return Task.FromResult(ProviderRunResult.Success(
+                    [],
+                    new ProviderTerminalResult(summary),
+                    [new ProviderToolCall(ProviderToolCallKinds.Command, null, 5, 0, true)],
+                    0));
+            });
+        using TestEnvironment environment = new(llmProviders: [provider], worktrees: worktrees);
+        Assert.True((await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken)).Succeeded);
+
+        (SprintOrchestrator orchestrator, SprintScheduler scheduler, FlakySprintStore store) =
+            environment.ResolveWithFlakyStore();
+        store.ToolUseRecordFailure = new OperationCanceledException("The journal gate was cancelled.");
+        SprintId sprintId = await CreateSprintReadyForImplementationAsync(
+            environment, orchestrator, scheduler, store, "The plan.", cancellationToken);
+
+        ImplementationExecutionHostedService service = NewService(environment, store, scheduler);
+        await service.StartAsync(cancellationToken);
+        try
+        {
+            await WaitForNodeStateAsync(store, environment, sprintId, NodeState.Succeeded, cancellationToken);
+            await WaitForHandoffAsync(store, environment, sprintId, cancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(cancellationToken);
+        }
+
+        NodeResult result = Assert.Single(
+            await ImplementationResultsAsync(store, environment, sprintId, cancellationToken));
+        Assert.Equal(NodeOutcome.Succeeded, result.State);
+        Assert.Single(worktrees.Commits);
+        Assert.Empty(await AttemptToolUseEventsAsync(store, environment, sprintId, cancellationToken));
+    }
+
+    private static async Task<IReadOnlyList<WorkflowEvent>> AttemptToolUseEventsAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken) =>
+        [.. (await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken))
+            .Where(item => item.Type == WorkflowEvent.AttemptToolUseRecordedType)];
+
+    /// <summary>Polled directly rather than inferred from node state, for the same reason
+    /// <see cref="WaitForAttemptDiffRecordedAsync"/> is: the append is fail-open, so a node reaching
+    /// `succeeded` guarantees nothing about the event's presence in either direction.</summary>
+    private static async Task WaitForAttemptToolUseRecordedAsync(
+        ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken)
+    {
+        Stopwatch stopwatch = Stopwatch.StartNew();
+        while (stopwatch.Elapsed < PollTimeout)
+        {
+            if ((await AttemptToolUseEventsAsync(store, environment, sprintId, cancellationToken)).Count > 0)
+            {
+                return;
+            }
+
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+
+        Assert.Fail($"Sprint {sprintId.Value:D}'s implementation attempt never recorded a tool-call summary.");
+    }
+
     private static async Task<IReadOnlyList<WorkflowEvent>> AttemptDiffEventsAsync(
         ISprintStore store, TestEnvironment environment, SprintId sprintId, CancellationToken cancellationToken) =>
         [.. (await store.GetEventsAsync(environment.ProjectRoot, sprintId, cancellationToken))
