@@ -6,7 +6,7 @@ namespace Forge.Application;
 /// <summary>
 /// Resolves and validates the three frozen <see cref="ExecutionProfile"/>s ADR 0006 requires
 /// (ADR 0014). Pure and deterministic given already-frozen inputs (<see cref="SprintDefinition.FrozenProviders"/>
-/// and the registered <see cref="ProviderCatalog"/>) — no I/O, no clock, so <see cref="SprintOrchestrator.CreateSprintAsync"/>
+/// and one already-resolved model per provider) — no I/O, no clock, so <see cref="SprintOrchestrator.CreateSprintAsync"/>
 /// can call it once at freeze time and get the exact same result on any resumed retry.
 /// </summary>
 public static class ExecutionProfilePolicy
@@ -25,17 +25,25 @@ public static class ExecutionProfilePolicy
     /// Freezes exactly three profiles — <see cref="ExecutionPhase.Planning"/>,
     /// <see cref="ExecutionPhase.Implementation"/>, and <see cref="ExecutionPhase.Review"/> — from
     /// <paramref name="frozenProviders"/> (already ADR 0008's ordered candidate intersection) and
-    /// <paramref name="catalog"/>. Planning and implementation both use the highest-priority
+    /// <paramref name="models"/>. Planning and implementation both use the highest-priority
     /// candidate; review prefers the highest-priority candidate whose id differs from the
     /// implementation phase's provider (lineage independence), falling back to the same provider —
     /// recording <see cref="ExecutionLineage.AchievedIndependence"/> either way, never blocking.
+    ///
+    /// Takes <paramref name="models"/> already resolved by <see cref="ResolveModels"/> rather than
+    /// reading <see cref="ILlmProvider.DefaultModel"/> itself, and deliberately has no
+    /// catalog-taking overload: ADR 0063 makes that property resolvable at runtime, so every read is
+    /// a separate answer. <see cref="SprintOrchestrator.CreateSprintAsync"/> must validate the exact
+    /// value it is about to freeze (<see cref="ModelPolicyGate"/>) with durable I/O in between, and
+    /// keeping the resolution in the caller's hands is what makes it structurally impossible for the
+    /// approved model and the frozen model to be two different readings.
     /// </summary>
     public static IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> Freeze(
         IReadOnlyList<string> frozenProviders,
-        ProviderCatalog catalog)
+        IReadOnlyDictionary<string, string> models)
     {
         ArgumentNullException.ThrowIfNull(frozenProviders);
-        ArgumentNullException.ThrowIfNull(catalog);
+        ArgumentNullException.ThrowIfNull(models);
         if (frozenProviders.Count == 0)
         {
             throw new ArgumentException(
@@ -46,17 +54,15 @@ public static class ExecutionProfilePolicy
         (string reviewProvider, bool achievedIndependence) =
             SelectReviewProvider(frozenProviders, implementationProvider);
 
-        // Each DISTINCT provider's model is read exactly ONCE per freeze and reused everywhere it
-        // appears — including the single-provider case, where review falls back to the implementation
-        // provider and must therefore record the same model, not a second reading of it.
-        // ADR 0063 lets an adapter resolve its DefaultModel from the vendor during a provider check,
-        // so the property can change value within one process lifetime; re-reading it per profile
-        // would let a refresh landing mid-freeze produce a sprint whose implementation profile and
-        // review lineage disagree about which model the implementation ran on.
-        string implementationModel = ModelFor(implementationProvider, catalog);
+        // One model per DISTINCT provider, reused everywhere it appears — including the
+        // single-provider case, where review falls back to the implementation provider and must
+        // therefore record the same model, not a second reading of it. A lineage claiming the
+        // implementation ran on a model the implementation profile does not name is unreadable
+        // evidence.
+        string implementationModel = ModelFor(implementationProvider, models);
         string reviewModel = string.Equals(reviewProvider, implementationProvider, StringComparison.Ordinal)
             ? implementationModel
-            : ModelFor(reviewProvider, catalog);
+            : ModelFor(reviewProvider, models);
 
         return new Dictionary<ExecutionPhase, ExecutionProfile>
         {
@@ -120,9 +126,34 @@ public static class ExecutionProfilePolicy
             idleDeadlineSeconds,
             lineage);
 
-    private static string ModelFor(string providerId, ProviderCatalog catalog) =>
-        catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider)
-            ? provider.DefaultModel
+    /// <summary>
+    /// Reads each distinct frozen provider's <see cref="ILlmProvider.DefaultModel"/> exactly once.
+    /// This is the single resolution point ADR 0063 requires: the property is resolvable at runtime,
+    /// so every read of it is a separate answer, and a sprint is one decision about one set of models.
+    /// </summary>
+    public static IReadOnlyDictionary<string, string> ResolveModels(
+        IReadOnlyList<string> frozenProviders,
+        ProviderCatalog catalog)
+    {
+        ArgumentNullException.ThrowIfNull(frozenProviders);
+        ArgumentNullException.ThrowIfNull(catalog);
+        Dictionary<string, string> models = new(StringComparer.Ordinal);
+        foreach (string providerId in frozenProviders)
+        {
+            models.TryAdd(
+                providerId,
+                catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider)
+                    ? provider.DefaultModel
+                    : throw new InvalidOperationException(
+                        $"Frozen provider '{providerId}' is not registered in the provider catalog."));
+        }
+
+        return models;
+    }
+
+    private static string ModelFor(string providerId, IReadOnlyDictionary<string, string> models) =>
+        models.TryGetValue(providerId, out string? model)
+            ? model
             : throw new InvalidOperationException(
                 $"Frozen provider '{providerId}' is not registered in the provider catalog.");
 }

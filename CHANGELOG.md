@@ -27,6 +27,10 @@ User-facing Forge changes are listed by release, newest first.
   exists — update it to the model your Codex configuration actually resolves.
 - Sprints created before this release keep the old placeholder in their stored profile. That value is
   deliberately never sent to Codex, so those sprints resume and run exactly as they did before.
+- **While Codex's model is still unresolved, a project that restricts Codex by model refuses sprint
+  creation with a model-policy error.** This happens right after installing Codex and after a failed
+  lookup, because Forge will not approve a model it has not confirmed. It clears itself at the next
+  successful lookup — within an hour — or immediately with `forge models --refresh`.
 
 ### Fixed
 

@@ -62,8 +62,9 @@ public sealed class ExecutionProfilePolicyTests
                 new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0"),
             ]);
 
-        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles =
-            ExecutionProfilePolicy.Freeze(["claude_code", "codex"], catalog);
+        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
+            ["claude_code", "codex"],
+            ExecutionProfilePolicy.ResolveModels(["claude_code", "codex"], catalog));
 
         Assert.Equal(3, profiles.Count);
         Assert.Equal("claude_code", profiles[ExecutionPhase.Planning].Provider);
@@ -89,7 +90,8 @@ public sealed class ExecutionProfilePolicyTests
     {
         ProviderCatalog catalog = new([]);
 
-        Assert.Throws<ArgumentException>(() => ExecutionProfilePolicy.Freeze([], catalog));
+        Assert.Throws<ArgumentException>(
+            () => ExecutionProfilePolicy.Freeze([], ExecutionProfilePolicy.ResolveModels([], catalog)));
     }
 
     /// <summary>ADR 0063 made <see cref="ILlmProvider.DefaultModel"/> resolvable at runtime, so it can
@@ -104,8 +106,8 @@ public sealed class ExecutionProfilePolicyTests
     {
         ProviderCatalog catalog = new([new ShiftingModelProvider(new ProviderId("codex"))]);
 
-        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles =
-            ExecutionProfilePolicy.Freeze(["codex"], catalog);
+        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
+            ["codex"], ExecutionProfilePolicy.ResolveModels(["codex"], catalog));
 
         Assert.Single(profiles.Values.Select(profile => profile.Model).Distinct());
         Assert.Equal(
@@ -124,16 +126,17 @@ public sealed class ExecutionProfilePolicyTests
     {
         ProviderCatalog catalog = new([new FixedModelProvider(new ProviderId("codex"), "vendor-default")]);
 
-        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles =
-            ExecutionProfilePolicy.Freeze(["codex"], catalog);
+        IReadOnlyDictionary<ExecutionPhase, ExecutionProfile> profiles = ExecutionProfilePolicy.Freeze(
+            ["codex"], ExecutionProfilePolicy.ResolveModels(["codex"], catalog));
 
         Assert.All(profiles.Values, profile => Assert.NotEmpty(profile.Model));
         Assert.NotEmpty(profiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
     }
 
     /// <summary>Reports a different model on every single read — the pathological end of what ADR 0063
-    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.Freeze"/> is
-    /// caught rather than depending on a race actually occurring.</summary>
+    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.ResolveModels"/>
+    /// plus <see cref="ExecutionProfilePolicy.Freeze"/> is caught rather than depending on a race
+    /// actually occurring.</summary>
     private sealed class ShiftingModelProvider(ProviderId id) : StubProvider(id)
     {
         private int reads;

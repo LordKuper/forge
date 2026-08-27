@@ -622,6 +622,84 @@ public sealed class CodexLlmProviderTests
         Assert.Equal(expectedModel, provider.DefaultModel);
     }
 
+    /// <summary>ADR 0063's "validated on the way out of the cache as well as on the way in", proven
+    /// rather than claimed. The cache is an ordinary JSON file that a user, another process, or a
+    /// truncated write can leave claiming success while carrying a model id that is not usable — every
+    /// shape the live probe's own failure-mode test already rejects. Such an entry must be rejected on
+    /// the same terms (sentinel, no `-m`, never trusted for its flag alone) AND must not earn the 24h
+    /// success window a genuine answer earns: it is re-probed once and overwritten, so a corrupt file
+    /// self-heals on the next check instead of pinning the provider to the sentinel for a day.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null, false, "vendor-default")]
+    [InlineData("", false, "vendor-default")]
+    [InlineData("   ", false, "vendor-default")]
+    [InlineData("gpt 5.6 sol", false, "vendor-default")]
+    [InlineData("gpt-5.6-sol\nrm -rf /", false, "vendor-default")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", false, "vendor-default")]
+    // The same corrupt entry when the vendor does answer: the one fresh probe replaces it outright.
+    [InlineData("", true, "gpt-5.6-sol")]
+    public async Task ACachedSuccessWhoseModelIsUnusableIsRejectedAndReProbedRatherThanTrusted(
+        string? cachedModel, bool probeSucceeds, string expectedModel)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        FakeClock clock = new() { UtcNow = DateTimeOffset.UnixEpoch.AddDays(30) };
+        FakeDefaultModelCache cache = new();
+        // One hour old: comfortably inside the 24h window a genuine cached success would be honoured for.
+        await cache.WriteAsync(
+            CodexLlmProvider.Codex,
+            new(clock.UtcNow.AddHours(-1), true, cachedModel),
+            TestContext.Current.CancellationToken);
+
+        int probes = 0;
+        IReadOnlyList<string>? capturedArguments = null;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            request =>
+            {
+                switch (request.Arguments)
+                {
+                    case ["doctor", "--json"]:
+                        probes++;
+                        return probeSucceeds
+                            ? new(
+                                0,
+                                """{"checks":{"config.load":{"details":{"model":"gpt-5.6-sol"}}}}""",
+                                string.Empty)
+                            : new(1, string.Empty, string.Empty);
+                    case ["--version"]:
+                        return new(0, "codex-cli 0.149.1", string.Empty);
+                    default:
+                        capturedArguments = request.Arguments;
+                        return new(0, """{"type":"turn.completed"}""", string.Empty);
+                }
+            },
+            defaultModelCache: cache,
+            clock: clock);
+
+        await provider.RefreshDefaultModelAsync(bypassCache: false, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, probes);
+        Assert.Equal(expectedModel, provider.DefaultModel);
+
+        // Overwritten with this probe's own real outcome, so a failure now retries on the SHORT window
+        // rather than the corrupt entry's remaining 23 hours of undeserved grace.
+        ProviderDefaultModelCacheEntry? rewritten =
+            await cache.ReadAsync(CodexLlmProvider.Codex, TestContext.Current.CancellationToken);
+        Assert.NotNull(rewritten);
+        Assert.Equal(clock.UtcNow, rewritten.CheckedAt);
+        Assert.Equal(probeSucceeds, rewritten.Succeeded);
+
+        await provider.RunAsync(
+            "prompt", "C:\\work", provider.DefaultModel, "high", TestContext.Current.CancellationToken);
+
+        string[] expectedArguments = probeSucceeds
+            ? ["exec", "--json", "-m", "gpt-5.6-sol", "-c", "model_reasoning_effort=high"]
+            : ["exec", "--json", "-c", "model_reasoning_effort=high"];
+        Assert.Equal(expectedArguments, capturedArguments);
+    }
+
     /// <summary>ADR 0063: a probe that fails AFTER one has succeeded must not un-resolve the model.
     /// Retry cadence is the cache's job; the last known-good value stays in force for the process
     /// lifetime, so one flaky vendor invocation cannot silently drop a whole session back to the

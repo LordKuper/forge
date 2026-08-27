@@ -87,6 +87,12 @@ opaque token: non-empty after trimming, free of embedded whitespace, at most 64 
 ASCII. This is data hygiene on a value that becomes both a command-line argument and durable sprint
 state, not injection defence — arguments are passed as a list with no shell anywhere.
 
+A cache entry that claims success but carries a model failing that validation is corrupt (a
+hand-edited, truncated, or foreign write), not a recorded answer, so it does not earn the 24-hour
+success window either: it is re-probed once and overwritten with that probe's real outcome. A corrupt
+file therefore self-heals on the very next provider check, and if the probe also fails it is the
+one-hour failure window that governs the retry — never a day of undeserved silence.
+
 ### The resolved model is sent as `-m` in the same slice
 
 This was the deliberate choice over the more cautious "resolve now, send later". The value being sent
@@ -106,14 +112,24 @@ Two values are suppressed rather than sent, and both degrade to exactly ADR 0062
   inaccurate into one that fails the run. A sprint frozen before v0.85.0 keeps running on the user's
   own configured model — which is what it has always actually done.
 
-### `ExecutionProfilePolicy` reads each provider's model once per freeze
+### One model resolution per sprint creation, owned by the orchestrator
 
 `DefaultModel` is now resolvable at runtime, so it can return different values on two consecutive
-reads within one process. `ExecutionProfilePolicy.Freeze` records a model in four places — three
-profiles plus the review lineage — and previously re-read the property for each. It now reads once
-per distinct provider and reuses the value, including the single-provider case where review falls
-back to the implementation provider. One freeze is one decision about one sprint; a lineage claiming
-the implementation ran on a model the implementation profile does not name is unreadable evidence.
+reads within one process. Every read inside one sprint creation must therefore be the *same* read.
+
+`SprintOrchestrator.CreateSprintAsync` resolves one model per distinct frozen provider
+(`ExecutionProfilePolicy.ResolveModels`) before its `ModelPolicyGate` check and passes that map into
+`ExecutionProfilePolicy.Freeze`, which takes already-resolved models and has no catalog-taking
+overload at all. Two reads there would be a policy hole, not just untidy: the gate and the freeze are
+separated by durable writes, so a provider check refreshing the model in that window could have the
+gate approve a model the allowlist names while the sprint freezes and runs a different one — silently
+defeating `models.allowed_models`. Keeping the resolution in the caller's hands makes that
+structurally impossible rather than merely unlikely.
+
+The same single value then covers all four places one freeze records a model — three profiles plus the
+review lineage — including the single-provider case where review falls back to the implementation
+provider. One freeze is one decision about one sprint; a lineage claiming the implementation ran on a
+model the implementation profile does not name is unreadable evidence.
 
 ### Codex's accepted effort set stays model-independent
 
@@ -134,6 +150,21 @@ real per-project model selection.
   serves, will now be refused at creation rather than proceeding on a model the policy never
   approved. This is the gate working correctly for the first time, but it is a real behaviour change
   for such a project and is stated as such in the changelog rather than buried.
+- **An unresolved model can block sprint creation for a project that restricts Codex by model, with a
+  diagnostic that names the policy rather than the real cause.** A project whose
+  `models.allowed_models` lists `codex:<model>` refuses creation with `model_policy_violation`
+  (CLI exit code unchanged) whenever `DefaultModel` is still the `vendor-default` sentinel — the
+  sentinel is obviously not in the allowlist. That state is reachable right after a fresh install and
+  after a transient `codex doctor` failure, and the cache's failure window means it can persist up to
+  one hour, until the next provider check re-probes. Accepted as a documented tradeoff: it is rare
+  (only a first check or a failing vendor probe, only for a project that restricts Codex), it
+  self-clears on the next successful probe within that window, `forge models --refresh` clears it
+  immediately by bypassing the cache, and the alternative — exempting the sentinel from the gate —
+  would let a sprint start on a model the policy never approved and cannot name, which is exactly the
+  failure this gate exists to prevent. Fail-closed with an imprecise diagnostic beats fail-open with a
+  precise one. A distinct diagnostic for "unresolved, not disallowed" is a deferred follow-up rather
+  than part of this slice: a new code is a public contract addition spanning `DiagnosticCodes`,
+  `ExitCodes`, localized surfaces, and the README's diagnostic table, and it changes no outcome.
 - Each Codex provider check may spawn one additional short-lived vendor process, at most once per 24
   hours per instance (once per hour after a failure), and never when Codex is not installed.
 - Sprints frozen before v0.85.0 keep the `gpt-5` value in their durable state and are unaffected at

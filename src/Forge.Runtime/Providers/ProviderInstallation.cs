@@ -43,16 +43,6 @@ public static partial class ProviderInstallation
     /// <summary>ADR 0008: "a failed check or update is retried after one hour."</summary>
     public static readonly TimeSpan ReleaseCheckFailureWindow = TimeSpan.FromHours(1);
 
-    /// <summary>ADR 0063: the default-model probe deliberately reuses the release check's exact
-    /// cadence rather than inventing a second one. Both answer "what does the vendor say today", both
-    /// are refreshed by the same provider-capability pass, and both are cheap to be a day stale — so
-    /// one cadence is one thing for a user to reason about instead of two.</summary>
-    public static readonly TimeSpan DefaultModelCheckSuccessWindow = ReleaseCheckSuccessWindow;
-
-    /// <summary>See <see cref="DefaultModelCheckSuccessWindow"/>: the same shorter retry window a
-    /// failed release check uses.</summary>
-    public static readonly TimeSpan DefaultModelCheckFailureWindow = ReleaseCheckFailureWindow;
-
     /// <summary>The default-model probe runs the vendor's own diagnostic command, which is
     /// materially heavier than a `--version` or authentication probe — Codex 0.149.1's `codex doctor
     /// --json` runs two dozen checks including network reachability and measured 1.7-7.4 seconds.
@@ -261,7 +251,9 @@ public static partial class ProviderInstallation
     /// the resolved model id, or <see langword="null"/> for every failure mode there is: no install,
     /// a non-zero exit, a timeout, an output shape <paramref name="parseResult"/> does not recognize,
     /// or a value that is not a usable model name. A cached failure is honoured within its own window
-    /// rather than respawning the vendor process, exactly as a cached release-check failure is.
+    /// rather than respawning the vendor process, exactly as a cached release-check failure is; a
+    /// cached success is honoured only while its recorded model still passes
+    /// <see cref="NormalizeModelName"/>.
     ///
     /// Only <paramref name="parseResult"/> ever sees raw process output, matching
     /// <see cref="CheckAuthenticationAsync"/> — a vendor diagnostic command's output routinely
@@ -299,7 +291,17 @@ public static partial class ProviderInstallation
             // Revalidated on the way out as well as on the way in: the cache is an ordinary file a
             // user or another process can edit, and it must not be a path around the same checks a
             // freshly probed value passes.
-            return entry.Succeeded ? NormalizeModelName(entry.Model) : null;
+            string? cached = entry.Succeeded ? NormalizeModelName(entry.Model) : null;
+            if (cached is not null || !entry.Succeeded)
+            {
+                return cached;
+            }
+
+            // An entry claiming success whose model does NOT pass validation is corrupt, not a
+            // recorded answer, so it does not earn the success window's 24 hours of silence either:
+            // fall through to a fresh probe whose result overwrites it. That is what makes a
+            // hand-edited or truncated file self-healing on the very next check instead of pinning
+            // the provider to "unresolved" for a day.
         }
 
         ProcessResult? result = await RunWithTimeoutAsync(
@@ -414,6 +416,11 @@ public static partial class ProviderInstallation
     private static bool IsStale(ProviderReleaseCacheEntry entry, DateTimeOffset now) =>
         IsStale(entry.CheckedAt, entry.Succeeded, now);
 
+    /// <summary>Shared verbatim by the release check and the default-model probe
+    /// (<see cref="ResolveDefaultModelAsync"/>) — one cadence, deliberately, not an oversight
+    /// (ADR 0063: both answer "what does the vendor say today", both are refreshed by the same
+    /// provider-capability pass, and both are cheap to be a day stale, so a second pair of windows
+    /// would only be a second thing for a user to reason about).</summary>
     private static bool IsStale(DateTimeOffset checkedAt, bool succeeded, DateTimeOffset now) =>
         now - checkedAt >= (succeeded ? ReleaseCheckSuccessWindow : ReleaseCheckFailureWindow);
 
