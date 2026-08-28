@@ -794,13 +794,21 @@ public partial class WorkspaceShellPage : ContentPage
     /// and keeps its existing <c>sprint:{id}</c> focus key, so focus-restore across a re-render is
     /// unchanged. Its <see cref="SemanticProperties.SetDescription"/> already names the
     /// title, the state, the progress fraction, and any attention reason (see
-    /// <c>SidebarViewModel.ToSprintItem</c>), so the dot, the second line, and the badge are all
-    /// excluded from the accessible tree via <see cref="Decorative{T}"/> -- visual reinforcement of
-    /// facts the row's one accessible node already speaks, exactly the double-announcement
-    /// PR #112 review round 2 finding 4 established the rule for. The badge is deliberately in the
-    /// first horn of that rule rather than the second: it is NOT the only carrier of the attention
-    /// fact, because <c>ToSprintItem</c>'s own <c>attentionSuffix</c> already appends the localized
-    /// reason to the same accessible name.
+    /// <c>SidebarViewModel.ToSprintItem</c>), so the second line and the badge are excluded from the
+    /// accessible tree via <see cref="Decorative{T}"/> -- visual reinforcement of facts the row's one
+    /// accessible node already speaks, exactly the double-announcement PR #112 review round 2
+    /// finding 4 established the rule for. The badge is deliberately in the first horn of that rule
+    /// rather than the second: it is NOT the only carrier of the attention fact, because
+    /// <c>ToSprintItem</c>'s own <c>attentionSuffix</c> already appends the localized reason to the
+    /// same accessible name.
+    ///
+    /// The dot is excluded for a different reason, and PR #122 review finding 3 is right that it
+    /// must not be described as a restatement: its FILL carries
+    /// <see cref="SidebarSprintItem.HasActiveOperation"/>, which no accessible name in this rail
+    /// states. ADR 0065 records that as a deliberately deferred gap -- naming it needs new localized
+    /// copy, and every message key lives in <c>Forge.Runtime</c>, which this Desktop-only slice does
+    /// not touch -- and not a regression, since <c>HasActiveOperation</c> was never spoken before
+    /// this change either. The dot's COLOR does restate the state the row already speaks.
     ///
     /// Finding B2: the highlight (see <see cref="SidebarSelectableRow"/>) follows the selected route.
     /// <see cref="SidebarSprintItem.HasActiveOperation"/> -- which used to own that highlight -- is a
@@ -842,9 +850,12 @@ public partial class WorkspaceShellPage : ContentPage
             Text = sprint.DisplayTitle,
             Style = ThemeStyle("GhostButtonStyle"),
             HorizontalOptions = LayoutOptions.Fill,
-            // A frozen title is free text of any length; truncating keeps one row one row instead of
-            // letting a long title reflow the whole rail.
-            LineBreakMode = LineBreakMode.TailTruncation,
+            // A frozen title is free text of up to 200 characters (ADR 0057); truncating keeps one
+            // row one row instead of letting a long title reflow the whole rail. Truncation is in
+            // the MIDDLE, not the tail: DisplayTitle ends with the "(Sprint N)" ordinal that makes
+            // two same-titled sprints distinguishable (PR #122 review finding 2), and tail
+            // truncation would eat exactly that suffix off the long titles most likely to collide.
+            LineBreakMode = LineBreakMode.MiddleTruncation,
             TextColor = isSelected ? accent : ThemeColor("ColorNeutral300"),
         };
         SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
@@ -904,19 +915,30 @@ public partial class WorkspaceShellPage : ContentPage
 
     /// <summary>A terminal sprint's history row (plan 12.1 final-sweep gap 3), given finding B1's
     /// title treatment and finding B2's selection highlight but none of the active row's dot, badge,
-    /// or progress line -- a terminal sprint carries none of those facts by construction, which is why
-    /// <see cref="SidebarHistoryItem"/> has no fields for them. Terminal rows still read as
-    /// muted/settled; <see cref="SidebarRowAccentColor"/> distinguishes completed (green-tinted) from
-    /// cancelled (neutral) once the row is the selected one.</summary>
+    /// or progress fraction -- a terminal sprint carries none of those facts by construction, which
+    /// is why <see cref="SidebarHistoryItem"/> has no fields for them.
+    ///
+    /// It does keep a second line, carrying the state word alone (PR #122 review finding 2 [round 2
+    /// finding 1]). The pre-redesign row rendered <c>"3. cancelled"</c>, so the state was always
+    /// legible as TEXT; replacing that with the title alone left
+    /// <see cref="SidebarRowAccentColor"/>'s green-versus-neutral tint as the only thing separating
+    /// a completed sprint from a cancelled one -- and only once the row was selected, since an
+    /// unselected row paints every state the same <c>ColorNeutral600</c>. That is status by colour
+    /// alone, which plan 12.6 forbids outright. Restoring the word also gives the archived list the
+    /// same two-line rhythm as the active list above it.</summary>
     private Border BuildHistoryRow(SidebarProjectItem project, SidebarHistoryItem historyItem)
     {
         bool isSelected = workspace.Route.SprintId == historyItem.SprintId;
+        VerticalStackLayout lines = new() { Spacing = 0 };
         Button historyButton = new()
         {
             Text = historyItem.DisplayTitle,
             Style = ThemeStyle("GhostButtonStyle"),
             HorizontalOptions = LayoutOptions.Fill,
-            LineBreakMode = LineBreakMode.TailTruncation,
+            // Middle truncation for the same reason BuildSprintRow uses it: the "(Sprint N)" ordinal
+            // that disambiguates two same-titled sprints sits at the end of DisplayTitle, and a
+            // history row has no progress fraction or attention badge to tell them apart instead.
+            LineBreakMode = LineBreakMode.MiddleTruncation,
             TextColor = isSelected ? SidebarRowAccentColor(historyItem.StateText) : ThemeColor("ColorNeutral600"),
         };
         SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
@@ -926,7 +948,23 @@ public partial class WorkspaceShellPage : ContentPage
                     WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
                     CancellationToken.None)
                 .ConfigureAwait(true));
-        return SidebarSelectableRow(historyButton, isSelected);
+        lines.Children.Add(historyButton);
+        // Decorative for BuildSprintRow's reason: ToHistoryItem's accessible name already ends with
+        // this exact state text, so describing the label would announce it twice.
+        lines.Children.Add(Decorative(new Label
+        {
+            Text = historyItem.StateText,
+            Style = ThemeStyle("MonoLabelStyle"),
+            // ColorNeutral500 on PR #122 review finding 3's precedent -- MonoLabelStyle's own
+            // ColorNeutral600 sits under the 4.5:1 floor on both the rail and the ColorAccent900 a
+            // selected row paints. It reads one step brighter than the muted ColorNeutral600 title
+            // above it, which is deliberate: the title carries the row's muted/settled weight at
+            // button size, while this 10.5pt line gets no large-text contrast allowance and is now
+            // the only textual carrier of the state.
+            TextColor = ThemeColor("ColorNeutral500"),
+            HorizontalTextAlignment = TextAlignment.Center,
+        }));
+        return SidebarSelectableRow(lines, isSelected);
     }
 
     /// <summary>Finding B2: the sidebar's highlighted-row treatment (tinted background + accent

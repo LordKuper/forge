@@ -300,8 +300,11 @@ public sealed class SidebarViewModel(
     /// untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it resolves to
     /// the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a label in a
     /// spoken row name. The ordinal itself is kept as a disambiguator by
-    /// <see cref="SprintDisplayTitle.ResolveAccessible"/> -- titles are not unique, so the title
+    /// <see cref="SprintDisplayTitle.ResolveRowTitle"/> -- titles are not unique, so the title
     /// alone would leave two same-titled sprints indistinguishable (PR #122 review finding 1).
+    /// That one resolved string is both drawn and spoken (round 2 finding 2): round 1 disambiguated
+    /// the spoken name only, leaving <see cref="SidebarSprintItem.DisplayTitle"/> -- what the row's
+    /// button actually renders -- still colliding, so two same-titled sprints drew identical rows.
     /// The plan progress the sidebar row now renders visually is spoken here too,
     /// through the existing <see cref="MessageKeys.SprintStatusHeaderProgressLabel"/> copy the sprint
     /// workspace header already uses for the same fraction -- so the second line the row draws can
@@ -311,16 +314,14 @@ public sealed class SidebarViewModel(
     {
         bool humanAttention = SprintOrderingRank.RequiresHumanAttention(sprint.State);
         string stateText = SurfaceFormatting.Machine(sprint.State);
-        string displayTitle = SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text.Current);
+        string displayTitle = SprintDisplayTitle.ResolveRowTitle(sprint.Title, sprint.CreationSequence, text.Current);
         string attentionSuffix = humanAttention
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture, $", {text.Resolve(AttentionReasonKey(sprint.State))}")
             : string.Empty;
-        string accessibleTitle =
-            SprintDisplayTitle.ResolveAccessible(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {accessibleTitle}, {stateText}, " +
+            $"{projectDisplayName}, {displayTitle}, {stateText}, " +
                 $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} " +
                 $"{sprint.StagesCompleted}/{sprint.StagesTotal}{attentionSuffix}");
         return new(
@@ -341,19 +342,19 @@ public sealed class SidebarViewModel(
     /// true for a non-terminal state, so a terminal sprint can never need it -- and never a progress
     /// fraction either: <see cref="SprintStatus"/> carries no stage counts at all, which is exactly
     /// why <see cref="SidebarHistoryItem"/> has no progress fields to render. Carries the same
-    /// <see cref="SprintDisplayTitle.ResolveAccessible"/> ordinal disambiguator as the active row
+    /// <see cref="SprintDisplayTitle.ResolveRowTitle"/> ordinal disambiguator as the active row
     /// (PR #122 review finding 1), and needs it more: with no state fraction or attention suffix to
-    /// vary, the title is nearly all this name has, so two same-titled terminal sprints would
-    /// otherwise be wholly indistinguishable in the archived list.</summary>
+    /// vary, the title is nearly all this row has, so two same-titled terminal sprints would
+    /// otherwise be wholly indistinguishable in the archived list -- in the drawn row as much as in
+    /// the spoken name, which is why one resolved string now serves both (round 2 finding 2).
+    /// </summary>
     private SidebarHistoryItem ToHistoryItem(string projectDisplayName, SprintStatus sprint)
     {
         string stateText = SurfaceFormatting.Machine(sprint.State);
-        string displayTitle = SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text.Current);
-        string accessibleTitle =
-            SprintDisplayTitle.ResolveAccessible(sprint.Title, sprint.CreationSequence, text.Current);
+        string displayTitle = SprintDisplayTitle.ResolveRowTitle(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {accessibleTitle}, {stateText}");
+            $"{projectDisplayName}, {displayTitle}, {stateText}");
         return new(sprint.Id, sprint.CreationSequence, displayTitle, stateText, accessible);
     }
 

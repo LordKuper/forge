@@ -26,20 +26,36 @@ public static class SprintDisplayTitle
 
     /// <summary>
     /// The row-naming form of <see cref="Resolve"/>: the resolved title, followed by the sprint's
-    /// ordinal when -- and only when -- the title is a frozen one.
+    /// ordinal when -- and only when -- the title is a frozen one. This is the single string a
+    /// sidebar row both <em>draws</em> and <em>announces</em>; it is not an accessibility-only
+    /// variant layered over a plainer visible label.
     /// </summary>
     /// <remarks>
-    /// PR #122 review finding 1. A frozen <c>SprintDefinition.Title</c> is free text with no
-    /// uniqueness constraint (ADR 0057 trims, redacts and length-bounds it, nothing more), so two
-    /// sprints in one project may share one, and a name carrying the title alone would render and
-    /// announce them identically -- the same defect the ordinal-only name had, relocated onto
-    /// same-titled sprints. Appending <see cref="Ordinal"/> restores the disambiguator.
+    /// PR #122 review findings 1 and 2. A frozen <c>SprintDefinition.Title</c> is free text with no
+    /// uniqueness constraint (ADR 0057 trims, redacts and length-bounds it to 200 characters,
+    /// nothing more), so two sprints in one project may share one, and a label carrying the title
+    /// alone renders and announces them identically -- the same defect the ordinal-only name had,
+    /// relocated onto same-titled sprints. Appending <see cref="Ordinal"/> restores the
+    /// disambiguator.
+    ///
+    /// Round 1 applied this to the spoken name only, which left the *visible* rows still colliding
+    /// (round 2 finding 2): two same-titled sprints drew byte-identical buttons, and a history row
+    /// -- which draws nothing but this label and its state -- was wholly indistinguishable. One
+    /// function now backs both renderings, so the two cannot drift apart again.
+    ///
+    /// The suffix is unconditional on the titled path rather than applied only when a title
+    /// actually collides. A collision-conditional rule would have to know the whole rendered set,
+    /// making this a set-aware operation instead of a pure per-sprint one; it would relabel a row
+    /// whenever an unrelated sprint was created or archived; and its uniqueness scope across the
+    /// separately rendered active and history lists is ambiguous exactly where the two lists sit
+    /// adjacent in the rail. A stable, local, always-present ordinal costs one short parenthetical.
+    ///
     /// The untitled path takes no suffix: its resolved title already <em>is</em> the ordinal, and
-    /// repeating it would speak "Sprint 2 (Sprint 2)". The branch is the same
+    /// repeating it would read "Sprint 2 (Sprint 2)". The branch is the same
     /// <see cref="string.IsNullOrWhiteSpace"/> test <see cref="Resolve"/> itself makes, never a
     /// comparison against the rendered fallback text.
     /// </remarks>
-    public static string ResolveAccessible(string? title, int creationSequence, SurfaceText text)
+    public static string ResolveRowTitle(string? title, int creationSequence, SurfaceText text)
     {
         ArgumentNullException.ThrowIfNull(text);
         return string.IsNullOrWhiteSpace(title)

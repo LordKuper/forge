@@ -14,10 +14,15 @@ User-facing Forge changes are listed by release, newest first.
   right now, which is what the row's tinted background used to mean. Sprints in the project's
   archived list get the same title treatment (a terminal sprint has no progress, attention, or
   running work to show). Screen readers hear the title, the state, the progress, and any attention
-  reason from the row's own button; the dot, second line, and badge are visual reinforcement and are
-  not announced again. Because sprint titles need not be unique, a titled row is announced with its
-  number after the title ("Fix login (Sprint 2)"), so two sprints sharing a title stay distinct —
-  including in the archived list, where there is no progress or attention detail to tell them apart.
+  reason from the row's own button; the second line and badge are visual reinforcement and are not
+  announced again. Because sprint titles need not be unique, a titled row both shows and announces
+  its number after the title ("Fix login (Sprint 2)"), so two sprints sharing a title stay distinct
+  on screen as well as to a screen reader — including in the archived list, where there is no
+  progress or attention detail to tell them apart. A title too long for the rail is shortened in the
+  middle rather than at the end, so that number stays visible.
+- **Archived sprints show their state in words.** Each row in a project's archived list reads its
+  state ("completed", "cancelled") on a second line beneath the title, so the two are no longer told
+  apart by colour alone.
 
 ### Changed
 
@@ -26,9 +31,9 @@ User-facing Forge changes are listed by release, newest first.
   distinguished only by a slight text tint — and with nothing running, nothing in the sidebar showed
   where you were. It now follows the selected sprint, including in the archived list.
 
-The rest of the sidebar redesign is still to come: creating a sprint from a project row, the
-simplified "Add project" button, collapsing the archived-sprints list, and removing the duplicate
-"Remove project" action are separate follow-up work and are unchanged here.
+> **Note:** the rest of the sidebar redesign is still to come. Creating a sprint from a project row,
+> the simplified "Add project" button, collapsing the archived-sprints list, and removing the
+> duplicate "Remove project" action are separate follow-up work and are unchanged here.
 
 ## v0.86.0
 

@@ -92,28 +92,22 @@ public sealed class SidebarViewModelTests
         SidebarSprintItem untitledRow =
             Assert.Single(project.ActiveSprints, item => item.SprintId == untitled.SprintId!.Value);
 
-        Assert.Equal(frozenTitle, titledRow.DisplayTitle);
+        // Round 2 finding 2: the DRAWN label carries the ordinal too, not just the spoken name. The
+        // untitled row states that ordinal once, as its whole resolved title, with no suffix.
         Assert.Equal(
-            string.Format(
-                CultureInfo.InvariantCulture,
-                en.Resolve(MessageKeys.SprintUntitledFallback),
-                untitledRow.CreationSequence),
-            untitledRow.DisplayTitle);
+            string.Create(CultureInfo.InvariantCulture, $"{frozenTitle} ({Ordinal(en, titledRow.CreationSequence)})"),
+            titledRow.DisplayTitle);
+        Assert.Equal(Ordinal(en, untitledRow.CreationSequence), untitledRow.DisplayTitle);
         // The defect itself: two rows, two distinguishable names -- not one shared label.
         Assert.NotEqual(titledRow.DisplayTitle, untitledRow.DisplayTitle);
 
         Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
         Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
         // PR #122 review finding 1: a titled row's name keeps the ordinal as a disambiguator, since
-        // titles are free text with no uniqueness constraint. The untitled row states it once only --
-        // its resolved title already is the ordinal, so no "(Sprint N)" suffix is appended.
-        Assert.Contains(
-            string.Format(
-                CultureInfo.InvariantCulture,
-                en.Resolve(MessageKeys.SprintUntitledFallback),
-                titledRow.CreationSequence),
-            titledRow.AccessibleName,
-            StringComparison.Ordinal);
+        // titles are free text with no uniqueness constraint. Round 2 finding 2: what the row speaks
+        // must be what the row draws -- one resolved string, never an accessible-only variant
+        // layered over a plainer visible label that still collides.
+        Assert.Contains(titledRow.DisplayTitle, titledRow.AccessibleName, StringComparison.Ordinal);
         Assert.DoesNotContain('(', untitledRow.AccessibleName);
         // A sprint that has only just been created has completed no stages, and its workflow graph is
         // never empty -- so the spoken fraction is "0/<graph size>", derived from the agreed behavior
@@ -202,30 +196,34 @@ public sealed class SidebarViewModelTests
         SidebarHistoryItem untitledRow = Assert.Single(project.History, item => item.SprintId == untitled);
 
         // The frozen title actually reaches the archived row, rather than degrading to the fallback.
-        Assert.Equal(frozenTitle, titledRow.DisplayTitle);
-        Assert.Equal(frozenTitle, duplicateRow.DisplayTitle);
+        Assert.Contains(frozenTitle, titledRow.DisplayTitle, StringComparison.Ordinal);
+        Assert.Contains(frozenTitle, duplicateRow.DisplayTitle, StringComparison.Ordinal);
+        Assert.Equal(Ordinal(en, untitledRow.CreationSequence), untitledRow.DisplayTitle);
+
+        // Round 2 finding 2, the defect this guards: an archived row draws its DisplayTitle and its
+        // state and nothing else -- no progress fraction, no attention badge -- so two sprints
+        // sharing one frozen title drew byte-identical rows while only their spoken names differed.
+        Assert.NotEqual(titledRow.DisplayTitle, duplicateRow.DisplayTitle);
         Assert.Equal(
-            string.Format(
-                CultureInfo.InvariantCulture,
-                en.Resolve(MessageKeys.SprintUntitledFallback),
-                untitledRow.CreationSequence),
-            untitledRow.DisplayTitle);
+            string.Create(CultureInfo.InvariantCulture, $"{frozenTitle} ({Ordinal(en, titledRow.CreationSequence)})"),
+            titledRow.DisplayTitle);
 
         Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
         Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
         // Finding 1: same title, same state, still distinguishable -- and by the ordinal specifically.
         Assert.NotEqual(titledRow.AccessibleName, duplicateRow.AccessibleName);
-        Assert.Contains(
-            string.Format(
-                CultureInfo.InvariantCulture,
-                en.Resolve(MessageKeys.SprintUntitledFallback),
-                titledRow.CreationSequence),
-            titledRow.AccessibleName,
-            StringComparison.Ordinal);
+        // Drawn and spoken stay one string, for both same-titled rows.
+        Assert.Contains(titledRow.DisplayTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(duplicateRow.DisplayTitle, duplicateRow.AccessibleName, StringComparison.Ordinal);
         // The untitled row's name states the ordinal once, not twice ("Sprint 3", never
         // "Sprint 3 (Sprint 3)") -- the duplication ADR 0065 dropped the old prefix to avoid.
         Assert.DoesNotContain('(', untitledRow.AccessibleName);
     }
+
+    /// <summary>The localized "Sprint {N}" copy, resolved the way a caller would read it rather than
+    /// rebuilt from production code -- one place, since both row tests assert against it.</summary>
+    private static string Ordinal(SurfaceTextProvider text, int creationSequence) => string.Format(
+        CultureInfo.InvariantCulture, text.Resolve(MessageKeys.SprintUntitledFallback), creationSequence);
 
     private static async Task<Guid> CreateAndCancelAsync(
         ForgeApplication application, string root, string? title, CancellationToken cancellationToken)
