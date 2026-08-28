@@ -73,7 +73,8 @@ public static class SurfaceFormatting
     /// single most severe state present (<see cref="ProviderQuotaAggregation.Worst"/>) as one
     /// localized sentence plus its accessible counterpart, so a degraded provider's quota is never
     /// communicated by color alone and is never hidden behind an otherwise-unremarkable majority.
-    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no verified signal yet") and
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no limit data is reported" -- terminally,
+    /// never "not yet"; see that member's own remarks) and
     /// <see cref="ProviderQuotaAvailability.Unavailable"/> ("quota is exhausted") are easy to
     /// conflate by name -- every named member below has its own explicit arm (no arm reached by more
     /// than one member), so this codebase's own single meeting point for the two vocabularies can no

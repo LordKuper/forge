@@ -184,7 +184,7 @@
   <data name="ProjectSelected" xml:space="preserve"><value>Выбор сохранён.</value></data>
   <data name="NoProjects" xml:space="preserve"><value>В каталоге пока нет проектов.</value></data>
   <data name="SprintReadyToFinalizeReason" xml:space="preserve"><value>Готово к финализации</value></data>
-  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Статус квоты пока недоступен.</value></data>
+  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Лимиты квоты провайдера не сообщаются.</value></data>
   <data name="SettingsLanguageUnsupported" xml:space="preserve"><value>Этот язык не поддерживается.</value></data>
   <data name="SettingsUnknownProvider" xml:space="preserve"><value>Этот провайдер неизвестен данной сборке Forge.</value></data>
   <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Бюджет токенов должен быть положительным числом.</value></data>
@@ -328,7 +328,7 @@
   <data name="workspace_action.reject_gate" xml:space="preserve"><value>Отклонить проверку человеком, которую ожидает этот узел.</value></data>
   <data name="ModelsQuotaDescription" xml:space="preserve"><value>Показать статус квоты аккаунта или модели провайдера.</value></data>
   <data name="ModelsQuotaTitle" xml:space="preserve"><value>Квота провайдера:</value></data>
-  <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Статус квоты: пока недоступен.</value></data>
+  <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Статус квоты: лимиты не сообщаются.</value></data>
   <data name="QuotaStatusReady" xml:space="preserve"><value>Квота провайдера в пределах нормы.</value></data>
   <data name="QuotaStatusReadyAccessible" xml:space="preserve"><value>Статус квоты: в пределах нормы.</value></data>
   <data name="QuotaStatusLimited" xml:space="preserve"><value>Квота провайдера ограничена; некоторые запросы могут задерживаться.</value></data>

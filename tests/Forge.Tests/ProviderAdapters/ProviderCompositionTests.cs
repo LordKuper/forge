@@ -33,4 +33,45 @@ public sealed class ProviderCompositionTests
         Assert.True(catalog.Contains(new ProviderId("codex")));
         Assert.True(catalog.Contains(new ProviderId("claude_code")));
     }
+
+    /// <summary>Slice S5: <see cref="ProviderQuotaAvailability.Unknown"/> is documented as the
+    /// TERMINAL quota reading for both shipped providers, so a later surface can render "no limit
+    /// data available" as a final answer rather than a placeholder. <c>ProviderQuotaProjectorTests</c>
+    /// only proves that over <c>FakeLlmProvider</c>; this proves it over the REAL
+    /// <c>Forge.Providers.Codex.Windows</c>/<c>Forge.Providers.Claude.Windows</c> adapters composed
+    /// exactly as a shipping composition root builds them -- neither adapter contributes any quota
+    /// signal, so no snapshot can carry a fabricated amount, unit, or reset time, and none can report
+    /// an availability other than the terminal one (ADR 0052's finding, re-confirmed by ADR
+    /// 0061).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void QuotaProjectsAsTerminallyUnknownForBothRealProviderAdapters()
+    {
+        using TestEnvironment environment = new();
+        ServiceCollection services = new();
+        services.AddForgeCore();
+        services.AddSingleton<IEnvironmentPaths>(environment);
+        services.AddCodexProvider();
+        services.AddClaudeProvider();
+        using ServiceProvider provider = services.BuildServiceProvider();
+        ProviderCatalog catalog = provider.GetRequiredService<ProviderCatalog>();
+        ProviderToolchainStatus status = new(
+        [
+            ProviderStatus.Ready(new ProviderId("codex"), "0.149.1"),
+            ProviderStatus.Ready(new ProviderId("claude_code"), "2.1.233"),
+        ]);
+
+        IReadOnlyList<ProviderQuotaSnapshot> entries =
+            ProviderQuotaProjector.Project(status, catalog, DateTimeOffset.UnixEpoch);
+
+        Assert.Equal(2, entries.Count);
+        Assert.All(entries, entry =>
+        {
+            Assert.Equal(ProviderQuotaAvailability.Unknown, entry.Availability);
+            Assert.Null(entry.RemainingAmount);
+            Assert.Null(entry.Unit);
+            Assert.Null(entry.ResetAt);
+            Assert.Equal(ProviderDiagnosticCodes.QuotaUnknown, entry.DiagnosticCode);
+        });
+    }
 }

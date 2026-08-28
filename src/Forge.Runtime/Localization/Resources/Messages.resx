@@ -184,7 +184,7 @@
   <data name="ProjectSelected" xml:space="preserve"><value>Selection recorded.</value></data>
   <data name="NoProjects" xml:space="preserve"><value>No projects in the catalog yet.</value></data>
   <data name="SprintReadyToFinalizeReason" xml:space="preserve"><value>Ready to finalize</value></data>
-  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Quota status not yet available.</value></data>
+  <data name="QuotaStatusUnknown" xml:space="preserve"><value>Provider quota limits are not reported.</value></data>
   <data name="SettingsLanguageUnsupported" xml:space="preserve"><value>This language is not supported.</value></data>
   <data name="SettingsUnknownProvider" xml:space="preserve"><value>This provider is not known to this Forge build.</value></data>
   <data name="SettingsTokenBudgetInvalid" xml:space="preserve"><value>Token budget must be a positive number.</value></data>
@@ -328,7 +328,7 @@
   <data name="workspace_action.reject_gate" xml:space="preserve"><value>Reject the human gate this node is waiting on.</value></data>
   <data name="ModelsQuotaDescription" xml:space="preserve"><value>Show provider/model account quota status.</value></data>
   <data name="ModelsQuotaTitle" xml:space="preserve"><value>Provider quota:</value></data>
-  <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Quota status: not yet available.</value></data>
+  <data name="QuotaStatusUnknownAccessible" xml:space="preserve"><value>Quota status: limits are not reported.</value></data>
   <data name="QuotaStatusReady" xml:space="preserve"><value>Provider quota is within normal limits.</value></data>
   <data name="QuotaStatusReadyAccessible" xml:space="preserve"><value>Quota status: within normal limits.</value></data>
   <data name="QuotaStatusLimited" xml:space="preserve"><value>Provider quota is limited; some requests may be delayed.</value></data>

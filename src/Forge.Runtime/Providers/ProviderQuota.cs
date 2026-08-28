@@ -12,8 +12,21 @@ namespace Forge.Providers;
 /// </summary>
 public enum ProviderQuotaAvailability
 {
-    /// <summary>No verified quota signal exists for this provider (the only state this codebase
-    /// currently produces -- see ADR 0052).</summary>
+    /// <summary>
+    /// No quota limit data exists for this provider: it is asked for on every projection and neither
+    /// shipped integration reports one (ADR 0052's investigation, re-confirmed by ADR 0061).
+    /// <para>
+    /// This is a TERMINAL state, not a pending one. It does not mean "not measured yet", "still
+    /// loading", or "wiring incomplete", and nothing in this codebase will ever replace it with a
+    /// different value while both providers remain as they are -- <see cref="ProviderQuotaProjector"/>
+    /// has exactly one production factory and it hardcodes this member. A surface that reports
+    /// "no limit data available" for it is therefore CORRECT and final: it must never render a
+    /// spinner, a placeholder awaiting a value, a retry affordance, or wording that promises a later
+    /// reading (the pre-ADR-0069 <c>QuotaStatusUnknown</c> text, "Quota status not yet available.",
+    /// was exactly that defect). Only a provider vendor publishing a structured quota API -- which
+    /// would extend the projector, not this contract -- can make any other member reachable.
+    /// </para>
+    /// </summary>
     Unknown,
 
     /// <summary>Verified remaining quota is comfortably above the provider's own warning threshold.</summary>
@@ -69,6 +82,14 @@ public sealed record ProviderQuotaStatus(string SchemaVersion, IReadOnlyList<Pro
 /// over a failed run's stderr text, classifies a failure after the fact -- it is not a verified
 /// remaining-amount/unit/reset-time reading and is deliberately not used here (fabricating a number
 /// from it would violate the plan's own "unknown quota is rendered as unknown, never inferred").
+/// <para>
+/// Consumer contract: every snapshot this class produces reports
+/// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset time,
+/// and that is the terminal, expected reading for both shipped providers -- see that member's own
+/// remarks. There is one production factory (<c>Unverified</c>) and no other production code path
+/// constructs a <see cref="ProviderQuotaSnapshot"/> at all, so a consumer needs no "still loading"
+/// branch and must not invent one.
+/// </para>
 /// </summary>
 public static class ProviderQuotaProjector
 {
