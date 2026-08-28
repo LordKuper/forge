@@ -58,14 +58,25 @@ this Desktop-only slice does not touch. This is not a regression — `HasActiveO
 any accessible name before this change either — but it is a real gap, and it should be closed by the
 slice that next has reason to add sidebar copy.
 
-### The accessible name names the sprint, not its ordinal
+### The accessible name leads with the sprint, and keeps the ordinal to disambiguate
 
-`"{SprintIdLabel} {CreationSequence}"` is replaced by the resolved `DisplayTitle`, matching the
-precedent ADR 0057 already set on the Project Overview sprint card: `DisplayTitle` carries either the
-frozen title or a sequence-bearing `"Sprint {N}"` fallback, so keeping the ordinal prefix would speak
-`"Sprint 2, Sprint 2"` for every untitled sprint. `SprintIdLabel` goes with it — it resolves to the
-CLI's own `"Sprint id (empty: active sprint):"` prompt, which never read as a label in a spoken row
-name.
+`"{SprintIdLabel} {CreationSequence}"` no longer *prefixes* the name: the resolved title leads,
+matching the precedent ADR 0057 already set on the Project Overview sprint card. `SprintIdLabel` is
+dropped entirely — it resolves to the CLI's own `"Sprint id (empty: active sprint):"` prompt, which
+never read as a label in a spoken row name.
+
+The ordinal itself is kept, as a trailing disambiguator rather than a leading label, because a frozen
+title is free text that ADR 0057 only trims, redacts and length-bounds — never makes unique. Two
+sprints titled `"Fix login"` would otherwise carry byte-identical names, which is finding B1's own
+defect relocated from untitled sprints onto same-titled ones. `SprintDisplayTitle.ResolveAccessible`
+therefore appends it only on the **titled** path — `"Fix login (Sprint 2)"` — and never on the
+untitled one, whose resolved title already *is* the ordinal and would otherwise speak
+`"Sprint 2 (Sprint 2)"`. That branch is the same `IsNullOrWhiteSpace(title)` test `Resolve` makes,
+not a comparison against the rendered fallback text, and it reuses the existing
+`SprintUntitledFallback` copy for both roles rather than duplicating it under a second key.
+
+History rows need this most: their name carries no progress fraction or attention suffix to vary, so
+the title and ordinal are nearly all they have.
 
 ### History rows get the title and the highlight, and nothing else
 
@@ -79,11 +90,19 @@ render no dot, badge, or progress line.
 - `Forge.Desktop.Presentation` (`SidebarViewModel.cs`): `SidebarSprintItem.DisplayTitle` and
   `SidebarHistoryItem.DisplayTitle` (positional, no default — each record has exactly one
   construction site, so every one is reviewed explicitly); `ToSprintItem`/`ToHistoryItem` resolve
-  them through `SprintDisplayTitle.Resolve`; `ToSprintItem`'s accessible name gains the progress
+  them through `SprintDisplayTitle.Resolve`, and their accessible names through
+  `SprintDisplayTitle.ResolveAccessible`; `ToSprintItem`'s accessible name gains the progress
   fraction through the existing `SprintStatusHeaderProgressLabel` copy.
 - `Forge.Desktop` (`WorkspaceShellPage.xaml.cs`): `BuildSprintRow`, `BuildHistoryRow`, and the shared
   `SidebarSelectableRow` container replace the two inline row loops; `ActiveOperationDot` /
   `IdleOperationDot`.
+- The sprint row's second line overrides `MonoLabelStyle`'s `ColorNeutral600` ink with
+  `ColorNeutral500`. `ColorNeutral600` measures ≈4.25:1 on the rail and ≈3.31:1 on the
+  `ColorAccent900` a selected row now paints — the mono-on-tint combination is new to this slice,
+  since a tinted row previously had no second line. `ColorNeutral500` clears the 4.5:1 body-text
+  floor on both grounds (≈6.3:1 and ≈4.9:1), so one existing token covers selected and unselected
+  alike. This matters more than usual because the line is `Decorative`-excluded and the progress
+  fraction appears nowhere else in the rail.
 - The sprint row's `TrackSidebarFocus` key (`sprint:{id}`) is unchanged, so focus restoration across
   a sidebar rebuild behaves exactly as before. History rows remain unregistered, as they already were.
 - `VERSION` moves from `0.86.0` to `0.87.0` (MINOR: additive, no breaking change).
@@ -93,3 +112,4 @@ render no dot, badge, or progress line.
 - `docs/plans/desktop-design-parity-review.md` findings B1 and B2
 - ADR 0057 (the sprint title this slice renders, and the `DisplayTitle`-not-ordinal precedent)
 - PR #112 review round 2 finding 4 (the decorative-versus-described rule the badge is judged against)
+- PR #112 review round 3 finding 4 (the 4.5:1 body-text floor and the `ColorNeutral500` precedent)

@@ -104,6 +104,17 @@ public sealed class SidebarViewModelTests
 
         Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
         Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
+        // PR #122 review finding 1: a titled row's name keeps the ordinal as a disambiguator, since
+        // titles are free text with no uniqueness constraint. The untitled row states it once only --
+        // its resolved title already is the ordinal, so no "(Sprint N)" suffix is appended.
+        Assert.Contains(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                en.Resolve(MessageKeys.SprintUntitledFallback),
+                titledRow.CreationSequence),
+            titledRow.AccessibleName,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain('(', untitledRow.AccessibleName);
         // A sprint that has only just been created has completed no stages, and its workflow graph is
         // never empty -- so the spoken fraction is "0/<graph size>", derived from the agreed behavior
         // rather than read back out of the row it is asserting on.
@@ -149,6 +160,80 @@ public sealed class SidebarViewModelTests
         SidebarHistoryItem historyItem = Assert.Single(project.History);
         Assert.Equal(created.SprintId!.Value, historyItem.SprintId);
         Assert.False(string.IsNullOrWhiteSpace(historyItem.AccessibleName));
+    }
+
+    /// <summary>PR #122 review finding 2: the history row resolves its title from a different
+    /// producer than the active row -- <see cref="SprintStatus.Title"/>, built by
+    /// <c>StatusAdvisor</c> from the loaded definition, rather than
+    /// <see cref="SprintWorkspaceSummary.Title"/> built by <c>WorkspaceSummary.CreateAsync</c> -- so
+    /// the active path's coverage does not reach it. The prior
+    /// <c>Assert.False(IsNullOrWhiteSpace(AccessibleName))</c> could not detect the failure it was
+    /// standing in for: it holds equally for a name that silently degraded to the "Sprint {N}"
+    /// fallback because <c>Title</c> stopped being carried. This asserts the resolved title itself.
+    ///
+    /// Also finding 1's regression guard for the terminal path: two sprints sharing one frozen title
+    /// must still be told apart. The history name has no progress fraction or attention suffix to
+    /// vary, so without the ordinal disambiguator the two would be byte-identical.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncNamesEachHistoryRowByItsOwnTitleAndKeepsSameTitledSprintsDistinct()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ForgeApplication application = environment.Application;
+        const string frozenTitle = "Fix login";
+        Guid titled = await CreateAndCancelAsync(application, environment.ProjectRoot, frozenTitle, cancellationToken);
+        // The same title a second time: free text, no uniqueness constraint (ADR 0057).
+        Guid duplicate =
+            await CreateAndCancelAsync(application, environment.ProjectRoot, frozenTitle, cancellationToken);
+        Guid untitled = await CreateAndCancelAsync(application, environment.ProjectRoot, null, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel =
+            new(catalog, application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        SidebarHistoryItem titledRow = Assert.Single(project.History, item => item.SprintId == titled);
+        SidebarHistoryItem duplicateRow = Assert.Single(project.History, item => item.SprintId == duplicate);
+        SidebarHistoryItem untitledRow = Assert.Single(project.History, item => item.SprintId == untitled);
+
+        // The frozen title actually reaches the archived row, rather than degrading to the fallback.
+        Assert.Equal(frozenTitle, titledRow.DisplayTitle);
+        Assert.Equal(frozenTitle, duplicateRow.DisplayTitle);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                en.Resolve(MessageKeys.SprintUntitledFallback),
+                untitledRow.CreationSequence),
+            untitledRow.DisplayTitle);
+
+        Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
+        // Finding 1: same title, same state, still distinguishable -- and by the ordinal specifically.
+        Assert.NotEqual(titledRow.AccessibleName, duplicateRow.AccessibleName);
+        Assert.Contains(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                en.Resolve(MessageKeys.SprintUntitledFallback),
+                titledRow.CreationSequence),
+            titledRow.AccessibleName,
+            StringComparison.Ordinal);
+        // The untitled row's name states the ordinal once, not twice ("Sprint 3", never
+        // "Sprint 3 (Sprint 3)") -- the duplication ADR 0065 dropped the old prefix to avoid.
+        Assert.DoesNotContain('(', untitledRow.AccessibleName);
+    }
+
+    private static async Task<Guid> CreateAndCancelAsync(
+        ForgeApplication application, string root, string? title, CancellationToken cancellationToken)
+    {
+        CreateSprintResult created = await application.CreateSprintAsync(root, title, cancellationToken);
+        Guid sprintId = created.SprintId!.Value;
+        await application.CancelSprintAsync(root, sprintId, true, cancellationToken);
+        return sprintId;
     }
 
     /// <summary>Plan 12.1 final-sweep gap 3's cap -- matches

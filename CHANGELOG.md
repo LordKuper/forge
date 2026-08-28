@@ -15,7 +15,9 @@ User-facing Forge changes are listed by release, newest first.
   archived list get the same title treatment (a terminal sprint has no progress, attention, or
   running work to show). Screen readers hear the title, the state, the progress, and any attention
   reason from the row's own button; the dot, second line, and badge are visual reinforcement and are
-  not announced again.
+  not announced again. Because sprint titles need not be unique, a titled row is announced with its
+  number after the title ("Fix login (Sprint 2)"), so two sprints sharing a title stay distinct —
+  including in the archived list, where there is no progress or attention detail to tell them apart.
 
 ### Changed
 

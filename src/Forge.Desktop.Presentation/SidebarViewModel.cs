@@ -294,13 +294,15 @@ public sealed class SidebarViewModel(
     }
 
     /// <summary>Finding B1: the row names the sprint, not merely its ordinal. The accessible name
-    /// leads with <see cref="SprintDisplayTitle.Resolve"/>'s resolved title -- which already carries
-    /// either the frozen title or a sequence-bearing "Sprint {N}" fallback -- instead of the former
+    /// leads with <see cref="SprintDisplayTitle.Resolve"/>'s resolved title instead of the former
     /// <c>"{SprintIdLabel} {CreationSequence}"</c> prefix, matching the same ADR 0057 reasoning the
     /// Project Overview sprint card already applies ("prefixing rendered '2. Sprint 2' for every
     /// untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it resolves to
     /// the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a label in a
-    /// spoken row name. The plan progress the sidebar row now renders visually is spoken here too,
+    /// spoken row name. The ordinal itself is kept as a disambiguator by
+    /// <see cref="SprintDisplayTitle.ResolveAccessible"/> -- titles are not unique, so the title
+    /// alone would leave two same-titled sprints indistinguishable (PR #122 review finding 1).
+    /// The plan progress the sidebar row now renders visually is spoken here too,
     /// through the existing <see cref="MessageKeys.SprintStatusHeaderProgressLabel"/> copy the sprint
     /// workspace header already uses for the same fraction -- so the second line the row draws can
     /// stay decorative (see <c>WorkspaceShellPage.BuildSprintRow</c>) rather than becoming a second,
@@ -314,9 +316,11 @@ public sealed class SidebarViewModel(
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture, $", {text.Resolve(AttentionReasonKey(sprint.State))}")
             : string.Empty;
+        string accessibleTitle =
+            SprintDisplayTitle.ResolveAccessible(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {displayTitle}, {stateText}, " +
+            $"{projectDisplayName}, {accessibleTitle}, {stateText}, " +
                 $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} " +
                 $"{sprint.StagesCompleted}/{sprint.StagesTotal}{attentionSuffix}");
         return new(
@@ -336,14 +340,20 @@ public sealed class SidebarViewModel(
     /// an attention suffix -- <see cref="SprintOrderingRank.RequiresHumanAttention"/> is only ever
     /// true for a non-terminal state, so a terminal sprint can never need it -- and never a progress
     /// fraction either: <see cref="SprintStatus"/> carries no stage counts at all, which is exactly
-    /// why <see cref="SidebarHistoryItem"/> has no progress fields to render.</summary>
+    /// why <see cref="SidebarHistoryItem"/> has no progress fields to render. Carries the same
+    /// <see cref="SprintDisplayTitle.ResolveAccessible"/> ordinal disambiguator as the active row
+    /// (PR #122 review finding 1), and needs it more: with no state fraction or attention suffix to
+    /// vary, the title is nearly all this name has, so two same-titled terminal sprints would
+    /// otherwise be wholly indistinguishable in the archived list.</summary>
     private SidebarHistoryItem ToHistoryItem(string projectDisplayName, SprintStatus sprint)
     {
         string stateText = SurfaceFormatting.Machine(sprint.State);
         string displayTitle = SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text.Current);
+        string accessibleTitle =
+            SprintDisplayTitle.ResolveAccessible(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {displayTitle}, {stateText}");
+            $"{projectDisplayName}, {accessibleTitle}, {stateText}");
         return new(sprint.Id, sprint.CreationSequence, displayTitle, stateText, accessible);
     }
 

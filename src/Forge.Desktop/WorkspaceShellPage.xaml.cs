@@ -866,6 +866,15 @@ public partial class WorkspaceShellPage : ContentPage
                 System.Globalization.CultureInfo.InvariantCulture,
                 $"{sprint.StateText} · {sprint.StagesCompleted}/{sprint.StagesTotal}"),
             Style = ThemeStyle("MonoLabelStyle"),
+            // PR #122 review finding 3, on PR #112 review round 3 finding 4's precedent:
+            // MonoLabelStyle's own ColorNeutral600 measures ~4.25:1 on the rail and only ~3.31:1 on
+            // the ColorAccent900 a selected row now paints -- both under the 4.5:1 body-text floor.
+            // ColorNeutral500 is this theme's muted-but-readable baseline and clears both grounds
+            // (~6.3:1 and ~4.9:1), so one token covers selected and unselected alike. The style still
+            // supplies family and size; only the ink is overridden. Legibility is load-bearing here:
+            // the fraction appears nowhere else in the rail, and this label is deliberately
+            // Decorative(...)-excluded, leaving a sighted low-vision user no alternative route to it.
+            TextColor = ThemeColor("ColorNeutral500"),
             HorizontalTextAlignment = TextAlignment.Center,
         }));
         Grid.SetColumn(lines, 1);
