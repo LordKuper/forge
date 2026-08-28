@@ -2,6 +2,19 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.87.1
+
+### Added
+
+- Added an execution plan for the desktop design-parity work
+  (`docs/plans/desktop-design-parity-execution.md`) beside the review it derives from: it records the
+  current state of all 43 review findings against the shipped application, the product and design
+  questions the remaining work needs answered, the answers accepted for them, and the sequenced
+  slices those answers unblock. Nothing in the shipped product changes. The document is the reference
+  for which parts of the desktop redesign have already been released, which are deliberately out of
+  scope — the provider permission card, per-step retry, message attachments, inline diff hunks, and
+  captured command output, each with the reason it cannot ship — and in what order the rest arrives.
+
 ## v0.87.0
 
 ### Added
