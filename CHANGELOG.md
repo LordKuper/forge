@@ -12,8 +12,10 @@ User-facing Forge changes are listed by release, newest first.
   questions the remaining work needs answered, the answers accepted for them, and the sequenced
   slices those answers unblock. Nothing in the shipped product changes. The document is the reference
   for which parts of the desktop redesign have already been released, which are deliberately out of
-  scope — the provider permission card, per-step retry, message attachments, inline diff hunks, and
-  captured command output, each with the reason it cannot ship — and in what order the rest arrives.
+  scope — the provider permission card, per-step retry, and message attachments, each with the reason
+  it cannot ship — and in what order the rest arrives. One scope question the document raises is
+  recorded as still open rather than decided: whether inline diff hunks and captured command output
+  stay out of parity scope.
 
 ## v0.87.0
 
