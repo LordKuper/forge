@@ -1,5 +1,5 @@
 {
-  "contract_version": "1.5.0",
+  "contract_version": "1.6.0",
   "stores": {
     "user": {
       "path": "%LOCALAPPDATA%/Forge/config.json",
@@ -19,13 +19,17 @@
     {"key":"language.interaction","scope":"user","default":null,"session_override":true,"inherits":"language.ui","sensitive":false},
     {"key":"language.llm","scope":"user","default":null,"session_override":true,"inherits":"language.interaction","sensitive":false},
     {"key":"interaction.confirm_destructive","scope":"user","default":true,"session_override":false,"inherits":null,"sensitive":false},
+    {"key":"interaction.auto_approve_gate","scope":"user","default":false,"session_override":false,"inherits":null,"sensitive":false},
     {"key":"providers.enabled","scope":"user","default":null,"session_override":false,"inherits":null,"sensitive":false,"default_is_dynamic":true},
+    {"key":"providers.priority","scope":"user","default":[],"session_override":false,"inherits":null,"sensitive":false},
+    {"key":"models.effort","scope":"user","default":{},"session_override":false,"inherits":null,"sensitive":false},
     {"key":"artifacts.language.user_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false},
     {"key":"artifacts.language.agent_facing","scope":"project","default":"en","session_override":false,"inherits":null,"sensitive":false},
     {"key":"notifications.enabled","scope":"user","default":true,"session_override":false,"inherits":null,"sensitive":false},
     {"key":"context.token_budget","scope":"project","default":32000,"session_override":false,"inherits":null,"sensitive":false},
     {"key":"models.allowed_models","scope":"project","default":[],"session_override":false,"inherits":null,"sensitive":false},
-    {"key":"shell.sidebar_collapsed","scope":"user","default":false,"session_override":false,"inherits":null,"sensitive":false}
+    {"key":"shell.sidebar_collapsed","scope":"user","default":false,"session_override":false,"inherits":null,"sensitive":false},
+    {"key":"shell.theme","scope":"user","default":"dark","session_override":false,"inherits":null,"sensitive":false}
   ],
   "provenance": ["session", "user", "project", "inherited", "built_in_default"],
   "resolution": {

@@ -9,7 +9,7 @@ internal static class ConfigurationSchemaCodec
     /// <summary>Every new write stamps the latest minor version; an older document (missing
     /// <c>providers</c>) still validates under <c>user-config.schema.json</c>'s tolerant
     /// <c>schema_version</c> enum and is silently upgraded the next time it is saved.</summary>
-    private const string UserContractVersion = "1.3.0";
+    private const string UserContractVersion = "1.4.0";
     /// <summary>Bumped for ADR 0042's optional, nullable `models.allowed_models` -- an older
     /// document (missing `models`) still validates under `project-manifest.schema.json`'s tolerant
     /// `schema_version` enum, matching ADR 0029's own `context.token_budget` precedent.</summary>
@@ -42,12 +42,19 @@ internal static class ConfigurationSchemaCodec
                 ConfirmDestructive = GetOptionalBoolean(
                     document,
                     "interaction.confirm_destructive"),
+                AutoApproveGate = GetOptionalBoolean(document, ConfigurationKeys.AutoApproveGate),
             },
             // Omitted (null) means "no explicit selection" — ADR 0008's "omission selects all
             // registered built-in providers"; a present-but-empty list is the deliberate opposite
-            // (blocks model work), so the distinction must survive this round trip.
-            Providers = GetOptionalStringArray(document, ConfigurationKeys.ProvidersEnabled) is { } enabled
-                ? new() { Enabled = enabled }
+            // (blocks model work), so the distinction must survive this round trip. `priority`
+            // carries no such distinction (ADR 0067), but it shares the object, so the object is
+            // written whenever either key is present.
+            Providers = ToProviders(document),
+            // Optional and nullable, like Providers above -- ADR 0067 added this key after
+            // schema_version 1.3.0 shipped, so an on-disk document written before this key existed
+            // must still validate on read with it entirely absent.
+            Models = GetOptionalStringMap(document, ConfigurationKeys.ModelsEffort) is { } effort
+                ? new() { Effort = effort }
                 : null,
             // Optional and nullable, like Providers above (not required, like Interaction) --
             // ADR 0024 added this key after schema_version 1.1.0 shipped, so an on-disk document
@@ -57,10 +64,9 @@ internal static class ConfigurationSchemaCodec
                 : null,
             // Optional and nullable, like Notifications above -- ADR 0050 addendum added this key
             // after schema_version 1.2.0 shipped, so an on-disk document written before this key
-            // existed must still validate on read with it entirely absent.
-            Shell = GetOptionalBoolean(document, ConfigurationKeys.SidebarCollapsed) is { } sidebarCollapsed
-                ? new() { SidebarCollapsed = sidebarCollapsed }
-                : null,
+            // existed must still validate on read with it entirely absent. ADR 0067's `theme`
+            // shares the object, so the object is written whenever either key is present.
+            Shell = ToShell(document),
         };
         Validate(JsonSerializer.SerializeToElement(persisted, JsonOptions), UserSchema, "user");
         return persisted;
@@ -76,10 +82,36 @@ internal static class ConfigurationSchemaCodec
         Add(values, "language.interaction", persisted.Language.Interaction);
         Add(values, "language.llm", persisted.Language.Llm);
         Add(values, "interaction.confirm_destructive", persisted.Interaction.ConfirmDestructive);
+        Add(values, ConfigurationKeys.AutoApproveGate, persisted.Interaction.AutoApproveGate);
         Add(values, ConfigurationKeys.ProvidersEnabled, persisted.Providers?.Enabled);
+        Add(values, ConfigurationKeys.ProvidersPriority, persisted.Providers?.Priority);
+        Add(values, ConfigurationKeys.ModelsEffort, persisted.Models?.Effort);
         Add(values, "notifications.enabled", persisted.Notifications?.Enabled);
         Add(values, ConfigurationKeys.SidebarCollapsed, persisted.Shell?.SidebarCollapsed);
+        Add(values, ConfigurationKeys.ShellTheme, persisted.Shell?.Theme);
         return new(1, values);
+    }
+
+    /// <summary>Both provider keys live in one object, and either may be absent, so the object is
+    /// materialized only when at least one is present -- keeping an older document that has neither
+    /// byte-identical after a round trip.</summary>
+    private static UserProviders? ToProviders(ConfigurationDocument document)
+    {
+        List<string>? enabled = GetOptionalStringArray(document, ConfigurationKeys.ProvidersEnabled);
+        List<string>? priority = GetOptionalStringArray(document, ConfigurationKeys.ProvidersPriority);
+        return enabled is null && priority is null
+            ? null
+            : new() { Enabled = enabled, Priority = priority };
+    }
+
+    /// <summary>The shell object's two keys, handled the same way as <see cref="ToProviders"/>.</summary>
+    private static UserShell? ToShell(ConfigurationDocument document)
+    {
+        bool? sidebarCollapsed = GetOptionalBoolean(document, ConfigurationKeys.SidebarCollapsed);
+        string? theme = GetOptionalString(document, ConfigurationKeys.ShellTheme);
+        return sidebarCollapsed is null && theme is null
+            ? null
+            : new() { SidebarCollapsed = sidebarCollapsed, Theme = theme };
     }
 
     public static ProjectConfiguration ToProject(ConfigurationDocument document)
@@ -213,6 +245,34 @@ internal static class ConfigurationSchemaCodec
             : throw InvalidType(key, "an array of strings"))];
     }
 
+    /// <summary>Reads an object of string values (ADR 0067's <c>models.effort</c>). Which strings
+    /// are legal is `user-config.schema.json`'s business, not this reader's -- the same split every
+    /// other getter here follows.</summary>
+    private static Dictionary<string, string>? GetOptionalStringMap(
+        ConfigurationDocument document,
+        string key)
+    {
+        if (!document.Values.TryGetValue(key, out JsonElement value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind != JsonValueKind.Object)
+        {
+            throw InvalidType(key, "an object");
+        }
+
+        Dictionary<string, string> result = new(StringComparer.Ordinal);
+        foreach (JsonProperty property in value.EnumerateObject())
+        {
+            result[property.Name] = property.Value.ValueKind == JsonValueKind.String
+                ? property.Value.GetString()!
+                : throw InvalidType(key, "an object of strings");
+        }
+
+        return result;
+    }
+
     private static InvalidDataException InvalidType(string key, string expected) =>
         new($"Configuration key '{key}' must be {expected}.");
 
@@ -260,6 +320,17 @@ internal static class ConfigurationSchemaCodec
         }
     }
 
+    private static void Add(
+        Dictionary<string, JsonElement> values,
+        string key,
+        IReadOnlyDictionary<string, string>? value)
+    {
+        if (value is not null)
+        {
+            values.Add(key, JsonSerializer.SerializeToElement(value));
+        }
+    }
+
     private static void Validate(JsonElement element, JsonSchema schema, string scope)
     {
         EvaluationResults result = schema.Evaluate(
@@ -295,6 +366,8 @@ internal static class ConfigurationSchemaCodec
 
         public UserProviders? Providers { get; set; }
 
+        public UserModels? Models { get; set; }
+
         public UserNotifications? Notifications { get; set; }
 
         public UserShell? Shell { get; set; }
@@ -312,11 +385,25 @@ internal static class ConfigurationSchemaCodec
     internal sealed class UserInteraction
     {
         public bool? ConfirmDestructive { get; set; }
+
+        public bool? AutoApproveGate { get; set; }
     }
 
     internal sealed class UserProviders
     {
         public List<string>? Enabled { get; set; }
+
+        public List<string>? Priority { get; set; }
+    }
+
+    /// <summary>User-scoped model preferences. Distinct from the project manifest's own
+    /// <see cref="ProjectModels"/>: <c>models.allowed_models</c> is project policy,
+    /// <c>models.effort</c> is an operator preference (ADR 0067 / plan decision Q23).
+    /// <c>JsonSerializerOptions.DictionaryKeyPolicy</c> is unset, so model ids survive the round
+    /// trip verbatim rather than being snake-cased like property names.</summary>
+    internal sealed class UserModels
+    {
+        public Dictionary<string, string>? Effort { get; set; }
     }
 
     internal sealed class UserNotifications
@@ -327,6 +414,8 @@ internal static class ConfigurationSchemaCodec
     internal sealed class UserShell
     {
         public bool? SidebarCollapsed { get; set; }
+
+        public string? Theme { get; set; }
     }
 
     internal sealed class ProjectConfiguration

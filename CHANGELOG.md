@@ -2,6 +2,28 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.88.0
+
+### Added
+
+- **Four new settings are now configurable**, ahead of the settings page that will present them.
+  `interaction.auto_approve_gate` records whether the human approval gate may be approved
+  automatically — the gate is still unconditional and nothing acts on this value yet. `shell.theme`
+  accepts `dark`, `light`, or `system` and defaults to `dark`; no light palette ships yet, so the
+  other two are stored but not yet rendered. `providers.priority` records a preferred provider
+  order, and `models.effort` records a per-model effort level. Existing configuration files keep
+  working untouched and pick up the defaults.
+
+### Changed
+
+- **`providers.enabled` and `providers.priority` now have a stated precedence.** `providers.enabled`
+  keeps deciding which providers may be used at all, and its order is still the routing order while
+  `providers.priority` is empty — which is its default, so no existing configuration changes
+  meaning. Setting `providers.priority` takes over the routing order without changing which
+  providers are enabled: the providers it lists are preferred, in that order, and the remaining
+  enabled providers follow in their existing order. Naming a provider that is not enabled has no
+  effect rather than being an error.
+
 ## v0.87.0
 
 ### Added

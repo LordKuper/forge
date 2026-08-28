@@ -1029,6 +1029,62 @@
       }
     },
     {
+      "name": "user config accepts the approval, theme, priority and effort keys",
+      "schema": "user-config",
+      "valid": true,
+      "instance": {
+        "schema_version": "1.4.0",
+        "language": {"ui": "en"},
+        "interaction": {"confirm_destructive": true, "auto_approve_gate": false},
+        "providers": {"enabled": ["claude_code", "codex"], "priority": ["codex", "claude_code"]},
+        "models": {"effort": {"claude-sonnet-4-5": "high", "gpt-5-Codex": "xhigh"}},
+        "shell": {"sidebar_collapsed": false, "theme": "light"}
+      }
+    },
+    {
+      "name": "user config rejects a duplicate provider priority entry",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.4.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "providers": {"priority": ["codex", "codex"]}
+      }
+    },
+    {
+      "name": "user config rejects an effort level outside the ladder",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.4.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "models": {"effort": {"claude-sonnet-4-5": "aggressive"}}
+      }
+    },
+    {
+      "name": "user config rejects a theme outside the declared enum",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.4.0",
+        "language": {"ui": "en"},
+        "interaction": {},
+        "shell": {"theme": "solarized"}
+      }
+    },
+    {
+      "name": "user config rejects a non-boolean auto approve gate",
+      "schema": "user-config",
+      "valid": false,
+      "instance": {
+        "schema_version": "1.4.0",
+        "language": {"ui": "en"},
+        "interaction": {"auto_approve_gate": "yes"}
+      }
+    },
+    {
       "name": "language pack accepts typed placeholders",
       "schema": "language-pack",
       "valid": true,

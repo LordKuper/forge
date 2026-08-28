@@ -1,6 +1,6 @@
 # ADR 0008: Modular provider runtime and selection
 
-- Status: Accepted
+- Status: Accepted (revised 2026-08-28)
 - Date: 2026-08-13
 - Contract version: 1.2.0
 
@@ -71,6 +71,18 @@ duplicates. User configuration adds the ordered, user-scoped
 - `[]` permits diagnostics and configuration but blocks model work;
 - duplicates or an identifier with no registration invalidate configuration.
 
+> **Revised by ADR 0067** (2026-08-28): `providers.enabled` keeps both jobs only
+> while the new user-scoped `providers.priority` is empty, which is its default
+> and the state of every document written before that ADR. When
+> `providers.priority` is non-empty it supersedes the *ordering* half above:
+> the user order becomes the priority ids that are in the effective enabled set,
+> in priority order, followed by the remaining enabled ids in their existing
+> relative order. `providers.enabled` remains the sole authority on
+> membership — priority never enables or disables a provider, and an id it
+> names that is not enabled is skipped rather than rejected. Everything
+> below about the project profile narrowing and reordering the user order
+> is unchanged.
+
 For example, `["claude_code"]` selects Claude Code only. A disabled provider is
 listed as disabled without probing it and is never discovered, installed,
 updated, authenticated, or executed. Its integration assembly remaining in the
@@ -79,9 +91,11 @@ Forge bundle does not install its external CLI.
 A project execution profile may narrow and reorder providers but cannot enable
 one outside the user list. Routing candidates are the ordered intersection of
 the frozen project profile and the user-enabled set; when no project constraint
-exists, the user order is used. An empty intersection blocks execution with a
-stable diagnostic rather than silently selecting another provider. The resolved
-candidate list is frozen into the sprint profile.
+exists, the user order is used — as revised above, that is
+`providers.priority`'s order when it is non-empty and `providers.enabled`'s
+otherwise. An empty intersection blocks execution with a stable diagnostic
+rather than silently selecting another provider. The resolved candidate list
+is frozen into the sprint profile.
 
 ### Startup performs conditional maintenance and authentication
 

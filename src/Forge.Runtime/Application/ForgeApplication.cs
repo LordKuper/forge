@@ -1581,9 +1581,18 @@ public sealed class ForgeApplication(
     /// unregistered id can only be caught here, against the actual composed provider catalog,
     /// since the schema has no knowledge of which providers this Forge build ships.
     /// </summary>
+    /// <remarks>
+    /// ADR 0067's <c>providers.priority</c> is checked by the identical rule, for the identical
+    /// reason. It is deliberately NOT additionally checked against the current
+    /// <c>providers.enabled</c> selection: the two keys are written independently, so requiring
+    /// priority to be a subset of enabled would make one of the two write orders impossible
+    /// (raising priority before enabling, or disabling before re-ordering). The consumer that
+    /// eventually reads priority intersects it with the effective enabled set instead.
+    /// </remarks>
     private void RequireRegisteredProviders(string key, JsonElement value)
     {
-        if (key != ConfigurationKeys.ProvidersEnabled || value.ValueKind != JsonValueKind.Array)
+        if ((key != ConfigurationKeys.ProvidersEnabled && key != ConfigurationKeys.ProvidersPriority) ||
+            value.ValueKind != JsonValueKind.Array)
         {
             return;
         }

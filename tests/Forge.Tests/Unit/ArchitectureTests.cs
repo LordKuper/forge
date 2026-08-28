@@ -256,6 +256,107 @@ public sealed class ArchitectureTests
 
     [Fact]
     [Trait("Category", "Architecture")]
+    public void TheSettingsKeysThisSliceShipsInertHaveNoConsumer()
+    {
+        // PR #124 review finding 3. ADR 0067 ships four keys deliberately inert, and for
+        // `interaction.auto_approve_gate` that inertness is a safety claim: the human-approval gate
+        // is unconditional today, and StageTransitionAssessor.NodeSucceededWithLiveEvidence returns
+        // true for NodeState.Skipped, so a consumer that made the gate skippable would *silently*
+        // satisfy the HumanApproved prerequisite. Prose in an ADR cannot fail a build; this can.
+        //
+        // The guard is not a prohibition -- it is a notification. It fails closed the moment any
+        // consumer appears, which forces that change into its own slice with its own review, where
+        // the reviewer confirms it is the right slice and deletes the key's entry from this list.
+        (string Member, string Literal)[] inertKeys =
+        [
+            (nameof(ConfigurationKeys.AutoApproveGate), ConfigurationKeys.AutoApproveGate),
+            (nameof(ConfigurationKeys.ShellTheme), ConfigurationKeys.ShellTheme),
+            (nameof(ConfigurationKeys.ProvidersPriority), ConfigurationKeys.ProvidersPriority),
+            (nameof(ConfigurationKeys.ModelsEffort), ConfigurationKeys.ModelsEffort),
+        ];
+
+        // The configuration layer itself declares, registers, and (de)serializes every key, so its
+        // own three files reference them freely -- that is not consumption.
+        string[] configurationLayer =
+            ["ConfigurationContracts.cs", "ConfigurationRegistry.cs", "ConfigurationSchemaCodec.cs"];
+
+        // The one allowed reference outside that layer, pinned by exact count rather than by file:
+        // ForgeApplication.RequireRegisteredProviders validates a `providers.priority` *write*
+        // against the provider catalog (ADR 0067). It never reads the stored value to route
+        // anything, and a second reference in the same file would no longer be that check.
+        Dictionary<(string Member, string File), int> allowedOutsideTheConfigurationLayer = new()
+        {
+            [(nameof(ConfigurationKeys.ProvidersPriority), "ForgeApplication.cs")] = 1,
+        };
+
+        string[] sourceFiles = Directory
+            .EnumerateFiles(Path.Combine(RepositoryRoot.Find(), "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !IsBuildOutput(path))
+            .ToArray();
+        Assert.NotEmpty(sourceFiles);
+
+        List<string> violations = [];
+        foreach ((string member, string literal) in inertKeys)
+        {
+            foreach (string path in sourceFiles)
+            {
+                string file = Path.GetFileName(path);
+                if (configurationLayer.Contains(file, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+
+                int references = CountKeyReferences(path, member, literal);
+                if (references == 0)
+                {
+                    continue;
+                }
+
+                allowedOutsideTheConfigurationLayer.TryGetValue((member, file), out int allowed);
+                if (references != allowed)
+                {
+                    violations.Add(
+                        $"{file} references ConfigurationKeys.{member} ('{literal}') {references} time(s), " +
+                        $"but only {allowed} are allowed");
+                }
+            }
+        }
+
+        Assert.True(
+            violations.Count == 0,
+            "ADR 0067 ships these configuration keys with no consumer, and its 'Consumption status' " +
+            "section is the record of that. A consumer now exists: " + string.Join("; ", violations) +
+            ". If that consumer is intended, review it as its own slice (for interaction.auto_approve_gate " +
+            "that means adding a real bypass to a mandatory safety gate) and then remove the key from " +
+            "this guard and from the ADR's table.");
+    }
+
+    // Counts references to one key in one file, by its ConfigurationKeys member name and by its
+    // literal string, ignoring comments -- ADR references such as "ADR 0067's models.effort" live in
+    // doc comments across the runtime and are documentation, never consumption.
+    private static int CountKeyReferences(string path, string member, string literal)
+    {
+        string code = string.Join(
+            '\n',
+            File.ReadLines(path).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
+        return CountOccurrences(code, $"ConfigurationKeys.{member}") + CountOccurrences(code, $"\"{literal}\"");
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        for (int index = text.IndexOf(value, StringComparison.Ordinal);
+            index >= 0;
+            index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    [Fact]
+    [Trait("Category", "Architecture")]
     public void ArtifactVersionMatchesCanonicalVersion()
     {
         string expected = $"{File.ReadAllText(Path.Combine(RepositoryRoot.Find(), "VERSION")).Trim()}.0";

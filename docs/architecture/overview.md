@@ -180,7 +180,10 @@ User scope owns:
 - `language.ui`;
 - `language.interaction`;
 - `language.llm`;
-- ordered `providers.enabled` selection and fallback priority;
+- ordered `providers.enabled` selection, which is also the fallback priority
+  while `providers.priority` is empty;
+- `providers.priority`, which supersedes that ordering when non-empty without
+  changing which providers are enabled (ADR 0067);
 - interaction and recent-project preferences.
 
 Project scope owns:

@@ -43,6 +43,165 @@ public sealed class ScopedConfigurationTests
         Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
     }
 
+    /// <summary>ADR 0067's four keys travel the same surface path the settings page will use — the
+    /// raw-string <c>SetConfigurationAsync</c> overload, so <see cref="ConfigurationValueParser"/>
+    /// is exercised too — and come back out of the resolver with their written values. The effort
+    /// map's model id is asserted verbatim because <c>JsonSerializerOptions.PropertyNamingPolicy</c>
+    /// is snake_case here and only <c>DictionaryKeyPolicy</c> (unset) governs map keys; if that ever
+    /// changed, every configured model id would silently stop matching a real model.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheApprovalThemePriorityAndEffortKeysRoundTripThroughTheUserStore()
+    {
+        using TestEnvironment environment = new(
+            llmProviders:
+            [
+                new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0"),
+                new FakeLlmProvider(new ProviderId("claude_code"), ProviderState.Ready, "1.0.0")
+            ]);
+        (string Key, string RawValue)[] writes =
+        [
+            (ConfigurationKeys.AutoApproveGate, "true"),
+            (ConfigurationKeys.ProvidersPriority, """["claude_code","codex"]"""),
+            (ConfigurationKeys.ModelsEffort, """{"claude-sonnet-4-5":"high","gpt-5-Codex":"xhigh"}"""),
+            (ConfigurationKeys.ShellTheme, "light"),
+        ];
+
+        foreach ((string key, string rawValue) in writes)
+        {
+            ConfigurationWriteResult write = await environment.Application.SetConfigurationAsync(
+                ConfigurationScope.User, null, key, rawValue, TestContext.Current.CancellationToken);
+            Assert.True(write.Succeeded, key);
+        }
+
+        IReadOnlyList<EffectiveConfigurationValue> resolved =
+            (await environment.Application.GetUserConfigurationAsync(
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.True(Value(resolved, ConfigurationKeys.AutoApproveGate).Value.GetBoolean());
+        Assert.Equal(
+            ["claude_code", "codex"],
+            Value(resolved, ConfigurationKeys.ProvidersPriority).Value
+                .EnumerateArray().Select(item => item.GetString()));
+        JsonElement effort = Value(resolved, ConfigurationKeys.ModelsEffort).Value;
+        Assert.Equal("high", effort.GetProperty("claude-sonnet-4-5").GetString());
+        Assert.Equal("xhigh", effort.GetProperty("gpt-5-Codex").GetString());
+        Assert.Equal("light", Value(resolved, ConfigurationKeys.ShellTheme).Value.GetString());
+        Assert.Equal(ConfigurationProvenance.User, Value(resolved, ConfigurationKeys.ShellTheme).Provenance);
+    }
+
+    /// <summary>ADR 0014's tolerant-read philosophy applied to configuration rather than sprint
+    /// definitions: a file written before ADR 0067 existed (literal <c>schema_version</c> "1.0.0",
+    /// none of the four objects present) still loads, and every new key resolves to its built-in
+    /// default rather than failing the whole document.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AConfigurationFileWrittenBeforeTheseKeysExistedResolvesThemToTheirDefaults()
+    {
+        using TestEnvironment environment = new();
+        string path = ConfigurationStoreFactory.UserPath(environment);
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        await File.WriteAllTextAsync(
+            path,
+            """{"schema_version":"1.0.0","language":{"ui":"en"},"interaction":{}}""",
+            TestContext.Current.CancellationToken);
+
+        IReadOnlyList<EffectiveConfigurationValue> resolved =
+            (await environment.Application.GetUserConfigurationAsync(
+                TestContext.Current.CancellationToken)).Values;
+
+        Assert.False(Value(resolved, ConfigurationKeys.AutoApproveGate).Value.GetBoolean());
+        Assert.Empty(Value(resolved, ConfigurationKeys.ProvidersPriority).Value.EnumerateArray());
+        Assert.Empty(Value(resolved, ConfigurationKeys.ModelsEffort).Value.EnumerateObject());
+        Assert.Equal("dark", Value(resolved, ConfigurationKeys.ShellTheme).Value.GetString());
+        Assert.All(
+            new[]
+            {
+                ConfigurationKeys.AutoApproveGate, ConfigurationKeys.ProvidersPriority,
+                ConfigurationKeys.ModelsEffort, ConfigurationKeys.ShellTheme,
+            },
+            key => Assert.Equal(ConfigurationProvenance.BuiltInDefault, Value(resolved, key).Provenance));
+    }
+
+    /// <summary>An id with no registration invalidates <c>providers.priority</c> exactly as it does
+    /// <c>providers.enabled</c> (ADR 0008's rule, extended by ADR 0067), reported through the same
+    /// <see cref="DiagnosticCodes.ConfigurationInvalid"/> contract.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task PrioritizingAnUnregisteredProviderIdIsRejected()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")]);
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ProvidersPriority,
+            JsonSerializer.SerializeToElement<string[]>(["codex", "no-such-provider"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
+    }
+
+    /// <summary>A priority list is an ordering, so an id may appear once. Enforced by
+    /// `user-config.schema.json`'s `uniqueItems`, the same way `providers.enabled` enforces it.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ADuplicateProviderPriorityEntryIsRejected()
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [new FakeLlmProvider(new ProviderId("codex"), ProviderState.Ready, "1.0.0")]);
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ProvidersPriority,
+            JsonSerializer.SerializeToElement<string[]>(["codex", "codex"]),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
+    }
+
+    /// <summary>Effort vocabulary outside <see cref="ProviderEffortLevels.KnownLevels"/> is rejected
+    /// at the configuration boundary rather than accepted and silently dropped later — the exact
+    /// failure mode <see cref="ProviderEffortLevels.Resolve"/> documents for an unknown level.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnUnknownEffortLevelIsRejected()
+    {
+        using TestEnvironment environment = new();
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ModelsEffort,
+            JsonSerializer.SerializeToElement(
+                new Dictionary<string, string> { ["claude-sonnet-4-5"] = "aggressive" }),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
+    }
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AThemeOutsideTheDeclaredEnumIsRejected()
+    {
+        using TestEnvironment environment = new();
+
+        ConfigurationWriteResult result = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.User,
+            null,
+            ConfigurationKeys.ShellTheme,
+            JsonSerializer.SerializeToElement("solarized"),
+            TestContext.Current.CancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ConfigurationInvalid, result.DiagnosticCode);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task AMalformedUserConfigurationFileDegradesToOmittedInsteadOfThrowing()
