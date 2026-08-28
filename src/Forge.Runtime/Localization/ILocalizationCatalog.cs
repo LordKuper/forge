@@ -247,10 +247,14 @@ public static class MessageKeys
     // MainPageViewModel's own already-localized capabilities, it adds no new interaction text.
     public const string SprintReadyToFinalizeReason = "SprintReadyToFinalizeReason";
 
-    /// <summary>"No verified quota signal exists" (<see cref="Forge.Providers.ProviderQuotaAvailability.Unknown"/>)
+    /// <summary>"No quota limit data exists" (<see cref="Forge.Providers.ProviderQuotaAvailability.Unknown"/>)
     /// -- deliberately not named "Unavailable": <see cref="Forge.Providers.ProviderQuotaAvailability.Unavailable"/>
     /// means "quota is exhausted" (see <see cref="QuotaStatusDepleted"/>), a different concept this
-    /// key must never be confused with (PR #100 review).</summary>
+    /// key must never be confused with (PR #100 review). Its value must state that fact as TERMINAL,
+    /// never as pending: until ADR 0068 it read "Quota status not yet available.", which promised a
+    /// reading ADR 0052 established will never arrive from either shipped provider. Wording that
+    /// implies "yet", "loading", or "still checking" is a defect here, not a style choice -- see
+    /// <see cref="Forge.Providers.ProviderQuotaAvailability.Unknown"/>'s own remarks.</summary>
     public const string QuotaStatusUnknown = "QuotaStatusUnknown";
     public const string SettingsLanguageUnsupported = "SettingsLanguageUnsupported";
     public const string SettingsUnknownProvider = "SettingsUnknownProvider";
@@ -503,9 +507,10 @@ public static class MessageKeys
     public const string WorkspaceActionRejectGateRationale = "workspace_action.reject_gate";
 
     // Slice 7: `provider.quota_status` (plan section 6.5, ADR 0043/0052). `QuotaStatusUnknown`
-    // (defined above, Slice 5) is the only state this codebase currently produces -- the remaining
+    // (defined above, Slice 5) is the only state this codebase produces, terminally -- the remaining
     // four exist so the sidebar/CLI rendering is complete for every state the plan requires, not
-    // only the one ADR 0052 found verifiable evidence for.
+    // only the one ADR 0052 found verifiable evidence for. `QuotaStatusUnknownAccessible` carries
+    // the same terminal-not-pending requirement as its visible counterpart.
     public const string ModelsQuotaDescription = "ModelsQuotaDescription";
     public const string ModelsQuotaTitle = "ModelsQuotaTitle";
     public const string QuotaStatusUnknownAccessible = "QuotaStatusUnknownAccessible";

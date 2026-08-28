@@ -1427,9 +1427,9 @@ public static class CliApplication
     }
 
     /// <summary>Plan section 6.5's reserved `provider.quota_status` query (Slice 7, ADR 0043/0052).
-    /// Every entry currently reports <see cref="ProviderQuotaAvailability.Unknown"/> -- ADR 0052
-    /// found no provider integration in this codebase exposes a verified account/model quota
-    /// signal -- so this command is truthful, not a placeholder pretending readiness. Unlike `forge
+    /// Every entry reports <see cref="ProviderQuotaAvailability.Unknown"/>, terminally (ADR 0068):
+    /// ADR 0052 found no provider integration in this codebase exposes a verified account/model
+    /// quota signal -- so this command is truthful, not a placeholder pretending readiness. Unlike `forge
     /// models`, an unknown or degraded quota reading is not itself a process failure (there is no
     /// analogous <c>DiagnosticCodes</c> member <see cref="ExitCodes.For"/> recognizes for a
     /// <see cref="ProviderDiagnosticCodes"/> value), so this command always exits

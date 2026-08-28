@@ -3,17 +3,32 @@ namespace Forge.Providers;
 /// <summary>
 /// One provider/model quota reading's normalized, presentation-safe state (plan section 6.5). Every
 /// value beyond <see cref="Unknown"/> requires a verified signal from the provider's own CLI/API --
-/// see ADR 0052: no provider integration in this codebase exposes one today, so
-/// <see cref="ProviderQuotaProjector"/>'s <c>Project</c> overloads only ever produce
-/// <see cref="Unknown"/>. The
+/// see ADR 0052: no provider integration in this codebase exposes one, and none can appear without a
+/// vendor publishing a structured quota API first, so <see cref="ProviderQuotaProjector"/>'s
+/// <c>Project</c> overloads only ever produce <see cref="Unknown"/> (see that member's remarks: this
+/// is a terminal reading, not an unfinished one). The
 /// remaining members exist so the projection, the CLI row, and the Desktop status row all handle
 /// every state the plan requires from the start, rather than special-casing "unknown" as the only
 /// code path and leaving the others to be invented later under review pressure.
 /// </summary>
 public enum ProviderQuotaAvailability
 {
-    /// <summary>No verified quota signal exists for this provider (the only state this codebase
-    /// currently produces -- see ADR 0052).</summary>
+    /// <summary>
+    /// No quota limit data exists for this provider: neither shipped integration exposes a quota
+    /// signal to read, and the projection issues no probe of its own -- nothing is ever asked, on
+    /// this or any other pass (ADR 0052's investigation, re-confirmed by ADR 0061).
+    /// <para>
+    /// This is a TERMINAL state, not a pending one. It does not mean "not measured yet", "still
+    /// loading", or "wiring incomplete", and nothing in this codebase will ever replace it with a
+    /// different value while both providers remain as they are -- <see cref="ProviderQuotaProjector"/>
+    /// has exactly one production factory and it hardcodes this member. A surface that reports
+    /// "no limit data available" for it is therefore CORRECT and final: it must never render a
+    /// spinner, a placeholder awaiting a value, a retry affordance, or wording that promises a later
+    /// reading (the pre-ADR-0068 <c>QuotaStatusUnknown</c> text, "Quota status not yet available.",
+    /// was exactly that defect). Only a provider vendor publishing a structured quota API -- which
+    /// would extend the projector, not this contract -- can make any other member reachable.
+    /// </para>
+    /// </summary>
     Unknown,
 
     /// <summary>Verified remaining quota is comfortably above the provider's own warning threshold.</summary>
@@ -69,12 +84,20 @@ public sealed record ProviderQuotaStatus(string SchemaVersion, IReadOnlyList<Pro
 /// over a failed run's stderr text, classifies a failure after the fact -- it is not a verified
 /// remaining-amount/unit/reset-time reading and is deliberately not used here (fabricating a number
 /// from it would violate the plan's own "unknown quota is rendered as unknown, never inferred").
+/// <para>
+/// Consumer contract: every snapshot this class produces reports
+/// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset time,
+/// and that is the terminal, expected reading for both shipped providers -- see that member's own
+/// remarks. There is one production factory (<c>Unverified</c>) and no other production code path
+/// constructs a <see cref="ProviderQuotaSnapshot"/> at all, so a consumer needs no "still loading"
+/// branch and must not invent one.
+/// </para>
 /// </summary>
 public static class ProviderQuotaProjector
 {
     /// <summary>Every enabled provider (from <paramref name="status"/>) plus every registered-but-disabled
     /// provider (from <paramref name="catalog"/>) always projects as <see cref="ProviderQuotaAvailability.Unknown"/>
-    /// today (see the type's own remarks). <paramref name="observedAt"/> is the caller's current time
+    /// (see the type's own remarks). <paramref name="observedAt"/> is the caller's current time
     /// (<c>IClock.UtcNow</c>) -- this method takes no clock dependency itself, keeping it as pure as
     /// <see cref="ProviderHealthProjector.Project"/>. Issues no probe of its own, but a fresh
     /// <paramref name="status"/> requires one from the caller (<see cref="IProviderToolchainManager.CheckAsync"/>)

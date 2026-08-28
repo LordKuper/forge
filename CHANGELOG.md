@@ -2,6 +2,14 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.87.1
+
+### Fixed
+
+- **Provider quota status no longer implies a reading is coming.** Neither shipped provider reports
+  usage limits, and that will not change — the status text previously said "not yet available",
+  which read as a promise. It now says limits "are not reported", in both English and Russian.
+
 ## v0.87.0
 
 ### Added

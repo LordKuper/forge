@@ -50,9 +50,10 @@ public static class SurfaceFormatting
     /// <summary>One provider's quota row, shared by every surface that lists quota status (`forge
     /// models quota`) so the `provider-quota-parity` capability can never drift between them --
     /// mirrors <see cref="ProviderRow"/>'s shape and, like it, is never localized (CLI machine
-    /// output). See ADR 0052: every row currently projects
-    /// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset
-    /// time, since no provider integration in this codebase exposes a verified quota signal.</summary>
+    /// output). See ADR 0052/0068: every row projects
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset time,
+    /// terminally -- no provider integration in this codebase exposes a verified quota signal, and
+    /// none is pending, so "-" here is the final reading and never a value awaiting arrival.</summary>
     public static string ProviderQuotaRow(ProviderQuotaSnapshot entry)
     {
         ArgumentNullException.ThrowIfNull(entry);
@@ -73,7 +74,8 @@ public static class SurfaceFormatting
     /// single most severe state present (<see cref="ProviderQuotaAggregation.Worst"/>) as one
     /// localized sentence plus its accessible counterpart, so a degraded provider's quota is never
     /// communicated by color alone and is never hidden behind an otherwise-unremarkable majority.
-    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no verified signal yet") and
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> ("no limit data is reported" -- terminally,
+    /// never "not yet"; see that member's own remarks) and
     /// <see cref="ProviderQuotaAvailability.Unavailable"/> ("quota is exhausted") are easy to
     /// conflate by name -- every named member below has its own explicit arm (no arm reached by more
     /// than one member), so this codebase's own single meeting point for the two vocabularies can no
