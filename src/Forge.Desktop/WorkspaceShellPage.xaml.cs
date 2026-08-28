@@ -683,35 +683,7 @@ public partial class WorkspaceShellPage : ContentPage
         {
             foreach (SidebarSprintItem sprint in project.ActiveSprints)
             {
-                // Nocturne semantic color (SidebarRowAccentColor): the sub-status color the mockup's
-                // rows use, applied to this row's own text since a Button has no room for a second,
-                // independently colored line the way the mockup's two-line div does. The active
-                // operation additionally gets the mockup's own highlighted-row treatment (tinted
-                // background + accent border) via Button.BackgroundColor/BorderColor/BorderWidth,
-                // which -- unlike a Grid/Border rewrite -- needs no new control at all.
-                bool isSelected = workspace.Route.SprintId == sprint.SprintId;
-                Color accent = SidebarRowAccentColor(sprint.StateText);
-                Button sprintButton = new()
-                {
-                    Text = string.Create(
-                        System.Globalization.CultureInfo.InvariantCulture, $"  {sprint.CreationSequence}. {sprint.StateText}"),
-                    Style = ThemeStyle("GhostButtonStyle"),
-                    HorizontalOptions = LayoutOptions.Fill,
-                    TextColor = sprint.HasActiveOperation || isSelected ? accent : ThemeColor("ColorNeutral300"),
-                    BackgroundColor = sprint.HasActiveOperation ? ThemeColor("ColorAccent900") : Colors.Transparent,
-                    BorderColor = sprint.HasActiveOperation ? ThemeColor("ColorAccent") : Colors.Transparent,
-                    BorderWidth = sprint.HasActiveOperation ? 1 : 0,
-                };
-                SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
-                sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
-                    await workspace
-                        .NavigateAsync(
-                            WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
-                            CancellationToken.None)
-                        .ConfigureAwait(true));
-                column.Children.Add(TrackSidebarFocus(
-                    string.Create(System.Globalization.CultureInfo.InvariantCulture, $"sprint:{sprint.SprintId:D}"),
-                    sprintButton));
+                column.Children.Add(BuildSprintRow(project, sprint));
             }
 
             if (project.History.Count > 0)
@@ -762,29 +734,7 @@ public partial class WorkspaceShellPage : ContentPage
                 // ever offered for one; plan 13 excludes editing raw sprint state).
                 foreach (SidebarHistoryItem historyItem in project.History)
                 {
-                    bool isHistorySelected = workspace.Route.SprintId == historyItem.SprintId;
-                    Button historyButton = new()
-                    {
-                        Text = string.Create(
-                            System.Globalization.CultureInfo.InvariantCulture,
-                            $"  {historyItem.CreationSequence}. {historyItem.StateText}"),
-                        Style = ThemeStyle("GhostButtonStyle"),
-                        HorizontalOptions = LayoutOptions.Fill,
-                        // Terminal sprints read as muted/settled in the mockup (dimmer neutral tone
-                        // than an active row) -- SidebarRowAccentColor still distinguishes completed
-                        // (green-tinted) from cancelled (neutral) the same way it does for active rows.
-                        TextColor = isHistorySelected
-                            ? SidebarRowAccentColor(historyItem.StateText)
-                            : ThemeColor("ColorNeutral600"),
-                    };
-                    SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
-                    historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
-                        await workspace
-                            .NavigateAsync(
-                                WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
-                                CancellationToken.None)
-                            .ConfigureAwait(true));
-                    column.Children.Add(historyButton);
+                    column.Children.Add(BuildHistoryRow(project, historyItem));
                 }
             }
         }
@@ -825,6 +775,167 @@ public partial class WorkspaceShellPage : ContentPage
             removeButton));
         return column;
     }
+
+    // The filled/hollow pair the sprint row's status dot switches between (see BuildSprintRow). Plain
+    // Unicode geometric shapes rather than a Phosphor pair, for exactly the reason SidebarStatusLine's
+    // own remarks already give for its bullet (MAUI falls back to a system font per glyph, a safer bet
+    // for one lone character than a custom icon font) -- and because IconGlyphs ships only the outline
+    // Circle, so a Phosphor pair cannot express the fill difference without adding a glyph this slice
+    // deliberately does not.
+    private const string ActiveOperationDot = "●";
+    private const string IdleOperationDot = "○";
+
+    /// <summary>Finding B1's sprint row: a status dot, the sprint's own title, a second line
+    /// ("<c>running · 3/7</c>"), and an attention badge -- replacing the single-line
+    /// <c>"3. running"</c> button that named neither the sprint nor its progress.
+    ///
+    /// The navigable part stays one real, focusable <see cref="Button"/> -- never a tap-recognizer
+    /// fake button on the container, which <c>WorkspaceShellAccessibilityTests</c> bans outright --
+    /// and keeps its existing <c>sprint:{id}</c> focus key, so focus-restore across a re-render is
+    /// unchanged. Its <see cref="SemanticProperties.SetDescription"/> already names the
+    /// title, the state, the progress fraction, and any attention reason (see
+    /// <c>SidebarViewModel.ToSprintItem</c>), so the dot, the second line, and the badge are all
+    /// excluded from the accessible tree via <see cref="Decorative{T}"/> -- visual reinforcement of
+    /// facts the row's one accessible node already speaks, exactly the double-announcement
+    /// PR #112 review round 2 finding 4 established the rule for. The badge is deliberately in the
+    /// first horn of that rule rather than the second: it is NOT the only carrier of the attention
+    /// fact, because <c>ToSprintItem</c>'s own <c>attentionSuffix</c> already appends the localized
+    /// reason to the same accessible name.
+    ///
+    /// Finding B2: the highlight (see <see cref="SidebarSelectableRow"/>) follows the selected route.
+    /// <see cref="SidebarSprintItem.HasActiveOperation"/> -- which used to own that highlight -- is a
+    /// strictly narrower fact than the state text ("this sprint is Running AND a node is executing a
+    /// live, non-stop-requested attempt right now", see <c>ActiveOperationLookup.FindActive</c>), so it
+    /// is retargeted onto the dot's fill rather than dropped: a filled dot means work is executing,
+    /// a hollow one means the sprint is idle at its current state. That is a shape difference, not a
+    /// color one, and it now sits next to the state color it refines instead of tinting a whole row
+    /// the way selection must.</summary>
+    private Border BuildSprintRow(SidebarProjectItem project, SidebarSprintItem sprint)
+    {
+        bool isSelected = workspace.Route.SprintId == sprint.SprintId;
+        // Nocturne semantic color: the sub-status color the mockup's rows use. Decorative -- the
+        // state is named in words on the second line and in the accessible name (plan 12.6).
+        Color accent = SidebarRowAccentColor(sprint.StateText);
+        Grid row = new()
+        {
+            ColumnDefinitions =
+            {
+                new ColumnDefinition(GridLength.Auto),
+                new ColumnDefinition(GridLength.Star),
+                new ColumnDefinition(GridLength.Auto),
+            },
+            ColumnSpacing = ThemeSpace("Space2"),
+        };
+        Label dot = DecorativeGlyph(new Label
+        {
+            Text = sprint.HasActiveOperation ? ActiveOperationDot : IdleOperationDot,
+            TextColor = accent,
+            FontSize = 9,
+            VerticalOptions = LayoutOptions.Center,
+        });
+        Grid.SetColumn(dot, 0);
+        row.Children.Add(dot);
+
+        VerticalStackLayout lines = new() { Spacing = 0 };
+        Button sprintButton = new()
+        {
+            Text = sprint.DisplayTitle,
+            Style = ThemeStyle("GhostButtonStyle"),
+            HorizontalOptions = LayoutOptions.Fill,
+            // A frozen title is free text of any length; truncating keeps one row one row instead of
+            // letting a long title reflow the whole rail.
+            LineBreakMode = LineBreakMode.TailTruncation,
+            TextColor = isSelected ? accent : ThemeColor("ColorNeutral300"),
+        };
+        SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
+        sprintButton.Clicked += (_, _) => _ = RunAsync(async () =>
+            await workspace
+                .NavigateAsync(
+                    WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, sprint.SprintId),
+                    CancellationToken.None)
+                .ConfigureAwait(true));
+        lines.Children.Add(TrackSidebarFocus(
+            string.Create(System.Globalization.CultureInfo.InvariantCulture, $"sprint:{sprint.SprintId:D}"),
+            sprintButton));
+        // Centered to match the title above it: MAUI's Button centers its own content and exposes no
+        // text-alignment lever, so a left-aligned second line would visibly hang off the title rather
+        // than read as the same row's continuation.
+        lines.Children.Add(Decorative(new Label
+        {
+            Text = string.Create(
+                System.Globalization.CultureInfo.InvariantCulture,
+                $"{sprint.StateText} · {sprint.StagesCompleted}/{sprint.StagesTotal}"),
+            Style = ThemeStyle("MonoLabelStyle"),
+            HorizontalTextAlignment = TextAlignment.Center,
+        }));
+        Grid.SetColumn(lines, 1);
+        row.Children.Add(lines);
+
+        if (sprint.RequiresHumanAttention)
+        {
+            Border badge = Decorative(Themed(
+                new Border
+                {
+                    Content = Decorative(new Label
+                    {
+                        Text = IconGlyphs.WarningCircle,
+                        Style = ThemeStyle("IconGlyphStyle"),
+                        TextColor = ThemeColor("ColorStatusAmberText"),
+                        FontSize = 11,
+                    }),
+                    VerticalOptions = LayoutOptions.Center,
+                },
+                "TagAccentStyle"));
+            Grid.SetColumn(badge, 2);
+            row.Children.Add(badge);
+        }
+
+        return SidebarSelectableRow(row, isSelected);
+    }
+
+    /// <summary>A terminal sprint's history row (plan 12.1 final-sweep gap 3), given finding B1's
+    /// title treatment and finding B2's selection highlight but none of the active row's dot, badge,
+    /// or progress line -- a terminal sprint carries none of those facts by construction, which is why
+    /// <see cref="SidebarHistoryItem"/> has no fields for them. Terminal rows still read as
+    /// muted/settled; <see cref="SidebarRowAccentColor"/> distinguishes completed (green-tinted) from
+    /// cancelled (neutral) once the row is the selected one.</summary>
+    private Border BuildHistoryRow(SidebarProjectItem project, SidebarHistoryItem historyItem)
+    {
+        bool isSelected = workspace.Route.SprintId == historyItem.SprintId;
+        Button historyButton = new()
+        {
+            Text = historyItem.DisplayTitle,
+            Style = ThemeStyle("GhostButtonStyle"),
+            HorizontalOptions = LayoutOptions.Fill,
+            LineBreakMode = LineBreakMode.TailTruncation,
+            TextColor = isSelected ? SidebarRowAccentColor(historyItem.StateText) : ThemeColor("ColorNeutral600"),
+        };
+        SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);
+        historyButton.Clicked += (_, _) => _ = RunAsync(async () =>
+            await workspace
+                .NavigateAsync(
+                    WorkspaceRoute.ToSprintWorkspace(project.ProjectId, project.Root, historyItem.SprintId),
+                    CancellationToken.None)
+                .ConfigureAwait(true));
+        return SidebarSelectableRow(historyButton, isSelected);
+    }
+
+    /// <summary>Finding B2: the sidebar's highlighted-row treatment (tinted background + accent
+    /// border) marks the sprint the shell is CURRENTLY ROUTED TO, which is what the design highlights
+    /// -- it used to be driven by <see cref="SidebarSprintItem.HasActiveOperation"/> instead, so the
+    /// row the user was actually looking at was distinguished only by a text tint while an unrelated
+    /// busy sprint owned the highlight. <see cref="Border.StrokeThickness"/> stays 1 in both states
+    /// (only the stroke color changes) so selecting a row never shifts the rail's layout by a pixel.
+    /// </summary>
+    private static Border SidebarSelectableRow(View content, bool isSelected) => new()
+    {
+        Content = content,
+        BackgroundColor = isSelected ? ThemeColor("ColorAccent900") : Colors.Transparent,
+        Stroke = isSelected ? ThemeColor("ColorAccent") : Colors.Transparent,
+        StrokeThickness = 1,
+        StrokeShape = new Microsoft.Maui.Controls.Shapes.RoundRectangle { CornerRadius = 8 },
+        Padding = new Thickness(ThemeSpace("Space1")),
+    };
 
     private async Task RenderContentAsync()
     {

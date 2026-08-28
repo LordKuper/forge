@@ -55,6 +55,67 @@ public sealed class SidebarViewModelTests
         return sprintId;
     }
 
+    /// <summary>Finding B1 (docs/plans/desktop-design-parity-review.md) for the sidebar specifically,
+    /// against the exact defect class ADR 0057 documents: every sidebar row used to read
+    /// <c>"{SprintIdLabel} {CreationSequence}, {state}"</c>, so a sprint's own frozen title -- the whole
+    /// point of that ADR -- never reached the one surface the user navigates from, and two sprints in
+    /// the same state were told apart only by an ordinal. Each row now carries
+    /// <see cref="SprintDisplayTitle"/>'s resolved label (the frozen title, or the localized
+    /// "Sprint {N}" fallback for a sprint created without one -- including every sprint frozen before
+    /// that field existed), and the row's one accessible node speaks that label together with the plan
+    /// progress the row now draws, since the drawn dot/second line/badge are all deliberately excluded
+    /// from the accessible tree (see <c>WorkspaceShellPage.BuildSprintRow</c>).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncNamesEachSprintByItsOwnTitleOrTheSequenceFallbackAndSpeaksItsProgress()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ForgeApplication application = environment.Application;
+        const string frozenTitle = "Rewrite the parser";
+        CreateSprintResult titled =
+            await application.CreateSprintAsync(environment.ProjectRoot, frozenTitle, cancellationToken);
+        CreateSprintResult untitled =
+            await application.CreateSprintAsync(environment.ProjectRoot, null, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel =
+            new(catalog, application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        SidebarSprintItem titledRow =
+            Assert.Single(project.ActiveSprints, item => item.SprintId == titled.SprintId!.Value);
+        SidebarSprintItem untitledRow =
+            Assert.Single(project.ActiveSprints, item => item.SprintId == untitled.SprintId!.Value);
+
+        Assert.Equal(frozenTitle, titledRow.DisplayTitle);
+        Assert.Equal(
+            string.Format(
+                CultureInfo.InvariantCulture,
+                en.Resolve(MessageKeys.SprintUntitledFallback),
+                untitledRow.CreationSequence),
+            untitledRow.DisplayTitle);
+        // The defect itself: two rows, two distinguishable names -- not one shared label.
+        Assert.NotEqual(titledRow.DisplayTitle, untitledRow.DisplayTitle);
+
+        Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
+        // A sprint that has only just been created has completed no stages, and its workflow graph is
+        // never empty -- so the spoken fraction is "0/<graph size>", derived from the agreed behavior
+        // rather than read back out of the row it is asserting on.
+        Assert.True(titledRow.StagesTotal > 0);
+        Assert.Contains(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"{en.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} 0/{titledRow.StagesTotal}"),
+            titledRow.AccessibleName,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint is reachable through
     /// <see cref="SidebarProjectItem.History"/> (a real, navigable entry naming its own sprint id) --
     /// never listed as active, and never merely counted the way this row rendered before that gap was

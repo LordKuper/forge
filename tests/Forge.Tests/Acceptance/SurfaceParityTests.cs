@@ -769,6 +769,47 @@ public sealed class SurfaceParityTests
         Assert.DoesNotContain("if (result.Succeeded)", toggleHandler, StringComparison.Ordinal);
     }
 
+    /// <summary>Finding B2 (docs/plans/desktop-design-parity-review.md): the sidebar's
+    /// highlighted-row treatment (tinted background plus accent border) was driven by
+    /// <c>SidebarSprintItem.HasActiveOperation</c>, so the row the user was actually looking at got
+    /// only a text tint while an unrelated busy sprint owned the highlight -- and with no sprint
+    /// running, nothing in the rail showed where the shell was routed. The highlight now follows the
+    /// selected route. No MAUI control can be instantiated headlessly in this suite (see this file's
+    /// other dialog/source pins), so this pins the fix directly in the source text. It also pins the
+    /// other half of the change: <c>HasActiveOperation</c> is a strictly narrower fact than the state
+    /// text (a live, non-stop-requested attempt is executing right now), so it was retargeted onto the
+    /// row's own status dot rather than deleted along with the highlight it used to drive.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarRowHighlightFollowsTheSelectedRouteInsteadOfAnActiveOperation()
+    {
+        string source = DesktopSourceText();
+        string container = BracedBlockAfter(
+            source, "private static Border SidebarSelectableRow(View content, bool isSelected) =>");
+        string sprintRow = BracedBlockAfter(
+            source, "private Border BuildSprintRow(SidebarProjectItem project, SidebarSprintItem sprint)");
+
+        Assert.Contains(
+            "BackgroundColor = isSelected ? ThemeColor(\"ColorAccent900\") : Colors.Transparent",
+            container, StringComparison.Ordinal);
+        Assert.Contains(
+            "Stroke = isSelected ? ThemeColor(\"ColorAccent\") : Colors.Transparent",
+            container, StringComparison.Ordinal);
+        Assert.Contains("SidebarSelectableRow(row, isSelected)", sprintRow, StringComparison.Ordinal);
+
+        // The pre-fix shape, gone from the whole shell: nothing tints a row's ground or draws its
+        // border from HasActiveOperation any more.
+        Assert.DoesNotContain(
+            "HasActiveOperation ? ThemeColor(\"ColorAccent900\")", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("HasActiveOperation ? ThemeColor(\"ColorAccent\")", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("BorderWidth = sprint.HasActiveOperation", source, StringComparison.Ordinal);
+
+        // ...and the signal it used to carry is preserved, not dropped.
+        Assert.Contains(
+            "Text = sprint.HasActiveOperation ? ActiveOperationDot : IdleOperationDot",
+            sprintRow, StringComparison.Ordinal);
+    }
+
     /// <summary>PR #105 review finding 2: the per-project chevron's own accessible name promises
     /// "Collapse sprints" (the whole per-project block), but the fix that shipped in that PR gated
     /// only the active-sprint loop on <c>project.SprintListExpanded</c> -- the history label and its

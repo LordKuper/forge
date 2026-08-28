@@ -2,6 +2,32 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.87.0
+
+### Added
+
+- **Sidebar sprint rows now name the sprint and show its progress.** Each active sprint in the
+  sidebar renders its own title — the one frozen when the sprint was created, or "Sprint 3" for a
+  sprint created without one — above a second line reading its state and plan progress
+  (`running · 3/7`), with a status dot at the left and a badge on the right for a sprint waiting on
+  a human. The dot's colour follows the sprint's state and its fill shows whether work is executing
+  right now, which is what the row's tinted background used to mean. Sprints in the project's
+  archived list get the same title treatment (a terminal sprint has no progress, attention, or
+  running work to show). Screen readers hear the title, the state, the progress, and any attention
+  reason from the row's own button; the dot, second line, and badge are visual reinforcement and are
+  not announced again.
+
+### Changed
+
+- **The sidebar highlight now marks the sprint you are actually looking at.** The tinted background
+  and accent border used to follow whichever sprint had a running operation, so the open sprint was
+  distinguished only by a slight text tint — and with nothing running, nothing in the sidebar showed
+  where you were. It now follows the selected sprint, including in the archived list.
+
+The rest of the sidebar redesign is still to come: creating a sprint from a project row, the
+simplified "Add project" button, collapsing the archived-sprints list, and removing the duplicate
+"Remove project" action are separate follow-up work and are unchanged here.
+
 ## v0.86.0
 
 ### Added

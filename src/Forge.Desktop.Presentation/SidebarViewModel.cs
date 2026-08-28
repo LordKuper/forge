@@ -7,12 +7,16 @@ using Forge.Providers;
 
 namespace Forge.Desktop.Presentation;
 
-/// <summary>One sidebar row for a non-terminal sprint (plan section 4.1). <see cref="AccessibleName"/>
-/// is a full sentence naming state and (when set) the attention reason -- plan 12.6: "every status has
-/// text and an accessible... name," color is never the only carrier.</summary>
+/// <summary>One sidebar row for a non-terminal sprint (plan section 4.1). <see cref="DisplayTitle"/>
+/// is the sprint's own frozen title or <see cref="SprintDisplayTitle"/>'s localized "Sprint {N}"
+/// fallback (ADR 0057), already resolved here so no surface re-derives it.
+/// <see cref="AccessibleName"/> is a full sentence naming that title, the state, the plan progress,
+/// and (when set) the attention reason -- plan 12.6: "every status has text and an accessible...
+/// name," color is never the only carrier.</summary>
 public sealed record SidebarSprintItem(
     Guid SprintId,
     int CreationSequence,
+    string DisplayTitle,
     string StateText,
     bool RequiresHumanAttention,
     string? CurrentStageId,
@@ -24,8 +28,14 @@ public sealed record SidebarSprintItem(
 /// <summary>One navigable row in a project's capped sprint history (plan 12.1 final-sweep gap 3):
 /// a terminal (completed/cancelled) sprint, distinct from <see cref="SidebarSprintItem"/> only in
 /// that it never carries attention/progress/active-operation fields no terminal sprint can have.
+/// <see cref="DisplayTitle"/> follows the same ADR 0057 resolution as its active-sprint counterpart.
 /// </summary>
-public sealed record SidebarHistoryItem(Guid SprintId, int CreationSequence, string StateText, string AccessibleName);
+public sealed record SidebarHistoryItem(
+    Guid SprintId,
+    int CreationSequence,
+    string DisplayTitle,
+    string StateText,
+    string AccessibleName);
 
 /// <summary>One sidebar project row. <see cref="ActiveSprints"/> and <see cref="History"/> are both
 /// shown only while <see cref="SprintListExpanded"/> (plan 12.1 final-sweep gap 1; default
@@ -283,20 +293,36 @@ public sealed class SidebarViewModel(
         return result.DiagnosticCode;
     }
 
+    /// <summary>Finding B1: the row names the sprint, not merely its ordinal. The accessible name
+    /// leads with <see cref="SprintDisplayTitle.Resolve"/>'s resolved title -- which already carries
+    /// either the frozen title or a sequence-bearing "Sprint {N}" fallback -- instead of the former
+    /// <c>"{SprintIdLabel} {CreationSequence}"</c> prefix, matching the same ADR 0057 reasoning the
+    /// Project Overview sprint card already applies ("prefixing rendered '2. Sprint 2' for every
+    /// untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it resolves to
+    /// the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a label in a
+    /// spoken row name. The plan progress the sidebar row now renders visually is spoken here too,
+    /// through the existing <see cref="MessageKeys.SprintStatusHeaderProgressLabel"/> copy the sprint
+    /// workspace header already uses for the same fraction -- so the second line the row draws can
+    /// stay decorative (see <c>WorkspaceShellPage.BuildSprintRow</c>) rather than becoming a second,
+    /// redundant screen-reader stop.</summary>
     private SidebarSprintItem ToSprintItem(string projectDisplayName, SprintWorkspaceSummary sprint)
     {
         bool humanAttention = SprintOrderingRank.RequiresHumanAttention(sprint.State);
         string stateText = SurfaceFormatting.Machine(sprint.State);
+        string displayTitle = SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text.Current);
         string attentionSuffix = humanAttention
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture, $", {text.Resolve(AttentionReasonKey(sprint.State))}")
             : string.Empty;
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {text.Resolve(MessageKeys.SprintIdLabel)} {sprint.CreationSequence}, {stateText}{attentionSuffix}");
+            $"{projectDisplayName}, {displayTitle}, {stateText}, " +
+                $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} " +
+                $"{sprint.StagesCompleted}/{sprint.StagesTotal}{attentionSuffix}");
         return new(
             sprint.SprintId,
             sprint.CreationSequence,
+            displayTitle,
             stateText,
             humanAttention,
             sprint.CurrentStageId,
@@ -308,14 +334,17 @@ public sealed class SidebarViewModel(
 
     /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint's sidebar-history row. Never carries
     /// an attention suffix -- <see cref="SprintOrderingRank.RequiresHumanAttention"/> is only ever
-    /// true for a non-terminal state, so a terminal sprint can never need it.</summary>
+    /// true for a non-terminal state, so a terminal sprint can never need it -- and never a progress
+    /// fraction either: <see cref="SprintStatus"/> carries no stage counts at all, which is exactly
+    /// why <see cref="SidebarHistoryItem"/> has no progress fields to render.</summary>
     private SidebarHistoryItem ToHistoryItem(string projectDisplayName, SprintStatus sprint)
     {
         string stateText = SurfaceFormatting.Machine(sprint.State);
+        string displayTitle = SprintDisplayTitle.Resolve(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {text.Resolve(MessageKeys.SprintIdLabel)} {sprint.CreationSequence}, {stateText}");
-        return new(sprint.Id, sprint.CreationSequence, stateText, accessible);
+            $"{projectDisplayName}, {displayTitle}, {stateText}");
+        return new(sprint.Id, sprint.CreationSequence, displayTitle, stateText, accessible);
     }
 
     internal static string AttentionReasonKey(SprintState state) => state switch
