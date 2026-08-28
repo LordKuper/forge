@@ -322,13 +322,16 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
 /// default, since most callers only care about install/discovery orchestration; pass
 /// <paramref name="authentication"/> explicitly to exercise an authentication-gated scenario, and
 /// <paramref name="selectableModels"/> to offer more (or fewer) than the one fixed
-/// <see cref="DefaultModel"/>.</summary>
+/// <see cref="DefaultModel"/>. <paramref name="reservedModel"/> gives this fake one literal it
+/// refuses as a caller's explicit choice, the neutral stand-in for a real adapter's own suppressed
+/// sentinel (ADR 0066).</summary>
 internal sealed class FakeLlmProvider(
     ProviderId id,
     ProviderState state,
     string? version,
     ProviderAuthenticationStatus? authentication = null,
-    IReadOnlyList<string>? selectableModels = null) : ILlmProvider
+    IReadOnlyList<string>? selectableModels = null,
+    string? reservedModel = null) : ILlmProvider
 {
     public int InstallCalls { get; private set; }
 
@@ -349,11 +352,14 @@ internal sealed class FakeLlmProvider(
     /// <summary>Just <see cref="DefaultModel"/> unless a caller supplied a set, so a test that
     /// requests the default explicitly is exercising a selectable choice rather than the empty
     /// "could not enumerate" fallback.</summary>
-    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken)
     {
         ListModelsCalls++;
         return Task.FromResult(selectableModels ?? [DefaultModel]);
     }
+
+    public bool IsReservedModelName(string model) =>
+        reservedModel is not null && string.Equals(model, reservedModel, StringComparison.Ordinal);
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
@@ -415,8 +421,10 @@ internal sealed class FakeRunnableLlmProvider(
     public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
-    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+    public Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.FromResult<IReadOnlyList<string>>([DefaultModel]);
+
+    public bool IsReservedModelName(string model) => false;
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));

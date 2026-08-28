@@ -39,7 +39,7 @@ public sealed class ClaudeLlmProvider(
 
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
     /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
-    private readonly string probeDirectory = FileProviderReleaseCache.ProviderStateDirectory(paths);
+    private readonly string probeDirectory = FileProviderJsonCache.ProviderStateDirectory(paths);
 
     /// <summary>
     /// The fully-qualified in-box Windows PowerShell path, never a bare `powershell.exe` (ADR
@@ -91,10 +91,16 @@ public sealed class ClaudeLlmProvider(
     // Revisit if Claude Code ever ships a real enumeration command.
     private static readonly IReadOnlyList<string> ModelAliases = ["fable", "opus", "sonnet"];
 
-    /// <summary>The alias set above, always -- there is nothing to probe, so this never fails and
-    /// never returns empty. See <see cref="ModelAliases"/> for why it is fixed.</summary>
-    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+    /// <summary>The alias set above, always -- there is nothing to probe, so this never fails, never
+    /// returns empty, and ignores <paramref name="bypassCache"/> (there is no cache to bypass). See
+    /// <see cref="ModelAliases"/> for why it is fixed.</summary>
+    public Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.FromResult(ModelAliases);
+
+    /// <summary>None: this adapter sends <see cref="RunAsync"/> whatever model it is given and
+    /// reserves no placeholder of its own, so every value <c>NormalizeModelName</c> accepts is one a
+    /// caller may genuinely request (ADR 0066, round 1 review of PR #123).</summary>
+    public bool IsReservedModelName(string model) => false;
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.DiscoverAsync(

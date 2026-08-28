@@ -51,7 +51,7 @@ public sealed class CodexLlmProvider(
 
     /// <summary>A Forge-owned working directory for probes that must not pick up a project-local
     /// vendor config file (ADR 0008: "from a Forge-owned probe directory").</summary>
-    private readonly string probeDirectory = FileProviderReleaseCache.ProviderStateDirectory(paths);
+    private readonly string probeDirectory = FileProviderJsonCache.ProviderStateDirectory(paths);
 
     /// <summary>
     /// The fully-qualified in-box Windows PowerShell path, never a bare `powershell.exe` (ADR
@@ -127,7 +127,7 @@ public sealed class CodexLlmProvider(
             bypassReleaseCache,
             versionProbeTimeout ?? ProviderInstallation.DefaultVersionProbeTimeout,
             cancellationToken).ConfigureAwait(false);
-        await RefreshDefaultModelAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
+        await RefreshCapabilitiesAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
         return status;
     }
 
@@ -147,8 +147,27 @@ public sealed class CodexLlmProvider(
             installTimeout ?? ProviderInstallation.DefaultInstallTimeout,
             installLockTimeout ?? ProviderInstallation.DefaultInstallLockTimeout,
             cancellationToken).ConfigureAwait(false);
-        await RefreshDefaultModelAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
+        await RefreshCapabilitiesAsync(bypassReleaseCache, cancellationToken).ConfigureAwait(false);
         return status;
+    }
+
+    /// <summary>
+    /// The two vendor-owned answers this adapter caches beside the release check, refreshed together
+    /// on the same flag the release check carries — so `forge models --refresh` reaches BOTH
+    /// (round 1 review of PR #123). Before that review the catalog cache was the one provider cache
+    /// nothing in the product could clear, which left a newly released Codex model unselectable, and
+    /// an explicit request for it REFUSED, for up to 24 hours with no supported recovery.
+    ///
+    /// The enumerated catalog is discarded here: the point is the cache write, which both refreshes a
+    /// stale entry and warms a cold one, so the first picker opened after a capability pass answers
+    /// without spawning anything. Neither call throws, and neither can fail the surrounding
+    /// install/discovery: an uninstalled provider is not probed at all, and every other failure mode
+    /// degrades to "no answer" (ADR 0063/0066).
+    /// </summary>
+    private async Task RefreshCapabilitiesAsync(bool bypassCache, CancellationToken cancellationToken)
+    {
+        await RefreshDefaultModelAsync(bypassCache, cancellationToken).ConfigureAwait(false);
+        await ListModelsAsync(bypassCache, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -259,8 +278,14 @@ public sealed class CodexLlmProvider(
     /// about (the measured cost is well under a second). The child environment is the same minimal one
     /// <see cref="RunAsync"/> builds, for ADR 0063's reason: a catalog resolved under a different
     /// environment than the attempt would describe a run that never happens.
+    ///
+    /// <paramref name="bypassCache"/> is the release check's own `--refresh` flag, forwarded by
+    /// <see cref="RefreshCapabilitiesAsync"/> from <see cref="DiscoverAsync"/> and
+    /// <see cref="InstallOrUpdateAsync"/>. Validating a requested model passes
+    /// <see langword="false"/>: sprint creation honours the throttle exactly as it does for the
+    /// default-model probe.
     /// </summary>
-    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken)
     {
         try
         {
@@ -280,9 +305,7 @@ public sealed class CodexLlmProvider(
             probeDirectory,
             modelCatalogCache,
             clock,
-            // Enumeration honours the throttle unconditionally: nothing on this path carries a
-            // `--refresh` intent, and `forge models --refresh` already bypasses every other window.
-            bypassCache: false,
+            bypassCache,
             modelCatalogProbeTimeout ?? ProviderInstallation.DefaultModelProbeTimeout,
             ParseModelCatalog,
             cancellationToken,
@@ -339,6 +362,30 @@ public sealed class CodexLlmProvider(
     /// <summary>The `visibility` value Codex gives a catalog entry it presents to a user; every other
     /// value (`hide` in the captures taken so far) is an entry Forge must not offer either.</summary>
     private const string ListedVisibility = "list";
+
+    /// <summary>
+    /// The two literals <see cref="RunAsync"/> deliberately does NOT send as `-m`, refused as a
+    /// caller's explicit choice for exactly that reason (round 1 review of PR #123).
+    ///
+    /// The suppression in <see cref="RunAsync"/> is legitimate and stays: it exists for profiles that
+    /// were already frozen — one frozen before any probe had succeeded (<see cref="UnresolvedModel"/>),
+    /// and one frozen by a release up to v0.84.1 (<see cref="RetiredPlaceholderModel"/>, which Codex
+    /// 0.149.1 rejects outright). Those sprints have always run on the user's own configured model, and
+    /// making them fail instead would help nobody.
+    ///
+    /// Freezing one of them FRESH, from a caller who explicitly asked for it, is a different thing
+    /// entirely and has no such justification: creation would report success, the durable profile and
+    /// the review lineage would record a model, and every attempt would then run on a different one
+    /// with nothing reporting the divergence — manufacturing precisely the "no probe has succeeded"
+    /// state <see cref="UnresolvedModel"/> exists to signal, on a sprint whose probe may have worked
+    /// fine, and turning ADR 0014's frozen profile into misleading evidence. Refusing at creation is
+    /// the only outcome that keeps the frozen model and the running model the same value.
+    ///
+    /// Filtering these out of <see cref="ListModelsAsync"/> would not be enough: a caller falls through
+    /// the enumeration check whenever the vendor could not be asked, which is the very branch that
+    /// reaches this state. Hence a separate, unconditional answer.
+    /// </summary>
+    public bool IsReservedModelName(string model) => model is UnresolvedModel or RetiredPlaceholderModel;
 
     private static string? StringOf(JsonElement element, string propertyName) =>
         element.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
@@ -421,8 +468,10 @@ public sealed class CodexLlmProvider(
         // The prompt travels on stdin, never a command-line argument (ADR 0006): `codex exec
         // --json` has no positional prompt argument at all (ADR 0002).
         List<string> arguments = ["exec", "--json"];
+        // One reserved set, read from one place (see IsReservedModelName): the values suppressed here
+        // and the values refused as an explicit request must never drift apart.
         if (ProviderInstallation.NormalizeModelName(model) is { } sendableModel &&
-            sendableModel is not (UnresolvedModel or RetiredPlaceholderModel))
+            !IsReservedModelName(sendableModel))
         {
             arguments.Add("-m");
             arguments.Add(sendableModel);

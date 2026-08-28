@@ -209,22 +209,24 @@ public sealed class SprintOrchestrator(
         // needing a separate flag.
         if (!string.IsNullOrWhiteSpace(command.RequestedModel))
         {
-            IReadOnlyDictionary<string, string>? requested = await ExecutionProfilePolicy
+            ExecutionProfilePolicy.RequestedModelOutcome requested = await ExecutionProfilePolicy
                 .ApplyRequestedModelAsync(
                     frozenModels, frozenProviders[0], command.RequestedModel, providerCatalog, cancellationToken)
                 .ConfigureAwait(false);
-            if (requested is null)
+            if (requested.Models is null)
             {
-                // ADR 0063 already established this tradeoff for its own imprecise case: the code
-                // names the policy rather than the real cause (here, a model the provider does not
-                // offer, or one that is not a usable model id at all). A distinct code is a public
-                // contract addition spanning DiagnosticCodes, ExitCodes, every localized surface, and
-                // the README's diagnostic table, and it changes no outcome -- deferred on the same
-                // terms, not silently.
-                return new(false, null, DiagnosticCodes.ModelPolicyViolation);
+                // Its own code, never `model_policy_violation` (round 1 review of PR #123): this
+                // refusal fires with no `models.allowed_models` configured at all -- the default --
+                // so naming a policy that usually does not exist would send an operator to a key
+                // that is not there. The three real causes now report separately:
+                // `sprint_model_invalid` (not a usable model id), `sprint_model_not_offered` (the
+                // provider does not offer it, or reserves it), and `model_policy_violation` below
+                // (a configured allowlist genuinely excludes it). A vendor probe that could not be
+                // asked is distinguished by producing no refusal here at all.
+                return new(false, null, requested.DiagnosticCode);
             }
 
-            frozenModels = requested;
+            frozenModels = requested.Models;
         }
 
         // ADR 0042: the allowlist half of ADR 0006's "project model policy" -- refused before any

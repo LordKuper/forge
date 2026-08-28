@@ -213,8 +213,13 @@ public sealed class ExecutionProfilePolicyTests
 
         /// <summary>Empty by default — "this provider could not be enumerated" — so a subclass that
         /// cares about the enumeration path has to say so.</summary>
-        public virtual Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+        public virtual Task<IReadOnlyList<string>> ListModelsAsync(
+            bool bypassCache, CancellationToken cancellationToken) =>
             Task.FromResult<IReadOnlyList<string>>([]);
+
+        /// <summary>Nothing reserved by default, so a subclass that cares about the reserved-sentinel
+        /// path has to say so.</summary>
+        public virtual bool IsReservedModelName(string model) => false;
 
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             throw new NotSupportedException();

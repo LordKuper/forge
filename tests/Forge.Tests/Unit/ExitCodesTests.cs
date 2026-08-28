@@ -54,4 +54,21 @@ public sealed class ExitCodesTests
     [Trait("Category", "Unit")]
     public void SprintTitleTooLongMapsToTheUsageExitCode() =>
         Assert.Equal(ExitCodes.Usage, ExitCodes.For(DiagnosticCodes.SprintTitleTooLong));
+
+    /// <summary>Round 1 review of PR #123: ADR 0066's two new refusals must not land on the generic
+    /// `Internal` fallback the way <see cref="DiagnosticCodes.SprintTitleTooLong"/> once did. A
+    /// requested model the provider does not offer is a provider-capability answer (exit 7, beside
+    /// the other provider refusals); a requested model that is not a usable model id at all is
+    /// caller input (exit 2, beside every other bounded-input diagnostic). Neither is
+    /// <see cref="DiagnosticCodes.ModelPolicyViolation"/>'s workflow family, which is the point of
+    /// separating them.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void SprintModelNotOfferedMapsToTheProviderExitCode() =>
+        Assert.Equal(ExitCodes.Provider, ExitCodes.For(DiagnosticCodes.SprintModelNotOffered));
+
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void SprintModelInvalidMapsToTheUsageExitCode() =>
+        Assert.Equal(ExitCodes.Usage, ExitCodes.For(DiagnosticCodes.SprintModelInvalid));
 }

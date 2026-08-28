@@ -26,9 +26,11 @@ This slice is the backend half of both. No UI ships here.
 
 ### `ILlmProvider.ListModelsAsync`, and why the two adapters answer it differently
 
-`ILlmProvider` gains one member, `ListModelsAsync(cancellationToken)`, returning the model ids a
-caller may select in the vendor's own presentation order. It is vendor-owned exactly like `Id` and
-`DefaultModel`; neutral code still names no model anywhere.
+`ILlmProvider` gains two members. `ListModelsAsync(bypassCache, cancellationToken)` returns the model
+ids a caller may select in the vendor's own presentation order; `IsReservedModelName(model)` answers
+whether a value is a placeholder the adapter reserves for itself (see "Reserved sentinels are refused
+at creation" below). Both are vendor-owned exactly like `Id` and `DefaultModel`; neutral code still
+names no model anywhere.
 
 The two implementations are deliberately asymmetric, mirroring the asymmetry ADR 0063 already
 established for `DefaultModel` — Codex resolves live, Claude is a constant — and for the same reason:
@@ -63,7 +65,7 @@ catalog whose slugs all fail model-name validation — returns an empty list, ne
 distinction is load-bearing in the validation below. Claude's list can never be empty, because there
 is nothing to fail.
 
-### Caching reuses ADR 0063's, exactly
+### Caching reuses ADR 0063's, exactly — including its refresh path
 
 `FileProviderModelCatalogCache` is a per-provider, per-instance JSON file beside the release and
 default-model caches, written atomically, degrading to "no cache" when missing or corrupt.
@@ -71,15 +73,37 @@ default-model caches, written atomically, degrading to "no cache" when missing o
 same no-install short circuit (so an uninstalled provider cannot write a failure entry that throttles
 the first real probe after an install), the same 24-hour success / one-hour failure windows, the same
 "validate on the way out of the cache as well as on the way in" rule, and the same "only the parse
-delegate ever sees raw process output". A third small sibling type rather than a generalization of
-either existing cache, for the reason ADR 0063 already gave: the payloads carry different values with
-different meanings, and the existing entries' shapes are load-bearing in existing tests.
+delegate ever sees raw process output".
+
+**`forge models --refresh` clears this cache too.** The first draft of this slice hardcoded
+`bypassCache: false` on the enumeration path, reasoning that nothing there carries a `--refresh`
+intent. Round 1 review of PR #123 showed that argument inverted: it made the catalog the one provider
+cache nothing in the product could reach, so a model Codex had just released — the exact event Q11
+chose live enumeration to survive — stayed invisible to the picker *and produced a refusal for an
+explicit request* for up to 24 hours, recoverable only by deleting
+`Forge/{InstanceId}/providers/model-catalog-codex.json` by hand. Strictly worse than the ADR 0063 case
+it claimed to mirror, which relies on `--refresh` as its escape hatch. `ListModelsAsync` therefore
+takes the same `bypassCache` flag the release check already carries, and `DiscoverAsync`/
+`InstallOrUpdateAsync` forward it alongside `RefreshDefaultModelAsync`. Sprint creation still passes
+`false` and honours the throttle. Riding the capability pass also warms a cold cache, so the first
+picker opened after one answers without spawning anything.
 
 The cache is not speculative even though enumeration is human-initiated. The Forge Host is
 long-lived and serves every Desktop sprint creation, so a picker opened repeatedly would otherwise
 spawn a vendor process and parse a ~320 KB catalog every time, on a path a user is waiting on. The
 30-second deadline is the default-model probe's, reused rather than reinvented — one deadline is one
 thing to reason about, and the measured cost is well under a second.
+
+**One implementation of the file mechanics, three payloads.** The first draft cloned
+`FileProviderDefaultModelCache` character for character, on ADR 0063's "the payloads carry different
+values with different meanings". Round 1 review of PR #123 was right that the reason does not survive
+the obvious refactor: the payloads differ, but the *file mechanics* — the per-instance directory,
+snake_case JSON, atomic write, corrupt-file degradation, best-effort write — are identical, and
+stating that contract in three places means a fix to any of them has to be made three times or
+silently diverge. `FileProviderJsonCache<TEntry>` now holds it once; `FileProviderReleaseCache`,
+`FileProviderDefaultModelCache`, and `FileProviderModelCatalogCache` each contribute only a payload
+record and a file-name prefix, so all three keep distinct serialized shapes, distinct file names, and
+distinct meanings, and no on-disk entry shape changed at all.
 
 ### Selection is frozen at creation, and overrides one provider's entry rather than three profiles
 
@@ -100,12 +124,50 @@ exactly the same `Freeze` call, so there is no second code path to keep in agree
 picker to become a route around `models.allowed_models`. ADR 0063's single-resolution invariant is
 untouched — this replaces a value in the one already-resolved map rather than reading anything again.
 
-Two checks run before the gate. `NormalizeModelName` is unconditional: a requested id becomes both a
-vendor command-line argument and durable sprint state, and it arrives from a caller rather than from
-a vendor, so it earns at least the hygiene a probed value gets. The enumeration check is conditional
-on there *being* an enumeration — an empty `ListModelsAsync` means the vendor could not be asked, and
-refusing every explicit choice whenever a vendor probe is unavailable would trade a rare bad run for
-a common blocked one. The check that actually protects policy is unconditional and runs regardless.
+Three checks run before the gate, and only the third is conditional.
+
+`NormalizeModelName` is unconditional: a requested id becomes both a vendor command-line argument and
+durable sprint state, and it arrives from a caller rather than from a vendor, so it earns at least the
+hygiene a probed value gets.
+
+`IsReservedModelName` is unconditional (see below).
+
+The enumeration check is conditional on there *being* an enumeration — an empty `ListModelsAsync`
+means the vendor could not be asked, and refusing every explicit choice whenever a vendor probe is
+unavailable would trade a rare bad run for a common blocked one. When there *is* one, the provider's
+current `DefaultModel` is accepted alongside it even if the catalog omits it. Round 1 review of PR
+#123 found that omission is reachable and its consequence perverse: `DefaultModel` comes from
+`codex doctor --json` (whatever the user's own `config.toml` resolves) while the catalog is
+`codex debug models` filtered to `"visibility": "list"`, so a `model = "..."` naming a `hide` entry, or
+a custom `model_providers`/OSS slug that is in no served catalog at all, yields a non-empty catalog
+without the current default in it. Omitting the request froze that model happily; asking for the same
+value was refused — the "safe" explicit choice punished and the implicit one not, and a picker's
+pre-selected entry unreachable. The default is trivially a valid choice, because it is precisely what
+a sprint that requests nothing freezes and runs.
+
+The check that actually protects policy is unconditional and runs regardless.
+
+### Reserved sentinels are refused at creation
+
+`CodexLlmProvider.RunAsync` deliberately does not send two literals as `-m`: `vendor-default` (no probe
+has succeeded) and `gpt-5` (frozen by releases up to v0.84.1 and rejected outright by Codex 0.149.1).
+Both leave the attempt on whatever the user's own configuration resolves. That suppression is correct
+and stays — it exists for profiles that were *already* frozen, and making those sprints fail instead
+would help nobody.
+
+Round 1 review of PR #123 found that neither literal was refused as a *fresh* explicit request, which
+is a different thing entirely. Both pass `NormalizeModelName`, and on the fail-open branch (vendor not
+enumerable) with no allowlist configured, creation reported success, the three profiles and the review
+lineage recorded the sentinel, and every attempt then ran on a different model with nothing reporting
+the divergence — manufacturing exactly the "no probe has succeeded" state `vendor-default` exists to
+signal, on a sprint whose probe may have worked fine, and turning ADR 0014's frozen profile into
+misleading evidence.
+
+`ILlmProvider.IsReservedModelName` closes it, and is a separate member rather than a filter inside
+`ListModelsAsync` for a specific reason: a caller falls through the enumeration check whenever the
+vendor could not be asked, which is the very branch that reached this state. The Codex adapter answers
+from the same constant set `RunAsync` suppresses, read from one place so the two can never drift;
+Claude reserves nothing.
 
 A `null` or blank request is byte-identical to the behaviour before this ADR: nothing is enumerated
 (proven by a test that counts `ListModelsAsync` calls on the default path), nothing is replaced, and
@@ -118,15 +180,30 @@ express one: the only place a model can be chosen is the command that freezes th
 "frozen exactly once, never re-resolved even if configuration changes while the sprint runs" is
 unweakened.
 
-### The refusal reuses `model_policy_violation`
+### Each refusal reports its own cause
 
-A request that is not a usable model id, or that the provider does not offer, is refused with
-`DiagnosticCodes.ModelPolicyViolation` and no sprint is registered — the same fail-closed placement
-as the empty-candidates and allowlist checks. The code names the policy rather than the real cause,
-which is imprecise, and it is the same tradeoff ADR 0063 documented for its own imprecise case: a
-distinct code is a public contract addition spanning `DiagnosticCodes`, `ExitCodes`, every localized
-surface, and the README's diagnostic table, and it changes no outcome. Deferred on those terms rather
-than silently.
+The first draft reused `DiagnosticCodes.ModelPolicyViolation` for every refusal on this path, on ADR
+0063's precedent. Round 1 review of PR #123 showed the precedent does not transfer. ADR 0063's
+imprecise case fires only for "a project whose `models.allowed_models` lists `codex:<model>`" — an
+allowlist exists, so the code is at least literally true — and it offers `forge models --refresh` as a
+concrete escape hatch. This path has neither property: it fires with **no allowlist configured at
+all**, which is the default, on caller-supplied input, with nothing stale to clear. Naming a policy
+the project never set is not imprecise but misleading, sending an operator to a `models.allowed_models`
+key that is not there.
+
+Three materially different causes now report separately, and no sprint is registered for any of them
+— the same fail-closed placement as the empty-candidates and allowlist checks:
+
+| Cause | Code | Exit |
+|---|---|---|
+| not a usable model id (blank, whitespace-bearing, non-printable, too long) | `sprint_model_invalid` | 2, usage |
+| the provider does not offer it, or reserves it as a placeholder | `sprint_model_not_offered` | 7, provider |
+| a configured project allowlist excludes it | `model_policy_violation` | 11, workflow |
+
+A fourth state, "the vendor could not be enumerated", is distinguished by producing no refusal here at
+all: the request falls through to the allowlist and model-name checks. `ExecutionProfilePolicy`
+returns the reason rather than a bare `null`, so the orchestrator reports it without re-deriving it,
+and `ExitCodes.For` and `docs/contracts/v1/README.md` carry both new codes.
 
 ## What stays deferred
 
@@ -146,8 +223,12 @@ than silently.
 |---|---|
 | create a sprint with no model request | unchanged in every respect; nothing is enumerated |
 | create a sprint requesting a model the provider offers and the project allows | that model is frozen into all three profiles and the review lineage |
-| create a sprint requesting a model the provider does not offer | `model_policy_violation`; no sprint registered |
-| create a sprint requesting a model the project allowlist excludes | `model_policy_violation`; no sprint registered |
-| create a sprint requesting a model while the vendor probe fails | the enumeration check is skipped; `ModelPolicyGate` and model-name validation still decide |
+| create a sprint requesting the provider's current default that its catalog omits | accepted and frozen — the default is always a valid choice |
+| create a sprint requesting a model the provider does not offer, or a placeholder it reserves | `sprint_model_not_offered` (exit 7); no sprint registered |
+| create a sprint requesting a value that is not a usable model id | `sprint_model_invalid` (exit 2); no sprint registered |
+| create a sprint requesting a model the project allowlist excludes | `model_policy_violation` (exit 11); no sprint registered |
+| create a sprint requesting a model while the vendor probe fails | the enumeration check is skipped; the reserved-name check, `ModelPolicyGate`, and model-name validation still decide |
+| create a sprint on a multi-provider project | the request replaces the primary provider's model only; a review phase on a different provider keeps its own resolved default |
 | open a picker repeatedly | at most one vendor process per 24 hours per machine, and none when the provider is not installed |
+| a vendor releases a new model | `forge models --refresh` makes it selectable immediately; otherwise it appears within the 24-hour window |
 | a hand-edited or truncated catalog cache | rejected as corrupt, re-probed once, and overwritten on the next enumeration |

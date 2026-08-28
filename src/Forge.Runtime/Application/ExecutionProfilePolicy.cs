@@ -185,11 +185,23 @@ public static class ExecutionProfilePolicy
         return models;
     }
 
+    /// <summary>The outcome of <see cref="ApplyRequestedModelAsync"/>: either the updated model map,
+    /// or the specific reason the request was refused. Two distinct diagnostic codes rather than one
+    /// null, because "you asked for something this provider does not offer"
+    /// (<see cref="DiagnosticCodes.SprintModelNotOffered"/>) and "that is not a model id"
+    /// (<see cref="DiagnosticCodes.SprintModelInvalid"/>) send an operator to two different places,
+    /// and neither of them is the project allowlist the caller's own separate
+    /// <see cref="ModelPolicyGate"/> check owns (round 1 review of PR #123).
+    /// <see cref="DiagnosticCodes.None"/> accompanies a non-null <paramref name="Models"/> and only
+    /// that.</summary>
+    public readonly record struct RequestedModelOutcome(
+        IReadOnlyDictionary<string, string>? Models, string DiagnosticCode);
+
     /// <summary>
     /// Applies an operator's explicit per-sprint model choice (ADR 0066) on top of the map
     /// <see cref="ResolveModelsAsync"/> just produced, replacing only
-    /// <paramref name="providerId"/>'s entry. Returns <see langword="null"/> when the request is not
-    /// selectable, which the caller turns into a refusal before anything is written.
+    /// <paramref name="providerId"/>'s entry. Returns the refusal reason instead of a map when the
+    /// request is not selectable, which the caller turns into a refusal before anything is written.
     ///
     /// One entry, not all of them, because a model id is provider-specific: ADR 0014 already freezes
     /// one model per DISTINCT provider, so overriding the primary provider's entry is what reaches
@@ -200,16 +212,34 @@ public static class ExecutionProfilePolicy
     /// <see cref="Freeze"/> both read this map, so the requested model is gated and frozen by exactly
     /// the code the default already goes through, and omitting the request leaves that path untouched.
     ///
-    /// Two checks, in order. <c>NormalizeModelName</c> is unconditional: a requested id becomes both a
-    /// vendor command-line argument and durable sprint state, and it arrives from a caller rather than
-    /// from a vendor, so it earns at least the hygiene a probed value gets. The enumeration check is
-    /// conditional on there BEING an enumeration — an empty
+    /// Three checks, in order, and only the third is conditional.
+    ///
+    /// <c>NormalizeModelName</c> is unconditional: a requested id becomes both a vendor command-line
+    /// argument and durable sprint state, and it arrives from a caller rather than from a vendor, so it
+    /// earns at least the hygiene a probed value gets.
+    ///
+    /// <see cref="ILlmProvider.IsReservedModelName"/> is unconditional for the reason it exists (round
+    /// 1 review of PR #123): a value the adapter reserves for itself is one <c>RunAsync</c> silently
+    /// declines to send, so accepting it would freeze a model the sprint then demonstrably does not run
+    /// on. That must not depend on whether a vendor probe happened to answer, which is exactly what
+    /// leaving it to the enumeration below would do.
+    ///
+    /// The enumeration check is conditional on there BEING an enumeration — an empty
     /// <see cref="ILlmProvider.ListModelsAsync"/> means the vendor could not be asked, not that it
     /// offers nothing, and refusing every explicit choice whenever a vendor probe is unavailable would
-    /// trade a rare bad run for a common blocked one. The check that actually protects policy,
-    /// <see cref="ModelPolicyGate"/>, is unconditional and runs regardless.
+    /// trade a rare bad run for a common blocked one. When there IS one, the provider's current
+    /// <see cref="ILlmProvider.DefaultModel"/> is accepted alongside it even if the catalog omits it
+    /// (round 1 review of PR #123). An adapter's catalog and its resolved default answer two different
+    /// questions and can legitimately disagree — a Codex `config.toml` may name an entry Codex marks
+    /// `"visibility": "hide"`, or a custom `model_providers` slug that is in no served catalog at all —
+    /// and the default is trivially a valid choice, since it is precisely what a sprint that requests
+    /// nothing freezes and runs. Refusing it would punish the explicit choice while allowing the
+    /// identical implicit one, and would make a picker's own pre-selected entry unreachable.
+    ///
+    /// The check that actually protects policy, <see cref="ModelPolicyGate"/>, is unconditional, runs
+    /// regardless, and stays the caller's.
     /// </summary>
-    public static async Task<IReadOnlyDictionary<string, string>?> ApplyRequestedModelAsync(
+    public static async Task<RequestedModelOutcome> ApplyRequestedModelAsync(
         IReadOnlyDictionary<string, string> models,
         string providerId,
         string requestedModel,
@@ -222,7 +252,7 @@ public static class ExecutionProfilePolicy
         ArgumentNullException.ThrowIfNull(catalog);
         if (ProviderInstallation.NormalizeModelName(requestedModel) is not { } requested)
         {
-            return null;
+            return new(null, DiagnosticCodes.SprintModelInvalid);
         }
 
         if (!catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider))
@@ -231,13 +261,23 @@ public static class ExecutionProfilePolicy
                 $"Frozen provider '{providerId}' is not registered in the provider catalog.");
         }
 
-        IReadOnlyList<string> selectable = await provider.ListModelsAsync(cancellationToken).ConfigureAwait(false);
-        if (selectable.Count > 0 && !selectable.Contains(requested, StringComparer.Ordinal))
+        if (provider.IsReservedModelName(requested))
         {
-            return null;
+            return new(null, DiagnosticCodes.SprintModelNotOffered);
         }
 
-        return new Dictionary<string, string>(models, StringComparer.Ordinal) { [providerId] = requested };
+        IReadOnlyList<string> selectable =
+            await provider.ListModelsAsync(false, cancellationToken).ConfigureAwait(false);
+        if (selectable.Count > 0 &&
+            !selectable.Contains(requested, StringComparer.Ordinal) &&
+            !string.Equals(requested, provider.DefaultModel, StringComparison.Ordinal))
+        {
+            return new(null, DiagnosticCodes.SprintModelNotOffered);
+        }
+
+        return new(
+            new Dictionary<string, string>(models, StringComparer.Ordinal) { [providerId] = requested },
+            DiagnosticCodes.None);
     }
 
     private static string ModelFor(string providerId, IReadOnlyDictionary<string, string> models) =>

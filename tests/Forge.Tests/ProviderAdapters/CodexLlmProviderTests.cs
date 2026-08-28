@@ -38,10 +38,11 @@ public sealed class CodexLlmProviderTests
         CodexLlmProvider provider = CreateProvider(paths, request =>
         {
             Assert.Equal(executable, request.FileName);
-            // ADR 0063 added a second, independent probe to the same discovery pass; both run on
-            // the same pinned executable and neither is a shell invocation.
+            // ADR 0063 and ADR 0066 each added an independent capability probe to the same
+            // discovery pass; all three run on the same pinned executable and none is a shell
+            // invocation.
             Assert.True(
-                request.Arguments is ["--version"] or ["doctor", "--json"],
+                request.Arguments is ["--version"] or ["doctor", "--json"] or ["debug", "models"],
                 $"Unexpected discovery probe: {string.Join(' ', request.Arguments)}");
             return new(0, "codex-cli 0.146.0", string.Empty);
         });
@@ -166,10 +167,11 @@ public sealed class CodexLlmProviderTests
             request =>
             {
                 // The version probe is the only INSTALL-related process an already-current install
-                // may spawn; ADR 0063's default-model probe rides the same pass and is excluded by
-                // name rather than by count, so it can never mask a real install/update regression.
+                // may spawn; ADR 0063's default-model probe and ADR 0066's catalog probe ride the
+                // same pass and are excluded by name rather than by count, so they can never mask a
+                // real install/update regression.
                 Assert.True(
-                    request.Arguments is ["--version"] or ["doctor", "--json"],
+                    request.Arguments is ["--version"] or ["doctor", "--json"] or ["debug", "models"],
                     "No install/update process should run when already current.");
                 return new(0, "0.146.0", string.Empty);
             },
@@ -193,10 +195,10 @@ public sealed class CodexLlmProviderTests
             paths,
             request =>
             {
-                // ADR 0063's default-model probe rides the same pass but is counted separately —
-                // this test is about the install/update sequence, and folding an unrelated probe
-                // into its count would make the count stop meaning anything.
-                if (request.Arguments is ["doctor", "--json"])
+                // ADR 0063's default-model probe and ADR 0066's catalog probe ride the same pass but
+                // are counted separately — this test is about the install/update sequence, and
+                // folding unrelated probes into its count would make the count stop meaning anything.
+                if (request.Arguments is ["doctor", "--json"] or ["debug", "models"])
                 {
                     return new(0, string.Empty, string.Empty);
                 }
@@ -230,8 +232,9 @@ public sealed class CodexLlmProviderTests
             paths,
             request =>
             {
-                // See the sibling test: ADR 0063's probe is deliberately outside this count.
-                if (request.Arguments is ["doctor", "--json"])
+                // See the sibling test: the ADR 0063/0066 capability probes are deliberately outside
+                // this count.
+                if (request.Arguments is ["doctor", "--json"] or ["debug", "models"])
                 {
                     return new(0, string.Empty, string.Empty);
                 }
@@ -830,7 +833,7 @@ public sealed class CodexLlmProviderTests
             return new(0, catalog, string.Empty);
         });
 
-        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+        IReadOnlyList<string> models = await provider.ListModelsAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(
             ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], models);
@@ -865,7 +868,7 @@ public sealed class CodexLlmProviderTests
         WriteCodexExecutable(paths);
         CodexLlmProvider provider = CreateProvider(paths, _ => new(exitCode, catalogOutput, string.Empty));
 
-        Assert.Empty(await provider.ListModelsAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await provider.ListModelsAsync(false, TestContext.Current.CancellationToken));
     }
 
     /// <summary>ADR 0066: with no vendor executable there is nothing to ask, so the probe is not
@@ -888,7 +891,7 @@ public sealed class CodexLlmProviderTests
             },
             modelCatalogCache: cache);
 
-        Assert.Empty(await provider.ListModelsAsync(TestContext.Current.CancellationToken));
+        Assert.Empty(await provider.ListModelsAsync(false, TestContext.Current.CancellationToken));
 
         Assert.False(spawned);
         Assert.Null(await cache.ReadAsync(CodexLlmProvider.Codex, TestContext.Current.CancellationToken));
@@ -938,10 +941,163 @@ public sealed class CodexLlmProviderTests
             modelCatalogCache: cache,
             clock: clock);
 
-        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+        IReadOnlyList<string> models = await provider.ListModelsAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(expectedProbes, probes);
         Assert.Equal(expectedModels, models);
+    }
+
+    /// <summary>Round 1 review of PR #123, finding 4: the catalog cache used to be the ONE provider
+    /// cache nothing in the product could clear, so a model Codex had just released stayed invisible
+    /// — and an explicit request for it was REFUSED — for up to 24 hours, with deleting the cache file
+    /// by hand as the only recovery. `forge models --refresh` now reaches it exactly as it reaches the
+    /// release and default-model caches: the flag it already carries is forwarded from
+    /// <see cref="CodexLlmProvider.InstallOrUpdateAsync"/> straight through to the catalog probe.
+    ///
+    /// The cache here holds a fresh (one-hour-old) success, so nothing but a genuine bypass could
+    /// re-probe it, and the refreshed catalog must be what the very next enumeration reports.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RefreshingProviderHealthReProbesTheModelCatalogPastItsThrottle()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        FakeClock clock = new() { UtcNow = DateTimeOffset.UnixEpoch.AddDays(30) };
+        FakeModelCatalogCache cache = new();
+        await cache.WriteAsync(
+            CodexLlmProvider.Codex,
+            new(clock.UtcNow.AddHours(-1), true, ["gpt-5.4"]),
+            TestContext.Current.CancellationToken);
+        int catalogProbes = 0;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            request =>
+            {
+                if (request.Arguments is not ["debug", "models"])
+                {
+                    return new(0, "codex-cli 0.149.1", string.Empty);
+                }
+
+                catalogProbes++;
+                return new(
+                    0,
+                    """{"models":[{"slug":"gpt-5.4","visibility":"list"},{"slug":"gpt-5.7-new","visibility":"list"}]}""",
+                    string.Empty);
+            },
+            modelCatalogCache: cache,
+            clock: clock);
+
+        // The throttle is honoured on the routine path: the stale-but-fresh entry answers alone.
+        Assert.Equal(["gpt-5.4"], await provider.ListModelsAsync(false, TestContext.Current.CancellationToken));
+        Assert.Equal(0, catalogProbes);
+
+        await provider.InstallOrUpdateAsync(bypassReleaseCache: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, catalogProbes);
+        Assert.Equal(
+            ["gpt-5.4", "gpt-5.7-new"],
+            await provider.ListModelsAsync(false, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>
+    /// Round 1 review of PR #123, finding 6, end to end through the real adapter. `RunAsync`
+    /// deliberately does NOT send `vendor-default` or `gpt-5` as `-m`: both are reserved placeholders
+    /// that leave the attempt on whatever the user's own `config.toml` resolves. That suppression is
+    /// right for a profile that was ALREADY frozen — one frozen before any probe succeeded, or one
+    /// frozen by a release up to v0.84.1, which Codex 0.149.1 rejects outright.
+    ///
+    /// Freezing one FRESH, from a caller who asked for it, has no such justification: creation would
+    /// report success, the profile and lineage would record the sentinel, and every attempt would then
+    /// run on a different model with nothing reporting the divergence. This is the worst outcome shape
+    /// available on this path, and the fail-open branch is where it was reachable — the catalog probe
+    /// here FAILS, so the enumeration check is skipped entirely and no allowlist is configured, which
+    /// is exactly the state that used to accept the sentinel.
+    /// </summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("vendor-default")]
+    [InlineData("gpt-5")]
+    public async Task RequestingAModelCodexReservesIsRefusedEvenWhenTheCatalogCannotBeEnumerated(
+        string requestedModel)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string doctor = ReadFixture("codex-doctor.json");
+        CodexLlmProvider provider = CreateProvider(paths, request => request.Arguments switch
+        {
+            ["doctor", "--json"] => new(0, doctor, string.Empty),
+            // The fail-open branch: the vendor cannot be asked what it offers.
+            _ => new(1, string.Empty, "codex: unknown subcommand"),
+        });
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready),
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: requestedModel), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.SprintModelNotOffered, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    /// <summary>
+    /// Round 1 review of PR #123, finding 1, against the two real sources that can disagree.
+    /// <c>DefaultModel</c> comes from `codex doctor --json` — whatever the user's own `~/.codex/
+    /// config.toml` resolves — while the catalog is `codex debug models` filtered to
+    /// `"visibility": "list"`. A `model = "..."` naming an entry Codex marks `hide`, or a custom
+    /// `model_providers` slug that is in no served catalog at all, produces a non-empty catalog that
+    /// does not contain the current default.
+    ///
+    /// That used to make the "safe" explicit choice worse than the implicit one: omitting the request
+    /// froze `gpt-5.6-sol` happily, while asking for the very same value was refused. The catalog here
+    /// lists two other models and marks `gpt-5.6-sol` as `hide`, so the enumeration really is
+    /// consulted, really is non-empty, and really does omit the default.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task RequestingTheConfiguredDefaultSucceedsWhenCodexHidesItFromItsOwnCatalog()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string doctor = ReadFixture("codex-doctor.json");
+        CodexLlmProvider provider = CreateProvider(paths, request => request.Arguments switch
+        {
+            ["doctor", "--json"] => new(0, doctor, string.Empty),
+            _ => new(
+                0,
+                """
+                {"models":[{"slug":"gpt-5.6-sol","visibility":"hide"},{"slug":"gpt-5.5","visibility":"list"},
+                {"slug":"gpt-5.4","visibility":"list"}]}
+                """,
+                string.Empty),
+        });
+        using TestEnvironment environment = new(
+            providers: new FakeProviderToolchainManager(FakeProviderToolchainManager.Ready),
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        Assert.DoesNotContain("gpt-5.6-sol", await provider.ListModelsAsync(false, cancellationToken));
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: "gpt-5.6-sol"), cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.True(result.Succeeded);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.All(definition!.ExecutionProfiles.Values, profile => Assert.Equal("gpt-5.6-sol", profile.Model));
     }
 
     /// <summary>ADR 0060, against the real thing: `codex-exec-json-tool-calls.jsonl` is a verbatim

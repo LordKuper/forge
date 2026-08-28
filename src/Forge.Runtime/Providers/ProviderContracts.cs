@@ -265,12 +265,32 @@ public interface ILlmProvider
     /// Never throws. An empty list means "this vendor could not be asked right now", never "this
     /// vendor offers nothing": a caller validating a requested model MUST treat an empty result as
     /// "no enumeration available" and fall through to the checks that are always authoritative
-    /// (<see cref="Forge.Application.ModelPolicyGate"/> and model-name normalization), rather than
-    /// refusing a legitimate model because a vendor probe happened to fail. Implementations that do
-    /// real vendor work MUST throttle it through a shared, cross-process cache, like
-    /// <see cref="RefreshDefaultModelAsync"/>.
+    /// (<see cref="Forge.Application.ModelPolicyGate"/>, model-name normalization, and
+    /// <see cref="IsReservedModelName"/>), rather than refusing a legitimate model because a vendor
+    /// probe happened to fail. Implementations that do real vendor work MUST throttle it through a
+    /// shared, cross-process cache, like <see cref="RefreshDefaultModelAsync"/>, and MUST re-probe
+    /// past that throttle when <paramref name="bypassCache"/> is set — the same flag
+    /// <see cref="DiscoverAsync"/> and <see cref="InstallOrUpdateAsync"/> already carry, and which
+    /// they forward here, so `forge models --refresh` reaches this catalog exactly as it reaches
+    /// every other provider cache (round 1 review of PR #123).
     /// </summary>
-    Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken);
+    Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Whether <paramref name="model"/> is a placeholder this adapter reserves for its own internal
+    /// use rather than a model a caller may ask for (ADR 0066, round 1 review of PR #123). Pure,
+    /// synchronous, and vendor-owned: only the adapter knows which literals it treats specially, and
+    /// neutral code still names no model.
+    ///
+    /// This exists because <see cref="ListModelsAsync"/> alone cannot close the hole. A caller
+    /// validating a requested model falls through the enumeration check whenever the vendor could not
+    /// be asked, so a reserved literal — one <see cref="RunAsync"/> would then silently decline to
+    /// send, running the attempt on something else while the frozen profile records the literal —
+    /// would otherwise be accepted and frozen on exactly that path. Callers MUST consult this
+    /// unconditionally, including for a value equal to <see cref="DefaultModel"/>, which is itself a
+    /// reserved sentinel in an adapter whose probe has never succeeded.
+    /// </summary>
+    bool IsReservedModelName(string model);
 
     /// <summary>
     /// Reads the fixed, vendor-owned install path and runs `--version`. When the local probe
@@ -421,10 +441,10 @@ public sealed record ProviderModelCatalogCacheEntry(
 
 /// <summary>A small per-user cache of the last enumerated model catalog for one provider (ADR 0066),
 /// so a model picker opened repeatedly does not respawn the vendor's own catalog command every time.
-/// A third small sibling of <see cref="IProviderReleaseCache"/>/<see cref="IProviderDefaultModelCache"/>
-/// rather than a generalization of either, for the reason ADR 0063 already gave: the payloads carry
-/// different values with different meanings. Read/write failures degrade to "no cache" rather than
-/// throwing.</summary>
+/// A third contract beside <see cref="IProviderReleaseCache"/>/<see cref="IProviderDefaultModelCache"/>
+/// because the payloads carry different values with different meanings; the file mechanics all three
+/// share are stated once, in <see cref="FileProviderJsonCache{TEntry}"/> (round 1 review of PR #123).
+/// Read/write failures degrade to "no cache" rather than throwing.</summary>
 public interface IProviderModelCatalogCache
 {
     Task<ProviderModelCatalogCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);

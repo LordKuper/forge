@@ -260,7 +260,7 @@ public sealed class ClaudeLlmProviderTests
         ClaudeLlmProvider provider = CreateProvider(paths, _ => throw new InvalidOperationException(
             "A fixed alias set must never spawn a vendor process."));
 
-        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+        IReadOnlyList<string> models = await provider.ListModelsAsync(false, TestContext.Current.CancellationToken);
 
         Assert.Equal(["fable", "opus", "sonnet"], models);
         Assert.Contains(provider.DefaultModel, models);
