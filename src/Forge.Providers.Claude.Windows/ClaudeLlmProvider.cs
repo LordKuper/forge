@@ -80,6 +80,22 @@ public sealed class ClaudeLlmProvider(
     public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.CompletedTask;
 
+    // ponytail: a fixed list, not an enumeration. Claude Code publishes no catalog command of any
+    // kind -- unlike Codex, whose `debug models` this same slice reads live (ADR 0066) -- so these are
+    // the exact three aliases the vendor's own `claude --help` names for `--model` ("Provide an alias
+    // for the latest model (e.g. 'fable', 'opus', or 'sonnet')"), in the order it names them, verified
+    // against Claude Code 2.1.250 rather than read from documentation. The same discipline ADR 0014
+    // applied to DefaultModel: a marked fixed value that stays honest about being one. `--model` also
+    // accepts a full model name, which this list deliberately does not try to predict -- an alias
+    // always resolves to the current model, and a hardcoded dated slug would rot at the next release.
+    // Revisit if Claude Code ever ships a real enumeration command.
+    private static readonly IReadOnlyList<string> ModelAliases = ["fable", "opus", "sonnet"];
+
+    /// <summary>The alias set above, always -- there is nothing to probe, so this never fails and
+    /// never returns empty. See <see cref="ModelAliases"/> for why it is fixed.</summary>
+    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(ModelAliases);
+
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         ProviderInstallation.DiscoverAsync(
             Id,

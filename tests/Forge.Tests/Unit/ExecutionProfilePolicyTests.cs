@@ -211,6 +211,11 @@ public sealed class ExecutionProfilePolicyTests
         public virtual Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
             Task.CompletedTask;
 
+        /// <summary>Empty by default — "this provider could not be enumerated" — so a subclass that
+        /// cares about the enumeration path has to say so.</summary>
+        public virtual Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
 

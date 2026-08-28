@@ -320,16 +320,23 @@ internal sealed class FakeProviderToolchainManager(ProviderToolchainStatus? stat
 /// <summary>A minimal, in-memory provider: reports a fixed state and counts install calls,
 /// without ever touching the network or spawning a process. Reports authentication as ready by
 /// default, since most callers only care about install/discovery orchestration; pass
-/// <paramref name="authentication"/> explicitly to exercise an authentication-gated scenario.</summary>
+/// <paramref name="authentication"/> explicitly to exercise an authentication-gated scenario, and
+/// <paramref name="selectableModels"/> to offer more (or fewer) than the one fixed
+/// <see cref="DefaultModel"/>.</summary>
 internal sealed class FakeLlmProvider(
     ProviderId id,
     ProviderState state,
     string? version,
-    ProviderAuthenticationStatus? authentication = null) : ILlmProvider
+    ProviderAuthenticationStatus? authentication = null,
+    IReadOnlyList<string>? selectableModels = null) : ILlmProvider
 {
     public int InstallCalls { get; private set; }
 
     public int DiscoverCalls { get; private set; }
+
+    /// <summary>Counts <see cref="ListModelsAsync"/> calls, so a test can prove the default
+    /// (no-explicit-model) creation path never enumerates at all.</summary>
+    public int ListModelsCalls { get; private set; }
 
     public ProviderId Id => id;
 
@@ -338,6 +345,15 @@ internal sealed class FakeLlmProvider(
     /// <summary>A no-op: this fake's model is a fixed string, so there is nothing to resolve.</summary>
     public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+
+    /// <summary>Just <see cref="DefaultModel"/> unless a caller supplied a set, so a test that
+    /// requests the default explicitly is exercising a selectable choice rather than the empty
+    /// "could not enumerate" fallback.</summary>
+    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken)
+    {
+        ListModelsCalls++;
+        return Task.FromResult(selectableModels ?? [DefaultModel]);
+    }
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken)
     {
@@ -398,6 +414,9 @@ internal sealed class FakeRunnableLlmProvider(
 
     public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
         Task.CompletedTask;
+
+    public Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<string>>([DefaultModel]);
 
     public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
         Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));

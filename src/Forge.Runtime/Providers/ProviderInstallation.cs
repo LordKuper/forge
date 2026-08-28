@@ -316,6 +316,101 @@ public static partial class ProviderInstallation
     }
 
     /// <summary>
+    /// Asks one vendor which models a caller may select, throttled through <paramref name="cache"/> on
+    /// the same 24h/1h cadence as the release and default-model checks (ADR 0066). The
+    /// <see cref="ResolveDefaultModelAsync"/> shape verbatim — same no-install short circuit, same
+    /// cached-failure honouring, same revalidate-on-the-way-out-of-the-cache rule — differing only in
+    /// that the payload is a list. Returns <see langword="null"/> for every failure mode: no install, a
+    /// non-zero exit, a timeout, an output shape <paramref name="parseResult"/> does not recognize, or a
+    /// catalog with no usable model id left in it after <see cref="NormalizeModelCatalog"/>.
+    ///
+    /// Only <paramref name="parseResult"/> ever sees raw process output, matching
+    /// <see cref="CheckAuthenticationAsync"/>: a vendor catalog command's output routinely carries far
+    /// more than model ids (Codex 0.149.1's is ~320 KB, most of it prompt templates), and none of it
+    /// survives past that delegate.
+    /// </summary>
+    public static async Task<IReadOnlyList<string>?> ResolveModelCatalogAsync(
+        ProviderId id,
+        string? executablePath,
+        IProcessRunner processRunner,
+        IReadOnlyList<string> arguments,
+        string probeDirectory,
+        IProviderModelCatalogCache cache,
+        IClock clock,
+        bool bypassCache,
+        TimeSpan timeout,
+        Func<ProcessResult, IReadOnlyList<string>?> parseResult,
+        CancellationToken cancellationToken,
+        IReadOnlyDictionary<string, string>? environmentVariables = null)
+    {
+        ArgumentNullException.ThrowIfNull(cache);
+        ArgumentNullException.ThrowIfNull(clock);
+        ArgumentNullException.ThrowIfNull(parseResult);
+        if (executablePath is null)
+        {
+            // Nothing to probe and nothing to learn: the cache is neither read nor written, so an
+            // uninstalled provider never poisons a later, installed one's window.
+            return null;
+        }
+
+        ProviderModelCatalogCacheEntry? entry = bypassCache
+            ? null
+            : await cache.ReadAsync(id, cancellationToken).ConfigureAwait(false);
+        if (entry is not null && !IsStale(entry.CheckedAt, entry.Succeeded, clock.UtcNow))
+        {
+            // Revalidated on the way out as well as on the way in: the cache is an ordinary file a
+            // user or another process can edit, and it must not be a path around the same checks a
+            // freshly probed catalog passes.
+            IReadOnlyList<string>? cached = entry.Succeeded ? NormalizeModelCatalog(entry.Models) : null;
+            if (cached is not null || !entry.Succeeded)
+            {
+                return cached;
+            }
+
+            // An entry claiming success whose catalog does NOT survive validation is corrupt, not a
+            // recorded answer, so it does not earn the success window's 24 hours of silence: fall
+            // through to a fresh probe whose result overwrites it.
+        }
+
+        ProcessResult? result = await RunWithTimeoutAsync(
+            processRunner,
+            new(executablePath, arguments, probeDirectory, environmentVariables),
+            timeout,
+            cancellationToken).ConfigureAwait(false);
+        IReadOnlyList<string>? models =
+            result is { ExitCode: 0 } ? NormalizeModelCatalog(parseResult(result)) : null;
+        await cache.WriteAsync(id, new(clock.UtcNow, models is not null, models), cancellationToken)
+            .ConfigureAwait(false);
+        return models;
+    }
+
+    /// <summary>Applies <see cref="NormalizeModelName"/> to every entry a vendor reported, dropping the
+    /// ones that do not survive it and any duplicate, and preserving the vendor's own order — which is
+    /// the order a picker should show. An empty result is reported as <see langword="null"/> ("could
+    /// not be enumerated") rather than as an empty catalog: a vendor that answers with nothing usable
+    /// has not told us it offers nothing, and the distinction decides whether a caller may treat the
+    /// enumeration as authoritative.</summary>
+    public static IReadOnlyList<string>? NormalizeModelCatalog(IReadOnlyList<string>? models)
+    {
+        if (models is null)
+        {
+            return null;
+        }
+
+        List<string> normalized = [];
+        HashSet<string> seen = new(StringComparer.Ordinal);
+        foreach (string model in models)
+        {
+            if (NormalizeModelName(model) is { } usable && seen.Add(usable))
+            {
+                normalized.Add(usable);
+            }
+        }
+
+        return normalized.Count > 0 ? normalized : null;
+    }
+
+    /// <summary>
     /// The one gate every model id a vendor reports must pass before Forge puts it on a command line
     /// or freezes it into durable sprint state (ADR 0063). A model id is a single opaque token: it is
     /// trimmed, then required to be non-empty, free of embedded whitespace, no longer than

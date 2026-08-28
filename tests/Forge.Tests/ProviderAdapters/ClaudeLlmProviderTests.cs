@@ -244,6 +244,28 @@ public sealed class ClaudeLlmProviderTests
             ["-p", "--output-format", "stream-json", "--verbose", .. expectedTail], capturedArguments);
     }
 
+    /// <summary>ADR 0066's asymmetry, from this side: Claude Code publishes no catalog command, so this
+    /// adapter ships the exact alias set the vendor's own `claude --help` names for `--model` ("an
+    /// alias for the latest model (e.g. 'fable', 'opus', or 'sonnet')"), in that order, rather than
+    /// probing. Two properties are pinned because both are what make the fixed list safe to build a
+    /// picker on: it never fails or empties (there is nothing to fail), and it contains this adapter's
+    /// own <c>DefaultModel</c> — a default that is not itself selectable would make the picker's
+    /// pre-selected entry unreachable, and would fail the very enumeration check a sprint's explicit
+    /// request goes through.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ListModelsReturnsTheVendorDocumentedAliasSetIncludingTheDefault()
+    {
+        using TestPaths paths = new();
+        ClaudeLlmProvider provider = CreateProvider(paths, _ => throw new InvalidOperationException(
+            "A fixed alias set must never spawn a vendor process."));
+
+        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(["fable", "opus", "sonnet"], models);
+        Assert.Contains(provider.DefaultModel, models);
+    }
+
     [Fact]
     [Trait("Category", "Unit")]
     public async Task RunAsyncPassesThePromptOnStandardInputNeverAsACommandLineArgument()

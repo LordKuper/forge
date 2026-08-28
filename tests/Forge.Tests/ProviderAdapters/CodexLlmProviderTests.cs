@@ -277,6 +277,7 @@ public sealed class CodexLlmProviderTests
             new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
             new FakeDefaultModelCache(),
+            new FakeModelCatalogCache(),
             new FakeInstallLock(),
             new FakeClock(),
             versionProbeTimeout: TimeSpan.FromMilliseconds(50),
@@ -299,6 +300,7 @@ public sealed class CodexLlmProviderTests
             new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
             new FakeDefaultModelCache(),
+            new FakeModelCatalogCache(),
             new FakeInstallLock(),
             new FakeClock(),
             installTimeout: TimeSpan.FromMilliseconds(50),
@@ -809,6 +811,139 @@ public sealed class CodexLlmProviderTests
         Assert.Equal("gpt-5.6-sol", provider.DefaultModel);
     }
 
+    /// <summary>ADR 0066, against the real thing: `codex-debug-models.json` is a verbatim
+    /// `codex debug models` catalog recorded from Codex CLI 0.149.1, with each entry's bulky
+    /// prompt-template payload removed and nothing else changed. The mapping is pinned by it: only the
+    /// entries Codex itself marks `"visibility": "list"` are offered, the two `hide` entries
+    /// (`gpt-reserve`, `codex-auto-review`) are not, and the vendor's own order survives — nothing is
+    /// re-sorted on `priority`, which ADR 0063 already established is not a key.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ListModelsReturnsTheListedSlugsFromARealRecordedCatalogInVendorOrder()
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        string catalog = ReadFixture("codex-debug-models.json");
+        CodexLlmProvider provider = CreateProvider(paths, request =>
+        {
+            Assert.Equal(["debug", "models"], request.Arguments);
+            return new(0, catalog, string.Empty);
+        });
+
+        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.5", "gpt-5.4", "gpt-5.4-mini"], models);
+    }
+
+    /// <summary>ADR 0066's safe-degradation rule, the enumeration counterpart of
+    /// <see cref="AnUnusableDoctorResponseLeavesTheModelUnresolvedAndTheRunUnchanged"/>. Every way the
+    /// catalog probe can fail — a non-zero exit, output that is not JSON, a missing or wrongly-typed
+    /// `models` node, entries that are not objects or carry no usable `slug`/`visibility`, and a
+    /// catalog whose only listed slug fails model-name validation — must yield an EMPTY list. Empty is
+    /// the contract's "could not be enumerated", which callers fall through on rather than treating as
+    /// "this provider offers nothing"; a vendor shape surprise never throws out of an enumeration.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(1, """{"models":[{"slug":"gpt-5.6-sol","visibility":"list"}]}""")]
+    [InlineData(0, "not json at all")]
+    [InlineData(0, "")]
+    [InlineData(0, "[]")]
+    [InlineData(0, """{"codexVersion":"0.149.1"}""")]
+    [InlineData(0, """{"models":42}""")]
+    [InlineData(0, """{"models":[]}""")]
+    [InlineData(0, """{"models":["gpt-5.6-sol"]}""")]
+    [InlineData(0, """{"models":[{"slug":"gpt-5.6-sol"}]}""")]
+    [InlineData(0, """{"models":[{"visibility":"list"}]}""")]
+    [InlineData(0, """{"models":[{"slug":42,"visibility":"list"}]}""")]
+    [InlineData(0, """{"models":[{"slug":"gpt-5.6-sol","visibility":"hide"}]}""")]
+    [InlineData(0, """{"models":[{"slug":"gpt 5.6 sol","visibility":"list"}]}""")]
+    [InlineData(0, """{"models":[{"slug":"","visibility":"list"}]}""")]
+    public async Task AnUnusableCatalogResponseLeavesTheModelListEmpty(int exitCode, string catalogOutput)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        CodexLlmProvider provider = CreateProvider(paths, _ => new(exitCode, catalogOutput, string.Empty));
+
+        Assert.Empty(await provider.ListModelsAsync(TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>ADR 0066: with no vendor executable there is nothing to ask, so the probe is not
+    /// attempted at all — not spawned and not cached, matching the default-model probe exactly, so an
+    /// uninstalled provider can never write a failure entry that throttles the first real enumeration
+    /// after an install.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheCatalogProbeIsNeverAttemptedWithoutAnInstalledExecutable()
+    {
+        using TestPaths paths = new();
+        bool spawned = false;
+        FakeModelCatalogCache cache = new();
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                spawned = true;
+                return new(0, string.Empty, string.Empty);
+            },
+            modelCatalogCache: cache);
+
+        Assert.Empty(await provider.ListModelsAsync(TestContext.Current.CancellationToken));
+
+        Assert.False(spawned);
+        Assert.Null(await cache.ReadAsync(CodexLlmProvider.Codex, TestContext.Current.CancellationToken));
+    }
+
+    /// <summary>ADR 0066 reuses ADR 0063's throttle wholesale, and that is what makes a repeatedly
+    /// opened picker cheap: a fresh cached success is reused without spawning anything, a cached
+    /// failure is honoured for its own shorter window, a stale entry of either kind triggers exactly
+    /// one fresh probe, and a cached "success" whose slugs do not survive validation is corrupt rather
+    /// than an answer — re-probed once and overwritten instead of earning 24 hours of silence.</summary>
+    [Theory]
+    [Trait("Category", "Unit")]
+    // A cached success inside its 24h window: reused verbatim, nothing spawned.
+    [InlineData(true, new[] { "cached-model" }, 1, 0, new[] { "cached-model" })]
+    // The same entry past 24h: one fresh probe, which wins.
+    [InlineData(true, new[] { "cached-model" }, 25, 1, new[] { "gpt-5.6-sol" })]
+    // A cached failure inside its 1h window: honoured, nothing spawned, still empty.
+    [InlineData(false, null, 0, 0, new string[0])]
+    // The same failure past 1h: retried exactly once.
+    [InlineData(false, null, 2, 1, new[] { "gpt-5.6-sol" })]
+    // A fresh entry claiming success whose only slug is unusable: corrupt, so re-probed anyway.
+    [InlineData(true, new[] { "cached model" }, 1, 1, new[] { "gpt-5.6-sol" })]
+    public async Task TheCatalogProbeIsThrottledOnTheSameCadenceAsTheDefaultModelProbe(
+        bool cachedSuccess,
+        string[]? cachedModels,
+        int hoursSinceCached,
+        int expectedProbes,
+        string[] expectedModels)
+    {
+        using TestPaths paths = new();
+        WriteCodexExecutable(paths);
+        FakeClock clock = new() { UtcNow = DateTimeOffset.UnixEpoch.AddDays(30) };
+        FakeModelCatalogCache cache = new();
+        await cache.WriteAsync(
+            CodexLlmProvider.Codex,
+            new(clock.UtcNow.AddHours(-hoursSinceCached), cachedSuccess, cachedModels),
+            TestContext.Current.CancellationToken);
+
+        int probes = 0;
+        CodexLlmProvider provider = CreateProvider(
+            paths,
+            _ =>
+            {
+                probes++;
+                return new(0, """{"models":[{"slug":"gpt-5.6-sol","visibility":"list"}]}""", string.Empty);
+            },
+            modelCatalogCache: cache,
+            clock: clock);
+
+        IReadOnlyList<string> models = await provider.ListModelsAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(expectedProbes, probes);
+        Assert.Equal(expectedModels, models);
+    }
+
     /// <summary>ADR 0060, against the real thing: `codex-exec-json-tool-calls.jsonl` is a verbatim
     /// `codex exec --json` stream recorded from Codex CLI 0.149.1 driving a throwaway worktree
     /// (read a file, run a command, edit a file), with only the captured absolute path replaced by a
@@ -1266,6 +1401,7 @@ public sealed class CodexLlmProviderTests
         IProviderReleaseSource? releaseSource = null,
         IProviderInstallLock? installLock = null,
         IProviderDefaultModelCache? defaultModelCache = null,
+        IProviderModelCatalogCache? modelCatalogCache = null,
         IClock? clock = null) =>
         new(
             paths,
@@ -1273,6 +1409,7 @@ public sealed class CodexLlmProviderTests
             releaseSource ?? new FakeReleaseSource(ProviderReleaseLookupResult.Failed),
             new FakeReleaseCache(),
             defaultModelCache ?? new FakeDefaultModelCache(),
+            modelCatalogCache ?? new FakeModelCatalogCache(),
             installLock ?? new FakeInstallLock(),
             clock ?? new FakeClock());
 

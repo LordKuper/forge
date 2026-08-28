@@ -14,13 +14,15 @@ public sealed class CodexLlmProvider(
     IProviderReleaseSource releaseSource,
     IProviderReleaseCache releaseCache,
     IProviderDefaultModelCache defaultModelCache,
+    IProviderModelCatalogCache modelCatalogCache,
     IProviderInstallLock installLock,
     IClock clock,
     TimeSpan? versionProbeTimeout = null,
     TimeSpan? installTimeout = null,
     TimeSpan? installLockTimeout = null,
     TimeSpan? authenticationProbeTimeout = null,
-    TimeSpan? defaultModelProbeTimeout = null) : ILlmProvider
+    TimeSpan? defaultModelProbeTimeout = null,
+    TimeSpan? modelCatalogProbeTimeout = null) : ILlmProvider
 {
     public static readonly ProviderId Codex = new("codex");
 
@@ -238,6 +240,110 @@ public sealed class CodexLlmProvider(
             return null;
         }
     }
+
+    /// <summary>
+    /// Enumerates the models a caller may select from Codex's own catalog, `codex debug models` (ADR
+    /// 0066), throttled through a cache file on the same 24h/1h cadence as the default-model probe.
+    ///
+    /// This is the one place `codex debug models` is the RIGHT source, and the asymmetry with ADR
+    /// 0063 is deliberate rather than an inconsistency. That ADR rejected the catalog for
+    /// <see cref="DefaultModel"/> because the question there is "what will a run started here right
+    /// now actually use", which the user's own `~/.codex/config.toml` answers and the catalog does
+    /// not. The question here is the different one the catalog is exactly right for: "what may a user
+    /// choose". Neither of ADR 0063's other two objections applies to it either — the two fetch modes
+    /// disagreeing and `priority` not being unique both bite only an attempt to identify one single
+    /// row, and this reads the listed rows as a set.
+    ///
+    /// The 30-second deadline is the default-model probe's, reused rather than reinvented: both are
+    /// vendor diagnostic commands on a human-initiated path, and one deadline is one thing to reason
+    /// about (the measured cost is well under a second). The child environment is the same minimal one
+    /// <see cref="RunAsync"/> builds, for ADR 0063's reason: a catalog resolved under a different
+    /// environment than the attempt would describe a run that never happens.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            Directory.CreateDirectory(probeDirectory);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+
+        string? executable = await ResolveExecutableAsync(cancellationToken).ConfigureAwait(false);
+        return await ProviderInstallation.ResolveModelCatalogAsync(
+            Id,
+            executable,
+            processRunner,
+            ["debug", "models"],
+            probeDirectory,
+            modelCatalogCache,
+            clock,
+            // Enumeration honours the throttle unconditionally: nothing on this path carries a
+            // `--refresh` intent, and `forge models --refresh` already bypasses every other window.
+            bypassCache: false,
+            modelCatalogProbeTimeout ?? ProviderInstallation.DefaultModelProbeTimeout,
+            ParseModelCatalog,
+            cancellationToken,
+            ProviderEnvironmentPolicy.BuildMinimalEnvironment(AuthenticationVariableNames)).ConfigureAwait(false) ?? [];
+    }
+
+    /// <summary>
+    /// Reads `models[].slug` from `codex debug models`, keeping only the entries Codex itself marks
+    /// <c>"visibility": "list"</c> and preserving the vendor's own order. Verified against
+    /// `tests/Forge.Tests/Unit/fixtures/providers/codex-debug-models.json`, a real captured run of
+    /// Codex CLI 0.149.1 with each entry's prompt-template payload removed.
+    ///
+    /// `visibility` is the vendor's own "show this in a picker" flag, and the two values a real
+    /// catalog carries are exactly that distinction: `list` for the models Codex presents, `hide` for
+    /// internal, retired, or preview entries a user has no business selecting. Nothing is re-sorted:
+    /// `priority` is not a key (ADR 0063), and the vendor already emits the catalog in the order it
+    /// wants a picker to show.
+    ///
+    /// Every step is a shape check. A vendor JSON surprise at any level — invalid JSON, a missing or
+    /// non-array `models`, an entry that is not an object, a missing/non-string `slug` or
+    /// `visibility` — drops that entry or fails the whole probe, never throws.
+    /// </summary>
+    private static IReadOnlyList<string>? ParseModelCatalog(ProcessResult result)
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(result.StandardOutput);
+            if (document.RootElement.ValueKind != JsonValueKind.Object ||
+                !document.RootElement.TryGetProperty("models", out JsonElement models) ||
+                models.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            List<string> slugs = [];
+            foreach (JsonElement model in models.EnumerateArray())
+            {
+                if (model.ValueKind == JsonValueKind.Object &&
+                    StringOf(model, "visibility") == ListedVisibility &&
+                    StringOf(model, "slug") is { } slug)
+                {
+                    slugs.Add(slug);
+                }
+            }
+
+            return slugs;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>The `visibility` value Codex gives a catalog entry it presents to a user; every other
+    /// value (`hide` in the captures taken so far) is an entry Forge must not offer either.</summary>
+    private const string ListedVisibility = "list";
+
+    private static string? StringOf(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out JsonElement value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
 
     public Task<string?> ResolveExecutableAsync(CancellationToken cancellationToken) =>
         Task.FromResult(File.Exists(spec.ExecutablePath) ? spec.ExecutablePath : null);

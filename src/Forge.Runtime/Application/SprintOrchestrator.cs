@@ -11,15 +11,24 @@ namespace Forge.Application;
 
 /// <summary><see cref="Title"/> is the operator's optional short label for the new sprint, frozen
 /// into <see cref="SprintDefinition.Title"/> after normalization/redaction (see
-/// <see cref="SprintOrchestrator.CreateSprintAsync"/>). Last, and optional, so every existing
-/// positional call site stays valid.</summary>
+/// <see cref="SprintOrchestrator.CreateSprintAsync"/>).
+///
+/// <see cref="RequestedModel"/> is the operator's optional explicit model choice for this sprint (ADR
+/// 0066), replacing the primary provider's resolved default in all three frozen
+/// <see cref="ExecutionProfile"/>s. Selection happens here and nowhere else: a sprint's profiles are
+/// frozen at creation (ADR 0014) and never re-resolved, so there is no mid-sprint model change to
+/// express. <see langword="null"/> — the default — and a blank value are both byte-identical to the
+/// behaviour before this field existed.
+///
+/// Both are last, and optional, so every existing positional call site stays valid.</summary>
 public sealed record CreateSprintCommand(
     string? ProjectRoot,
     long ExpectedStateVersion,
     Guid IdempotencyKey,
     IReadOnlyList<SprintDependency>? Dependencies = null,
     IReadOnlyList<NodeDefinition>? Graph = null,
-    string? Title = null);
+    string? Title = null,
+    string? RequestedModel = null);
 
 public sealed record CreateSprintResult(bool Succeeded, SprintId? SprintId, string DiagnosticCode);
 
@@ -189,6 +198,34 @@ public sealed class SprintOrchestrator(
         // that window approve model A and run model B, silently defeating the allowlist.
         IReadOnlyDictionary<string, string> frozenModels = await ExecutionProfilePolicy
             .ResolveModelsAsync(frozenProviders, providerCatalog, cancellationToken).ConfigureAwait(false);
+
+        // ADR 0066: an explicit per-sprint model choice replaces the primary provider's resolved
+        // default in this same map, BEFORE the gate below -- so the requested model is validated by
+        // exactly the allowlist the default would have been, and frozen by exactly the same Freeze
+        // call, with no second code path to keep in agreement. Omitting it leaves everything below
+        // reading the untouched resolved map, which is the pre-ADR-0066 behaviour exactly. Blank
+        // counts as omitted, not as a refusal -- the same rule NormalizeTitle applies to a blank
+        // title above, and what lets a picker's own "auto" entry send an empty value rather than
+        // needing a separate flag.
+        if (!string.IsNullOrWhiteSpace(command.RequestedModel))
+        {
+            IReadOnlyDictionary<string, string>? requested = await ExecutionProfilePolicy
+                .ApplyRequestedModelAsync(
+                    frozenModels, frozenProviders[0], command.RequestedModel, providerCatalog, cancellationToken)
+                .ConfigureAwait(false);
+            if (requested is null)
+            {
+                // ADR 0063 already established this tradeoff for its own imprecise case: the code
+                // names the policy rather than the real cause (here, a model the provider does not
+                // offer, or one that is not a usable model id at all). A distinct code is a public
+                // contract addition spanning DiagnosticCodes, ExitCodes, every localized surface, and
+                // the README's diagnostic table, and it changes no outcome -- deferred on the same
+                // terms, not silently.
+                return new(false, null, DiagnosticCodes.ModelPolicyViolation);
+            }
+
+            frozenModels = requested;
+        }
 
         // ADR 0042: the allowlist half of ADR 0006's "project model policy" -- refused before any
         // event is written, the same fail-closed placement as the empty-candidates check above.

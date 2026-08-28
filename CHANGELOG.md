@@ -2,6 +2,27 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.88.0
+
+### Added
+
+- **A sprint can be created on a chosen model instead of the provider's default.** Sprint creation
+  accepts an explicit model, which is validated and then frozen into all three of that sprint's
+  execution profiles — planning, implementation, and review — in place of the model the provider
+  would have resolved for itself. The choice is made once, at creation, and never changes afterwards:
+  a sprint's profiles are frozen when it is created, which is what makes its attempts reproducible.
+  Creating a sprint without a choice behaves exactly as before.
+- **Forge can list the models a provider offers.** Codex is asked for its own catalog and Forge
+  offers the entries Codex itself marks as listed, in Codex's own order; Claude Code publishes no
+  catalog, so its three documented aliases (`fable`, `opus`, `sonnet`) are offered instead. Codex's
+  answer is cached per machine on the same 24-hour cadence as the update and default-model checks, so
+  asking repeatedly costs nothing and asking while Codex is unreachable costs nothing either. A model
+  the provider does not offer, or that a project's `models.allowed_models` does not permit, is refused
+  at creation with `model_policy_violation`, and no sprint is registered.
+
+> **Note:** there is no model picker in the app yet. This release is the backend half — the
+> enumeration, the per-sprint choice, and its validation — that the picker is built on.
+
 ## v0.87.0
 
 ### Added

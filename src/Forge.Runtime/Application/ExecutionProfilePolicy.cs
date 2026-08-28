@@ -185,6 +185,61 @@ public static class ExecutionProfilePolicy
         return models;
     }
 
+    /// <summary>
+    /// Applies an operator's explicit per-sprint model choice (ADR 0066) on top of the map
+    /// <see cref="ResolveModelsAsync"/> just produced, replacing only
+    /// <paramref name="providerId"/>'s entry. Returns <see langword="null"/> when the request is not
+    /// selectable, which the caller turns into a refusal before anything is written.
+    ///
+    /// One entry, not all of them, because a model id is provider-specific: ADR 0014 already freezes
+    /// one model per DISTINCT provider, so overriding the primary provider's entry is what reaches
+    /// planning, implementation, and — in the single-provider case, where review falls back to that
+    /// same provider — review and its lineage too. A review phase that ran on a genuinely different
+    /// provider keeps that provider's own resolved default, because the requested id means nothing to
+    /// it. Nothing downstream changes: the caller's existing <see cref="ModelPolicyGate"/> check and
+    /// <see cref="Freeze"/> both read this map, so the requested model is gated and frozen by exactly
+    /// the code the default already goes through, and omitting the request leaves that path untouched.
+    ///
+    /// Two checks, in order. <c>NormalizeModelName</c> is unconditional: a requested id becomes both a
+    /// vendor command-line argument and durable sprint state, and it arrives from a caller rather than
+    /// from a vendor, so it earns at least the hygiene a probed value gets. The enumeration check is
+    /// conditional on there BEING an enumeration — an empty
+    /// <see cref="ILlmProvider.ListModelsAsync"/> means the vendor could not be asked, not that it
+    /// offers nothing, and refusing every explicit choice whenever a vendor probe is unavailable would
+    /// trade a rare bad run for a common blocked one. The check that actually protects policy,
+    /// <see cref="ModelPolicyGate"/>, is unconditional and runs regardless.
+    /// </summary>
+    public static async Task<IReadOnlyDictionary<string, string>?> ApplyRequestedModelAsync(
+        IReadOnlyDictionary<string, string> models,
+        string providerId,
+        string requestedModel,
+        ProviderCatalog catalog,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(models);
+        ArgumentNullException.ThrowIfNull(providerId);
+        ArgumentNullException.ThrowIfNull(requestedModel);
+        ArgumentNullException.ThrowIfNull(catalog);
+        if (ProviderInstallation.NormalizeModelName(requestedModel) is not { } requested)
+        {
+            return null;
+        }
+
+        if (!catalog.TryGet(new ProviderId(providerId), out ILlmProvider? provider))
+        {
+            throw new InvalidOperationException(
+                $"Frozen provider '{providerId}' is not registered in the provider catalog.");
+        }
+
+        IReadOnlyList<string> selectable = await provider.ListModelsAsync(cancellationToken).ConfigureAwait(false);
+        if (selectable.Count > 0 && !selectable.Contains(requested, StringComparer.Ordinal))
+        {
+            return null;
+        }
+
+        return new Dictionary<string, string>(models, StringComparer.Ordinal) { [providerId] = requested };
+    }
+
     private static string ModelFor(string providerId, IReadOnlyDictionary<string, string> models) =>
         models.TryGetValue(providerId, out string? model)
             ? model

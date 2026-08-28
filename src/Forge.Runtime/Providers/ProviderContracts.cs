@@ -257,6 +257,22 @@ public interface ILlmProvider
     Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken);
 
     /// <summary>
+    /// The model ids a caller may select for this provider, in the vendor's own presentation order
+    /// (ADR 0066). Vendor-owned, exactly like <see cref="DefaultModel"/>: an adapter either asks its
+    /// vendor for a catalog or ships the fixed alias set its vendor documents, and neutral code never
+    /// names a model.
+    ///
+    /// Never throws. An empty list means "this vendor could not be asked right now", never "this
+    /// vendor offers nothing": a caller validating a requested model MUST treat an empty result as
+    /// "no enumeration available" and fall through to the checks that are always authoritative
+    /// (<see cref="Forge.Application.ModelPolicyGate"/> and model-name normalization), rather than
+    /// refusing a legitimate model because a vendor probe happened to fail. Implementations that do
+    /// real vendor work MUST throttle it through a shared, cross-process cache, like
+    /// <see cref="RefreshDefaultModelAsync"/>.
+    /// </summary>
+    Task<IReadOnlyList<string>> ListModelsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
     /// Reads the fixed, vendor-owned install path and runs `--version`. When the local probe
     /// finds a usable install, also checks release-update availability: throttled to once per 24
     /// hours on success and once per hour after a failed check unless
@@ -395,6 +411,25 @@ public interface IProviderDefaultModelCache
     Task<ProviderDefaultModelCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);
 
     Task WriteAsync(ProviderId id, ProviderDefaultModelCacheEntry entry, CancellationToken cancellationToken);
+}
+
+/// <summary><paramref name="CheckedAt"/> anchors the same 24-hour success / one-hour failure retry
+/// windows the release and default-model checks use (ADR 0066 reuses ADR 0063's cadence, which reused
+/// ADR 0008's). <paramref name="Models"/> is only meaningful when <paramref name="Succeeded"/>.</summary>
+public sealed record ProviderModelCatalogCacheEntry(
+    DateTimeOffset CheckedAt, bool Succeeded, IReadOnlyList<string>? Models);
+
+/// <summary>A small per-user cache of the last enumerated model catalog for one provider (ADR 0066),
+/// so a model picker opened repeatedly does not respawn the vendor's own catalog command every time.
+/// A third small sibling of <see cref="IProviderReleaseCache"/>/<see cref="IProviderDefaultModelCache"/>
+/// rather than a generalization of either, for the reason ADR 0063 already gave: the payloads carry
+/// different values with different meanings. Read/write failures degrade to "no cache" rather than
+/// throwing.</summary>
+public interface IProviderModelCatalogCache
+{
+    Task<ProviderModelCatalogCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken);
+
+    Task WriteAsync(ProviderId id, ProviderModelCatalogCacheEntry entry, CancellationToken cancellationToken);
 }
 
 /// <summary>One generated provider-native integration file's content and metadata (ADR 0010).
