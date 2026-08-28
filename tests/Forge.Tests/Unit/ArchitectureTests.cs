@@ -329,17 +329,40 @@ public sealed class ArchitectureTests
             ". If that consumer is intended, review it as its own slice (for interaction.auto_approve_gate " +
             "that means adding a real bypass to a mandatory safety gate) and then remove the key from " +
             "this guard and from the ADR's table.");
+
+        // PR #124 review round 2 finding 2b. The scan above structurally cannot see this: it exempts
+        // ConfigurationRegistry.cs as "the configuration layer", but that file is also where each
+        // key's ConfigurationScope is declared, and SprintOrchestrator.ConfigurationSnapshotAsync
+        // sweeps *every* effective project-scope value into SprintDefinition.ConfigurationSnapshot
+        // without naming a key. Flipping one of these four from User to Project -- a one-token edit
+        // inside the exempt file -- would feed it to that sweep and into every frozen sprint with no
+        // new textual reference anywhere. Pinning the scope costs one assertion and covers exactly
+        // that class of change; the general "an exempt file can hide anything" problem is not solved
+        // here and is not claimed to be.
+        ConfigurationRegistry registry = new();
+        Assert.All(
+            inertKeys,
+            key => Assert.Equal(ConfigurationScope.User, registry.FindRequired(key.Literal).Scope));
     }
 
     // Counts references to one key in one file, by its ConfigurationKeys member name and by its
-    // literal string, ignoring comments -- ADR references such as "ADR 0067's models.effort" live in
-    // doc comments across the runtime and are documentation, never consumption.
+    // literal string, ignoring whole-line comments -- ADR references such as "ADR 0067's
+    // models.effort" live in doc comments across the runtime and are documentation, never
+    // consumption.
+    //
+    // The member name is matched as a bare word, not as `ConfigurationKeys.<member>` (PR #124 review
+    // round 2 finding 2a): `using static Forge.Configuration.ConfigurationKeys;` followed by a bare
+    // `AutoApproveGate` compiles, reads the same const, and slipped through the qualified-only scan.
+    // The tradeoff is that an unrelated identifier sharing one of these names now trips the guard
+    // too. That is the safe direction for a check that exists to fail closed: the cost is one
+    // reviewer glance, resolved by renaming the identifier or recording it in the caller's allowance
+    // table, whereas the cost of the miss is an unnoticed consumer of a safety-relevant key.
     private static int CountKeyReferences(string path, string member, string literal)
     {
         string code = string.Join(
             '\n',
             File.ReadLines(path).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
-        return CountOccurrences(code, $"ConfigurationKeys.{member}") + CountOccurrences(code, $"\"{literal}\"");
+        return Regex.Count(code, $@"\b{Regex.Escape(member)}\b") + CountOccurrences(code, $"\"{literal}\"");
     }
 
     private static int CountOccurrences(string text, string value)

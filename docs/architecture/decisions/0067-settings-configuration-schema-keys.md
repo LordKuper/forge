@@ -193,14 +193,21 @@ reads `providers.enabled`; `ForgeSettingsViewModel` picks its rows by name).
 That inertness is pinned mechanically rather than only in prose, because the
 `interaction.auto_approve_gate` row is a safety claim and prose cannot fail a build:
 `ArchitectureTests.TheSettingsKeysThisSliceShipsInertHaveNoConsumer` scans every `src/**/*.cs` file
-for references to the four `ConfigurationKeys` members and their literal key strings — comments
-excluded — and fails on any reference outside `ConfigurationContracts.cs`,
-`ConfigurationRegistry.cs` and `ConfigurationSchemaCodec.cs`. The single allowed exception is
+for the four member names — as bare identifiers, so a `using static ConfigurationKeys` import cannot
+route around the check — and for their literal key strings, whole-line comments excluded, and fails
+on any reference outside `ConfigurationContracts.cs`, `ConfigurationRegistry.cs` and
+`ConfigurationSchemaCodec.cs`. The single allowed exception is
 `ForgeApplication.RequireRegisteredProviders`'s one write-time catalog check of
 `providers.priority`, allowlisted by exact count, so even a second reference in that same file trips
-the guard. The guard is written to fail *closed*: it is not a prohibition on ever wiring these keys,
-it is the notification that someone has, so the reviewer of that change can confirm it is the right
-slice and delete the key's entry here.
+the guard. The same test also pins each key's `ConfigurationScope` to `User`, because the
+project-scope sweep described above needs no textual reference to pick a key up: a `User` → `Project`
+flip inside the exempt `ConfigurationRegistry.cs` would hand the key to every frozen sprint and the
+text scan structurally could not see it. Bare-identifier matching accepts a false positive from an
+unrelated same-named identifier as the cheaper error, and the scan remains best-effort in general —
+it reads text, not semantics, and an exempt file can still hide changes other than scope. The guard
+is written to fail *closed*: it is not a prohibition on ever wiring these keys, it is the
+notification that someone has, so the reviewer of that change can confirm it is the right slice and
+delete the key's entry here.
 
 `ExecutionProfilePolicy` is a `static class` with no configuration dependency, and ADR 0014's
 ADR-0063 revision deliberately deleted its catalog-taking overload so that no hidden resolution can

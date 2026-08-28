@@ -11,18 +11,23 @@ User-facing Forge changes are listed by release, newest first.
   automatically — the gate is still unconditional and nothing acts on this value yet. `shell.theme`
   accepts `dark`, `light`, or `system` and defaults to `dark`; no light palette ships yet, so the
   other two are stored but not yet rendered. `providers.priority` records a preferred provider
-  order, and `models.effort` records a per-model effort level. Existing configuration files keep
-  working untouched and pick up the defaults.
+  order — routing does not read it yet — and `models.effort` records a per-model effort level,
+  which no provider run consults yet either. Existing configuration files keep working untouched
+  and pick up the defaults.
 
 ### Changed
 
-- **`providers.enabled` and `providers.priority` now have a stated precedence.** `providers.enabled`
-  keeps deciding which providers may be used at all, and its order is still the routing order while
-  `providers.priority` is empty — which is its default, so no existing configuration changes
-  meaning. Setting `providers.priority` takes over the routing order without changing which
-  providers are enabled: the providers it lists are preferred, in that order, and the remaining
-  enabled providers follow in their existing order. Naming a provider that is not enabled has no
-  effect rather than being an error.
+- **`providers.enabled` and `providers.priority` now have a stated precedence.** This is a
+  documented contract, not a routing change: provider routing behaves exactly as it did in
+  v0.87.0, because nothing reads `providers.priority` yet. What changed is that the rule is now
+  decided and written down (ADR 0008 revised by ADR 0067, plus the descriptions the configuration
+  schema shows while you edit the file), so the release that does route by it implements a settled
+  contract. Under that rule `providers.enabled` keeps deciding which providers may be used at all,
+  and its order stays the routing order while `providers.priority` is empty — which is its
+  default, so no existing configuration changes meaning. A non-empty `providers.priority` will
+  take over the routing order without changing which providers are enabled: the providers it lists
+  are preferred, in that order, and the remaining enabled providers follow in their existing
+  order. Naming a provider that is not enabled will have no effect rather than being an error.
 
 ## v0.87.0
 
