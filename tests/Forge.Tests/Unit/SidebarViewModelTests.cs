@@ -55,6 +55,75 @@ public sealed class SidebarViewModelTests
         return sprintId;
     }
 
+    /// <summary>Finding B1 (docs/plans/desktop-design-parity-review.md) for the sidebar specifically,
+    /// against the exact defect class ADR 0057 documents: every sidebar row used to read
+    /// <c>"{SprintIdLabel} {CreationSequence}, {state}"</c>, so a sprint's own frozen title -- the whole
+    /// point of that ADR -- never reached the one surface the user navigates from, and two sprints in
+    /// the same state were told apart only by an ordinal. Each row now carries
+    /// <see cref="SprintDisplayTitle"/>'s resolved label (the frozen title, or the localized
+    /// "Sprint {N}" fallback for a sprint created without one -- including every sprint frozen before
+    /// that field existed), and the row's one accessible node speaks that label together with the plan
+    /// progress the row now draws, since the drawn dot/second line/badge are all deliberately excluded
+    /// from the accessible tree (see <c>WorkspaceShellPage.BuildSprintRow</c>).</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncNamesEachSprintByItsOwnTitleOrTheSequenceFallbackAndSpeaksItsProgress()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ForgeApplication application = environment.Application;
+        const string frozenTitle = "Rewrite the parser";
+        CreateSprintResult titled =
+            await application.CreateSprintAsync(environment.ProjectRoot, frozenTitle, cancellationToken);
+        CreateSprintResult untitled =
+            await application.CreateSprintAsync(environment.ProjectRoot, null, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel =
+            new(catalog, application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        SidebarSprintItem titledRow =
+            Assert.Single(project.ActiveSprints, item => item.SprintId == titled.SprintId!.Value);
+        SidebarSprintItem untitledRow =
+            Assert.Single(project.ActiveSprints, item => item.SprintId == untitled.SprintId!.Value);
+
+        // Round 2 finding 2: the DRAWN label carries the ordinal too, not just the spoken name.
+        // Round 3 finding 1: that ordinal LEADS the string, so the rail's tail truncation can only
+        // ever eat the title's end and never the disambiguator. The untitled row states the ordinal
+        // once, as its whole resolved title, with no prefix of its own.
+        Assert.Equal(
+            string.Create(CultureInfo.InvariantCulture, $"({Ordinal(en, titledRow.CreationSequence)}) {frozenTitle}"),
+            titledRow.DisplayTitle);
+        Assert.StartsWith("(", titledRow.DisplayTitle, StringComparison.Ordinal);
+        Assert.Equal(Ordinal(en, untitledRow.CreationSequence), untitledRow.DisplayTitle);
+        // The defect itself: two rows, two distinguishable names -- not one shared label.
+        Assert.NotEqual(titledRow.DisplayTitle, untitledRow.DisplayTitle);
+
+        Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
+        // PR #122 review finding 1: a titled row's name keeps the ordinal as a disambiguator, since
+        // titles are free text with no uniqueness constraint. Round 2 finding 2: what the row speaks
+        // must be what the row draws -- one resolved string, never an accessible-only variant
+        // layered over a plainer visible label that still collides.
+        Assert.Contains(titledRow.DisplayTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.DoesNotContain('(', untitledRow.AccessibleName);
+        // A sprint that has only just been created has completed no stages, and its workflow graph is
+        // never empty -- so the spoken fraction is "0/<graph size>", derived from the agreed behavior
+        // rather than read back out of the row it is asserting on.
+        Assert.True(titledRow.StagesTotal > 0);
+        Assert.Contains(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"{en.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} 0/{titledRow.StagesTotal}"),
+            titledRow.AccessibleName,
+            StringComparison.Ordinal);
+    }
+
     /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint is reachable through
     /// <see cref="SidebarProjectItem.History"/> (a real, navigable entry naming its own sprint id) --
     /// never listed as active, and never merely counted the way this row rendered before that gap was
@@ -88,6 +157,87 @@ public sealed class SidebarViewModelTests
         SidebarHistoryItem historyItem = Assert.Single(project.History);
         Assert.Equal(created.SprintId!.Value, historyItem.SprintId);
         Assert.False(string.IsNullOrWhiteSpace(historyItem.AccessibleName));
+    }
+
+    /// <summary>PR #122 review finding 2: the history row resolves its title from a different
+    /// producer than the active row -- <see cref="SprintStatus.Title"/>, built by
+    /// <c>StatusAdvisor</c> from the loaded definition, rather than
+    /// <see cref="SprintWorkspaceSummary.Title"/> built by <c>WorkspaceSummary.CreateAsync</c> -- so
+    /// the active path's coverage does not reach it. The prior
+    /// <c>Assert.False(IsNullOrWhiteSpace(AccessibleName))</c> could not detect the failure it was
+    /// standing in for: it holds equally for a name that silently degraded to the "Sprint {N}"
+    /// fallback because <c>Title</c> stopped being carried. This asserts the resolved title itself.
+    ///
+    /// Also finding 1's regression guard for the terminal path: two sprints sharing one frozen title
+    /// must still be told apart. The history name has no progress fraction or attention suffix to
+    /// vary, so without the ordinal disambiguator the two would be byte-identical.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task LoadAsyncNamesEachHistoryRowByItsOwnTitleAndKeepsSameTitledSprintsDistinct()
+    {
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        using TestEnvironment environment = new();
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ForgeApplication application = environment.Application;
+        const string frozenTitle = "Fix login";
+        Guid titled = await CreateAndCancelAsync(application, environment.ProjectRoot, frozenTitle, cancellationToken);
+        // The same title a second time: free text, no uniqueness constraint (ADR 0057).
+        Guid duplicate =
+            await CreateAndCancelAsync(application, environment.ProjectRoot, frozenTitle, cancellationToken);
+        Guid untitled = await CreateAndCancelAsync(application, environment.ProjectRoot, null, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SurfaceTextProvider en = Text();
+        SidebarViewModel viewModel =
+            new(catalog, application, new FakeFolderPicker(), en, new HostConnectivityMonitor());
+
+        SidebarSnapshot snapshot = await viewModel.LoadAsync(cancellationToken);
+
+        SidebarProjectItem project = Assert.Single(snapshot.Projects);
+        SidebarHistoryItem titledRow = Assert.Single(project.History, item => item.SprintId == titled);
+        SidebarHistoryItem duplicateRow = Assert.Single(project.History, item => item.SprintId == duplicate);
+        SidebarHistoryItem untitledRow = Assert.Single(project.History, item => item.SprintId == untitled);
+
+        // The frozen title actually reaches the archived row, rather than degrading to the fallback.
+        Assert.Contains(frozenTitle, titledRow.DisplayTitle, StringComparison.Ordinal);
+        Assert.Contains(frozenTitle, duplicateRow.DisplayTitle, StringComparison.Ordinal);
+        Assert.Equal(Ordinal(en, untitledRow.CreationSequence), untitledRow.DisplayTitle);
+
+        // Round 2 finding 2, the defect this guards: an archived row draws its DisplayTitle and its
+        // state and nothing else -- no progress fraction, no attention badge -- so two sprints
+        // sharing one frozen title drew byte-identical rows while only their spoken names differed.
+        Assert.NotEqual(titledRow.DisplayTitle, duplicateRow.DisplayTitle);
+        // Round 3 finding 1: ordinal first, so the rail's tail truncation cannot reach it -- a
+        // history row has nothing else to tell two same-titled sprints apart.
+        Assert.Equal(
+            string.Create(CultureInfo.InvariantCulture, $"({Ordinal(en, titledRow.CreationSequence)}) {frozenTitle}"),
+            titledRow.DisplayTitle);
+        Assert.StartsWith("(", titledRow.DisplayTitle, StringComparison.Ordinal);
+
+        Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);
+        // Finding 1: same title, same state, still distinguishable -- and by the ordinal specifically.
+        Assert.NotEqual(titledRow.AccessibleName, duplicateRow.AccessibleName);
+        // Drawn and spoken stay one string, for both same-titled rows.
+        Assert.Contains(titledRow.DisplayTitle, titledRow.AccessibleName, StringComparison.Ordinal);
+        Assert.Contains(duplicateRow.DisplayTitle, duplicateRow.AccessibleName, StringComparison.Ordinal);
+        // The untitled row's name states the ordinal once, not twice ("Sprint 3", never
+        // "Sprint 3 (Sprint 3)") -- the duplication ADR 0065 dropped the old prefix to avoid.
+        Assert.DoesNotContain('(', untitledRow.AccessibleName);
+    }
+
+    /// <summary>The localized "Sprint {N}" copy, resolved the way a caller would read it rather than
+    /// rebuilt from production code -- one place, since both row tests assert against it.</summary>
+    private static string Ordinal(SurfaceTextProvider text, int creationSequence) => string.Format(
+        CultureInfo.InvariantCulture, text.Resolve(MessageKeys.SprintUntitledFallback), creationSequence);
+
+    private static async Task<Guid> CreateAndCancelAsync(
+        ForgeApplication application, string root, string? title, CancellationToken cancellationToken)
+    {
+        CreateSprintResult created = await application.CreateSprintAsync(root, title, cancellationToken);
+        Guid sprintId = created.SprintId!.Value;
+        await application.CancelSprintAsync(root, sprintId, true, cancellationToken);
+        return sprintId;
     }
 
     /// <summary>Plan 12.1 final-sweep gap 3's cap -- matches

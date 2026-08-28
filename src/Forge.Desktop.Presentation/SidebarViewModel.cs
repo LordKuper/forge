@@ -7,12 +7,20 @@ using Forge.Providers;
 
 namespace Forge.Desktop.Presentation;
 
-/// <summary>One sidebar row for a non-terminal sprint (plan section 4.1). <see cref="AccessibleName"/>
-/// is a full sentence naming state and (when set) the attention reason -- plan 12.6: "every status has
-/// text and an accessible... name," color is never the only carrier.</summary>
+/// <summary>One sidebar row for a non-terminal sprint (plan section 4.1). <see cref="DisplayTitle"/>
+/// is <see cref="SprintDisplayTitle.ResolveRowTitle"/>'s output, already resolved here so no surface
+/// re-derives it: a titled sprint reads <c>"(Sprint 2) Fix login"</c> -- the localized ordinal
+/// LEADS the frozen title, disambiguating two sprints that share one (titles are not unique under
+/// ADR 0057) and surviving the rail's tail truncation -- while an untitled sprint reads the bare
+/// <c>"Sprint 2"</c> fallback. It is therefore NOT equal to <c>SprintDefinition.Title</c>; compare
+/// or match on <see cref="CreationSequence"/> or <see cref="SprintId"/>, never on this string.
+/// <see cref="AccessibleName"/> is a full sentence naming that same resolved title, the state, the
+/// plan progress, and (when set) the attention reason -- plan 12.6: "every status has text and an
+/// accessible... name," color is never the only carrier.</summary>
 public sealed record SidebarSprintItem(
     Guid SprintId,
     int CreationSequence,
+    string DisplayTitle,
     string StateText,
     bool RequiresHumanAttention,
     string? CurrentStageId,
@@ -24,8 +32,14 @@ public sealed record SidebarSprintItem(
 /// <summary>One navigable row in a project's capped sprint history (plan 12.1 final-sweep gap 3):
 /// a terminal (completed/cancelled) sprint, distinct from <see cref="SidebarSprintItem"/> only in
 /// that it never carries attention/progress/active-operation fields no terminal sprint can have.
-/// </summary>
-public sealed record SidebarHistoryItem(Guid SprintId, int CreationSequence, string StateText, string AccessibleName);
+/// <see cref="DisplayTitle"/> is the same <see cref="SprintDisplayTitle.ResolveRowTitle"/> form its
+/// active-sprint counterpart carries, ordinal-first on the titled path.</summary>
+public sealed record SidebarHistoryItem(
+    Guid SprintId,
+    int CreationSequence,
+    string DisplayTitle,
+    string StateText,
+    string AccessibleName);
 
 /// <summary>One sidebar project row. <see cref="ActiveSprints"/> and <see cref="History"/> are both
 /// shown only while <see cref="SprintListExpanded"/> (plan 12.1 final-sweep gap 1; default
@@ -283,20 +297,47 @@ public sealed class SidebarViewModel(
         return result.DiagnosticCode;
     }
 
+    /// <summary>Finding B1: the row names the sprint, not merely its ordinal. The accessible name
+    /// leads with <see cref="SprintDisplayTitle.ResolveRowTitle"/>'s resolved title instead of the
+    /// former <c>"{SprintIdLabel} {CreationSequence}"</c> prefix, matching the same ADR 0057
+    /// reasoning the Project Overview sprint card already applies ("prefixing rendered '2. Sprint 2'
+    /// for every untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it
+    /// resolves to the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a
+    /// label in a spoken row name. The ordinal itself is kept as a parenthesized disambiguator by
+    /// <see cref="SprintDisplayTitle.ResolveRowTitle"/> -- titles are not unique, so the title
+    /// alone would leave two same-titled sprints indistinguishable (PR #122 review finding 1).
+    /// That one resolved string is both drawn and spoken (round 2 finding 2): round 1 disambiguated
+    /// the spoken name only, leaving <see cref="SidebarSprintItem.DisplayTitle"/> -- what the row's
+    /// button actually renders -- still colliding, so two same-titled sprints drew identical rows.
+    /// Round 3 finding 1 anchored that ordinal at the FRONT of the one string, for the rendering
+    /// reason <see cref="SprintDisplayTitle.ResolveRowTitle"/> records. The spoken name inherits the
+    /// order rather than keeping a title-first phrasing of its own: this sentence is already a
+    /// comma-separated list led by the project name, so "(Sprint 2) Fix login" reads as one more
+    /// item in it, and a second ordering would be a second string that can drift from the drawn one
+    /// -- exactly the divergence round 2 collapsed.
+    /// The plan progress the sidebar row now renders visually is spoken here too,
+    /// through the existing <see cref="MessageKeys.SprintStatusHeaderProgressLabel"/> copy the sprint
+    /// workspace header already uses for the same fraction -- so the second line the row draws can
+    /// stay decorative (see <c>WorkspaceShellPage.BuildSprintRow</c>) rather than becoming a second,
+    /// redundant screen-reader stop.</summary>
     private SidebarSprintItem ToSprintItem(string projectDisplayName, SprintWorkspaceSummary sprint)
     {
         bool humanAttention = SprintOrderingRank.RequiresHumanAttention(sprint.State);
         string stateText = SurfaceFormatting.Machine(sprint.State);
+        string displayTitle = SprintDisplayTitle.ResolveRowTitle(sprint.Title, sprint.CreationSequence, text.Current);
         string attentionSuffix = humanAttention
             ? string.Create(
                 System.Globalization.CultureInfo.InvariantCulture, $", {text.Resolve(AttentionReasonKey(sprint.State))}")
             : string.Empty;
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {text.Resolve(MessageKeys.SprintIdLabel)} {sprint.CreationSequence}, {stateText}{attentionSuffix}");
+            $"{projectDisplayName}, {displayTitle}, {stateText}, " +
+                $"{text.Resolve(MessageKeys.SprintStatusHeaderProgressLabel)} " +
+                $"{sprint.StagesCompleted}/{sprint.StagesTotal}{attentionSuffix}");
         return new(
             sprint.SprintId,
             sprint.CreationSequence,
+            displayTitle,
             stateText,
             humanAttention,
             sprint.CurrentStageId,
@@ -308,14 +349,23 @@ public sealed class SidebarViewModel(
 
     /// <summary>Plan 12.1 final-sweep gap 3: a terminal sprint's sidebar-history row. Never carries
     /// an attention suffix -- <see cref="SprintOrderingRank.RequiresHumanAttention"/> is only ever
-    /// true for a non-terminal state, so a terminal sprint can never need it.</summary>
+    /// true for a non-terminal state, so a terminal sprint can never need it -- and never a progress
+    /// fraction either: <see cref="SprintStatus"/> carries no stage counts at all, which is exactly
+    /// why <see cref="SidebarHistoryItem"/> has no progress fields to render. Carries the same
+    /// <see cref="SprintDisplayTitle.ResolveRowTitle"/> ordinal disambiguator as the active row
+    /// (PR #122 review finding 1), and needs it more: with no state fraction or attention suffix to
+    /// vary, the title is nearly all this row has, so two same-titled terminal sprints would
+    /// otherwise be wholly indistinguishable in the archived list -- in the drawn row as much as in
+    /// the spoken name, which is why one resolved string now serves both (round 2 finding 2).
+    /// </summary>
     private SidebarHistoryItem ToHistoryItem(string projectDisplayName, SprintStatus sprint)
     {
         string stateText = SurfaceFormatting.Machine(sprint.State);
+        string displayTitle = SprintDisplayTitle.ResolveRowTitle(sprint.Title, sprint.CreationSequence, text.Current);
         string accessible = string.Create(
             System.Globalization.CultureInfo.InvariantCulture,
-            $"{projectDisplayName}, {text.Resolve(MessageKeys.SprintIdLabel)} {sprint.CreationSequence}, {stateText}");
-        return new(sprint.Id, sprint.CreationSequence, stateText, accessible);
+            $"{projectDisplayName}, {displayTitle}, {stateText}");
+        return new(sprint.Id, sprint.CreationSequence, displayTitle, stateText, accessible);
     }
 
     internal static string AttentionReasonKey(SprintState state) => state switch
