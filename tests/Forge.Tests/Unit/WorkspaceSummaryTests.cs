@@ -114,8 +114,10 @@ public sealed class WorkspaceSummaryTests
         SprintId sprintId = (await orchestrator.CreateSprintAsync(
             new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
         await RunToRunningAsync(orchestrator, environment.ProjectRoot, sprintId, cancellationToken);
+        DateTimeOffset beforeStart = DateTimeOffset.UtcNow;
         StartAttemptResult started = await scheduler.StartAttemptAsync(
             environment.ProjectRoot, sprintId, "a", 2, cancellationToken);
+        DateTimeOffset afterStart = DateTimeOffset.UtcNow;
 
         ProjectWorkspaceSummary summary = await environment.Application
             .GetWorkspaceSummaryAsync(environment.ProjectRoot, false, cancellationToken);
@@ -124,6 +126,15 @@ public sealed class WorkspaceSummaryTests
         Assert.True(sprint.HasActiveOperation);
         Assert.Equal("a", sprint.ActiveOperationNodeId);
         Assert.Equal(started.AttemptId!.Value, sprint.ActiveOperationAttemptId);
+        // PR #126 review finding 8: the two `FirstAttemptStartedAt` tests below derive the anchor
+        // from `WorkflowEvent`s the test itself constructs, so they prove the predicate but agree
+        // with the implementation by construction -- neither would notice `SprintScheduler` writing
+        // attempt creation under a different `AggregateKind`, or the projector reading a filtered
+        // stream. This test already drives a real `StartAttemptAsync`, so it is where that gap
+        // closes: the anchor must be present, and must be the moment THIS attempt started rather
+        // than any other event's timestamp.
+        Assert.NotNull(sprint.FirstAttemptStartedAt);
+        Assert.InRange(sprint.FirstAttemptStartedAt.Value, beforeStart, afterStart);
     }
 
     /// <summary>ADR 0069 (Q8): the elapsed-time anchor is absent, not zero, for a sprint that has
@@ -182,7 +193,14 @@ public sealed class WorkspaceSummaryTests
     /// fake answers identically for any arguments, so `DiffStat` alone would match an implementation
     /// that diffed an attempt worktree instead of the integration one, another sprint's worktree, or
     /// `HEAD` against itself. Those three arguments ARE Q9's decision -- "the integration branch's
-    /// current tip against the sprint's own frozen base commit" -- so they are what this pins.</summary>
+    /// current tip against the sprint's own frozen base commit" -- so they are what this pins.
+    ///
+    /// The integration worktree is deliberately advanced past its base commit before summarizing (PR
+    /// #126 review finding 6). Creating it registers `heads[path] = baseCommit`, so without that
+    /// commit the base and the resolved tip are one identical string and both commit assertions are
+    /// tautologies: swapped `fromCommit`/`toCommit` arguments, and an implementation that skipped
+    /// `TryGetHeadAsync` and diffed the base commit against itself (an always-empty diff for every
+    /// sprint), would both still pass. With base != tip they fail.</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public async Task DiffStatisticsAreAbsentUntilAnIntegrationWorktreeExistsAndSurfaceOnceItDoes()
@@ -207,10 +225,18 @@ public sealed class WorkspaceSummaryTests
         SprintDefinition definition = (await environment.Resolve<ISprintStore>()
             .LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
         Guid projectId = beforeIntegration.ProjectId!.Value;
+        string integrationPath = WorktreeLayout.IntegrationPath(environment, projectId, sprintId);
         GitOperationResult created = await environment.Resolve<SprintGitIsolation>()
             .EnsureIntegrationWorktreeAsync(
                 environment.ProjectRoot, projectId, sprintId, definition.BaseCommit, cancellationToken);
         Assert.True(created.Succeeded, created.DiagnosticCode);
+        Assert.Equal(definition.BaseCommit, created.Commit);
+        // Work lands on the integration branch, moving its tip off the frozen base commit -- the
+        // state every sprint with anything to report is actually in.
+        GitOperationResult integrated = await worktrees.CommitAllAsync(
+            environment.ProjectRoot, integrationPath, "integrated an attempt", cancellationToken);
+        Assert.True(integrated.Succeeded, integrated.DiagnosticCode);
+        Assert.NotEqual(definition.BaseCommit, integrated.Commit);
 
         ProjectWorkspaceSummary afterIntegration = await environment.Application
             .GetWorkspaceSummaryAsync(environment.ProjectRoot, true, cancellationToken);
@@ -218,9 +244,12 @@ public sealed class WorkspaceSummaryTests
         Assert.Equal(
             new SprintDiffStat(3, 120, 8), Assert.Single(afterIntegration.ActiveSprints).DiffStat);
         (string Path, string FromCommit, string ToCommit) diffCall = Assert.Single(worktrees.DiffStatCalls);
-        Assert.Equal(WorktreeLayout.IntegrationPath(environment, projectId, sprintId), diffCall.Path);
+        Assert.Equal(integrationPath, diffCall.Path);
+        // Each side against its own distinct expected value, and never against each other: the base
+        // is the sprint's frozen commit, the tip is the advanced integration head.
         Assert.Equal(definition.BaseCommit, diffCall.FromCommit);
-        Assert.Equal(created.Commit, diffCall.ToCommit);
+        Assert.Equal(integrated.Commit, diffCall.ToCommit);
+        Assert.NotEqual(diffCall.FromCommit, diffCall.ToCommit);
     }
 
     /// <summary>PR #126 review finding 2: the diff read is the one member of this row that spawns

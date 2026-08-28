@@ -105,10 +105,12 @@ whole fan-out for a value it discards.
 and on the wire as `GetWorkspaceSummaryRequest.IncludeDiffStats` (defaulted `false`, so an absent or
 older payload gets the pre-ADR-0069 row). Left off, the read model reports `diff_stat` absent and no
 `git` process is started — which is what every caller that fans out over a catalog on a render, or
-that does not draw the number, asks for. `forge workspace summary` opts in, because its `--json`
-contract reports the field and it is one explicit invocation rather than a refreshing view; the
-Desktop sidebar and the sprint header both stay opted out until S13 adds the control that draws the
-value (PR #126 review finding 2).
+that does not draw the number, asks for. `forge workspace summary --json` opts in, because that
+contract reports the field and it is one explicit invocation rather than a refreshing view. The
+opt-in is scoped to the output mode, not to the command: the same command's human-readable table
+prints state, stage, progress, and active operation and never `diff_stat`, so it passes `false` and
+pays nothing (PR #126 review finding 5). The Desktop sidebar and the sprint header both stay opted
+out until S13 adds the control that draws the value (PR #126 review finding 2).
 
 ### Absent and zero are different answers
 
@@ -174,9 +176,10 @@ file including elided ones, so ADR 0059's honest-totals rule survives the narrow
   `WorkspaceSummaryProjector` takes `SprintGitIsolation` (already a registered singleton) and gains
   one private fail-open read. One construction site, reviewed as ADR 0057/0058 require.
 - `WorkspaceSummaryProjector.CreateAsync` and `ForgeApplication.GetWorkspaceSummaryAsync` take a
-  required `includeDiffStats`; `forge workspace summary` passes `true`, `SidebarViewModel.LoadAsync`
-  and `SprintWorkspaceViewModel.RefreshHeaderAsync` pass `false`. Pre-1.0 signature replacement, no
-  alias kept (repository rule).
+  required `includeDiffStats`; `forge workspace summary` passes `true` only for `--json` and `false`
+  for its human-readable table, while `SidebarViewModel.LoadAsync` and
+  `SprintWorkspaceViewModel.RefreshHeaderAsync` always pass `false`. Pre-1.0 signature replacement,
+  no alias kept (repository rule).
 - No JSON schema change: `ProjectWorkspaceSummary` has no schema under `docs/contracts/v1/schemas/`
   — it is serialized reflectively by `StatusJson` and versioned only by its own `ContractVersion`
   constant. Both new members are additive and nullable, so an older reader is unaffected; pre-1.0,
@@ -184,19 +187,26 @@ file including elided ones, so ADR 0059's honest-totals rule survives the narrow
 - Control protocol: `get_workspace_summary`'s response is the same record, two fields wider; its
   request gains one optional `include_diff_stats` field defaulting to `false`, so a client that sends
   no payload — every client today — is unaffected.
-- `forge workspace summary --json` reports both fields; its human-readable output is unchanged. No
-  Desktop surface computes `diff_stat` in this slice.
+- `forge workspace summary --json` reports both fields; the command's human-readable output is
+  unchanged and computes no `diff_stat`. No Desktop surface computes it in this slice.
 - `tests/Forge.Tests` (`Unit/WorkspaceSummaryTests.cs`): two pure tests for the elapsed anchor (no
   attempt yet → absent; the first attempt's start, pinned against both a later retroactive `running`
   event and a second attempt) and four for the diff stat, using the existing `FakeWorktreeManager` —
   real `git.exe` `--numstat` behaviour already belongs to `GitIsolationTests`. The diff-stat tests
   cover the wiring across both states (absent before an integration worktree exists, the fake's stat
-  after, asserted against the recorded worktree path / base commit / tip rather than only the
-  returned value), the opt-out (no `DiffStatAsync` call at all), a `git` read that reports failure,
-  and a `git` that cannot be launched (`Win32Exception`) — the last two both asserting the project
-  row around the absent field is still fully populated. No test for the `SprintWorkspaceSummary`
-  field pass-through itself: it is straight plumbing with no branch, and the tests above read it end
-  to end anyway.
+  after, asserted against the recorded worktree path / base commit / tip — with the integration head
+  advanced past the base first, so the two commit assertions cannot both hold for a swapped or
+  self-referential diff), the opt-out (no `DiffStatAsync` call at all), a `git` read that reports
+  failure, and a `git` that cannot be launched (`Win32Exception`) — the last two both asserting the
+  project row around the absent field is still fully populated. The elapsed anchor is additionally
+  asserted against a real `SprintScheduler.StartAttemptAsync` (in
+  `AnActiveOperationIsReportedWithoutLoadingTheSprintsTimeline`), so its derivation is pinned to the
+  events production writes rather than only to synthetic ones. No test for the
+  `SprintWorkspaceSummary` field pass-through itself: it is straight plumbing with no branch, and the
+  tests above read it end to end anyway.
+- `tests/Forge.Tests` (`Acceptance/WorkspaceCliTests.cs`): one test pinning the output-mode scope of
+  the opt-in — the plain `forge workspace summary` reaches no `DiffStatAsync` while `--json` does,
+  both against an integration worktree that exists.
 - `VERSION` moves from `0.87.0` to `0.88.0` (MINOR: additive, no breaking change).
 
 ## References
