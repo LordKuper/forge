@@ -63,7 +63,7 @@ public sealed class LocalizationCatalogTests
     /// promises a later reading which will never arrive, so the only surface a user ever sees told them
     /// to keep waiting on a permanently absent signal. Pins the corrected wording in both languages and,
     /// independently of the exact phrasing, asserts neither value carries a pending marker: revert either
-    /// resx value and the `DoesNotContain` assertions fail on "not yet"/"пока".</summary>
+    /// resx value and the pending-marker assertions fail on "not yet"/"пока".</summary>
     [Fact]
     [Trait("Category", "Unit")]
     public void TheUnknownQuotaStateIsWordedAsTerminalRatherThanPendingInBothLanguages()
@@ -82,10 +82,14 @@ public sealed class LocalizationCatalogTests
 
         // Asserted before the exact-value pins below so this phrasing-independent guard is what a
         // reverted resx value trips first (mutation-verified against all four pre-fix strings).
+        // "пока" is word-bounded: as a bare substring it is also the "пока-" stem of unrelated words
+        // ("показывать", "показатель"), so a correct terminal rewording could otherwise trip this
+        // guard and point a translator at a pending marker that is not there (PR #125 review round 2
+        // finding 3). "not yet" needs no boundary -- it is already a two-word phrase.
         foreach (string value in values)
         {
             Assert.DoesNotContain("not yet", value, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("пока", value, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotMatch(RussianPendingMarker, value);
         }
 
         Assert.Equal("Provider quota limits are not reported.", values[0]);
@@ -446,6 +450,11 @@ public sealed class LocalizationCatalogTests
 
     private static readonly Regex MessageKeyLiteralPattern =
         new("\"((?:workflow|routing)\\.[a-z][a-z0-9_]*)\"", RegexOptions.Compiled);
+
+    /// <summary>The standalone Russian adverb "пока" ("for now"), the pending marker this slice
+    /// removed -- word-bounded so it cannot fire on the unrelated "пока-" stem.</summary>
+    private static readonly Regex RussianPendingMarker =
+        new(@"\bпока\b", RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
 
     [Fact]
     [Trait("Category", "Architecture")]

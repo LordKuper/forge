@@ -50,9 +50,10 @@ public static class SurfaceFormatting
     /// <summary>One provider's quota row, shared by every surface that lists quota status (`forge
     /// models quota`) so the `provider-quota-parity` capability can never drift between them --
     /// mirrors <see cref="ProviderRow"/>'s shape and, like it, is never localized (CLI machine
-    /// output). See ADR 0052: every row currently projects
-    /// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset
-    /// time, since no provider integration in this codebase exposes a verified quota signal.</summary>
+    /// output). See ADR 0052/0068: every row projects
+    /// <see cref="ProviderQuotaAvailability.Unknown"/> with no remaining amount, unit, or reset time,
+    /// terminally -- no provider integration in this codebase exposes a verified quota signal, and
+    /// none is pending, so "-" here is the final reading and never a value awaiting arrival.</summary>
     public static string ProviderQuotaRow(ProviderQuotaSnapshot entry)
     {
         ArgumentNullException.ThrowIfNull(entry);

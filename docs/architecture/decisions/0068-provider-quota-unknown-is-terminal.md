@@ -75,24 +75,37 @@ states' strings are untouched.
 - `LocalizationCatalogTests.TheUnknownQuotaStateIsWordedAsTerminalRatherThanPendingInBothLanguages`
   pins the corrected wording in both languages and, independently of the exact phrasing, asserts that
   neither value carries a pending marker. Mutation-verified: restoring either pre-fix resx value fails
-  the `DoesNotContain` assertions on "not yet"/"пока".
+  the pending-marker assertions on "not yet"/"пока". The Russian marker is matched word-bounded, so a
+  future terminal rewording using the unrelated "пока-" stem ("показатель") does not trip it.
 - Terminality is a structural claim, so it is checked structurally. No behavioral test can carry it:
   the projector never asks an adapter about quota (its only adapter read is `DefaultModel`), so
   asserting `Unknown` over the real catalog would stay green even after an adapter grew a real quota
   API — the defect PR #125's review found in the first revision of this section.
   - `ProviderCompositionTests.NeitherRealProviderAdapterExposesAQuotaSignalTheProjectorCouldRead`
-    reflects over `ILlmProvider` and over every provider a shipping composition root actually
-    registers, including inherited and non-public members, and fails if any is quota-shaped by name
-    or by quota contract type. Mutation-verified against a `QuotaHint` property added to
-    `CodexLlmProvider`.
+    reflects over `ILlmProvider` and over both provider adapters, including inherited and non-public
+    members, and fails if any is quota-shaped by name or by quota contract type. The adapter list is
+    not duplicated on trust: the same test scans `src/` for every `.Add*Provider(` invocation and
+    fails if that set differs from the two it registers, so a third adapter composed into any
+    shipping root cannot skip inspection here. Mutation-verified against a `QuotaHint` property added
+    to `CodexLlmProvider`.
   - `ProviderCompositionTests.TheProjectorsUnverifiedFactoryIsTheOnlyProductionProducerOfAQuotaSnapshot`
     scans production source and fails if a `ProviderQuotaSnapshot` is constructed anywhere but
     `ProviderQuotaProjector.Unverified`, or if that factory stops hardcoding `Unknown`.
     Mutation-verified against a second producer added to `ProviderCatalog` and against the factory
-    returning `Stale`.
+    returning `Stale`. This is a text scan, so its reach is bounded and stated rather than assumed: it
+    recognizes an explicit `new ProviderQuotaSnapshot(...)`, and a target-typed `new(...)` or a `with`
+    expression bound to a declaration naming the type — expression-bodied, assigned, or returned from
+    a brace body. A construction site that names the type nowhere near itself (a `var` local, a
+    declaration assigned in a later statement, a `return` behind a nested block) is out of reach. The
+    companion
+    `TheQuotaSnapshotConstructionScanRecognizesEveryFormItClaimsTo` pins both lists, so this paragraph
+    cannot drift from what the scan does. It is the tripwire for a second producer appearing, not a
+    compiler-grade proof that none can be written.
   - Together: nothing to read, and nothing else that produces a reading — so no production code path
     reaches another availability, amount, unit, or reset time. Either check failing is the signal
-    that this ADR's terminal wording must be revisited.
+    that this ADR's terminal wording must be revisited. The first check is exhaustive by reflection;
+    the second is exhaustive only over the construction forms listed above, which is why the two are
+    stated with different strength.
 - `ProviderCompositionTests.QuotaProjectsAsUnknownForBothRealProviderAdapters` remains as the
   composed-root demonstration (`ProviderQuotaProjectorTests` covers the projection over
   `FakeLlmProvider` only), and its own doc comment states that it pins today's behavior rather than
@@ -117,9 +130,11 @@ S10's own scope.
   `ProviderQuotaProjector` gain the terminal-state consumer contract. No member, signature, or
   behavior changed.
 - `Forge.Runtime` (`Localization/`): `Messages.resx`/`Messages.ru.resx` reword `QuotaStatusUnknown`
-  and `QuotaStatusUnknownAccessible`; `MessageKeys.QuotaStatusUnknown` and
-  `SurfaceFormatting.QuotaStatusSummary` document the terminal-not-pending requirement.
-- `tests/Forge.Tests`: the wording regression plus the two structural checks above.
+  and `QuotaStatusUnknownAccessible`; `MessageKeys.QuotaStatusUnknown`,
+  `SurfaceFormatting.QuotaStatusSummary` and `SurfaceFormatting.ProviderQuotaRow` document the
+  terminal-not-pending requirement (the row formatter's remarks previously still said "currently").
+- `tests/Forge.Tests`: the wording regression, the two structural checks above, and the scan's own
+  form-coverage check.
 - No contract, schema, capability, CLI, or Desktop change. Every existing test asserts through message
   *keys*, not literals, so none needed updating.
 - `VERSION` takes a PATCH bump from this branch's base, `main` @ `0.87.0`, to `0.87.1` (a wording fix
