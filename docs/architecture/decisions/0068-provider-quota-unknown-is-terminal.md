@@ -70,18 +70,33 @@ The four corrected values still read as a statement about the reading itself, so
 `ProviderQuotaAggregation.Worst`'s worst-case-across-providers semantics. The other four availability
 states' strings are untouched.
 
-### Tests: one regression, one real-adapter confirmation
+### Tests: one wording regression, two structural checks
 
 - `LocalizationCatalogTests.TheUnknownQuotaStateIsWordedAsTerminalRatherThanPendingInBothLanguages`
   pins the corrected wording in both languages and, independently of the exact phrasing, asserts that
   neither value carries a pending marker. Mutation-verified: restoring either pre-fix resx value fails
   the `DoesNotContain` assertions on "not yet"/"пока".
-- `ProviderCompositionTests.QuotaProjectsAsTerminallyUnknownForBothRealProviderAdapters` verifies the
-  terminality claim rather than asserting it: it composes the real
-  `Forge.Providers.Codex.Windows`/`Forge.Providers.Claude.Windows` adapters exactly as a shipping
-  composition root does and proves every projected snapshot is `Unknown`/`provider_quota_unknown` with
-  no amount, unit, or reset time. `ProviderQuotaProjectorTests` only ever proved that over
-  `FakeLlmProvider`.
+- Terminality is a structural claim, so it is checked structurally. No behavioral test can carry it:
+  the projector never asks an adapter about quota (its only adapter read is `DefaultModel`), so
+  asserting `Unknown` over the real catalog would stay green even after an adapter grew a real quota
+  API — the defect PR #125's review found in the first revision of this section.
+  - `ProviderCompositionTests.NeitherRealProviderAdapterExposesAQuotaSignalTheProjectorCouldRead`
+    reflects over `ILlmProvider` and over every provider a shipping composition root actually
+    registers, including inherited and non-public members, and fails if any is quota-shaped by name
+    or by quota contract type. Mutation-verified against a `QuotaHint` property added to
+    `CodexLlmProvider`.
+  - `ProviderCompositionTests.TheProjectorsUnverifiedFactoryIsTheOnlyProductionProducerOfAQuotaSnapshot`
+    scans production source and fails if a `ProviderQuotaSnapshot` is constructed anywhere but
+    `ProviderQuotaProjector.Unverified`, or if that factory stops hardcoding `Unknown`.
+    Mutation-verified against a second producer added to `ProviderCatalog` and against the factory
+    returning `Stale`.
+  - Together: nothing to read, and nothing else that produces a reading — so no production code path
+    reaches another availability, amount, unit, or reset time. Either check failing is the signal
+    that this ADR's terminal wording must be revisited.
+- `ProviderCompositionTests.QuotaProjectsAsUnknownForBothRealProviderAdapters` remains as the
+  composed-root demonstration (`ProviderQuotaProjectorTests` covers the projection over
+  `FakeLlmProvider` only), and its own doc comment states that it pins today's behavior rather than
+  proving terminality.
 
 No test asserts the absence of a spinner, because no rendering code exists to assert against — that is
 S10's own scope.
@@ -104,7 +119,7 @@ S10's own scope.
 - `Forge.Runtime` (`Localization/`): `Messages.resx`/`Messages.ru.resx` reword `QuotaStatusUnknown`
   and `QuotaStatusUnknownAccessible`; `MessageKeys.QuotaStatusUnknown` and
   `SurfaceFormatting.QuotaStatusSummary` document the terminal-not-pending requirement.
-- `tests/Forge.Tests`: the two tests above.
+- `tests/Forge.Tests`: the wording regression plus the two structural checks above.
 - No contract, schema, capability, CLI, or Desktop change. Every existing test asserts through message
   *keys*, not literals, so none needed updating.
 - `VERSION` takes a PATCH bump from this branch's base, `main` @ `0.87.0`, to `0.87.1` (a wording fix
