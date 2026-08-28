@@ -208,6 +208,45 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
         return result.Stat is { } stat ? result with { Stat = Sanitize(stat) } : result;
     }
 
+    /// <summary>
+    /// ADR 0069: the sprint-level counterpart to <see cref="ReadDiffStatAsync"/> — what this whole
+    /// sprint has changed so far, read fresh from git as the integration branch's current tip
+    /// against the sprint's own frozen base commit. Never persisted and never cached: the answer
+    /// changes on every integration, and the sprint header asks it as a live question.
+    /// </summary>
+    /// <remarks>
+    /// The tip is resolved through <see cref="TryGetHeadAsync"/> rather than passed as the branch
+    /// name, because <see cref="IWorktreeManager.DiffStatAsync"/> accepts only canonical full-length
+    /// object ids (a ref name is rejected outright as <see cref="DiagnosticCodes.WorktreeCommitInvalid"/>).
+    /// The integration worktree is checked out on <see cref="WorktreeLayout.IntegrationBranch"/>, so
+    /// its `HEAD` *is* that branch's tip.
+    ///
+    /// Fails closed rather than throwing, on every path a caller cannot control: a sprint whose
+    /// integration worktree does not exist yet (nothing has run) costs no `git` process at all —
+    /// <c>GitWorktreeManager</c>'s own directory-existence guard short-circuits before starting one —
+    /// and reports <see cref="DiagnosticCodes.WorktreeUnavailable"/>, exactly like every other method
+    /// here. A read-only projection must degrade to "not available", never fail its caller.
+    /// </remarks>
+    public async Task<GitDiffStatResult> ReadIntegrationDiffStatAsync(
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        string baseCommit,
+        CancellationToken cancellationToken)
+    {
+        string integrationPath = WorktreeLayout.IntegrationPath(paths, projectId, sprintId);
+        string? tip = await TryGetHeadAsync(projectRoot, integrationPath, cancellationToken).ConfigureAwait(false);
+        if (tip is null)
+        {
+            return GitDiffStatResult.Fail(DiagnosticCodes.WorktreeUnavailable);
+        }
+
+        GitDiffStatResult result = await worktrees
+            .DiffStatAsync(projectRoot, integrationPath, baseCommit, tip, cancellationToken)
+            .ConfigureAwait(false);
+        return result.Stat is { } stat ? result with { Stat = Sanitize(stat) } : result;
+    }
+
     private static DiffPayload Sanitize(DiffPayload stat)
     {
         List<DiffFileStat> safe = [];
