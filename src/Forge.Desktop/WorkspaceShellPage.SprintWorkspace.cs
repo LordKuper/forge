@@ -145,7 +145,7 @@ public partial class WorkspaceShellPage
         // mutation must reuse the same Entry instance rather than replace it with a blank one).
         Entry messageEntry = Describe(new Entry(), text.Resolve(MessageKeys.TimelineMessageLabel));
         Label messageResult = new() { Style = resultLabelStyle };
-        // PR #99 review finding 7: hoisted out of RefreshActionsAsync (like rewindReasonEntry already
+        // PR #99 review finding 7: hoisted out of RenderActions (like rewindReasonEntry already
         // was) so a re-render triggered by a FAILED mutation -- every mutation handler calls
         // RefreshAllAsync unconditionally on completion -- reuses the same Entry instance instead of
         // replacing it with a blank one. Only a genuinely successful, completed action clears the
@@ -191,7 +191,7 @@ public partial class WorkspaceShellPage
         {
             contentFocusRegistry.Register(key, control);
             // PR #110 review round 2 finding 1: the five hoisted Entry fields (rewindReasonEntry et
-            // al.) pass through here again on every RefreshActionsAsync call -- MarkWiredOnce guards
+            // al.) pass through here again on every RenderActions call -- MarkWiredOnce guards
             // the Focused subscription so a control already wired by an earlier call in this same
             // navigation's lifetime (its own field declaration onward) never gets a second, third, ...
             // Nth handler stacked on top of the first, while a freshly built control (every dynamic
@@ -519,15 +519,25 @@ public partial class WorkspaceShellPage
                 IsEnabled = link.Reject.Enabled,
                 Style = ThemeStyle("DangerButtonStyle"),
             };
+            // Two concurrently pending gates render two of these cards at once (the case ADR 0058
+            // node-scoped the action ids for), so "Approve"/"Reject" alone -- a Button's UIA name is
+            // its own Text -- would reach assistive technology as several indistinguishable buttons
+            // with no way to tell which decides which node. The node id is already on screen as a
+            // sibling Label, but that is a separate, disconnected stop; folding it into each button's
+            // own description is what makes the button itself uniquely identified. Same "<visible
+            // text> - <disambiguator>" shape RefreshHeaderAsync's own title description uses.
+            SemanticProperties.SetDescription(
+                approve, string.Create(CultureInfo.InvariantCulture, $"{approve.Text} - {link.NodeId}"));
+            SemanticProperties.SetDescription(
+                reject, string.Create(CultureInfo.InvariantCulture, $"{reject.Text} - {link.NodeId}"));
             // Deliberately different from ContextualActionHost's own gate buttons, which pass `null`
-            // (resolving to the built-in graph's canonical gate node). That panel is built from
-            // SprintWorkspaceViewModel.HasPendingGate, a bare "is any node awaiting_human" boolean
-            // that cannot name a node at all, so `null` is the only argument it can honestly supply.
-            // This card comes from a node-scoped approve_gate:/reject_gate: row, so it names the exact
-            // node -- which is what makes it correct when SprintScheduler.AdvanceGraphAsync has
-            // promoted two independent gates at once, precisely the case ADR 0058 node-scoped the
-            // action ids for. The panel's call site is deliberately left unchanged; closing that gap
-            // there belongs to finding A2, which dissolves the panel rather than patching it.
+            // (resolving to the built-in graph's canonical gate node). The panel could name a node --
+            // currentDetails.Nodes is in scope there and NodeIsReady already indexes it, and only a
+            // human gate is ever `awaiting_human` -- but it renders exactly ONE approve/reject pair,
+            // so with two gates pending any id it picked would be an arbitrary choice between them
+            // presented as a definite target. Its single-target UI is what has to change, which is
+            // finding A2's job (see ADR 0064). This card is emitted per node-scoped approve_gate:/
+            // reject_gate: row, so naming the exact node is unambiguous here.
             approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true, link.NodeId));
             reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false, link.NodeId));
             return new Border
@@ -615,11 +625,15 @@ public partial class WorkspaceShellPage
                     TextColor = ThemeColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
                 });
                 row.Children.Add(summary);
-                TimelineCardContent? card = TimelineCardProjector.Build(item, text.Current);
-                if (card is { Stats.Count: > 0 })
+                // Only the chip strip is projected here. TimelineCardProjector.BuildStats is the
+                // cheap half by construction -- three to five chips -- while the up-to-50 formatted
+                // detail rows behind the "Details" toggle come from BuildDetails, called from the
+                // lazy builder below and never on an ordinary render (ADR 0064).
+                IReadOnlyList<TimelineStat> cardStats = TimelineCardProjector.BuildStats(item, text.Current);
+                if (cardStats.Count > 0)
                 {
                     HorizontalStackLayout chips = new() { Spacing = 6 };
-                    foreach (TimelineStat stat in card.Stats)
+                    foreach (TimelineStat stat in cardStats)
                     {
                         chips.Children.Add(StatChip(stat));
                     }
@@ -627,10 +641,11 @@ public partial class WorkspaceShellPage
                     row.Children.Add(chips);
                 }
 
-                // Built lazily on first expansion, and never rebuilt afterwards. This method runs on
-                // every 15s poll tick over up to SprintTimelineProjector.MaxItemsPerPage items, each
-                // of which may carry up to 50 per-file or per-call payload rows -- eagerly
-                // constructing all of that would mean tens of thousands of controls per tick for
+                // Built lazily on first expansion, and never rebuilt afterwards -- the projection of
+                // the underlying data included, not only the controls. This method runs on every 15s
+                // poll tick over up to SprintTimelineProjector.MaxItemsPerPage items, each of which
+                // may carry up to 50 per-file or per-call payload rows; formatting and constructing
+                // all of that would mean tens of thousands of strings and controls per tick for
                 // content that is collapsed and unread. The whole technical-detail section is inside
                 // the lazy builder, not just the new payload rows, so the correlation/causation/
                 // arguments text (previously an eager string.Join per item per render) shares the same
@@ -645,21 +660,22 @@ public partial class WorkspaceShellPage
                     }
 
                     technicalDetailBuilt = true;
-                    if (card is { } content)
+                    TimelineCardDetails details = TimelineCardProjector.BuildDetails(item, text.Current);
+                    foreach (TimelineDetailRow detailRow in details.Rows)
                     {
-                        foreach (TimelineDetailRow detailRow in content.DetailRows)
-                        {
-                            technicalDetail.Children.Add(DetailRow(detailRow));
-                        }
+                        technicalDetail.Children.Add(DetailRow(detailRow));
+                    }
 
-                        if (content.ElidedText is { } elidedText)
+                    // Every note, not only the last one written: a payload may cap a diff family and
+                    // a tool-use family independently, and each elision is its own fact (ADR
+                    // 0059/0060 via TimelineCardDetails.ElidedNotes).
+                    foreach (string elidedNote in details.ElidedNotes)
+                    {
+                        technicalDetail.Children.Add(Describe(new Label
                         {
-                            technicalDetail.Children.Add(Describe(new Label
-                            {
-                                Text = elidedText,
-                                Style = ThemeStyle("MutedLabelStyle"),
-                            }));
-                        }
+                            Text = elidedNote,
+                            Style = ThemeStyle("MutedLabelStyle"),
+                        }));
                     }
 
                     string argumentsText = string.Join(
@@ -793,9 +809,10 @@ public partial class WorkspaceShellPage
                 .LoadAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
 
-        // Byte-for-byte the rendering half of what RefreshActionsAsync used to do, reading
-        // loadedActions instead of awaiting its own fetch -- the bottom action panel is not changed by
-        // this slice in any way (finding A2, which dissolves it, is separate structural work).
+        // Byte-for-byte the rendering half of the single fetch-and-render step this slice split in
+        // two (LoadActionsAsync above is the other half), reading loadedActions instead of awaiting
+        // its own fetch -- the bottom action panel is not changed by this slice in any way (finding
+        // A2, which dissolves it, is separate structural work).
         void RenderActions()
         {
             ContextualActionHost.Children.Clear();
@@ -922,7 +939,7 @@ public partial class WorkspaceShellPage
 
                 // PR #110 review finding 2: this Entry is hoisted (see its own field declaration's
                 // remarks) so the *instance* -- and whatever the user already typed into it -- survives
-                // RefreshActionsAsync, but it is still removed from ContextualActionHost and re-added on
+                // RenderActions, but it is still removed from ContextualActionHost and re-added on
                 // every rebuild, which disconnects the handler and drops focus exactly as it would for a
                 // freshly built button. Tracking it here is what lets RestoreContentFocus bring focus
                 // back mid-edit instead of only ever restoring buttons.
@@ -1099,7 +1116,7 @@ public partial class WorkspaceShellPage
                 ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:definition-of-done", definitionOfDoneEntry));
                 ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:evidence", evidenceEntry));
                 // PR #110 review finding 3: evidenceKind is rebuilt fresh (not hoisted) on every
-                // RefreshActionsAsync call, so unlike the two Entry fields above it is never a
+                // RenderActions call, so unlike the two Entry fields above it is never a
                 // meaningful restoration target and is deliberately left out of TrackContentFocus. But
                 // it is still a real, focusable control the user can tab into -- see
                 // ClearContentFocusWhenFocused's own remarks for why that still requires wiring.
@@ -1348,7 +1365,7 @@ public partial class WorkspaceShellPage
             // is re-registered under its own stable key, so clearing first means a control that no
             // longer renders (a resolved gate, a move target whose legal set changed) leaves no stale
             // entry behind for RestoreContentFocus to resolve to a now-detached instance. This spans
-            // both RefreshHeaderAsync and RefreshActionsAsync, so it belongs here rather than in either
+            // both RefreshHeaderAsync and RenderActions, so it belongs here rather than in either
             // individually -- matching where RestoreContentFocus itself already sits, below, once both
             // have finished. The initial three-call render at the end of RenderSprintWorkspaceAsync
             // does not need this: contentFocusRegistry is declared empty immediately above and nothing
@@ -1379,7 +1396,7 @@ public partial class WorkspaceShellPage
 
             RenderActions();
             // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
-            // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
+            // restoring inside RefreshHeaderAsync/RenderActions individually would consume the
             // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
             // own remarks).
             RestoreContentFocus();

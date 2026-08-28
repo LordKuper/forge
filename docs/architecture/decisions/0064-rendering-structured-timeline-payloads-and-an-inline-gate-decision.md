@@ -74,21 +74,39 @@ timeline is paged, so a decision requested long before the loaded window has no 
 and inventing one would attach it to an unrelated event. The panel is the correct surface for exactly
 that case, which means removing the panel is a decision this slice must not force.
 
-The two surfaces call `ResolveGateAsync` with different node arguments, and the difference is
-principled:
+The two surfaces call `ResolveGateAsync` with different node arguments:
 
-- The panel passes `null` — "the built-in graph's canonical gate node". It is built from
-  `SprintWorkspaceViewModel.HasPendingGate`, a bare "is any node `awaiting_human`" boolean that
-  cannot name a node, so `null` is the only argument it can honestly supply. Its call site is left
-  exactly as it was.
-- The inline card passes `link.NodeId`, taken from the `approve_gate:<node-id>` row itself. This is
-  what makes it correct when `SprintScheduler.AdvanceGraphAsync` has promoted two independent gates
-  at once — the case ADR 0058 node-scoped the action ids for, and the case the panel silently
-  mis-resolves. Fixing the panel is finding A2's job; patching it here would mean maintaining a
-  surface this codebase has already decided to remove.
+- The inline card passes `link.NodeId`, taken from the `approve_gate:<node-id>` row itself. One card
+  is emitted per node-scoped row, so naming the exact node is unambiguous — which is what makes it
+  correct when `SprintScheduler.AdvanceGraphAsync` has promoted two independent gates at once, the
+  case ADR 0058 node-scoped the action ids for.
+- The panel keeps passing `null` — "the built-in graph's canonical gate node". Not because it cannot
+  determine a node id: `currentDetails.Nodes` is in scope at that call site, the same method already
+  indexes nodes individually through `NodeIsReady`, and only a `HumanGate` node is ever
+  `awaiting_human` (`SprintScheduler.AdvanceGraphAsync` promotes no other kind), so the first
+  `awaiting_human` node **is** a gate node. The reason is that the panel renders exactly **one**
+  approve/reject pair regardless of how many gates are pending. With one gate — the only case its
+  current UI can express — `null` and that node id address the same decision. With two, any id it
+  picked would be an arbitrary choice between them, presented as a definite target: a silent
+  mis-targeting in place of today's deterministic canonical-node resolution. What has to change is
+  the panel's single-target UI, not its argument, and that is finding A2's job.
+
+Passing the single pending gate's own node id from the panel is nonetheless a reasonable, low-risk
+follow-up, and it was deliberately deferred to keep this slice's diff scoped to the new inline
+surface — not because it was infeasible. It is deferred rather than taken here because it changes
+behaviour on a surface this slice otherwise leaves untouched (a graph whose gate is not the canonical
+node would newly resolve differently), and because it is only defensible while the panel shows one
+gate; doing it properly means the per-gate rendering finding A2 covers.
 
 `ResolveGateAsync` gained a trailing `string? nodeId = null` parameter so both call sites read as
 what they are.
+
+Each inline Approve/Reject button also carries a `SemanticProperties.Description` of
+`"<visible text> - <node id>"`. A `Button`'s UIA name is its own `Text`, so concurrent gates — the
+scenario this surface newly makes reachable — would otherwise reach assistive technology as several
+indistinguishable "Approve"/"Reject" stops. The node id is on screen as a sibling `Label`, but that
+is a separate, disconnected stop; folding it into the button's own description is what identifies the
+button. The panel's buttons are unchanged: its single-target UI has no such ambiguity.
 
 ### Actions are fetched before the timeline renders, without a second round-trip
 
@@ -102,20 +120,40 @@ refreshes on mutation and navigation, the same cadence the panel's card already 
 an accepted, documented limitation of the existing poll rather than a regression this slice
 introduces, and it is stated in the code beside the card.
 
-### Detail rows are built lazily, and the whole detail section with them
+### The projection is two-phase, so lazy detail rows are lazy as data, not only as controls
 
 `RenderTimelineItems` rebuilds the entire host on every poll tick, over up to
 `SprintTimelineProjector.MaxItemsPerPage` items, each of which may carry up to 50 per-file or
-per-call rows (ADR 0059/0060's caps). Building those eagerly would mean tens of thousands of controls
-per tick for content that is collapsed and unread.
+per-call rows (ADR 0059/0060's caps). Building those eagerly would mean tens of thousands of
+formatted strings and controls per tick for content that is collapsed and unread.
 
-The per-item detail container is therefore empty until its existing "Details" toggle is clicked, and
-is built exactly once per rendered row thereafter. The pre-existing correlation/causation/arguments
-text — previously an eager `string.Join` over every argument of every item on every render — moved
-inside the same lazy builder, so the whole detail section shares one discipline rather than two.
+`TimelineCardProjector` therefore has two entry points rather than one:
 
-The collapsed steady-state cost per payload-bearing item is one chip strip: three to five small
-`Border`s, each holding two `Label`s.
+- `BuildStats(item, text)` returns just the chip strip. It runs on every render of every row.
+- `BuildDetails(item, text)` returns the detail rows and every elision note. It is called **only**
+  from the view's first-expansion builder, alongside the lazy control construction, and never on an
+  ordinary render.
+
+A single `Build` returning both would have made the per-tick cost the full detail projection — up to
+50 records of formatted strings per payload-bearing item — with only the MAUI controls deferred. The
+per-item detail container is empty until its existing "Details" toggle is clicked, and both its data
+and its controls are produced exactly once per rendered row thereafter. The pre-existing
+correlation/causation/arguments text — previously an eager `string.Join` over every argument of every
+item on every render — sits inside the same lazy builder, so the whole detail section shares one
+discipline rather than two.
+
+The collapsed steady-state cost per payload-bearing item is therefore genuinely one chip strip:
+three to five small `Border`s, each holding two `Label`s, over three to five projected
+`TimelineStat`s.
+
+### Every elision note survives, not only the last one written
+
+`TimelineCardDetails.ElidedNotes` is a list, not one nullable string. `WorkflowEventPayload` permits
+a `diff` family and a `tool_use` family on the same payload, and each caps its own list
+independently, so a single slot would let one family's note overwrite the other's — dropping a real
+elided-items fact from the UI entirely, which is exactly what ADR 0059/0060's explicit-elision rule
+exists to prevent. No producer emits both families on one payload today; the shape permits it, so the
+projection and the view both handle it, and a test constructs that payload directly.
 
 ## What stays deferred
 
@@ -146,16 +184,17 @@ Each with the reason it is not simply unfinished work:
 ## Consequences
 
 - `Forge.Desktop.Presentation` (`TimelineCards.cs`, new): `TimelineStatTone`, `TimelineStat`,
-  `TimelineDetailRow`, `TimelineCardContent`, `TimelineCardProjector`, `TimelineGateLink`,
-  `TimelineGateLinks`. MAUI-free by construction (this project references only `Forge.Runtime`), which
+  `TimelineDetailRow`, `TimelineCardDetails`, `TimelineCardProjector` (`BuildStats`/`BuildDetails`),
+  `TimelineGateLink`, `TimelineGateLinks`. MAUI-free by construction (this project references only `Forge.Runtime`), which
   is what makes the whole projection unit-testable — ADR 0050: no MAUI control can be instantiated
   headlessly in this suite.
 - `Forge.Desktop.Presentation` (`SprintTimelineViewModel.cs`): `TimelineItemView.Sequence`, carried
   through from `SprintTimelineItem.Sequence` (positional, second, mirroring the source record's own
   field order). One construction site.
-- `Forge.Desktop` (`WorkspaceShellPage.SprintWorkspace.cs`): the chip strip, the lazy detail section,
-  three new `TimelineIconFor` arms, `InlineGateCard`, the `LoadActionsAsync`/`RenderActions` split,
-  and `ResolveGateAsync`'s optional node id.
+- `Forge.Desktop` (`WorkspaceShellPage.SprintWorkspace.cs`): the chip strip, the lazy detail section
+  (which now calls `BuildDetails` from inside its own first-expansion builder), three new
+  `TimelineIconFor` arms, `InlineGateCard` with node-id-bearing button descriptions, the
+  `LoadActionsAsync`/`RenderActions` split, and `ResolveGateAsync`'s optional node id.
 - `Forge.Desktop` (`WorkspaceShellPage.xaml.cs`): `Decorative<T>`, with `DecorativeGlyph` delegating
   to it.
 - `Forge.Runtime` (`Localization/`): 26 new keys in `MessageKeys`, `Messages.resx`, and

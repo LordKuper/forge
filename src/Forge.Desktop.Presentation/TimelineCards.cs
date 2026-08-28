@@ -32,13 +32,22 @@ public sealed record TimelineStat(string Label, string Value, TimelineStatTone T
 /// <see cref="PrimaryText"/> -- never an empty placeholder standing in for an absent value.</summary>
 public sealed record TimelineDetailRow(string PrimaryText, string? SecondaryText, TimelineStatTone Tone);
 
-/// <summary>Everything a timeline item's structured payload contributes to its row: an always-visible
-/// chip strip, plus detail rows and an elision note the view builds lazily on first expansion.
-/// </summary>
-public sealed record TimelineCardContent(
-    IReadOnlyList<TimelineStat> Stats,
-    IReadOnlyList<TimelineDetailRow> DetailRows,
-    string? ElidedText);
+/// <summary>The collapsed half of what a timeline item's structured payload contributes to its row:
+/// the per-file and per-call rows behind its "Details" toggle, plus every elision note.
+/// <para><see cref="ElidedNotes"/> is a list rather than one nullable string because
+/// <see cref="WorkflowEventPayload"/> permits a diff family and a tool-use family on the same
+/// payload, and each caps its own list independently (ADR 0059/0060). A single slot would let one
+/// family's note overwrite the other's, dropping a real elided-items fact from the UI entirely --
+/// exactly what those ADRs' explicit-elision rule exists to prevent. No producer emits both families
+/// on one payload today; the shape permits it, so the projection handles it.</para></summary>
+public sealed record TimelineCardDetails(
+    IReadOnlyList<TimelineDetailRow> Rows,
+    IReadOnlyList<string> ElidedNotes)
+{
+    /// <summary>The shared "this item contributes no detail content" instance, so the common case
+    /// allocates nothing.</summary>
+    public static TimelineCardDetails Empty { get; } = new([], []);
+}
 
 /// <summary>
 /// Turns ADR 0059/0060/0061's structured <see cref="WorkflowEventPayload"/> into the localized,
@@ -68,29 +77,32 @@ public sealed record TimelineCardContent(
 /// </remarks>
 public static class TimelineCardProjector
 {
-    /// <summary>Returns <see langword="null"/> for an item carrying no structured payload -- the
-    /// overwhelming majority of timeline items -- so the view can skip the whole card path with one
-    /// null check per row.</summary>
-    public static TimelineCardContent? Build(TimelineItemView item, SurfaceText text)
+    /// <summary>The always-visible half: one chip per counter, for the strip the view renders on
+    /// every row it draws. Deliberately separate from <see cref="BuildDetails"/> because this runs on
+    /// every timeline render -- up to <c>SprintTimelineProjector.MaxItemsPerPage</c> items on every
+    /// 15-second poll tick -- while the detail rows behind an item's collapsed "Details" toggle are
+    /// up to 50 formatted rows per item that nothing displays until it is expanded (ADR 0064).
+    /// Returns an empty list for an item carrying no structured payload -- the overwhelming majority
+    /// of timeline items -- so the view can skip the whole card path with one count check per row.
+    /// </summary>
+    public static IReadOnlyList<TimelineStat> BuildStats(TimelineItemView item, SurfaceText text)
     {
         ArgumentNullException.ThrowIfNull(item);
         ArgumentNullException.ThrowIfNull(text);
         if (item.Payload is not { } payload)
         {
-            return null;
+            return [];
         }
 
         List<TimelineStat> stats = [];
-        List<TimelineDetailRow> rows = [];
-        string? elided = null;
         if (payload.Diff is { } diff)
         {
-            AddDiff(diff, text, stats, rows, ref elided);
+            AddDiffStats(diff, text, stats);
         }
 
         if (payload.ToolUse is { } toolUse)
         {
-            AddToolUse(toolUse, text, stats, rows, ref elided);
+            AddToolUseStats(toolUse, text, stats);
         }
 
         if (payload.Usage is { } usage)
@@ -98,13 +110,38 @@ public static class TimelineCardProjector
             AddUsage(usage, text, stats);
         }
 
-        return stats.Count == 0 && rows.Count == 0 && elided is null
-            ? null
-            : new(stats, rows, elided);
+        return stats;
     }
 
-    private static void AddDiff(
-        DiffPayload diff, SurfaceText text, List<TimelineStat> stats, List<TimelineDetailRow> rows, ref string? elided)
+    /// <summary>The lazy half: everything behind an item's "Details" toggle. Called only from the
+    /// view's own first-expansion builder, so a collapsed row never formats a single detail row --
+    /// see <see cref="BuildStats"/> for why the two phases are separate. A usage payload contributes
+    /// nothing here: ADR 0061's family is counters only.</summary>
+    public static TimelineCardDetails BuildDetails(TimelineItemView item, SurfaceText text)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+        ArgumentNullException.ThrowIfNull(text);
+        if (item.Payload is not { } payload)
+        {
+            return TimelineCardDetails.Empty;
+        }
+
+        List<TimelineDetailRow> rows = [];
+        List<string> elidedNotes = [];
+        if (payload.Diff is { } diff)
+        {
+            AddDiffDetails(diff, text, rows, elidedNotes);
+        }
+
+        if (payload.ToolUse is { } toolUse)
+        {
+            AddToolUseDetails(toolUse, text, rows, elidedNotes);
+        }
+
+        return rows.Count == 0 && elidedNotes.Count == 0 ? TimelineCardDetails.Empty : new(rows, elidedNotes);
+    }
+
+    private static void AddDiffStats(DiffPayload diff, SurfaceText text, List<TimelineStat> stats)
     {
         // All three restate `workflow.attempt_diff_recorded`'s own sentence verbatim ("Changed {0}
         // file(s): +{1}/-{2} lines."), so they are reinforcement for a sighted reader and noise for a
@@ -120,6 +157,11 @@ public static class TimelineCardProjector
             text.Resolve(MessageKeys.TimelineCardDiffDeletedLabel),
             string.Create(CultureInfo.InvariantCulture, $"-{diff.Deletions}"),
             TimelineStatTone.Negative, RestatesSummary: true));
+    }
+
+    private static void AddDiffDetails(
+        DiffPayload diff, SurfaceText text, List<TimelineDetailRow> rows, List<string> elidedNotes)
+    {
         foreach (DiffFileStat file in diff.Files)
         {
             string kind = ChangeKindLabel(text, file.ChangeKind);
@@ -134,14 +176,12 @@ public static class TimelineCardProjector
 
         if (diff.ElidedFiles > 0)
         {
-            elided = string.Format(
-                CultureInfo.InvariantCulture, text.Resolve(MessageKeys.TimelineCardDiffElidedNote), diff.ElidedFiles);
+            elidedNotes.Add(string.Format(
+                CultureInfo.InvariantCulture, text.Resolve(MessageKeys.TimelineCardDiffElidedNote), diff.ElidedFiles));
         }
     }
 
-    private static void AddToolUse(
-        ToolUsePayload toolUse, SurfaceText text, List<TimelineStat> stats, List<TimelineDetailRow> rows,
-        ref string? elided)
+    private static void AddToolUseStats(ToolUsePayload toolUse, SurfaceText text, List<TimelineStat> stats)
     {
         // Restate `workflow.attempt_tool_use_recorded` verbatim, like the diff counts above.
         stats.Add(new(
@@ -162,7 +202,11 @@ public static class TimelineCardProjector
                 text.Resolve(MessageKeys.TimelineCardToolUnmappedLabel), Number(toolUse.UnmappedItems),
                 TimelineStatTone.Caution, RestatesSummary: false));
         }
+    }
 
+    private static void AddToolUseDetails(
+        ToolUsePayload toolUse, SurfaceText text, List<TimelineDetailRow> rows, List<string> elidedNotes)
+    {
         foreach (ToolCallStat call in toolUse.Calls)
         {
             rows.Add(new(ToolCallPrimaryText(text, call), ToolCallSecondaryText(text, call), ToolCallTone(call)));
@@ -170,8 +214,9 @@ public static class TimelineCardProjector
 
         if (toolUse.ElidedCalls > 0)
         {
-            elided = string.Format(
-                CultureInfo.InvariantCulture, text.Resolve(MessageKeys.TimelineCardToolElidedNote), toolUse.ElidedCalls);
+            elidedNotes.Add(string.Format(
+                CultureInfo.InvariantCulture, text.Resolve(MessageKeys.TimelineCardToolElidedNote),
+                toolUse.ElidedCalls));
         }
     }
 

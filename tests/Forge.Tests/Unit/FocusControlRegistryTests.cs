@@ -90,7 +90,7 @@ public sealed class FocusControlRegistryTests
 
     // PR #110 review round 2 finding 1: TrackContentFocus (WorkspaceShellPage.SprintWorkspace.cs)
     // re-registers each of the sprint workspace's five hoisted Entry fields on every
-    // RefreshActionsAsync call, but must subscribe that control's Focused handler exactly once for the
+    // RenderActions call, but must subscribe that control's Focused handler exactly once for the
     // control's entire lifetime -- not once per refresh -- or the handler count grows without bound on
     // the page's highest-frequency re-render path. MarkWiredOnce is the primitive that guard is built
     // on; these tests pin down its own dedupe behavior directly (headlessly, per ADR 0050), independent

@@ -43,13 +43,41 @@ public sealed class TimelineCardProjectorTests
         Item(WorkflowEvent.AttemptUsageRecordedType, new(null, null, usage));
 
     /// <summary>An item with no structured payload -- the overwhelming majority of timeline items --
-    /// produces no card at all, so the renderer's per-row cost stays one null check.</summary>
+    /// produces no card content at all, so the renderer's per-row cost stays one count check.
+    /// </summary>
     [Fact]
     [Trait("Category", "Unit")]
     public void AnItemWithNoPayloadProducesNoCard()
     {
-        Assert.Null(TimelineCardProjector.Build(Item(WorkflowEvent.UserMessagePostedType, null), English()));
-        Assert.Null(TimelineCardProjector.Build(Item(WorkflowEvent.UserMessagePostedType, new(null, null, null)), English()));
+        foreach (TimelineItemView item in new[]
+        {
+            Item(WorkflowEvent.UserMessagePostedType, null),
+            Item(WorkflowEvent.UserMessagePostedType, new(null, null, null)),
+        })
+        {
+            Assert.Empty(TimelineCardProjector.BuildStats(item, English()));
+            Assert.Same(TimelineCardDetails.Empty, TimelineCardProjector.BuildDetails(item, English()));
+        }
+    }
+
+    /// <summary>ADR 0064's render-cost rule, as a contract rather than a comment: the half that runs
+    /// on every 15-second poll tick projects the chip strip and nothing else, so a collapsed
+    /// payload-bearing row never formats one of the up-to-50 per-file or per-call rows behind its
+    /// "Details" toggle. Those come from <c>BuildDetails</c>, which only the view's first-expansion
+    /// builder calls.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void TheAlwaysRenderedHalfProjectsChipsOnlyAndNeverTheDetailRows()
+    {
+        TimelineItemView item = DiffItem(new(
+            2, 12, 3,
+            [new("src/App.cs", 10, 3, DiffChangeKinds.Modified), new("src/New.cs", 2, 0, DiffChangeKinds.Added)],
+            7));
+
+        Assert.Equal(3, TimelineCardProjector.BuildStats(item, English()).Count);
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(item, English());
+        Assert.Equal(2, details.Rows.Count);
+        Assert.Single(details.ElidedNotes);
     }
 
     /// <summary>ADR 0059's three totals become three chips, and every one is flagged as restating the
@@ -60,12 +88,11 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void ADiffPayloadProducesExactlyThreeSummaryRestatingCountChips()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
-            DiffItem(new(3, 120, 8, [], 0)), English())!;
+        IReadOnlyList<TimelineStat> stats = TimelineCardProjector.BuildStats(DiffItem(new(3, 120, 8, [], 0)), English());
 
-        Assert.Equal(3, card.Stats.Count);
-        Assert.All(card.Stats, stat => Assert.True(stat.RestatesSummary));
-        Assert.Equal(["3", "+120", "-8"], card.Stats.Select(stat => stat.Value));
+        Assert.Equal(3, stats.Count);
+        Assert.All(stats, stat => Assert.True(stat.RestatesSummary));
+        Assert.Equal(["3", "+120", "-8"], stats.Select(stat => stat.Value));
     }
 
     /// <summary>One detail row per recorded file, carrying the LOCALIZED change kind rather than the
@@ -76,7 +103,7 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void EachChangedFileBecomesADetailRowWithALocalizedChangeKind()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(
             DiffItem(new(
                 2,
                 12,
@@ -86,14 +113,14 @@ public sealed class TimelineCardProjectorTests
                     new("src/New.cs", 2, 0, DiffChangeKinds.Added),
                 ],
                 0)),
-            English())!;
+            English());
 
-        Assert.Equal(2, card.DetailRows.Count);
-        Assert.Equal("src/App.cs", card.DetailRows[0].PrimaryText);
-        Assert.Equal("+10 -3 modified", card.DetailRows[0].SecondaryText);
-        Assert.Equal("+2 -0 added", card.DetailRows[1].SecondaryText);
+        Assert.Equal(2, details.Rows.Count);
+        Assert.Equal("src/App.cs", details.Rows[0].PrimaryText);
+        Assert.Equal("+10 -3 modified", details.Rows[0].SecondaryText);
+        Assert.Equal("+2 -0 added", details.Rows[1].SecondaryText);
         Assert.All(
-            card.DetailRows,
+            details.Rows,
             row => Assert.DoesNotContain(DiffChangeKinds.Binary, row.SecondaryText!, StringComparison.Ordinal));
     }
 
@@ -103,14 +130,38 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void ACappedFileListReportsHowManyRowsAreNotShown()
     {
-        TimelineCardContent capped = TimelineCardProjector.Build(
-            DiffItem(new(60, 500, 100, [new("src/App.cs", 5, 1, DiffChangeKinds.Modified)], 59)), English())!;
-        TimelineCardContent uncapped = TimelineCardProjector.Build(
-            DiffItem(new(1, 5, 1, [new("src/App.cs", 5, 1, DiffChangeKinds.Modified)], 0)), English())!;
+        TimelineCardDetails capped = TimelineCardProjector.BuildDetails(
+            DiffItem(new(60, 500, 100, [new("src/App.cs", 5, 1, DiffChangeKinds.Modified)], 59)), English());
+        TimelineCardDetails uncapped = TimelineCardProjector.BuildDetails(
+            DiffItem(new(1, 5, 1, [new("src/App.cs", 5, 1, DiffChangeKinds.Modified)], 0)), English());
 
-        Assert.NotNull(capped.ElidedText);
-        Assert.Contains("59", capped.ElidedText, StringComparison.Ordinal);
-        Assert.Null(uncapped.ElidedText);
+        Assert.Contains("59", Assert.Single(capped.ElidedNotes), StringComparison.Ordinal);
+        Assert.Empty(uncapped.ElidedNotes);
+    }
+
+    /// <summary><see cref="WorkflowEventPayload"/> permits a diff family and a tool-use family on the
+    /// same payload, and ADR 0059 and ADR 0060 cap their lists independently. No producer emits that
+    /// combination today, but the shape allows it, and a single elision-note slot would let one
+    /// family's note overwrite the other's -- silently dropping a real elided-items fact, which is
+    /// precisely what the explicit-elision rule exists to prevent. Both notes must survive.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public void ADiffElisionAndAToolUseElisionOnOnePayloadBothReachTheOutput()
+    {
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(
+            Item(
+                WorkflowEvent.AttemptDiffRecordedType,
+                new(
+                    new(60, 500, 100, [new("src/App.cs", 5, 1, DiffChangeKinds.Modified)], 59),
+                    new(80, 40, 40, [new(ProviderToolCallKinds.Command, null, 40, 0, true)], 31, 0),
+                    null)),
+            English());
+
+        Assert.Equal(2, details.ElidedNotes.Count);
+        Assert.Contains(details.ElidedNotes, note => note.Contains("59", StringComparison.Ordinal));
+        Assert.Contains(details.ElidedNotes, note => note.Contains("31", StringComparison.Ordinal));
+        // Both families' rows survive together too, for the same reason.
+        Assert.Equal(["src/App.cs", "command"], details.Rows.Select(row => row.PrimaryText));
     }
 
     /// <summary>ADR 0060: a command never carries a target (the only text identifying which command
@@ -120,7 +171,7 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void ACommandRowCarriesNoTargetWhileAnEditRowDoes()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(
             ToolUseItem(new(
                 2,
                 1,
@@ -131,10 +182,10 @@ public sealed class TimelineCardProjectorTests
                 ],
                 0,
                 0)),
-            English())!;
+            English());
 
-        Assert.Equal("command", card.DetailRows[0].PrimaryText);
-        Assert.Equal("edit src/App.cs", card.DetailRows[1].PrimaryText);
+        Assert.Equal("command", details.Rows[0].PrimaryText);
+        Assert.Equal("edit src/App.cs", details.Rows[1].PrimaryText);
     }
 
     /// <summary>A null duration or exit code is OMITTED from the row, never rendered as "0 ms" or
@@ -144,7 +195,7 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void AnUnobservedDurationOrExitCodeIsOmittedRatherThanRenderedAsZero()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(
             ToolUseItem(new(
                 3,
                 2,
@@ -156,13 +207,13 @@ public sealed class TimelineCardProjectorTests
                 ],
                 0,
                 0)),
-            English())!;
+            English());
 
-        Assert.Null(card.DetailRows[0].SecondaryText);
-        Assert.Equal("40 ms", card.DetailRows[1].SecondaryText);
-        Assert.Equal("exit code 1, failed", card.DetailRows[2].SecondaryText);
-        Assert.Equal(TimelineStatTone.Negative, card.DetailRows[2].Tone);
-        Assert.Equal(TimelineStatTone.Neutral, card.DetailRows[0].Tone);
+        Assert.Null(details.Rows[0].SecondaryText);
+        Assert.Equal("40 ms", details.Rows[1].SecondaryText);
+        Assert.Equal("exit code 1, failed", details.Rows[2].SecondaryText);
+        Assert.Equal(TimelineStatTone.Negative, details.Rows[2].Tone);
+        Assert.Equal(TimelineStatTone.Neutral, details.Rows[0].Tone);
     }
 
     /// <summary>ADR 0060's drift counter gets a chip only when it is non-zero, and that chip is the
@@ -173,13 +224,14 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void TheDriftChipAppearsOnlyWhenSomethingWasUnmappedAndIsNotASummaryRestatement()
     {
-        TimelineCardContent quiet = TimelineCardProjector.Build(ToolUseItem(new(2, 1, 1, [], 0, 0)), English())!;
-        TimelineCardContent drifting = TimelineCardProjector.Build(ToolUseItem(new(2, 1, 1, [], 0, 4)), English())!;
+        IReadOnlyList<TimelineStat> quiet = TimelineCardProjector.BuildStats(ToolUseItem(new(2, 1, 1, [], 0, 0)), English());
+        IReadOnlyList<TimelineStat> drifting =
+            TimelineCardProjector.BuildStats(ToolUseItem(new(2, 1, 1, [], 0, 4)), English());
 
-        Assert.Equal(3, quiet.Stats.Count);
-        Assert.All(quiet.Stats, stat => Assert.True(stat.RestatesSummary));
-        Assert.Equal(4, drifting.Stats.Count);
-        TimelineStat drift = drifting.Stats[3];
+        Assert.Equal(3, quiet.Count);
+        Assert.All(quiet, stat => Assert.True(stat.RestatesSummary));
+        Assert.Equal(4, drifting.Count);
+        TimelineStat drift = drifting[3];
         Assert.Equal("4", drift.Value);
         Assert.False(drift.RestatesSummary);
         Assert.Equal(TimelineStatTone.Caution, drift.Tone);
@@ -193,18 +245,20 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void AnUnreportedTokenCounterProducesNoChipAtAllRatherThanAZero()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
-            UsageItem(new(InputTokens: 6, OutputTokens: null, CacheReadTokens: null, CacheCreationTokens: null,
-                ContextWindow: null)),
-            English())!;
+        TimelineItemView item = UsageItem(new(
+            InputTokens: 6, OutputTokens: null, CacheReadTokens: null, CacheCreationTokens: null, ContextWindow: null));
 
-        TimelineStat only = Assert.Single(card.Stats);
+        IReadOnlyList<TimelineStat> stats = TimelineCardProjector.BuildStats(item, English());
+
+        TimelineStat only = Assert.Single(stats);
         Assert.Equal("input", only.Label);
         Assert.Equal("6", only.Value);
         Assert.False(only.RestatesSummary);
-        Assert.DoesNotContain(card.Stats, stat => stat.Value == "0");
-        Assert.Empty(card.DetailRows);
-        Assert.Null(card.ElidedText);
+        Assert.DoesNotContain(stats, stat => stat.Value == "0");
+        // A usage payload is counters only (ADR 0061) -- it contributes nothing to the detail half.
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(item, English());
+        Assert.Empty(details.Rows);
+        Assert.Empty(details.ElidedNotes);
     }
 
     /// <summary>A reported zero is still reported: "0" is a real observation and must not be confused
@@ -213,12 +267,12 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void AGenuinelyReportedZeroStillProducesItsOwnChip()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
+        IReadOnlyList<TimelineStat> stats = TimelineCardProjector.BuildStats(
             UsageItem(new(InputTokens: 0, OutputTokens: null, CacheReadTokens: null, CacheCreationTokens: null,
                 ContextWindow: null)),
-            English())!;
+            English());
 
-        Assert.Equal("0", Assert.Single(card.Stats).Value);
+        Assert.Equal("0", Assert.Single(stats).Value);
     }
 
     /// <summary>ADR 0061/0064: the context window is a value in its own right, never a denominator.
@@ -229,12 +283,12 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void TheContextWindowIsItsOwnChipAndNothingInTheCardReadsAsARatio()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
-            UsageItem(new(6, 265, 75_666, 38_581, 200_000)), English())!;
+        IReadOnlyList<TimelineStat> stats = TimelineCardProjector.BuildStats(
+            UsageItem(new(6, 265, 75_666, 38_581, 200_000)), English());
 
-        Assert.Equal(5, card.Stats.Count);
-        Assert.Contains(card.Stats, stat => stat.Label == "context window" && stat.Value == "200000");
-        Assert.All(card.Stats, stat => Assert.All(
+        Assert.Equal(5, stats.Count);
+        Assert.Contains(stats, stat => stat.Label == "context window" && stat.Value == "200000");
+        Assert.All(stats, stat => Assert.All(
             new[] { stat.Label, stat.Value },
             part =>
             {
@@ -252,17 +306,19 @@ public sealed class TimelineCardProjectorTests
     {
         TimelineItemView item = DiffItem(new(1, 4, 0, [new("src/App.cs", 4, 0, DiffChangeKinds.Renamed)], 2));
 
-        TimelineCardContent english = TimelineCardProjector.Build(item, English())!;
-        TimelineCardContent russian = TimelineCardProjector.Build(item, Russian())!;
+        IReadOnlyList<TimelineStat> englishStats = TimelineCardProjector.BuildStats(item, English());
+        IReadOnlyList<TimelineStat> russianStats = TimelineCardProjector.BuildStats(item, Russian());
+        TimelineCardDetails english = TimelineCardProjector.BuildDetails(item, English());
+        TimelineCardDetails russian = TimelineCardProjector.BuildDetails(item, Russian());
 
-        Assert.Equal("files", english.Stats[0].Label);
-        Assert.Equal("файлов", russian.Stats[0].Label);
-        Assert.Equal("+4 -0 renamed", english.DetailRows[0].SecondaryText);
-        Assert.Equal("+4 -0 переименован", russian.DetailRows[0].SecondaryText);
-        Assert.DoesNotContain(DiffChangeKinds.Renamed, russian.DetailRows[0].SecondaryText!, StringComparison.Ordinal);
-        Assert.NotEqual(english.ElidedText, russian.ElidedText);
+        Assert.Equal("files", englishStats[0].Label);
+        Assert.Equal("файлов", russianStats[0].Label);
+        Assert.Equal("+4 -0 renamed", english.Rows[0].SecondaryText);
+        Assert.Equal("+4 -0 переименован", russian.Rows[0].SecondaryText);
+        Assert.DoesNotContain(DiffChangeKinds.Renamed, russian.Rows[0].SecondaryText!, StringComparison.Ordinal);
+        Assert.NotEqual(Assert.Single(english.ElidedNotes), Assert.Single(russian.ElidedNotes));
         // The path itself is data, not prose -- it must survive both renders verbatim.
-        Assert.Equal("src/App.cs", russian.DetailRows[0].PrimaryText);
+        Assert.Equal("src/App.cs", russian.Rows[0].PrimaryText);
     }
 
     /// <summary>ADR 0059 records a binary file with zero counts because "how many lines changed" has
@@ -272,10 +328,10 @@ public sealed class TimelineCardProjectorTests
     [Trait("Category", "Unit")]
     public void ABinaryFileShowsItsKindWithoutFabricatedLineCounts()
     {
-        TimelineCardContent card = TimelineCardProjector.Build(
-            DiffItem(new(1, 0, 0, [new("docs/logo.png", 0, 0, DiffChangeKinds.Binary)], 0)), English())!;
+        TimelineCardDetails details = TimelineCardProjector.BuildDetails(
+            DiffItem(new(1, 0, 0, [new("docs/logo.png", 0, 0, DiffChangeKinds.Binary)], 0)), English());
 
-        Assert.Equal("binary", card.DetailRows[0].SecondaryText);
+        Assert.Equal("binary", details.Rows[0].SecondaryText);
     }
 }
 

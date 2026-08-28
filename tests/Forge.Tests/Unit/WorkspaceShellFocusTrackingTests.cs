@@ -24,7 +24,7 @@ public sealed class WorkspaceShellFocusTrackingTests
     {
         // PR #110 review finding 2: rewindReasonEntry, instructionEntry, definitionOfDoneEntry,
         // evidenceEntry, and justificationEntry are hoisted so their *instance* -- and whatever the
-        // user already typed -- survives RefreshActionsAsync, but before this fix none of them was
+        // user already typed -- survives RenderActions, but before this fix none of them was
         // ever passed through TrackContentFocus, so a refresh mid-edit still dropped focus to the top
         // of the page exactly as it would for a freshly built button.
         string source = SprintWorkspaceSource();

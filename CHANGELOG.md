@@ -23,9 +23,11 @@ User-facing Forge changes are listed by release, newest first.
   percentage is computed for either.
 - **A pending human decision now appears at the point in the timeline that asked for it.** When a
   sprint is waiting on a gate, an Approve/Reject card is rendered inline, directly beneath the event
-  that requested the decision, naming the exact gate node. This is in addition to the action panel at
-  the bottom of the workspace, which is unchanged and still works — and remains the place a decision
-  appears when the event that requested it is older than the timeline page currently loaded.
+  that requested the decision, naming the exact gate node. When several gates are waiting at once,
+  each card's Approve and Reject buttons announce the node they decide, so a screen-reader user can
+  tell them apart. This is in addition to the action panel at the bottom of the workspace, which is
+  unchanged and still works — and remains the place a decision appears when the event that requested
+  it is older than the timeline page currently loaded.
 
 Out of scope, matching the limits of what Forge actually records: diff cards show per-file line
 counts, never the diff content itself; tool-call rows show that a command ran and how it ended, never
