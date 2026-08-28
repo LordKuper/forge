@@ -44,6 +44,56 @@ public sealed class WorkspaceCliTests
         Assert.Contains(secondRoot.Replace("\\", "\\\\", StringComparison.Ordinal), json, StringComparison.Ordinal);
     }
 
+    /// <summary>ADR 0069's "computed only where it is actually reported", at the one surface that
+    /// reports it (PR #126 review finding 5). `diff_stat` is the single member of this row that
+    /// spawns `git` processes -- up to three per active sprint per cataloged project -- and only
+    /// `--json` serializes it; the plain table prints state/stage/progress/active_operation and
+    /// discards the rest. Asking for it in both modes was the same wasted cost review finding 2
+    /// removed from the Desktop surfaces, just relocated to this command's default output.
+    ///
+    /// Pins the two modes against each other in one arrangement, so neither can drift alone: the
+    /// integration worktree exists in both runs, meaning the plain run WOULD reach `git` if it
+    /// asked, and the `--json` run proves the opt-in was not simply switched off for everyone.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public async Task WorkspaceSummaryReadsDiffStatisticsOnlyInTheJsonModeThatReportsThem()
+    {
+        FakeWorktreeManager worktrees = new();
+        using TestEnvironment environment = new(worktrees: worktrees);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        await environment.InitializeAsync(environment.ProjectRoot, true, cancellationToken);
+        ProjectCatalogStore catalog = environment.Resolve<ProjectCatalogStore>();
+        await catalog.AddAsync(environment.ProjectRoot, cancellationToken);
+        SprintId sprintId = (await environment.Resolve<SprintOrchestrator>().CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), Graph: OneNodeGraph), cancellationToken)).SprintId!;
+        SprintDefinition definition = (await environment.Resolve<ISprintStore>()
+            .LoadDefinitionAsync(environment.ProjectRoot, sprintId, cancellationToken))!;
+        ProjectWorkspaceSummary probe = await environment.Application
+            .GetWorkspaceSummaryAsync(environment.ProjectRoot, false, cancellationToken);
+        Assert.True((await environment.Resolve<SprintGitIsolation>().EnsureIntegrationWorktreeAsync(
+            environment.ProjectRoot, probe.ProjectId!.Value, sprintId, definition.BaseCommit,
+            cancellationToken)).Succeeded);
+
+        StringWriter plainOutput = new(CultureInfo.InvariantCulture);
+        int plainExitCode = await CliApplication
+            .CreateRootCommand(Text(), plainOutput, environment.Application, catalog: catalog)
+            .Parse(["workspace", "summary"])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, plainExitCode);
+        Assert.Contains(sprintId.Value.ToString(), plainOutput.ToString(), StringComparison.Ordinal);
+        Assert.Empty(worktrees.DiffStatCalls);
+
+        StringWriter jsonOutput = new(CultureInfo.InvariantCulture);
+        int jsonExitCode = await CliApplication
+            .CreateRootCommand(Text(), jsonOutput, environment.Application, catalog: catalog)
+            .Parse(["workspace", "summary", "--json"])
+            .InvokeAsync(new InvocationConfiguration(), cancellationToken);
+
+        Assert.Equal(0, jsonExitCode);
+        Assert.Single(worktrees.DiffStatCalls);
+    }
+
     [Fact]
     [Trait("Category", "Acceptance")]
     public async Task WorkspaceActionsListsProjectLevelActionsWhenNoSprintIsGiven()

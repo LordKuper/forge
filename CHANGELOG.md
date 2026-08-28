@@ -2,6 +2,27 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.88.0
+
+### Added
+
+- `forge workspace summary --json` now reports two more facts per active sprint, ahead of the sprint
+  header that will display them. `first_attempt_started_at` is when the sprint's first attempt was
+  started, so a reader can show how long the sprint has been *working* rather than how long ago it
+  was created — a sprint parked overnight before anyone ran it is not a fourteen-hour run. It is
+  absent for a sprint that has not started an attempt yet, never a zero. `diff_stat` reports how much
+  the sprint has changed so far as `files_changed`, `insertions`, and `deletions`, read fresh from
+  git each time as the sprint's integration branch against the base commit it was created at — so a
+  file two attempts both touched counts once, not twice. It is absent, rather than zero, for a sprint
+  that has not run yet and whenever the git read does not succeed: "nothing to report" and "nothing
+  changed" are different answers and are never conflated.
+- Nothing renders either fact yet. The human-readable `forge workspace summary` output and every
+  Desktop surface are unchanged in this release; showing elapsed time and diff statistics in the
+  sprint workspace header is the next slice of that work. Reading `diff_stat` runs git, so it is
+  computed only where it is actually reported: `forge workspace summary --json` asks for it, while
+  Desktop's sidebar and sprint header do not — no Desktop view got slower, and a missing or
+  unusable `git` leaves the field absent instead of failing the surface reading it.
+
 ## v0.87.0
 
 ### Added

@@ -852,13 +852,23 @@ public sealed class ControlPlaneHostedService(
     /// <summary>Plan section 6.2's reserved `workspace.summary` query (Slice 4). A Host is always
     /// scoped to exactly one project (ADR 0005), so this only ever answers for this Host's own
     /// project root -- the client-side catalog fan-out across every known project lives entirely
-    /// outside any one Host (ADR 0049).</summary>
+    /// outside any one Host (ADR 0049). Both the payload and its one field are optional: a client
+    /// that sends neither gets the cheap row (no `git`-backed `diff_stat`, ADR 0069), matching
+    /// <see cref="DispatchGetAvailableActionsAsync"/>'s own tolerance of a missing payload.</summary>
     private async Task<ControlResponse> DispatchGetWorkspaceSummaryAsync(
         ControlRequest request,
         CancellationToken cancellationToken)
     {
+        bool includeDiffStats = false;
+        if (request.Payload is { } value)
+        {
+            GetWorkspaceSummaryRequest? payload =
+                value.Deserialize<GetWorkspaceSummaryRequest>(ControlProtocol.JsonOptions);
+            includeDiffStats = payload?.IncludeDiffStats ?? false;
+        }
+
         ProjectWorkspaceSummary result = await application
-            .GetWorkspaceSummaryAsync(options.ProjectRoot, cancellationToken)
+            .GetWorkspaceSummaryAsync(options.ProjectRoot, includeDiffStats, cancellationToken)
             .ConfigureAwait(false);
         JsonElement responsePayload = JsonSerializer.SerializeToElement(result, StatusJson.Options);
         return new(request.CorrelationId, ControlDiagnostic.None, responsePayload);

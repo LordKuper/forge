@@ -192,8 +192,13 @@ public sealed class SidebarViewModel(
         IReadOnlyList<ProviderHealthEntry>? selectedProjectProviders = null;
         foreach (ProjectCatalogEntry entry in listing.Entries)
         {
+            // Never the `git`-backed diff statistics (ADR 0069): this loop is per cataloged project
+            // and its rows are the lighter SidebarSprintItem projection, which carries no diff at
+            // all -- asking for one here would spawn up to three `git` processes per active sprint
+            // per project on every sidebar refresh for a value this surface then discards (PR #126
+            // review finding 2).
             ProjectWorkspaceSummary summary = await application
-                .GetWorkspaceSummaryAsync(entry.Root, cancellationToken)
+                .GetWorkspaceSummaryAsync(entry.Root, false, cancellationToken)
                 .ConfigureAwait(false);
             foreach (ProviderHealthEntry provider in summary.Providers)
             {

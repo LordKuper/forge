@@ -42,7 +42,7 @@ public sealed class SprintStatusHeaderProjectorTests
         ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
         ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
-            environment.ProjectRoot, cancellationToken);
+            environment.ProjectRoot, false, cancellationToken);
 
         SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
 
@@ -94,7 +94,7 @@ public sealed class SprintStatusHeaderProjectorTests
         ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
         ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
-            environment.ProjectRoot, cancellationToken);
+            environment.ProjectRoot, false, cancellationToken);
 
         SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
 
@@ -157,7 +157,7 @@ public sealed class SprintStatusHeaderProjectorTests
         ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
         ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
-            environment.ProjectRoot, cancellationToken);
+            environment.ProjectRoot, false, cancellationToken);
 
         SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
 
@@ -196,7 +196,7 @@ public sealed class SprintStatusHeaderProjectorTests
         ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
         ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
-            environment.ProjectRoot, cancellationToken);
+            environment.ProjectRoot, false, cancellationToken);
 
         SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
 
@@ -224,7 +224,7 @@ public sealed class SprintStatusHeaderProjectorTests
         ProjectSnapshot snapshot = await environment.Application.GetProjectSnapshotAsync(
             environment.ProjectRoot, SnapshotDetail.Full, sprintId.Value, cancellationToken);
         ProjectWorkspaceSummary summary = await environment.Application.GetWorkspaceSummaryAsync(
-            environment.ProjectRoot, cancellationToken);
+            environment.ProjectRoot, false, cancellationToken);
 
         SprintStatusHeaderData header = SprintStatusHeaderProjector.Build("My Project", snapshot, summary, Text());
 

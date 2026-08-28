@@ -44,8 +44,12 @@ public sealed class SprintWorkspaceViewModel(
         ProjectSnapshot snapshot = await application
             .GetProjectSnapshotAsync(projectRoot, SnapshotDetail.Full, sprintId, cancellationToken)
             .ConfigureAwait(false);
+        // Diff statistics stay opted out until the header actually draws them (ADR 0069's own
+        // deferral: slice S13 adds the control together with the field it reads). Flipping this one
+        // argument is what S13 does; asking now would cost `git` processes per active sprint on
+        // every header refresh for a value nothing renders (PR #126 review finding 2).
         ProjectWorkspaceSummary summary = await application
-            .GetWorkspaceSummaryAsync(projectRoot, cancellationToken)
+            .GetWorkspaceSummaryAsync(projectRoot, false, cancellationToken)
             .ConfigureAwait(false);
         return (SprintStatusHeaderProjector.Build(projectDisplayName, snapshot, summary, text), snapshot);
     }

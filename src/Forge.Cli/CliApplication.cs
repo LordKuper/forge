@@ -1731,16 +1731,24 @@ public static class CliApplication
             }
 
             IReadOnlyList<ProjectCatalogEntry> entries = listing.Entries;
+            // The one surface that opts into the `git`-backed diff statistics (ADR 0069), and only
+            // in the output mode that reports them: `--json` serializes the whole row, while the
+            // human-readable table below prints state/stage/progress/active_operation and never
+            // `diff_stat`. Asking for them unconditionally would spawn up to three `git` processes
+            // per active sprint per cataloged project for a value the default output discards --
+            // the same wasted cost PR #126 review finding 2 removed from the Desktop surfaces, and
+            // what review finding 5 found still charged to this command's plain table.
+            bool asJson = parseResult.GetValue(json);
             List<(ProjectCatalogEntry Entry, ProjectWorkspaceSummary Summary)> rows = new(entries.Count);
             foreach (ProjectCatalogEntry entry in entries)
             {
                 ProjectWorkspaceSummary summary = await application
-                    .GetWorkspaceSummaryAsync(entry.Root, cancellationToken)
+                    .GetWorkspaceSummaryAsync(entry.Root, includeDiffStats: asJson, cancellationToken)
                     .ConfigureAwait(false);
                 rows.Add((entry, summary));
             }
 
-            if (parseResult.GetValue(json))
+            if (asJson)
             {
                 output.WriteLine(StatusJson.Serialize(rows.Select(row => row.Summary).ToList()));
                 return ExitCodes.Ok;

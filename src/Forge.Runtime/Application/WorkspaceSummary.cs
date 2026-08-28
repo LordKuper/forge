@@ -1,8 +1,19 @@
+using System.ComponentModel;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Providers;
 
 namespace Forge.Application;
+
+/// <summary>ADR 0069: how much one sprint has changed so far, as three totals over a fresh git diff
+/// of its integration branch against its own frozen base commit. Deliberately not
+/// <see cref="DiffPayload"/>: this travels inside a bounded sidebar/header row, and that type's
+/// per-file list (up to <see cref="GitWorktreeManagerDiffStatBudget.MaxFiles"/> entries, per active
+/// sprint, per project) is weight no reader of this row needs -- a surface that wants the file list
+/// reads it for one sprint on its own. <see cref="Insertions"/>/<see cref="Deletions"/> are totals
+/// over every changed file, including any the underlying per-file list elided, so a small number here
+/// always means a small change (ADR 0059's honest-totals rule).</summary>
+public sealed record SprintDiffStat(int FilesChanged, int Insertions, int Deletions);
 
 /// <summary>One active (non-terminal) sprint's bounded contribution to a project's workspace-summary
 /// row (plan section 6.2). <see cref="CurrentStageId"/>/<see cref="StagesCompleted"/>/
@@ -11,6 +22,24 @@ namespace Forge.Application;
 /// sprint's own frozen <see cref="SprintDefinition.Title"/> verbatim, including its
 /// <see langword="null"/> (ADR 0057) -- a presentation fallback is never baked into this read
 /// model.</summary>
+/// <remarks>
+/// ADR 0069 adds two live projections. Neither is a frozen sprint-creation value: ADR 0014 governs
+/// what <see cref="SprintDefinition"/> freezes, and both of these answer "what is true right now",
+/// like <see cref="State"/> and <see cref="StagesCompleted"/> already do.
+/// <list type="bullet">
+/// <item><see cref="FirstAttemptStartedAt"/> -- the anchor an elapsed-time display measures from
+/// (<see cref="SprintJournalEntry.FirstAttemptStartedAt"/>), <see langword="null"/> for a sprint that
+/// has never started an attempt. A timestamp, never a duration: the reader owns the clock, so this
+/// read model needs none and stays a pure projection over durable data.</item>
+/// <item><see cref="DiffStat"/> -- <see langword="null"/> both when the sprint has no integration
+/// worktree yet and when the git read failed. Those two are reported identically on purpose: a header
+/// can only say "not available" for either, and substituting zeros would assert that a sprint changed
+/// nothing. Also <see langword="null"/> whenever the caller did not ask for it: this is the one member
+/// of this row that costs `git` processes to compute, so it is opt-in per query
+/// (<see cref="WorkspaceSummaryProjector.CreateAsync"/>'s <c>includeDiffStats</c>) rather than paid
+/// for by every reader of the row.</item>
+/// </list>
+/// </remarks>
 public sealed record SprintWorkspaceSummary(
     Guid SprintId,
     int CreationSequence,
@@ -22,7 +51,9 @@ public sealed record SprintWorkspaceSummary(
     bool HasActiveOperation,
     string? ActiveOperationNodeId,
     Guid? ActiveOperationAttemptId,
-    string? Title);
+    string? Title,
+    DateTimeOffset? FirstAttemptStartedAt,
+    SprintDiffStat? DiffStat);
 
 /// <summary>
 /// Plan section 6.2's bounded, per-project workspace-summary row: project availability,
@@ -46,8 +77,10 @@ public sealed record ProjectWorkspaceSummary(
     string DiagnosticCode)
 {
     /// <summary>`1.1.0` adds <see cref="SprintWorkspaceSummary.Title"/> (ADR 0057) -- additive and
-    /// nullable, so an older reader that ignores it still sees a valid row.</summary>
-    public const string ContractVersion = "1.1.0";
+    /// nullable, so an older reader that ignores it still sees a valid row. `1.2.0` adds
+    /// <see cref="SprintWorkspaceSummary.FirstAttemptStartedAt"/> and
+    /// <see cref="SprintWorkspaceSummary.DiffStat"/> (ADR 0069) on the same terms.</summary>
+    public const string ContractVersion = "1.2.0";
 }
 
 /// <summary>A pure read derivation of "does this sprint have an exact live active operation right
@@ -95,9 +128,17 @@ public sealed class WorkspaceSummaryProjector(
     StartupPipeline pipeline,
     ISprintStore store,
     IConfigurationRegistry registry,
-    ProviderCatalog providerCatalog)
+    ProviderCatalog providerCatalog,
+    SprintGitIsolation gitIsolation)
 {
-    public async Task<ProjectWorkspaceSummary> CreateAsync(string? projectRoot, CancellationToken cancellationToken)
+    /// <summary>Builds one project's summary row. <paramref name="includeDiffStats"/> is the only
+    /// cost-bearing knob here (PR #126 review finding 2): every other member of the row is folded
+    /// from data this call already loads, while <see cref="SprintWorkspaceSummary.DiffStat"/> spawns
+    /// up to three `git` processes per active sprint. Left <see langword="false"/>, the row is exactly
+    /// as cheap as it was before ADR 0069 and <see cref="SprintWorkspaceSummary.DiffStat"/> is
+    /// <see langword="null"/> throughout; a caller that actually renders the value asks for it.</summary>
+    public async Task<ProjectWorkspaceSummary> CreateAsync(
+        string? projectRoot, bool includeDiffStats, CancellationToken cancellationToken)
     {
         (StartupStatus startup, ProviderToolchainStatus providers) =
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
@@ -167,7 +208,13 @@ public sealed class WorkspaceSummaryProjector(
                     activeOperation is not null,
                     activeOperation?.NodeId,
                     activeOperation?.Id.Value,
-                    definition.Title));
+                    definition.Title,
+                    entry.FirstAttemptStartedAt,
+                    includeDiffStats
+                        ? await ReadDiffStatAsync(
+                            startup.Project.Root, projectId, entry.Id, definition.BaseCommit, cancellationToken)
+                            .ConfigureAwait(false)
+                        : null));
             }
 
             return new(
@@ -200,6 +247,62 @@ public sealed class WorkspaceSummaryProjector(
                 [],
                 providerHealth,
                 DiagnosticCodes.InternalError);
+        }
+    }
+
+    /// <summary>
+    /// ADR 0069 (Q9): the sprint's own working diff, read fresh on every projection rather than
+    /// persisted or cached. Nothing durable could answer this question correctly -- the number changes
+    /// on every integration, and no aggregation over the per-attempt <c>AttemptDiffRecorded</c>
+    /// payloads (ADR 0059) can avoid double-counting a file two attempts both touched -- so the branch
+    /// git already maintains is the only honest source, and it is cheap enough to re-read.
+    /// </summary>
+    /// <remarks>
+    /// Reached only when the caller asked for it (<c>includeDiffStats</c>), because this is the one
+    /// read on this path that spawns processes and it fans out over `projects x active sprints` for a
+    /// caller that iterates a catalog. Once asked for, it is still bounded per sprint: only
+    /// non-terminal sprints reach here, and a sprint that has never run has no integration worktree
+    /// directory, which <see cref="SprintGitIsolation.ReadIntegrationDiffStatAsync"/> answers without
+    /// starting a `git` process at all. A sprint that has run costs three short `git` reads.
+    ///
+    /// Never throws and never reports a diagnostic: every failure mode -- no worktree yet, a worktree
+    /// deleted out from under us, an unresolvable base commit, a `git` failure -- collapses to
+    /// <see langword="null"/>, the same "one unreadable input never fails the whole fan-out" posture
+    /// <see cref="CreateAsync"/>'s own catch block applies to the project row. The catch below is what
+    /// makes that true for the shapes a result code cannot carry (PR #126 review finding 1): a `git`
+    /// that cannot be launched at all throws <see cref="Win32Exception"/> out of
+    /// <c>Process.Start</c>, which neither <c>SprintGitIsolation</c> nor <see cref="CreateAsync"/>'s
+    /// own filter catches, so before this guard one machine without `git` on `PATH` took down the
+    /// whole Desktop sidebar rather than blanking one optional field. The filter mirrors
+    /// <c>ImplementationExecutionHostedService.TryReadDiffStatAsync</c>'s, which was added for the same
+    /// shape (PR #116 finding 1), minus its <c>JsonException</c>: nothing on this path reads JSON.
+    /// Only a cancellation of this method's own <paramref name="cancellationToken"/> is a real
+    /// shutdown and is rethrown; any other <see cref="OperationCanceledException"/> is one optional
+    /// read giving up.
+    /// </remarks>
+    private async Task<SprintDiffStat?> ReadDiffStatAsync(
+        string projectRoot,
+        Guid projectId,
+        SprintId sprintId,
+        string baseCommit,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            GitDiffStatResult result = await gitIsolation
+                .ReadIntegrationDiffStatAsync(projectRoot, projectId, sprintId, baseCommit, cancellationToken)
+                .ConfigureAwait(false);
+            return result.Stat is { } stat ? new(stat.FilesChanged, stat.Insertions, stat.Deletions) : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or Win32Exception
+            or OperationCanceledException)
+        {
+            return null;
         }
     }
 }
