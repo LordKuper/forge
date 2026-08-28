@@ -12,11 +12,21 @@ public enum ConfigurationScope
 /// rename cannot silently desync a reader from a writer.</summary>
 public static class ConfigurationKeys
 {
+    /// <summary>ADR 0008: the exact set of providers that may be used at all. Omitted selects every
+    /// registered provider in composition order; <c>[]</c> blocks model work. Its array order is
+    /// also the routing order, but only while <see cref="ProvidersPriority"/> is empty (ADR
+    /// 0067).</summary>
     public const string ProvidersEnabled = "providers.enabled";
 
-    /// <summary>ADR 0067: the user's preferred order for routing among the providers
-    /// <see cref="ProvidersEnabled"/> allows. Declared, validated, and resolved only -- no routing
-    /// code reads it yet.</summary>
+    /// <summary>ADR 0067: the user's preferred routing order. It governs order only -- it never
+    /// enables or disables a provider, so <see cref="ProvidersEnabled"/> remains the sole authority
+    /// on membership and an id named here that is not enabled is skipped, not rejected. When
+    /// non-empty this <b>supersedes</b> <see cref="ProvidersEnabled"/>'s ordering (ADR 0008's
+    /// "explicit array is the exact enabled set and fallback priority"): the effective user order is
+    /// the ids listed here that are in the effective enabled set, in this order, followed by the
+    /// remaining enabled ids in their existing relative order. Empty -- the default -- leaves ADR
+    /// 0008's rule untouched. A frozen project profile still narrows and reorders on top of the
+    /// result. Declared, validated, and resolved only -- no routing code reads it yet.</summary>
     public const string ProvidersPriority = "providers.priority";
 
     /// <summary>ADR 0067: a map from model id to one of <c>ProviderEffortLevels.KnownLevels</c>.

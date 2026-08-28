@@ -92,20 +92,62 @@ Per Q24 (shape only), `shell.theme` accepts `dark`, `light`, and `system`, and d
 honours**. That is intentional: S24 owns the palette and the switching logic, and this slice ships
 neither. The settings UI (S18) must not present the choice as effective before S24 lands.
 
+### `providers.priority` orders; `providers.enabled` still decides membership (revises ADR 0008)
+
+ADR 0008 gives `providers.enabled` two jobs at once — "an explicit array is the exact enabled set
+**and fallback priority**" — and that ordering is live, not aspirational
+(`ScopedConfigurationProviderEnablementSource.GetEnabledIdsAsync` preserves document order,
+`ProviderCatalog.ResolveEnabled` preserves it again, and `ExecutionProfilePolicy.Freeze` takes
+`frozenProviders[0]` as the implementation provider). A second user-scoped ordering of the same ids
+would therefore be ambiguous — `enabled: ["a","b"]` with `priority: ["b","a"]` is schema-valid and
+has two contradictory correct answers. This ADR splits the two jobs and revises ADR 0008 accordingly,
+now, while the key still has no consumer and the rule is free to set.
+
+**Membership is `providers.enabled` alone.** Its three states are unchanged: omitted selects every
+registered provider in composition order, an explicit array is the exact enabled set, and `[]` blocks
+model work. `providers.priority` never enables or disables anything — that is exactly why it is
+validated against the provider catalog rather than against the enabled set (below), and why an id it
+names that is not currently enabled is skipped at routing time rather than being an error.
+
+**Order is `providers.priority` whenever it is non-empty.** The effective user-scope routing order is
+the ids of `providers.priority` that are in the effective enabled set, in priority order, followed by
+the remaining enabled ids in their existing relative order — `providers.enabled`'s document order, or
+composition order when it is omitted. Priority is therefore a *partial* order: naming one provider is
+enough to promote it, and the example above resolves to `b, a`.
+
+**When `providers.priority` is empty — its default, and every document that exists today — ADR 0008's
+rule stands verbatim** and `providers.enabled`'s array order is the fallback priority. No shipped
+configuration changes meaning, and `ScopedConfigurationProviderEnablementSource`,
+`ProviderCatalog.ResolveEnabled` and `SprintOrchestrator.CreateSprintAsync` need no change in this
+slice.
+
+Scope layering is untouched. ADR 0008's frozen project profile still narrows and reorders on top of
+the user order, and the candidate list is still the ordered intersection frozen into the sprint
+profile; `providers.priority` only defines what "the user order" *is* when no project constraint
+exists.
+
+Priority wins rather than `providers.enabled` for three reasons. `providers.enabled` cannot express an
+order without also freezing membership: its omitted state means "every registered provider, including
+one a future release adds", so a user who merely wants Claude tried first would have to enumerate the
+whole set and turn a preference into a policy. The opposite rule would leave `providers.priority` with
+no meaning at all wherever `providers.enabled` is an explicit array, making one key's meaning depend
+on another key's presence — the ambiguity being removed, not a resolution of it. And the change is
+free exactly now: the key defaults to `[]` and nothing reads it, so no released behavior moves, while
+after a consumer ships this would be a behavior change.
+
 ### `providers.priority` is validated against the provider catalog, not against `providers.enabled`
 
-The plan's Q23 phrases priority as ordering the enabled providers. It is nonetheless validated the
-same way `providers.enabled` is — every id must exist in the composed `ProviderCatalog`
-(`ForgeApplication.RequireRegisteredProviders`, extended to cover both keys), with duplicates
-rejected by the schema's `uniqueItems`.
+Priority is validated the same way `providers.enabled` is — every id must exist in the composed
+`ProviderCatalog` (`ForgeApplication.RequireRegisteredProviders`, extended to cover both keys), with
+duplicates rejected by the schema's `uniqueItems`.
 
 It is deliberately **not** additionally required to be a subset of the current `providers.enabled`
 selection. The two keys are written independently, so a subset rule would make one of the two write
 orders impossible — raising priority before enabling a provider, or disabling one before re-ordering
-the rest. The eventual consumer intersects priority with the effective enabled set at read time,
-where both values are known at once.
+the rest. The membership rule above is what makes that safe: an id named by priority but not enabled
+is inert, never an escalation.
 
-Unlike `providers.enabled`, priority draws no omitted-vs-empty distinction: empty means "no
+Unlike `providers.enabled`, priority draws no omitted-vs-empty distinction: both mean "no
 preference", which is the registration order every release has used, so its default is `[]` rather
 than `null`.
 
@@ -114,7 +156,10 @@ than `null`.
 `models.effort` is an object mapping model id to an effort level. The levels are not a fresh
 vocabulary: `ProviderEffortLevels` already owns the neutral ladder
 `none | minimal | low | medium | high | xhigh | max | ultra`, which was `private`. It is now exposed
-as `ProviderEffortLevels.KnownLevels` and `user-config.schema.json` restates it as an enum.
+as `internal ProviderEffortLevels.KnownLevels` — `internal`, not `public`, because the only reader is
+`Forge.Tests`, which `Forge.Runtime` already grants `InternalsVisibleTo`; the slice that adds a real
+cross-assembly consumer (S18's settings page) widens it then rather than this slice widening it on
+speculation. `user-config.schema.json` restates the ladder as an enum.
 
 Restricting the key to `low`/`medium`/`high` was rejected: both shipped adapters accept `xhigh`, so
 that set would reject configuration the providers can honour.
@@ -142,8 +187,20 @@ reads `providers.enabled`; `ForgeSettingsViewModel` picks its rows by name).
 |---|---|
 | `interaction.auto_approve_gate` | Schema only, **not consumed**. No enforcement path exists; see the mandatory-gate finding above before wiring one. |
 | `shell.theme` | Schema only, not consumed by any rendering code. Blocked on S24's light palette. |
-| `providers.priority` | Schema only, not consumed by routing. A later consumer intersects it with the effective enabled set. |
+| `providers.priority` | Schema only, not consumed by routing. A later consumer applies the precedence rule above; until then `providers.enabled`'s order is still the only one anything reads. |
 | `models.effort` | Schema only, not consumed by `ExecutionProfilePolicy.Freeze`. |
+
+That inertness is pinned mechanically rather than only in prose, because the
+`interaction.auto_approve_gate` row is a safety claim and prose cannot fail a build:
+`ArchitectureTests.TheSettingsKeysThisSliceShipsInertHaveNoConsumer` scans every `src/**/*.cs` file
+for references to the four `ConfigurationKeys` members and their literal key strings — comments
+excluded — and fails on any reference outside `ConfigurationContracts.cs`,
+`ConfigurationRegistry.cs` and `ConfigurationSchemaCodec.cs`. The single allowed exception is
+`ForgeApplication.RequireRegisteredProviders`'s one write-time catalog check of
+`providers.priority`, allowlisted by exact count, so even a second reference in that same file trips
+the guard. The guard is written to fail *closed*: it is not a prohibition on ever wiring these keys,
+it is the notification that someone has, so the reviewer of that change can confirm it is the right
+slice and delete the key's entry here.
 
 `ExecutionProfilePolicy` is a `static class` with no configuration dependency, and ADR 0014's
 ADR-0063 revision deliberately deleted its catalog-taking overload so that no hidden resolution can
@@ -161,4 +218,9 @@ caller, mirroring how frozen models are already passed.
 - Invalid values are rejected through the existing contract: `InvalidDataException` from the codec or
   schema, surfaced as `ConfigurationWriteResult(false, DiagnosticCodes.ConfigurationInvalid)`, with
   the previous file retained.
+- ADR 0008's "an explicit array is the exact enabled set and fallback priority" is revised: it remains
+  exactly true while `providers.priority` is empty, and yields the ordering half to
+  `providers.priority` when it is not. `docs/architecture/overview.md`'s user-scope list names both
+  keys accordingly. No code changes, because no code reads `providers.priority` yet — the rule exists
+  so the slice that writes that consumer implements a decided contract instead of inventing one.
 - No UI ships in this slice, and `Forge.Desktop` / `Forge.Desktop.Presentation` are untouched.

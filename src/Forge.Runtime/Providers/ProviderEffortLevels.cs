@@ -23,8 +23,10 @@ public static class ProviderEffortLevels
 
     /// <summary><see cref="Ladder"/> as a read-only view, so a surface that must *reject* unknown
     /// vocabulary rather than silently drop it (ADR 0067's <c>models.effort</c> configuration key
-    /// and its schema enum) validates against this list instead of restating it.</summary>
-    public static IReadOnlyList<string> KnownLevels => Ladder;
+    /// and its schema enum) validates against this list instead of restating it. <c>internal</c>
+    /// because the only reader today is <c>Forge.Tests</c>, which this assembly already grants
+    /// access to; the slice that adds a real cross-assembly consumer widens it then.</summary>
+    internal static IReadOnlyList<string> KnownLevels => Ladder;
 
     /// <summary>
     /// The level <paramref name="supportedLevels"/> should actually receive, or <see langword="null"/>

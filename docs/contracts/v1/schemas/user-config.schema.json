@@ -29,11 +29,13 @@
       "additionalProperties": false,
       "properties": {
         "enabled": {
+          "description": "The exact set of providers that may be used at all (ADR 0008). Omitted selects every registered provider in composition order; [] blocks model work. This array's order is also the routing order, but only while 'priority' is empty (ADR 0067).",
           "type": "array",
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
         },
         "priority": {
+          "description": "Preferred routing order (ADR 0067). Governs order only: it never enables or disables a provider, and an id listed here that is not enabled is skipped rather than rejected. When non-empty it supersedes the ordering of 'enabled' -- the effective user order is the ids listed here that are in the effective enabled set, in this order, followed by the remaining enabled ids in their existing relative order. Empty (the default) leaves ADR 0008's rule untouched. A frozen project profile still narrows and reorders on top of the result.",
           "type": "array",
           "items": {"type": "string", "minLength": 1},
           "uniqueItems": true
