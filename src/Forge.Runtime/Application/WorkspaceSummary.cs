@@ -1,3 +1,4 @@
+using System.ComponentModel;
 using Forge.Configuration;
 using Forge.Domain;
 using Forge.Providers;
@@ -33,7 +34,10 @@ public sealed record SprintDiffStat(int FilesChanged, int Insertions, int Deleti
 /// <item><see cref="DiffStat"/> -- <see langword="null"/> both when the sprint has no integration
 /// worktree yet and when the git read failed. Those two are reported identically on purpose: a header
 /// can only say "not available" for either, and substituting zeros would assert that a sprint changed
-/// nothing.</item>
+/// nothing. Also <see langword="null"/> whenever the caller did not ask for it: this is the one member
+/// of this row that costs `git` processes to compute, so it is opt-in per query
+/// (<see cref="WorkspaceSummaryProjector.CreateAsync"/>'s <c>includeDiffStats</c>) rather than paid
+/// for by every reader of the row.</item>
 /// </list>
 /// </remarks>
 public sealed record SprintWorkspaceSummary(
@@ -127,7 +131,14 @@ public sealed class WorkspaceSummaryProjector(
     ProviderCatalog providerCatalog,
     SprintGitIsolation gitIsolation)
 {
-    public async Task<ProjectWorkspaceSummary> CreateAsync(string? projectRoot, CancellationToken cancellationToken)
+    /// <summary>Builds one project's summary row. <paramref name="includeDiffStats"/> is the only
+    /// cost-bearing knob here (PR #126 review finding 2): every other member of the row is folded
+    /// from data this call already loads, while <see cref="SprintWorkspaceSummary.DiffStat"/> spawns
+    /// up to three `git` processes per active sprint. Left <see langword="false"/>, the row is exactly
+    /// as cheap as it was before ADR 0069 and <see cref="SprintWorkspaceSummary.DiffStat"/> is
+    /// <see langword="null"/> throughout; a caller that actually renders the value asks for it.</summary>
+    public async Task<ProjectWorkspaceSummary> CreateAsync(
+        string? projectRoot, bool includeDiffStats, CancellationToken cancellationToken)
     {
         (StartupStatus startup, ProviderToolchainStatus providers) =
             await pipeline.RunAsync(projectRoot, cancellationToken).ConfigureAwait(false);
@@ -199,9 +210,11 @@ public sealed class WorkspaceSummaryProjector(
                     activeOperation?.Id.Value,
                     definition.Title,
                     entry.FirstAttemptStartedAt,
-                    await ReadDiffStatAsync(
-                        startup.Project.Root, projectId, entry.Id, definition.BaseCommit, cancellationToken)
-                        .ConfigureAwait(false)));
+                    includeDiffStats
+                        ? await ReadDiffStatAsync(
+                            startup.Project.Root, projectId, entry.Id, definition.BaseCommit, cancellationToken)
+                            .ConfigureAwait(false)
+                        : null));
             }
 
             return new(
@@ -245,16 +258,27 @@ public sealed class WorkspaceSummaryProjector(
     /// git already maintains is the only honest source, and it is cheap enough to re-read.
     /// </summary>
     /// <remarks>
-    /// Bounded by construction, not by luck. Only non-terminal sprints reach here, and a sprint that
-    /// has never run has no integration worktree directory, which
-    /// <see cref="SprintGitIsolation.ReadIntegrationDiffStatAsync"/> answers without starting a `git`
-    /// process at all. A sprint that has run costs three short `git` reads on a call that already runs
-    /// a full <see cref="StartupPipeline"/> pass plus a provider-toolchain probe for the same project.
+    /// Reached only when the caller asked for it (<c>includeDiffStats</c>), because this is the one
+    /// read on this path that spawns processes and it fans out over `projects x active sprints` for a
+    /// caller that iterates a catalog. Once asked for, it is still bounded per sprint: only
+    /// non-terminal sprints reach here, and a sprint that has never run has no integration worktree
+    /// directory, which <see cref="SprintGitIsolation.ReadIntegrationDiffStatAsync"/> answers without
+    /// starting a `git` process at all. A sprint that has run costs three short `git` reads.
     ///
     /// Never throws and never reports a diagnostic: every failure mode -- no worktree yet, a worktree
     /// deleted out from under us, an unresolvable base commit, a `git` failure -- collapses to
     /// <see langword="null"/>, the same "one unreadable input never fails the whole fan-out" posture
-    /// <see cref="CreateAsync"/>'s own catch block applies to the project row.
+    /// <see cref="CreateAsync"/>'s own catch block applies to the project row. The catch below is what
+    /// makes that true for the shapes a result code cannot carry (PR #126 review finding 1): a `git`
+    /// that cannot be launched at all throws <see cref="Win32Exception"/> out of
+    /// <c>Process.Start</c>, which neither <c>SprintGitIsolation</c> nor <see cref="CreateAsync"/>'s
+    /// own filter catches, so before this guard one machine without `git` on `PATH` took down the
+    /// whole Desktop sidebar rather than blanking one optional field. The filter mirrors
+    /// <c>ImplementationExecutionHostedService.TryReadDiffStatAsync</c>'s, which was added for the same
+    /// shape (PR #116 finding 1), minus its <c>JsonException</c>: nothing on this path reads JSON.
+    /// Only a cancellation of this method's own <paramref name="cancellationToken"/> is a real
+    /// shutdown and is rethrown; any other <see cref="OperationCanceledException"/> is one optional
+    /// read giving up.
     /// </remarks>
     private async Task<SprintDiffStat?> ReadDiffStatAsync(
         string projectRoot,
@@ -263,9 +287,22 @@ public sealed class WorkspaceSummaryProjector(
         string baseCommit,
         CancellationToken cancellationToken)
     {
-        GitDiffStatResult result = await gitIsolation
-            .ReadIntegrationDiffStatAsync(projectRoot, projectId, sprintId, baseCommit, cancellationToken)
-            .ConfigureAwait(false);
-        return result.Stat is { } stat ? new(stat.FilesChanged, stat.Insertions, stat.Deletions) : null;
+        try
+        {
+            GitDiffStatResult result = await gitIsolation
+                .ReadIntegrationDiffStatAsync(projectRoot, projectId, sprintId, baseCommit, cancellationToken)
+                .ConfigureAwait(false);
+            return result.Stat is { } stat ? new(stat.FilesChanged, stat.Insertions, stat.Deletions) : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException
+            or InvalidDataException or InvalidOperationException or Win32Exception
+            or OperationCanceledException)
+        {
+            return null;
+        }
     }
 }

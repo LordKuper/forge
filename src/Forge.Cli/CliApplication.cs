@@ -1734,8 +1734,12 @@ public static class CliApplication
             List<(ProjectCatalogEntry Entry, ProjectWorkspaceSummary Summary)> rows = new(entries.Count);
             foreach (ProjectCatalogEntry entry in entries)
             {
+                // The one surface that opts into the `git`-backed diff statistics (ADR 0069): this
+                // command's own `--json` contract reports them, and it is a single explicit
+                // invocation rather than a view that refetches on every render (PR #126 review
+                // finding 2).
                 ProjectWorkspaceSummary summary = await application
-                    .GetWorkspaceSummaryAsync(entry.Root, cancellationToken)
+                    .GetWorkspaceSummaryAsync(entry.Root, true, cancellationToken)
                     .ConfigureAwait(false);
                 rows.Add((entry, summary));
             }

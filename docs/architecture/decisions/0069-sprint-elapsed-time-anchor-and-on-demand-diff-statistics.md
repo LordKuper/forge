@@ -85,12 +85,30 @@ one render pass, not about holding a result across passes. Here there is nothing
 sprint's diff is its own read, taken once per projection. A cross-call cache would also be actively
 wrong, since the number changes on every integration and the header exists to show it moving.
 
-The cost is bounded by construction rather than by luck. Only non-terminal sprints reach the read at
-all. A sprint that has never run has no integration worktree directory, and `GitWorktreeManager`'s
-own directory-existence guard short-circuits before starting a process — so that case costs zero
-`git` invocations, which is the common case for a draft or ready sprint. A sprint that has run costs
-three short reads (`rev-parse`, `--numstat`, `--name-status`) on a call that already runs a full
-`StartupPipeline` pass and a provider-toolchain probe for the same project.
+The cost is bounded per sprint rather than by luck. Only non-terminal sprints reach the read at all.
+A sprint that has never run has no integration worktree directory, and `GitWorktreeManager`'s own
+directory-existence guard short-circuits before starting a process — so that case costs zero `git`
+invocations, which is the common case for a draft or ready sprint. A sprint that has run costs three
+short reads (`rev-parse`, `--numstat`, `--name-status`).
+
+**Per-sprint boundedness is not the cost that matters, so the read is opt-in.** The first revision of
+this ADR compared one sprint's read to the whole per-project call, which is the wrong baseline:
+`GetWorkspaceSummaryAsync` is called once per cataloged project, in a sequential loop, by both
+`SidebarViewModel.LoadAsync` and `forge workspace summary`. The real added cost of computing this
+unconditionally is `projects × active sprints` serialized process spawns per refresh — and
+`StartupPipeline.RunAsync` spawns no `git` at all, so it would have made a project's summary a
+process-spawning call for the first time. Worse, the sidebar's rows are the lighter
+`SidebarSprintItem` projection (PR #122), which carries no diff at all, so that surface paid the
+whole fan-out for a value it discards.
+
+`CreateAsync` therefore takes an `includeDiffStats` flag, mirrored on `ForgeApplication.GetWorkspaceSummaryAsync`
+and on the wire as `GetWorkspaceSummaryRequest.IncludeDiffStats` (defaulted `false`, so an absent or
+older payload gets the pre-ADR-0069 row). Left off, the read model reports `diff_stat` absent and no
+`git` process is started — which is what every caller that fans out over a catalog on a render, or
+that does not draw the number, asks for. `forge workspace summary` opts in, because its `--json`
+contract reports the field and it is one explicit invocation rather than a refreshing view; the
+Desktop sidebar and the sprint header both stay opted out until S13 adds the control that draws the
+value (PR #126 review finding 2).
 
 ### Absent and zero are different answers
 
@@ -104,6 +122,20 @@ The read never throws and never surfaces a diagnostic code. Every failure mode �
 worktree deleted mid-read, an unresolvable base commit, a `git` failure — collapses to `null`,
 matching the "one unreadable input never fails the whole fan-out" posture `WorkspaceSummaryProjector`
 already applies to an unreadable project row and ADR 0005 applies to diagnostic-bundle collection.
+
+**That guarantee lives in the projector, not in `SprintGitIsolation`.** A result code cannot express
+a `git` that never started: `Process.Start` throws `Win32Exception` when the binary is missing from
+the Desktop host's `PATH`, replaced mid-session, or blocked by policy, and no `SprintGitIsolation`
+method converts that into a failure code. `CreateAsync`'s own catch filter
+(`IOException or UnauthorizedAccessException or InvalidDataException or FormatException`) does not
+cover it either, so such an exception escaped `GetWorkspaceSummaryAsync` entirely and propagated
+through `SidebarViewModel.LoadAsync`'s per-project loop — one machine without `git` took down the
+whole sidebar instead of blanking one optional field. `WorkspaceSummaryProjector.ReadDiffStatAsync`
+now wraps the read in the same fail-open guard `ImplementationExecutionHostedService.TryReadDiffStatAsync`
+uses for the attempt-level read (PR #116 finding 1), rethrowing only a cancellation of the caller's
+own token. Even for the exceptions the outer filter does cover, that guard is the correct outcome: an
+optional read must null one field, not degrade the project row to `internal_error` (PR #126 review
+finding 1).
 
 ### `SprintDiffStat` carries three totals, not `DiffPayload`
 
@@ -140,21 +172,31 @@ file including elided ones, so ADR 0059's honest-totals rule survives the narrow
 - `Forge.Runtime` (`Application/WorkspaceSummary.cs`): new `SprintDiffStat`; two new
   `SprintWorkspaceSummary` members; `ProjectWorkspaceSummary.ContractVersion` 1.1.0 → 1.2.0;
   `WorkspaceSummaryProjector` takes `SprintGitIsolation` (already a registered singleton) and gains
-  one private soft-failing read. One construction site, reviewed as ADR 0057/0058 require.
+  one private fail-open read. One construction site, reviewed as ADR 0057/0058 require.
+- `WorkspaceSummaryProjector.CreateAsync` and `ForgeApplication.GetWorkspaceSummaryAsync` take a
+  required `includeDiffStats`; `forge workspace summary` passes `true`, `SidebarViewModel.LoadAsync`
+  and `SprintWorkspaceViewModel.RefreshHeaderAsync` pass `false`. Pre-1.0 signature replacement, no
+  alias kept (repository rule).
 - No JSON schema change: `ProjectWorkspaceSummary` has no schema under `docs/contracts/v1/schemas/`
   — it is serialized reflectively by `StatusJson` and versioned only by its own `ContractVersion`
   constant. Both new members are additive and nullable, so an older reader is unaffected; pre-1.0,
   that additive change needs no version bump beyond the constant itself.
-- No control-protocol change: `get_workspace_summary`'s response is the same record, two fields
-  wider.
-- `forge workspace summary --json` reports both fields; its human-readable output is unchanged.
+- Control protocol: `get_workspace_summary`'s response is the same record, two fields wider; its
+  request gains one optional `include_diff_stats` field defaulting to `false`, so a client that sends
+  no payload — every client today — is unaffected.
+- `forge workspace summary --json` reports both fields; its human-readable output is unchanged. No
+  Desktop surface computes `diff_stat` in this slice.
 - `tests/Forge.Tests` (`Unit/WorkspaceSummaryTests.cs`): two pure tests for the elapsed anchor (no
   attempt yet → absent; the first attempt's start, pinned against both a later retroactive `running`
-  event and a second attempt) and one for the diff-stat wiring across both states (absent before an
-  integration worktree exists, the fake's stat after), using the existing `FakeWorktreeManager` —
-  real `git.exe` `--numstat` behaviour already belongs to `GitIsolationTests`. No test for the
-  `SprintWorkspaceSummary` field pass-through itself: it is straight plumbing with no branch, and
-  both tests above read it end to end anyway.
+  event and a second attempt) and four for the diff stat, using the existing `FakeWorktreeManager` —
+  real `git.exe` `--numstat` behaviour already belongs to `GitIsolationTests`. The diff-stat tests
+  cover the wiring across both states (absent before an integration worktree exists, the fake's stat
+  after, asserted against the recorded worktree path / base commit / tip rather than only the
+  returned value), the opt-out (no `DiffStatAsync` call at all), a `git` read that reports failure,
+  and a `git` that cannot be launched (`Win32Exception`) — the last two both asserting the project
+  row around the absent field is still fully populated. No test for the `SprintWorkspaceSummary`
+  field pass-through itself: it is straight plumbing with no branch, and the tests above read it end
+  to end anyway.
 - `VERSION` moves from `0.87.0` to `0.88.0` (MINOR: additive, no breaking change).
 
 ## References

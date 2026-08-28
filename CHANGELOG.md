@@ -18,7 +18,10 @@ User-facing Forge changes are listed by release, newest first.
   changed" are different answers and are never conflated.
 - Nothing renders either fact yet. The human-readable `forge workspace summary` output and every
   Desktop surface are unchanged in this release; showing elapsed time and diff statistics in the
-  sprint workspace header is the next slice of that work.
+  sprint workspace header is the next slice of that work. Reading `diff_stat` runs git, so it is
+  computed only where it is actually reported: `forge workspace summary --json` asks for it, while
+  Desktop's sidebar and sprint header do not — no Desktop view got slower, and a missing or
+  unusable `git` leaves the field absent instead of failing the surface reading it.
 
 ## v0.87.0
 

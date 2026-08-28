@@ -221,11 +221,16 @@ public sealed class SprintGitIsolation(IWorktreeManager worktrees, ISprintStore 
     /// The integration worktree is checked out on <see cref="WorktreeLayout.IntegrationBranch"/>, so
     /// its `HEAD` *is* that branch's tip.
     ///
-    /// Fails closed rather than throwing, on every path a caller cannot control: a sprint whose
+    /// Reports a failure code rather than throwing for the paths it can observe: a sprint whose
     /// integration worktree does not exist yet (nothing has run) costs no `git` process at all —
     /// <c>GitWorktreeManager</c>'s own directory-existence guard short-circuits before starting one —
     /// and reports <see cref="DiagnosticCodes.WorktreeUnavailable"/>, exactly like every other method
-    /// here. A read-only projection must degrade to "not available", never fail its caller.
+    /// here. It does NOT convert a `git` that cannot be launched, or is torn down mid-read, into a
+    /// failure code: <see cref="System.ComponentModel.Win32Exception"/> and
+    /// <see cref="OperationCanceledException"/> propagate from here exactly as they do from every
+    /// other method in this class. A read-only projection that must degrade to "not available" rather
+    /// than fail its own caller owns that guard itself — see
+    /// <c>WorkspaceSummaryProjector.ReadDiffStatAsync</c> (PR #126 review finding 1).
     /// </remarks>
     public async Task<GitDiffStatResult> ReadIntegrationDiffStatAsync(
         string projectRoot,

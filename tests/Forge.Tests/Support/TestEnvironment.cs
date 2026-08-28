@@ -547,12 +547,24 @@ internal sealed class FakeWorktreeManager : IWorktreeManager
     /// attempt whose commit is ready to integrate (PR #116 review finding 1).</summary>
     public Exception? DiffStatException { get; set; }
 
+    /// <summary>Every <see cref="DiffStatAsync"/> call's own arguments, in order -- the same
+    /// recorded-call shape <see cref="CreatedPaths"/>/<see cref="RemovedPaths"/>/<see cref="Commits"/>
+    /// already provide. Without it an assertion on the returned <see cref="DiffStat"/> alone passes
+    /// for a caller that diffed the wrong worktree, the wrong base commit, or a commit against
+    /// itself, since this fake answers identically for any arguments (PR #126 review finding 4).
+    /// Recorded before <see cref="DiffStatException"/> is thrown, so a failure case can still assert
+    /// what was asked for.</summary>
+    public List<(string Path, string FromCommit, string ToCommit)> DiffStatCalls { get; } = [];
+
     public Task<GitDiffStatResult> DiffStatAsync(
-        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken) =>
-        DiffStatException is { } failure
+        string projectRoot, string path, string fromCommit, string toCommit, CancellationToken cancellationToken)
+    {
+        DiffStatCalls.Add((path, fromCommit, toCommit));
+        return DiffStatException is { } failure
             ? Task.FromException<GitDiffStatResult>(failure)
             : Task.FromResult(
                 FailNextDiff ? GitDiffStatResult.Fail(DiffFailureCode) : GitDiffStatResult.Ok(DiffStat));
+    }
 
     public Task<string> GetHeadAsync(string projectRoot, string path, CancellationToken cancellationToken) =>
         heads.TryGetValue(path, out string? head)

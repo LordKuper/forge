@@ -1419,10 +1419,15 @@ public sealed class ForgeApplication(
     /// sidebar/status-header row (ADR 0043/0049). Deliberately catalog-agnostic -- the CLI's own
     /// `forge workspace summary` calls this once per <see cref="ProjectCatalogEntry"/> and pairs each
     /// result with that entry's own alias/last-route, since a project's Host has no notion of the
-    /// local catalog at all.</summary>
+    /// local catalog at all. <paramref name="includeDiffStats"/> opts into
+    /// <see cref="SprintWorkspaceSummary.DiffStat"/>, the one member of that row that costs `git`
+    /// processes to compute (up to three per active sprint) -- left <see langword="false"/> it is
+    /// reported absent and this query stays as cheap as it was before ADR 0069, which is what a caller
+    /// that fans this out across a whole catalog on every refresh needs (PR #126 review
+    /// finding 2).</summary>
     public Task<ProjectWorkspaceSummary> GetWorkspaceSummaryAsync(
-        string? projectRoot, CancellationToken cancellationToken) =>
-        workspaceSummary.CreateAsync(projectRoot, cancellationToken);
+        string? projectRoot, bool includeDiffStats, CancellationToken cancellationToken) =>
+        workspaceSummary.CreateAsync(projectRoot, includeDiffStats, cancellationToken);
 
     /// <summary>Plan section 6.3's reserved `sprint.timeline` query: a bounded, cursor-paged
     /// projection of one sprint's existing append-only workflow journal (ADR 0043/0049). Matches

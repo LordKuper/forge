@@ -169,10 +169,14 @@ public sealed record MoveSprintToStageRequest(
     Guid IdempotencyKey);
 
 /// <summary><see cref="ControlProtocol.GetWorkspaceSummaryKind"/>'s request payload (plan section
-/// 6.2, Slice 4). Empty: the Host always reports its own project's bounded summary row -- the
-/// client-side catalog fan-out across projects lives entirely outside any one Host (ADR 0049).
-/// </summary>
-public sealed record GetWorkspaceSummaryRequest;
+/// 6.2, Slice 4). Names no project: the Host always reports its own project's bounded summary row --
+/// the client-side catalog fan-out across projects lives entirely outside any one Host (ADR 0049).
+/// <see cref="IncludeDiffStats"/> (ADR 0069) opts into `ProjectWorkspaceSummary`'s per-sprint
+/// `diff_stat`, the one member of that row a Host must spawn `git` processes to answer. It defaults to
+/// <see langword="false"/>, so an absent payload -- including one sent by a client built before this
+/// field existed -- gets exactly the cheap row every earlier release answered with (PR #126 review
+/// finding 2).</summary>
+public sealed record GetWorkspaceSummaryRequest(bool IncludeDiffStats = false);
 
 /// <summary><see cref="ControlProtocol.GetSprintTimelineKind"/>'s request payload (plan section 6.3,
 /// Slice 4). No expected version travels on the wire -- a query has nothing to gate optimistic
