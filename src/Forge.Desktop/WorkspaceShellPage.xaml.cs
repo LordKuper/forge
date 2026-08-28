@@ -851,11 +851,14 @@ public partial class WorkspaceShellPage : ContentPage
             Style = ThemeStyle("GhostButtonStyle"),
             HorizontalOptions = LayoutOptions.Fill,
             // A frozen title is free text of up to 200 characters (ADR 0057); truncating keeps one
-            // row one row instead of letting a long title reflow the whole rail. Truncation is in
-            // the MIDDLE, not the tail: DisplayTitle ends with the "(Sprint N)" ordinal that makes
-            // two same-titled sprints distinguishable (PR #122 review finding 2), and tail
-            // truncation would eat exactly that suffix off the long titles most likely to collide.
-            LineBreakMode = LineBreakMode.MiddleTruncation,
+            // row one row instead of letting a long title reflow the whole rail. Tail truncation is
+            // the only mode that survives the round trip: MAUI's Windows renderer maps HEAD and
+            // MIDDLE truncation onto WinUI's TextTrimming.WordEllipsis, which trims the END at a
+            // word boundary (WinUI has no head/middle form), so a middle mode here would silently
+            // be a coarser tail mode (PR #122 review round 3 finding 1). The "(Sprint N)" ordinal
+            // that distinguishes two same-titled sprints therefore LEADS DisplayTitle rather than
+            // trailing it, so tail truncation eats the title's tail and never the disambiguator.
+            LineBreakMode = LineBreakMode.TailTruncation,
             TextColor = isSelected ? accent : ThemeColor("ColorNeutral300"),
         };
         SemanticProperties.SetDescription(sprintButton, sprint.AccessibleName);
@@ -935,10 +938,11 @@ public partial class WorkspaceShellPage : ContentPage
             Text = historyItem.DisplayTitle,
             Style = ThemeStyle("GhostButtonStyle"),
             HorizontalOptions = LayoutOptions.Fill,
-            // Middle truncation for the same reason BuildSprintRow uses it: the "(Sprint N)" ordinal
-            // that disambiguates two same-titled sprints sits at the end of DisplayTitle, and a
-            // history row has no progress fraction or attention badge to tell them apart instead.
-            LineBreakMode = LineBreakMode.MiddleTruncation,
+            // Tail truncation for the same reason BuildSprintRow uses it, and a history row needs
+            // the property most: it has no progress fraction or attention badge to tell two
+            // same-titled sprints apart, so the leading "(Sprint N)" ordinal is all it has, and
+            // trimming the title's tail is the only trim WinUI actually performs.
+            LineBreakMode = LineBreakMode.TailTruncation,
             TextColor = isSelected ? SidebarRowAccentColor(historyItem.StateText) : ThemeColor("ColorNeutral600"),
         };
         SemanticProperties.SetDescription(historyButton, historyItem.AccessibleName);

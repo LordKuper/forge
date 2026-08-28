@@ -8,11 +8,15 @@ using Forge.Providers;
 namespace Forge.Desktop.Presentation;
 
 /// <summary>One sidebar row for a non-terminal sprint (plan section 4.1). <see cref="DisplayTitle"/>
-/// is the sprint's own frozen title or <see cref="SprintDisplayTitle"/>'s localized "Sprint {N}"
-/// fallback (ADR 0057), already resolved here so no surface re-derives it.
-/// <see cref="AccessibleName"/> is a full sentence naming that title, the state, the plan progress,
-/// and (when set) the attention reason -- plan 12.6: "every status has text and an accessible...
-/// name," color is never the only carrier.</summary>
+/// is <see cref="SprintDisplayTitle.ResolveRowTitle"/>'s output, already resolved here so no surface
+/// re-derives it: a titled sprint reads <c>"(Sprint 2) Fix login"</c> -- the localized ordinal
+/// LEADS the frozen title, disambiguating two sprints that share one (titles are not unique under
+/// ADR 0057) and surviving the rail's tail truncation -- while an untitled sprint reads the bare
+/// <c>"Sprint 2"</c> fallback. It is therefore NOT equal to <c>SprintDefinition.Title</c>; compare
+/// or match on <see cref="CreationSequence"/> or <see cref="SprintId"/>, never on this string.
+/// <see cref="AccessibleName"/> is a full sentence naming that same resolved title, the state, the
+/// plan progress, and (when set) the attention reason -- plan 12.6: "every status has text and an
+/// accessible... name," color is never the only carrier.</summary>
 public sealed record SidebarSprintItem(
     Guid SprintId,
     int CreationSequence,
@@ -28,8 +32,8 @@ public sealed record SidebarSprintItem(
 /// <summary>One navigable row in a project's capped sprint history (plan 12.1 final-sweep gap 3):
 /// a terminal (completed/cancelled) sprint, distinct from <see cref="SidebarSprintItem"/> only in
 /// that it never carries attention/progress/active-operation fields no terminal sprint can have.
-/// <see cref="DisplayTitle"/> follows the same ADR 0057 resolution as its active-sprint counterpart.
-/// </summary>
+/// <see cref="DisplayTitle"/> is the same <see cref="SprintDisplayTitle.ResolveRowTitle"/> form its
+/// active-sprint counterpart carries, ordinal-first on the titled path.</summary>
 public sealed record SidebarHistoryItem(
     Guid SprintId,
     int CreationSequence,
@@ -294,17 +298,23 @@ public sealed class SidebarViewModel(
     }
 
     /// <summary>Finding B1: the row names the sprint, not merely its ordinal. The accessible name
-    /// leads with <see cref="SprintDisplayTitle.Resolve"/>'s resolved title instead of the former
-    /// <c>"{SprintIdLabel} {CreationSequence}"</c> prefix, matching the same ADR 0057 reasoning the
-    /// Project Overview sprint card already applies ("prefixing rendered '2. Sprint 2' for every
-    /// untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it resolves to
-    /// the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a label in a
-    /// spoken row name. The ordinal itself is kept as a disambiguator by
+    /// leads with <see cref="SprintDisplayTitle.ResolveRowTitle"/>'s resolved title instead of the
+    /// former <c>"{SprintIdLabel} {CreationSequence}"</c> prefix, matching the same ADR 0057
+    /// reasoning the Project Overview sprint card already applies ("prefixing rendered '2. Sprint 2'
+    /// for every untitled sprint"). <see cref="MessageKeys.SprintIdLabel"/> is dropped with it: it
+    /// resolves to the CLI's own "Sprint id (empty: active sprint):" prompt, which never read as a
+    /// label in a spoken row name. The ordinal itself is kept as a parenthesized disambiguator by
     /// <see cref="SprintDisplayTitle.ResolveRowTitle"/> -- titles are not unique, so the title
     /// alone would leave two same-titled sprints indistinguishable (PR #122 review finding 1).
     /// That one resolved string is both drawn and spoken (round 2 finding 2): round 1 disambiguated
     /// the spoken name only, leaving <see cref="SidebarSprintItem.DisplayTitle"/> -- what the row's
     /// button actually renders -- still colliding, so two same-titled sprints drew identical rows.
+    /// Round 3 finding 1 anchored that ordinal at the FRONT of the one string, for the rendering
+    /// reason <see cref="SprintDisplayTitle.ResolveRowTitle"/> records. The spoken name inherits the
+    /// order rather than keeping a title-first phrasing of its own: this sentence is already a
+    /// comma-separated list led by the project name, so "(Sprint 2) Fix login" reads as one more
+    /// item in it, and a second ordering would be a second string that can drift from the drawn one
+    /// -- exactly the divergence round 2 collapsed.
     /// The plan progress the sidebar row now renders visually is spoken here too,
     /// through the existing <see cref="MessageKeys.SprintStatusHeaderProgressLabel"/> copy the sprint
     /// workspace header already uses for the same fraction -- so the second line the row draws can

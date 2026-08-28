@@ -810,6 +810,99 @@ public sealed class SurfaceParityTests
             sprintRow, StringComparison.Ordinal);
     }
 
+    /// <summary>PR #122 review round 2 finding 1: an archived row rendered its title alone, leaving
+    /// <c>SidebarRowAccentColor</c>'s green-versus-neutral tint as the only thing separating a
+    /// completed sprint from a cancelled one -- and only once the row was selected, since an
+    /// unselected row paints every state the same ink. That is status by colour alone, which plan
+    /// 12.6 forbids outright. The same holds for the active row's <c>state · n/m</c> line: the rail
+    /// carries the progress fraction nowhere else. Both lines are the ONLY rail-visible carriers of
+    /// their fact, so both must exist as text.
+    ///
+    /// Both are also deliberately <c>Decorative(...)</c>-excluded rather than described: the row's
+    /// single focusable control already speaks the same state (and progress) through
+    /// <c>ToSprintItem</c>/<c>ToHistoryItem</c>'s accessible name, so describing the label too would
+    /// announce it twice -- PR #112 review round 2 finding 4's rule. Restoring the word as a second
+    /// screen-reader stop would therefore be the wrong repair, which is why the exclusion is pinned
+    /// alongside the presence.
+    ///
+    /// No MAUI control is instantiable headlessly in this suite (see this file's other source pins),
+    /// so this pins both lines in the source text, inside their own brace-matched method bodies.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarRowsCarryTheirStateAndProgressAsDecorativeTextNotColourAlone()
+    {
+        string source = DesktopSourceText();
+        string sprintRow = BracedBlockAfter(
+            source, "private Border BuildSprintRow(SidebarProjectItem project, SidebarSprintItem sprint)");
+        string historyRow = BracedBlockAfter(
+            source, "private Border BuildHistoryRow(SidebarProjectItem project, SidebarHistoryItem historyItem)");
+
+        AssertDecorativeLabelText(
+            historyRow, "Text = historyItem.StateText", "the archived row's state word");
+        AssertDecorativeLabelText(
+            sprintRow,
+            "$\"{sprint.StateText} · {sprint.StagesCompleted}/{sprint.StagesTotal}\"",
+            "the active row's state and progress fraction");
+    }
+
+    /// <summary>Asserts that <paramref name="labelText"/> is rendered by a <c>Label</c> whose
+    /// nearest enclosing construction is a <c>Decorative(...)</c> wrap -- proven by nearest-preceding
+    /// <c>new Label</c> rather than by line positions, so reformatting cannot silently pass it.
+    /// </summary>
+    private static void AssertDecorativeLabelText(string methodBody, string labelText, string what)
+    {
+        int textIndex = methodBody.IndexOf(labelText, StringComparison.Ordinal);
+        Assert.True(
+            textIndex >= 0,
+            $"{what} is not rendered as text at all; colour would be its only carrier (plan 12.6).");
+
+        string beforeText = methodBody[..textIndex];
+        int nearestLabel = beforeText.LastIndexOf("new Label", StringComparison.Ordinal);
+        Assert.True(nearestLabel >= 0, $"{what} is not carried by a Label.");
+        Assert.True(
+            nearestLabel >= "Decorative(".Length
+                && beforeText.AsSpan(nearestLabel - "Decorative(".Length, "Decorative(".Length)
+                    .SequenceEqual("Decorative("),
+            $"{what}'s Label must be Decorative(...)-excluded: the row's button already speaks the "
+                + "same fact, so describing the label would announce it twice.");
+    }
+
+    /// <summary>PR #122 review round 3 finding 1. Both sidebar row labels draw
+    /// <c>SidebarSprintItem.DisplayTitle</c>, which leads with the <c>"(Sprint N)"</c> ordinal that
+    /// keeps two same-titled sprints distinguishable, into a fixed-width rail that a 200-character
+    /// frozen title (ADR 0057) routinely overruns.
+    ///
+    /// Only <c>TailTruncation</c> keeps that leading ordinal. An earlier revision asked for
+    /// <c>MiddleTruncation</c> with a TRAILING ordinal instead, which cannot work on the only
+    /// platform this app ships to: <c>Forge.Desktop</c> targets <c>net10.0-windows10.0.19041.0</c>
+    /// only, and MAUI's <c>TextBlockExtensions.SetLineBreakMode</c> maps both <c>HeadTruncation</c>
+    /// and <c>MiddleTruncation</c> onto WinUI's <c>TextTrimming.WordEllipsis</c> -- WinUI has no
+    /// head or middle form, and <c>WordEllipsis</c> trims from the END at a word boundary. Either
+    /// mode is therefore a coarser tail trim that would drop a leading ordinal's title tail one
+    /// whole word at a time, and would have dropped a trailing ordinal outright.
+    ///
+    /// Scoped to these two method bodies rather than the whole shell: other surfaces draw strings
+    /// with no truncation-sensitive anchor and are free to choose their own mode.</summary>
+    [Fact]
+    [Trait("Category", "Acceptance")]
+    public void SidebarRowLabelsTruncateAtTheTailWhereWinUiActuallyTruncates()
+    {
+        string source = DesktopSourceText();
+
+        foreach (string anchor in new[]
+                 {
+                     "private Border BuildSprintRow(SidebarProjectItem project, SidebarSprintItem sprint)",
+                     "private Border BuildHistoryRow(SidebarProjectItem project, SidebarHistoryItem historyItem)",
+                 })
+        {
+            string body = BracedBlockAfter(source, anchor);
+            Assert.Contains("LineBreakMode = LineBreakMode.TailTruncation", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("LineBreakMode.MiddleTruncation", body, StringComparison.Ordinal);
+            Assert.DoesNotContain("LineBreakMode.HeadTruncation", body, StringComparison.Ordinal);
+        }
+    }
+
     /// <summary>PR #105 review finding 2: the per-project chevron's own accessible name promises
     /// "Collapse sprints" (the whole per-project block), but the fix that shipped in that PR gated
     /// only the active-sprint loop on <c>project.SprintListExpanded</c> -- the history label and its

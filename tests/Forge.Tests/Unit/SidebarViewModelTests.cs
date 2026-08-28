@@ -92,11 +92,14 @@ public sealed class SidebarViewModelTests
         SidebarSprintItem untitledRow =
             Assert.Single(project.ActiveSprints, item => item.SprintId == untitled.SprintId!.Value);
 
-        // Round 2 finding 2: the DRAWN label carries the ordinal too, not just the spoken name. The
-        // untitled row states that ordinal once, as its whole resolved title, with no suffix.
+        // Round 2 finding 2: the DRAWN label carries the ordinal too, not just the spoken name.
+        // Round 3 finding 1: that ordinal LEADS the string, so the rail's tail truncation can only
+        // ever eat the title's end and never the disambiguator. The untitled row states the ordinal
+        // once, as its whole resolved title, with no prefix of its own.
         Assert.Equal(
-            string.Create(CultureInfo.InvariantCulture, $"{frozenTitle} ({Ordinal(en, titledRow.CreationSequence)})"),
+            string.Create(CultureInfo.InvariantCulture, $"({Ordinal(en, titledRow.CreationSequence)}) {frozenTitle}"),
             titledRow.DisplayTitle);
+        Assert.StartsWith("(", titledRow.DisplayTitle, StringComparison.Ordinal);
         Assert.Equal(Ordinal(en, untitledRow.CreationSequence), untitledRow.DisplayTitle);
         // The defect itself: two rows, two distinguishable names -- not one shared label.
         Assert.NotEqual(titledRow.DisplayTitle, untitledRow.DisplayTitle);
@@ -204,9 +207,12 @@ public sealed class SidebarViewModelTests
         // state and nothing else -- no progress fraction, no attention badge -- so two sprints
         // sharing one frozen title drew byte-identical rows while only their spoken names differed.
         Assert.NotEqual(titledRow.DisplayTitle, duplicateRow.DisplayTitle);
+        // Round 3 finding 1: ordinal first, so the rail's tail truncation cannot reach it -- a
+        // history row has nothing else to tell two same-titled sprints apart.
         Assert.Equal(
-            string.Create(CultureInfo.InvariantCulture, $"{frozenTitle} ({Ordinal(en, titledRow.CreationSequence)})"),
+            string.Create(CultureInfo.InvariantCulture, $"({Ordinal(en, titledRow.CreationSequence)}) {frozenTitle}"),
             titledRow.DisplayTitle);
+        Assert.StartsWith("(", titledRow.DisplayTitle, StringComparison.Ordinal);
 
         Assert.Contains(frozenTitle, titledRow.AccessibleName, StringComparison.Ordinal);
         Assert.Contains(untitledRow.DisplayTitle, untitledRow.AccessibleName, StringComparison.Ordinal);

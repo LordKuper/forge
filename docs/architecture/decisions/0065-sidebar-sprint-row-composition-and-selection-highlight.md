@@ -62,31 +62,30 @@ this Desktop-only slice does not touch. This is not a regression — `HasActiveO
 any accessible name before this change either — but it is a real gap, and it should be closed by the
 slice that next has reason to add sidebar copy.
 
-### The row label leads with the sprint, and keeps the ordinal to disambiguate
+### The row label names the sprint, and carries the ordinal to disambiguate
 
-`"{SprintIdLabel} {CreationSequence}"` no longer *prefixes* the name: the resolved title leads,
-matching the precedent ADR 0057 already set on the Project Overview sprint card. `SprintIdLabel` is
-dropped entirely — it resolves to the CLI's own `"Sprint id (empty: active sprint):"` prompt, which
-never read as a label in a spoken row name.
+`"{SprintIdLabel} {CreationSequence}"` no longer labels the row: `SprintIdLabel` is dropped entirely
+— it resolves to the CLI's own `"Sprint id (empty: active sprint):"` prompt, which never read as a
+label in a spoken row name — and the frozen title becomes the substance of the label, matching the
+precedent ADR 0057 already set on the Project Overview sprint card.
 
-The ordinal itself is kept, as a trailing disambiguator rather than a leading label, because a frozen
-title is free text that ADR 0057 only trims, redacts and length-bounds to 200 characters — never
-makes unique. Two sprints titled `"Fix login"` would otherwise carry byte-identical labels, which is
-finding B1's own defect relocated from untitled sprints onto same-titled ones.
-`SprintDisplayTitle.ResolveRowTitle` therefore appends it only on the **titled** path —
-`"Fix login (Sprint 2)"` — and never on the untitled one, whose resolved title already *is* the
-ordinal and would otherwise read `"Sprint 2 (Sprint 2)"`. That branch is the same
+The ordinal itself is kept, as a parenthesized disambiguator rather than a bare label, because a
+frozen title is free text that ADR 0057 only trims, redacts and length-bounds to 200 characters —
+never makes unique. Two sprints titled `"Fix login"` would otherwise carry byte-identical labels,
+which is finding B1's own defect relocated from untitled sprints onto same-titled ones.
+`SprintDisplayTitle.ResolveRowTitle` therefore adds it only on the **titled** path —
+`"(Sprint 2) Fix login"` — and never on the untitled one, whose resolved title already *is* the
+ordinal and would otherwise read `"(Sprint 2) Sprint 2"`. That branch is the same
 `IsNullOrWhiteSpace(title)` test `Resolve` makes, not a comparison against the rendered fallback
 text, and it reuses the existing `SprintUntitledFallback` copy for both roles rather than
 duplicating it under a second key.
 
 **One string is both drawn and spoken.** `ResolveRowTitle` backs `DisplayTitle` itself, not a
-separate accessible-only variant layered over it. An earlier revision disambiguated the spoken name
-only, which left the visible rows colliding exactly as before — two same-titled sprints drew
-byte-identical buttons — so the defect survived in the half of the row most users actually read.
-Deriving both from one function makes that divergence unrepresentable.
+separate accessible-only variant layered over it, so a visible label and a spoken name cannot
+disagree about which sprint a row is. Deriving both from one function makes that divergence
+unrepresentable.
 
-The suffix is unconditional on the titled path rather than applied only when a title actually
+The ordinal is unconditional on the titled path rather than applied only when a title actually
 collides. Collision-conditional labelling would make this a set-aware operation instead of a pure
 per-sprint one; it would relabel a row whenever an unrelated sprint was created or archived; and its
 uniqueness scope is ambiguous across the separately rendered active and history lists, which sit
@@ -94,9 +93,27 @@ adjacent in the rail. It would also have to be mirrored in the spoken name to ke
 agreement, undoing the property above. A stable, local, always-present ordinal costs one short
 parenthetical.
 
-Because the ordinal is a *suffix*, both row buttons truncate in the **middle**
-(`LineBreakMode.MiddleTruncation`), not at the tail: with a 200-character bound, tail truncation
-would drop the disambiguator off precisely the long titles most likely to collide.
+#### The ordinal leads the label because only trailing truncation exists on Windows
+
+Both row buttons use `LineBreakMode.TailTruncation`, and the ordinal is placed at the **front** of
+the string so the rail can only ever trim the title's tail, never the disambiguator. Front-anchoring
+is what makes the ordinal survivable; the truncation mode is not doing that work and cannot.
+
+Placing the ordinal last and asking for `LineBreakMode.MiddleTruncation` does **not** work here.
+`Forge.Desktop` targets `net10.0-windows10.0.19041.0` only, so WinUI is the sole renderer, and
+`Button.MapLineBreakMode` → `ButtonExtensions.UpdateLineBreakMode` →
+`TextBlockExtensions.SetLineBreakMode` maps both `HeadTruncation` and `MiddleTruncation` onto
+`TextTrimming.WordEllipsis`. WinUI implements no head or middle form at all: `WordEllipsis` trims
+from the END at a word boundary. A middle mode is therefore a *coarser* tail mode — it drops a whole
+trailing word where `TailTruncation` (`CharacterEllipsis`) drops characters — and a trailing ordinal
+is lost either way. With a 200-character title bound and a rail roughly 210px wide for text, that is
+the common case, not an edge one.
+
+The spoken name inherits the same order rather than keeping a title-first phrasing of its own.
+`ToSprintItem`/`ToHistoryItem` build a comma-separated sentence already led by the project name, so
+`"(Sprint 2) Fix login"` reads as one more item in that list; the small awkwardness of hearing the
+ordinal first is worth less than the guarantee that exactly one string is drawn and announced, which
+is the property the section above rests on.
 
 History rows need all of this most: they carry no progress fraction or attention suffix to vary, so
 the title and ordinal are nearly all they have.
@@ -117,9 +134,9 @@ the word also gives the archived list the same two-line rhythm as the active lis
 
 ## Consequences
 
-- `Forge.Desktop.Presentation` (`SprintDisplayTitle.cs`): `ResolveAccessible` becomes
-  `ResolveRowTitle` — a pre-1.0 contract replacement (no alias), since it is no longer an
-  accessibility-only form. `Resolve` is unchanged and still serves `ProjectOverviewViewModel`.
+- `Forge.Desktop.Presentation` (`SprintDisplayTitle.cs`): `ResolveRowTitle` is new, alongside the
+  unchanged `Resolve`, which still serves `ProjectOverviewViewModel`. No existing contract is
+  replaced.
 - `Forge.Desktop.Presentation` (`SidebarViewModel.cs`): `SidebarSprintItem.DisplayTitle` and
   `SidebarHistoryItem.DisplayTitle` (positional, no default — each record has exactly one
   construction site, so every one is reviewed explicitly); `ToSprintItem`/`ToHistoryItem` resolve
@@ -129,7 +146,7 @@ the word also gives the archived list the same two-line rhythm as the active lis
   `SprintStatusHeaderProgressLabel` copy.
 - `Forge.Desktop` (`WorkspaceShellPage.xaml.cs`): `BuildSprintRow`, `BuildHistoryRow`, and the shared
   `SidebarSelectableRow` container replace the two inline row loops; `ActiveOperationDot` /
-  `IdleOperationDot`; both row buttons use `LineBreakMode.MiddleTruncation`.
+  `IdleOperationDot`; both row buttons use `LineBreakMode.TailTruncation`.
 - Both second lines override `MonoLabelStyle`'s `ColorNeutral600` ink with `ColorNeutral500`.
   `ColorNeutral600` measures ≈4.25:1 on the rail and ≈3.31:1 on the `ColorAccent900` a selected row
   now paints — the mono-on-tint combination is new to this slice, since a tinted row previously had

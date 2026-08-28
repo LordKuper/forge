@@ -16,10 +16,10 @@ User-facing Forge changes are listed by release, newest first.
   running work to show). Screen readers hear the title, the state, the progress, and any attention
   reason from the row's own button; the second line and badge are visual reinforcement and are not
   announced again. Because sprint titles need not be unique, a titled row both shows and announces
-  its number after the title ("Fix login (Sprint 2)"), so two sprints sharing a title stay distinct
+  its number before the title ("(Sprint 2) Fix login"), so two sprints sharing a title stay distinct
   on screen as well as to a screen reader — including in the archived list, where there is no
-  progress or attention detail to tell them apart. A title too long for the rail is shortened in the
-  middle rather than at the end, so that number stays visible.
+  progress or attention detail to tell them apart. The number leads so that a title too long for the
+  rail is shortened at its end, leaving the number visible.
 - **Archived sprints show their state in words.** Each row in a project's archived list reads its
   state ("completed", "cancelled") on a second line beneath the title, so the two are no longer told
   apart by colour alone.
