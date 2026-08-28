@@ -263,6 +263,32 @@
   <data name="TimelineDetailsAction" xml:space="preserve"><value>Подробности</value></data>
   <data name="TimelineMarkAllReadAction" xml:space="preserve"><value>Отметить всё прочитанным</value></data>
   <data name="TimelineUnreadLabel" xml:space="preserve"><value>Непрочитано: {0}</value></data>
+  <data name="TimelineCardDiffFilesLabel" xml:space="preserve"><value>файлов</value></data>
+  <data name="TimelineCardDiffAddedLabel" xml:space="preserve"><value>добавлено</value></data>
+  <data name="TimelineCardDiffDeletedLabel" xml:space="preserve"><value>удалено</value></data>
+  <data name="TimelineCardDiffElidedNote" xml:space="preserve"><value>Ещё изменённых файлов, не показанных по отдельности: {0}.</value></data>
+  <data name="DiffChangeKindAdded" xml:space="preserve"><value>добавлен</value></data>
+  <data name="DiffChangeKindDeleted" xml:space="preserve"><value>удалён</value></data>
+  <data name="DiffChangeKindModified" xml:space="preserve"><value>изменён</value></data>
+  <data name="DiffChangeKindRenamed" xml:space="preserve"><value>переименован</value></data>
+  <data name="DiffChangeKindBinary" xml:space="preserve"><value>двоичный</value></data>
+  <data name="TimelineCardToolCallsLabel" xml:space="preserve"><value>вызовов</value></data>
+  <data name="TimelineCardToolCommandsLabel" xml:space="preserve"><value>команд</value></data>
+  <data name="TimelineCardToolEditsLabel" xml:space="preserve"><value>правок</value></data>
+  <data name="TimelineCardToolUnmappedLabel" xml:space="preserve"><value>нераспознано</value></data>
+  <data name="TimelineCardToolElidedNote" xml:space="preserve"><value>Ещё вызовов инструментов, не показанных по отдельности: {0}.</value></data>
+  <data name="ToolCallKindCommand" xml:space="preserve"><value>команда</value></data>
+  <data name="ToolCallKindEdit" xml:space="preserve"><value>правка</value></data>
+  <data name="TimelineCardToolDurationText" xml:space="preserve"><value>{0} мс</value></data>
+  <data name="TimelineCardToolExitCodeText" xml:space="preserve"><value>код возврата {0}</value></data>
+  <data name="TimelineCardToolSucceededLabel" xml:space="preserve"><value>успешно</value></data>
+  <data name="TimelineCardToolFailedLabel" xml:space="preserve"><value>с ошибкой</value></data>
+  <data name="TimelineCardUsageInputLabel" xml:space="preserve"><value>на входе</value></data>
+  <data name="TimelineCardUsageOutputLabel" xml:space="preserve"><value>на выходе</value></data>
+  <data name="TimelineCardUsageCacheReadLabel" xml:space="preserve"><value>чтение кэша</value></data>
+  <data name="TimelineCardUsageCacheCreationLabel" xml:space="preserve"><value>создание кэша</value></data>
+  <data name="TimelineCardUsageContextWindowLabel" xml:space="preserve"><value>окно контекста</value></data>
+  <data name="TimelineGateDecisionRequiredLabel" xml:space="preserve"><value>Требуется решение</value></data>
   <data name="ActionsTitle" xml:space="preserve"><value>Действия</value></data>
   <data name="ActionsNoneAvailable" xml:space="preserve"><value>Сейчас нет доступных действий.</value></data>
   <data name="ActionsBlockedPrefix" xml:space="preserve"><value>Заблокировано:</value></data>

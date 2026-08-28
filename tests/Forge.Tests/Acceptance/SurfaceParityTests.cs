@@ -538,8 +538,13 @@ public sealed class SurfaceParityTests
         string source = File.ReadAllText(
             Path.Combine(RepositoryRoot.Find(), "src", "Forge.Desktop", "WorkspaceShellPage.SprintWorkspace.cs"));
 
+        // ADR 0064: the node-id slot moved from a hardcoded `null` to `ResolveGateAsync`'s own
+        // `nodeId` parameter, so the inline timeline gate card can name the exact gate node while
+        // ContextualActionHost's own call keeps passing nothing (its `HasPendingGate` boolean cannot
+        // name one). Only that slot changed -- the property this assertion exists for, that
+        // `confirmed` is the dialog's own answer rather than a literal `true`, is untouched.
         Assert.Contains(
-            ".ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)",
+            ".ResolveGateAsync(root, sprintId, nodeId, approved, confirmed, CancellationToken.None)",
             source, StringComparison.Ordinal);
         Assert.Contains(
             "attemptId.ToString(\"D\"), instructionEntry.Text, confirmed, CancellationToken.None)",

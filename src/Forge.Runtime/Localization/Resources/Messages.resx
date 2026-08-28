@@ -263,6 +263,32 @@
   <data name="TimelineDetailsAction" xml:space="preserve"><value>Details</value></data>
   <data name="TimelineMarkAllReadAction" xml:space="preserve"><value>Mark all read</value></data>
   <data name="TimelineUnreadLabel" xml:space="preserve"><value>{0} unread</value></data>
+  <data name="TimelineCardDiffFilesLabel" xml:space="preserve"><value>files</value></data>
+  <data name="TimelineCardDiffAddedLabel" xml:space="preserve"><value>added</value></data>
+  <data name="TimelineCardDiffDeletedLabel" xml:space="preserve"><value>deleted</value></data>
+  <data name="TimelineCardDiffElidedNote" xml:space="preserve"><value>{0} more changed file(s) are not listed individually.</value></data>
+  <data name="DiffChangeKindAdded" xml:space="preserve"><value>added</value></data>
+  <data name="DiffChangeKindDeleted" xml:space="preserve"><value>deleted</value></data>
+  <data name="DiffChangeKindModified" xml:space="preserve"><value>modified</value></data>
+  <data name="DiffChangeKindRenamed" xml:space="preserve"><value>renamed</value></data>
+  <data name="DiffChangeKindBinary" xml:space="preserve"><value>binary</value></data>
+  <data name="TimelineCardToolCallsLabel" xml:space="preserve"><value>calls</value></data>
+  <data name="TimelineCardToolCommandsLabel" xml:space="preserve"><value>commands</value></data>
+  <data name="TimelineCardToolEditsLabel" xml:space="preserve"><value>edits</value></data>
+  <data name="TimelineCardToolUnmappedLabel" xml:space="preserve"><value>unrecognized</value></data>
+  <data name="TimelineCardToolElidedNote" xml:space="preserve"><value>{0} more tool call(s) are not listed individually.</value></data>
+  <data name="ToolCallKindCommand" xml:space="preserve"><value>command</value></data>
+  <data name="ToolCallKindEdit" xml:space="preserve"><value>edit</value></data>
+  <data name="TimelineCardToolDurationText" xml:space="preserve"><value>{0} ms</value></data>
+  <data name="TimelineCardToolExitCodeText" xml:space="preserve"><value>exit code {0}</value></data>
+  <data name="TimelineCardToolSucceededLabel" xml:space="preserve"><value>succeeded</value></data>
+  <data name="TimelineCardToolFailedLabel" xml:space="preserve"><value>failed</value></data>
+  <data name="TimelineCardUsageInputLabel" xml:space="preserve"><value>input</value></data>
+  <data name="TimelineCardUsageOutputLabel" xml:space="preserve"><value>output</value></data>
+  <data name="TimelineCardUsageCacheReadLabel" xml:space="preserve"><value>cache read</value></data>
+  <data name="TimelineCardUsageCacheCreationLabel" xml:space="preserve"><value>cache creation</value></data>
+  <data name="TimelineCardUsageContextWindowLabel" xml:space="preserve"><value>context window</value></data>
+  <data name="TimelineGateDecisionRequiredLabel" xml:space="preserve"><value>Decision required</value></data>
   <data name="ActionsTitle" xml:space="preserve"><value>Actions</value></data>
   <data name="ActionsNoneAvailable" xml:space="preserve"><value>No actions available right now.</value></data>
   <data name="ActionsBlockedPrefix" xml:space="preserve"><value>Blocked:</value></data>

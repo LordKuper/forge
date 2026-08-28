@@ -372,6 +372,74 @@ public static class MessageKeys
     /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking the
     /// unread count, e.g. "{0} unread".</summary>
     public const string TimelineUnreadLabel = "TimelineUnreadLabel";
+
+    // Timeline payload cards (finding D1's rendering half): every label
+    // `Forge.Desktop.Presentation.TimelineCardProjector` puts on a stat chip or a detail row for an
+    // ADR 0059/0060/0061 structured payload. The projector owns all of this text so the view layer
+    // holds only color and layout -- see that type's own remarks.
+    public const string TimelineCardDiffFilesLabel = "TimelineCardDiffFilesLabel";
+    public const string TimelineCardDiffAddedLabel = "TimelineCardDiffAddedLabel";
+    public const string TimelineCardDiffDeletedLabel = "TimelineCardDiffDeletedLabel";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking
+    /// <c>DiffPayload.ElidedFiles</c> -- the per-file rows a single journal line may carry are capped
+    /// (ADR 0059), and the reader is told how many are missing rather than shown a shorter list that
+    /// looks complete.</summary>
+    public const string TimelineCardDiffElidedNote = "TimelineCardDiffElidedNote";
+
+    // The closed `DiffChangeKinds` vocabulary (ADR 0059), localized rather than interpolated raw --
+    // the same rule TimelineMessageFormatter's BlockedReasonLabel/AttemptStateLabel already follow
+    // for their own machine-only codes.
+    public const string DiffChangeKindAdded = "DiffChangeKindAdded";
+    public const string DiffChangeKindDeleted = "DiffChangeKindDeleted";
+    public const string DiffChangeKindModified = "DiffChangeKindModified";
+    public const string DiffChangeKindRenamed = "DiffChangeKindRenamed";
+    public const string DiffChangeKindBinary = "DiffChangeKindBinary";
+    public const string TimelineCardToolCallsLabel = "TimelineCardToolCallsLabel";
+    public const string TimelineCardToolCommandsLabel = "TimelineCardToolCommandsLabel";
+    public const string TimelineCardToolEditsLabel = "TimelineCardToolEditsLabel";
+
+    /// <summary>Labels <c>ToolUsePayload.UnmappedItems</c>: provider stream items an adapter's own
+    /// mapping did not recognize (ADR 0060's drift counter). Deliberately its own chip rather than a
+    /// component of the call count -- the localized summary sentence never mentions drift.</summary>
+    public const string TimelineCardToolUnmappedLabel = "TimelineCardToolUnmappedLabel";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking
+    /// <c>ToolUsePayload.ElidedCalls</c> -- see <see cref="TimelineCardDiffElidedNote"/>.</summary>
+    public const string TimelineCardToolElidedNote = "TimelineCardToolElidedNote";
+
+    // The closed `ProviderToolCallKinds` vocabulary (ADR 0060), localized for the same reason as the
+    // change kinds above.
+    public const string ToolCallKindCommand = "ToolCallKindCommand";
+    public const string ToolCallKindEdit = "ToolCallKindEdit";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking a
+    /// tool call's Forge-observed wall-clock duration in milliseconds (ADR 0060: never a
+    /// vendor-reported figure).</summary>
+    public const string TimelineCardToolDurationText = "TimelineCardToolDurationText";
+
+    /// <summary>A <see cref="string.Format(IFormatProvider?, string, object?)"/> template taking a
+    /// command's process exit code.</summary>
+    public const string TimelineCardToolExitCodeText = "TimelineCardToolExitCodeText";
+    public const string TimelineCardToolSucceededLabel = "TimelineCardToolSucceededLabel";
+    public const string TimelineCardToolFailedLabel = "TimelineCardToolFailedLabel";
+
+    // UsagePayload's five independently nullable counters (ADR 0061). A counter the provider did not
+    // report gets no chip at all, so each label only ever appears beside a real observation.
+    public const string TimelineCardUsageInputLabel = "TimelineCardUsageInputLabel";
+    public const string TimelineCardUsageOutputLabel = "TimelineCardUsageOutputLabel";
+    public const string TimelineCardUsageCacheReadLabel = "TimelineCardUsageCacheReadLabel";
+    public const string TimelineCardUsageCacheCreationLabel = "TimelineCardUsageCacheCreationLabel";
+
+    /// <summary>Labels <c>UsagePayload.ContextWindow</c>, rendered as a value in its own right and
+    /// never as the denominator of a computed ratio (ADR 0061: Codex reports no context window at
+    /// all, so a ratio would exist for some attempts and not others).</summary>
+    public const string TimelineCardUsageContextWindowLabel = "TimelineCardUsageContextWindowLabel";
+
+    /// <summary>The inline gate card's heading, shown beside the node id of the human gate whose own
+    /// <c>awaiting_human</c> transition is the timeline item this card is anchored to (ADR
+    /// 0058).</summary>
+    public const string TimelineGateDecisionRequiredLabel = "TimelineGateDecisionRequiredLabel";
     public const string ActionsTitle = "ActionsTitle";
     public const string ActionsNoneAvailable = "ActionsNoneAvailable";
     public const string ActionsBlockedPrefix = "ActionsBlockedPrefix";

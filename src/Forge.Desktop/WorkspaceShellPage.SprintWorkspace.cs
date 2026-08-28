@@ -155,6 +155,12 @@ public partial class WorkspaceShellPage
         Entry evidenceEntry = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmEvidenceLabel));
         Entry justificationEntry = Describe(new Entry(), text.Resolve(MessageKeys.TestWorkJustificationLabel));
         SprintDetails? currentDetails = null;
+        // Finding D1/D2: the Host's action rows are now needed by the timeline render (to place a
+        // pending gate's decision beside the event that requested it), not only by the bottom action
+        // panel -- so fetching and rendering them are separate steps (LoadActionsAsync/RenderActions
+        // below) with the timeline render sandwiched between them. Still exactly one action fetch per
+        // refresh; only the ordering changed.
+        IReadOnlyList<AvailableAction> loadedActions = [];
         // PR #99 review finding 3: RenderTimelineItems below re-assigns filterPicker.ItemsSource/
         // SelectedItem, either of which can raise the picker's own SelectedIndexChanged event
         // synchronously (a fresh ItemsSource resets SelectedIndex first) -- re-entering
@@ -393,25 +399,190 @@ public partial class WorkspaceShellPage
 
         // Nocturne visual pass: the mockup's timeline distinguishes a user-message bubble, an agent
         // summary with a sparkle avatar, and several per-kind tool-call/diff/test/permission cards --
-        // but TimelineItemView is one flat shape for every journal event (WorkflowEvent has exactly
-        // nine ...Type consts total: RouteDecisionRecorded, AttemptActivityRecorded,
-        // AttemptSuperseded, AttemptStopRequested/Converged, StageRevisionRecorded,
-        // StageTransitionConverged, UserMessagePosted, AgentSummaryRecorded -- no distinct
-        // "read"/"edit"/"test" tool-call shape or diff/test-output structure the Host actually
-        // describes). This reproduces exactly the distinction the data supports: bubble-align
-        // "operator" (human-authored: supersede/stop/rewind/UserMessagePosted), sparkle-card "agent"
-        // (AgentSummaryRecorded), and an icon-tagged card for every other "system" (workflow-driven)
-        // event, styled by its own Type -- never a fabricated per-kind layout.
+        // but TimelineItemView is one flat shape for every journal event, so this reproduces exactly
+        // the distinction the data supports: bubble-align "operator" (human-authored: supersede/stop/
+        // rewind/UserMessagePosted), sparkle-card "agent" (AgentSummaryRecorded), and an icon-tagged
+        // card for every other "system" (workflow-driven) event, styled by its own Type -- never a
+        // fabricated per-kind layout. The three ADR 0059/0060/0061 payload-bearing types get their
+        // own glyphs from the same already-declared set (no new codepoint): a diff summary reads as a
+        // diff, a tool-use summary as a terminal, a token-usage summary as a processor.
         string TimelineIconFor(TimelineItemView item) => item.Type switch
         {
             WorkflowEvent.AttemptActivityRecordedType => IconGlyphs.TerminalWindow,
             WorkflowEvent.AttemptSupersededType => IconGlyphs.GitMerge,
             WorkflowEvent.AttemptStopRequestedType or WorkflowEvent.AttemptStopConvergedType => IconGlyphs.StopCircle,
-            WorkflowEvent.StageRevisionRecordedType => IconGlyphs.GitDiff,
+            WorkflowEvent.StageRevisionRecordedType or WorkflowEvent.AttemptDiffRecordedType => IconGlyphs.GitDiff,
             WorkflowEvent.StageTransitionConvergedType => IconGlyphs.FlowArrow,
-            WorkflowEvent.RouteDecisionRecordedType => IconGlyphs.Cpu,
+            WorkflowEvent.AttemptToolUseRecordedType => IconGlyphs.TerminalWindow,
+            WorkflowEvent.RouteDecisionRecordedType or WorkflowEvent.AttemptUsageRecordedType => IconGlyphs.Cpu,
             _ => IconGlyphs.Circle,
         };
+
+        // Finding D1: TimelineCardProjector owns every label and every localization decision on a
+        // payload card; this view owns only the color a tone maps to and the layout it sits in.
+        Color ToneColor(TimelineStatTone tone) => tone switch
+        {
+            TimelineStatTone.Positive => ThemeColor("ColorStatusGreenText"),
+            TimelineStatTone.Negative => ThemeColor("ColorStatusRedText"),
+            TimelineStatTone.Caution => ThemeColor("ColorStatusAmberText"),
+            _ => ThemeColor("ColorNeutral300"),
+        };
+
+        // One counter chip. TagAccentStyle is this theme's only pill Border style, so a neutral chip
+        // reads as the same pill with neutral text rather than through a second Border style this
+        // slice would have to invent.
+        Border StatChip(TimelineStat stat)
+        {
+            Label label = new()
+            {
+                Text = stat.Label,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 9,
+                TextColor = ThemeColor("ColorNeutral500"),
+                VerticalOptions = LayoutOptions.Center,
+            };
+            Label value = new()
+            {
+                Text = stat.Value,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 11,
+                TextColor = ToneColor(stat.Tone),
+            };
+            Border chip = new()
+            {
+                Style = ThemeStyle("TagAccentStyle"),
+                VerticalOptions = LayoutOptions.Center,
+                Content = new HorizontalStackLayout { Spacing = 4, Children = { label, value } },
+            };
+            // The two Labels never speak individually either way: a Label's UIA name is its own text,
+            // so "files" and "3" as separate stops read as two disconnected fragments. Either the
+            // whole chip is excluded (its numbers are already in the item's described summary
+            // sentence) or the chip itself carries one coherent "<label>: <value>" description.
+            Decorative(label);
+            Decorative(value);
+            if (stat.RestatesSummary)
+            {
+                Decorative(chip);
+            }
+            else
+            {
+                SemanticProperties.SetDescription(
+                    chip, string.Create(CultureInfo.InvariantCulture, $"{stat.Label}: {stat.Value}"));
+            }
+
+            return chip;
+        }
+
+        View DetailRow(TimelineDetailRow detailRow)
+        {
+            HorizontalStackLayout line = new() { Spacing = 8 };
+            line.Children.Add(Describe(new Label
+            {
+                Text = detailRow.PrimaryText,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 10.5,
+                TextColor = ToneColor(detailRow.Tone),
+                LineBreakMode = LineBreakMode.MiddleTruncation,
+            }));
+            if (detailRow.SecondaryText is { } secondary)
+            {
+                line.Children.Add(Describe(new Label
+                {
+                    Text = secondary,
+                    FontFamily = ThemeString("FontMono"),
+                    FontSize = 10.5,
+                    TextColor = ThemeColor("ColorNeutral500"),
+                }));
+            }
+
+            return line;
+        }
+
+        // ADR 0058's decision, rendered at the exact point in the timeline that asked for it. Strictly
+        // ADDITIVE: ContextualActionHost's own gate card is untouched and remains the fallback surface
+        // for a gate whose requesting event is not on the loaded page (TimelineGateLinks.Resolve emits
+        // no link for one). Like that panel's card, this refreshes on mutation and navigation, not on
+        // the 15s timeline poll -- the poll re-fetches timeline items only, never actions, so a gate
+        // that opens between two mutations first appears inline at the next refresh. That is an
+        // accepted, documented limitation of the existing poll, not something this slice changes.
+        Border InlineGateCard(TimelineGateLink link)
+        {
+            Button approve = new()
+            {
+                Text = text.Resolve(MessageKeys.GateApproveAction),
+                IsEnabled = link.Approve.Enabled,
+                Style = ThemeStyle("PrimaryButtonStyle"),
+            };
+            Button reject = new()
+            {
+                Text = text.Resolve(MessageKeys.GateRejectAction),
+                IsEnabled = link.Reject.Enabled,
+                Style = ThemeStyle("DangerButtonStyle"),
+            };
+            // Deliberately different from ContextualActionHost's own gate buttons, which pass `null`
+            // (resolving to the built-in graph's canonical gate node). That panel is built from
+            // SprintWorkspaceViewModel.HasPendingGate, a bare "is any node awaiting_human" boolean
+            // that cannot name a node at all, so `null` is the only argument it can honestly supply.
+            // This card comes from a node-scoped approve_gate:/reject_gate: row, so it names the exact
+            // node -- which is what makes it correct when SprintScheduler.AdvanceGraphAsync has
+            // promoted two independent gates at once, precisely the case ADR 0058 node-scoped the
+            // action ids for. The panel's call site is deliberately left unchanged; closing that gap
+            // there belongs to finding A2, which dissolves the panel rather than patching it.
+            approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true, link.NodeId));
+            reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false, link.NodeId));
+            return new Border
+            {
+                Style = ThemeStyle("AmberCardStyle"),
+                Content = new VerticalStackLayout
+                {
+                    Spacing = 8,
+                    Children =
+                    {
+                        new HorizontalStackLayout
+                        {
+                            Spacing = 8,
+                            Children =
+                            {
+                                DecorativeGlyph(new Label
+                                {
+                                    Text = IconGlyphs.ShieldCheck,
+                                    Style = ThemeStyle("IconGlyphStyle"),
+                                    TextColor = ThemeColor("ColorStatusAmber"),
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                                Describe(new Label
+                                {
+                                    Text = text.Resolve(MessageKeys.TimelineGateDecisionRequiredLabel),
+                                    Style = ThemeStyle("HeadingLabelStyle"),
+                                    FontSize = 13,
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                                Describe(new Label
+                                {
+                                    Text = link.NodeId,
+                                    Style = ThemeStyle("MonoLabelStyle"),
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                            },
+                        },
+                        new HorizontalStackLayout
+                        {
+                            Spacing = 8,
+                            // NOT TrackContentFocus: that pair is restored only by RefreshAllAsync,
+                            // which never runs for the 15s poll that rebuilds this host -- so a key
+                            // captured here would sit unconsumed until an unrelated mutation yanked
+                            // focus back onto a button this card no longer renders. Every other
+                            // control inside timelineItemsHost uses this same lighter pattern.
+                            Children =
+                            {
+                                ClearContentFocusWhenFocused(approve),
+                                ClearContentFocusWhenFocused(reject),
+                            },
+                        },
+                    },
+                },
+            };
+        }
 
         void RenderTimelineItems(TimelineState state)
         {
@@ -425,6 +596,10 @@ public partial class WorkspaceShellPage
                 }));
             }
 
+            // Resolved once per render rather than per item: a gate whose requesting event is not on
+            // the loaded page yields no link at all, so the common case (no pending gate) is an empty
+            // list and the per-item check below is a scan over nothing.
+            IReadOnlyList<TimelineGateLink> gateLinks = TimelineGateLinks.Resolve(loadedActions, state.Items);
             foreach (TimelineItemView item in state.Items)
             {
                 bool isOperator = item.ActorText == "operator";
@@ -440,24 +615,76 @@ public partial class WorkspaceShellPage
                     TextColor = ThemeColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
                 });
                 row.Children.Add(summary);
-                string argumentsText = string.Join(
-                    Environment.NewLine,
-                    item.Arguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                        .Select(pair => string.Create(CultureInfo.InvariantCulture, $"  {pair.Key}={pair.Value}")));
-                Label technicalDetail = Describe(new Label
+                TimelineCardContent? card = TimelineCardProjector.Build(item, text.Current);
+                if (card is { Stats.Count: > 0 })
                 {
-                    IsVisible = false,
-                    Text = string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
-                    Style = ThemeStyle("MonoLabelStyle"),
-                });
+                    HorizontalStackLayout chips = new() { Spacing = 6 };
+                    foreach (TimelineStat stat in card.Stats)
+                    {
+                        chips.Children.Add(StatChip(stat));
+                    }
+
+                    row.Children.Add(chips);
+                }
+
+                // Built lazily on first expansion, and never rebuilt afterwards. This method runs on
+                // every 15s poll tick over up to SprintTimelineProjector.MaxItemsPerPage items, each
+                // of which may carry up to 50 per-file or per-call payload rows -- eagerly
+                // constructing all of that would mean tens of thousands of controls per tick for
+                // content that is collapsed and unread. The whole technical-detail section is inside
+                // the lazy builder, not just the new payload rows, so the correlation/causation/
+                // arguments text (previously an eager string.Join per item per render) shares the same
+                // discipline.
+                VerticalStackLayout technicalDetail = new() { IsVisible = false, Spacing = 3 };
+                bool technicalDetailBuilt = false;
+                void BuildTechnicalDetail()
+                {
+                    if (technicalDetailBuilt)
+                    {
+                        return;
+                    }
+
+                    technicalDetailBuilt = true;
+                    if (card is { } content)
+                    {
+                        foreach (TimelineDetailRow detailRow in content.DetailRows)
+                        {
+                            technicalDetail.Children.Add(DetailRow(detailRow));
+                        }
+
+                        if (content.ElidedText is { } elidedText)
+                        {
+                            technicalDetail.Children.Add(Describe(new Label
+                            {
+                                Text = elidedText,
+                                Style = ThemeStyle("MutedLabelStyle"),
+                            }));
+                        }
+                    }
+
+                    string argumentsText = string.Join(
+                        Environment.NewLine,
+                        item.Arguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                            .Select(pair => string.Create(CultureInfo.InvariantCulture, $"  {pair.Key}={pair.Value}")));
+                    technicalDetail.Children.Add(Describe(new Label
+                    {
+                        Text = string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
+                        Style = ThemeStyle("MonoLabelStyle"),
+                    }));
+                }
+
                 Button detailsButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineDetailsAction),
                     Style = ThemeStyle("GhostButtonStyle"),
                 };
-                detailsButton.Clicked += (_, _) => technicalDetail.IsVisible = !technicalDetail.IsVisible;
+                detailsButton.Clicked += (_, _) =>
+                {
+                    BuildTechnicalDetail();
+                    technicalDetail.IsVisible = !technicalDetail.IsVisible;
+                };
                 Button copyButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineCopyAction),
@@ -512,14 +739,21 @@ public partial class WorkspaceShellPage
                     };
                 }
 
-                Border card = new()
+                Border itemCard = new()
                 {
                     Style = ThemeStyle(isOperator ? "MessageBubbleStyle" : "OutlinedPanelStyle"),
                     Content = cardContent,
                     HorizontalOptions = isOperator ? LayoutOptions.End : LayoutOptions.Fill,
                     MaximumWidthRequest = isOperator ? 620 : double.PositiveInfinity,
                 };
-                timelineItemsHost.Children.Add(card);
+                timelineItemsHost.Children.Add(itemCard);
+                foreach (TimelineGateLink link in gateLinks)
+                {
+                    if (link.Sequence == item.Sequence)
+                    {
+                        timelineItemsHost.Children.Add(InlineGateCard(link));
+                    }
+                }
             }
 
             loadMoreButton.IsVisible = state.HasMore;
@@ -550,12 +784,22 @@ public partial class WorkspaceShellPage
             RenderTimelineItems(state);
         }
 
-        async Task RefreshActionsAsync()
-        {
-            ContextualActionHost.Children.Clear();
-            IReadOnlyList<AvailableAction> actions = await sprintWorkspace.Actions
+        // Fetches the Host's action rows and stores them for BOTH consumers -- the timeline render
+        // (which needs them to place a pending gate's decision inline) and RenderActions below.
+        // Separated from rendering purely so the fetch can happen before the timeline renders; the
+        // number of Host round-trips per refresh is unchanged.
+        async Task LoadActionsAsync() =>
+            loadedActions = await sprintWorkspace.Actions
                 .LoadAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
+
+        // Byte-for-byte the rendering half of what RefreshActionsAsync used to do, reading
+        // loadedActions instead of awaiting its own fetch -- the bottom action panel is not changed by
+        // this slice in any way (finding A2, which dissolves it, is separate structural work).
+        void RenderActions()
+        {
+            ContextualActionHost.Children.Clear();
+            IReadOnlyList<AvailableAction> actions = loadedActions;
             ContextualActionHost.Children.Add(Describe(new Label
             {
                 Text = text.Resolve(MessageKeys.ActionsTitle),
@@ -1005,11 +1249,16 @@ public partial class WorkspaceShellPage
         bool NodeIsReady(string nodeId) =>
             currentDetails?.Nodes.Any(node => node.Id == nodeId && node.State == "ready") ?? false;
 
-        async Task ResolveGateAsync(bool approved)
+        // `nodeId` defaults to null so ContextualActionHost's existing call sites are unchanged -- see
+        // InlineGateCard's own remarks for why only the inline card can honestly name a node. The
+        // inline card routes its outcome here too, into the panel's own hoisted gateResult label:
+        // RefreshAllAsync below tears the resolved gate's inline card out of the timeline entirely,
+        // so a result label inside it would be destroyed before it could be read.
+        async Task ResolveGateAsync(bool approved, string? nodeId = null)
         {
             string action = text.Resolve(approved ? MessageKeys.GateApproveAction : MessageKeys.GateRejectAction);
             bool confirmed = await DisplayAlertAsync(
-                    action, sprintWorkspace.GatePrompt(sprintId, null), action, text.Resolve(MessageKeys.CancelAction))
+                    action, sprintWorkspace.GatePrompt(sprintId, nodeId), action, text.Resolve(MessageKeys.CancelAction))
                 .ConfigureAwait(true);
             if (!confirmed)
             {
@@ -1018,7 +1267,7 @@ public partial class WorkspaceShellPage
             }
 
             string message = await sprintWorkspace
-                .ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)
+                .ResolveGateAsync(root, sprintId, nodeId, approved, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
             await RefreshAllAsync().ConfigureAwait(true);
             gateResult.Text = message;
@@ -1106,6 +1355,10 @@ public partial class WorkspaceShellPage
             // has populated it yet by the time that render runs.
             contentFocusRegistry.Clear();
             await RefreshHeaderAsync().ConfigureAwait(true);
+            // Loaded before the timeline renders, rendered after it: the timeline needs the action
+            // rows to resolve a pending gate's inline decision card, and the panel needs the same
+            // rows. One fetch feeds both (see LoadActionsAsync's own remarks).
+            await LoadActionsAsync().ConfigureAwait(true);
             if (resetTimeline)
             {
                 // Full re-InitializeAsync clears SprintTimelineViewModel's loaded list and cursor,
@@ -1124,7 +1377,7 @@ public partial class WorkspaceShellPage
                     await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true));
             }
 
-            await RefreshActionsAsync().ConfigureAwait(true);
+            RenderActions();
             // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
             // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
             // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
@@ -1133,8 +1386,11 @@ public partial class WorkspaceShellPage
         }
 
         await RefreshHeaderAsync().ConfigureAwait(true);
+        // Same load-then-render-timeline-then-render-actions order RefreshAllAsync uses, for the same
+        // reason: the timeline's inline gate card is resolved from these rows.
+        await LoadActionsAsync().ConfigureAwait(true);
         await InitializeTimelineAsync().ConfigureAwait(true);
-        await RefreshActionsAsync().ConfigureAwait(true);
+        RenderActions();
 
         string? SelectedFilterOrNull()
         {
