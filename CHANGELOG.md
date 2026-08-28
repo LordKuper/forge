@@ -2,6 +2,38 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.86.0
+
+### Added
+
+- **The sprint timeline now shows what an attempt actually did, not just a sentence about it.** The
+  three summary events Forge already records for a completed implementation attempt — files changed,
+  tool calls made, tokens spent — now render as structured cards in Forge Desktop. Each one carries a
+  strip of counter chips (files/added/deleted, calls/commands/edits, and one chip per token counter),
+  and its existing "Details" toggle now also lists the per-file and per-tool-call breakdown that was
+  already being recorded but had nowhere to appear: every changed file with its own line counts and
+  change kind, and every recorded tool call with its duration, exit code, and outcome. Where the
+  recorded list was capped, the card says how many entries are not shown rather than quietly
+  presenting a short list as complete.
+- **A token counter your provider did not report is now visibly absent, not shown as zero.** The
+  one-line usage summary has always had to print `0` for a counter no provider reported. The new card
+  shows a chip only for counters that were genuinely reported, so "not measured" and "measured as
+  zero" stop looking identical. Claude attempts additionally show the model's context window as a
+  value of its own; Codex publishes no context window, so nothing is shown for those attempts and no
+  percentage is computed for either.
+- **A pending human decision now appears at the point in the timeline that asked for it.** When a
+  sprint is waiting on a gate, an Approve/Reject card is rendered inline, directly beneath the event
+  that requested the decision, naming the exact gate node. When several gates are waiting at once,
+  each card's Approve and Reject buttons announce the node they decide, so a screen-reader user can
+  tell them apart. This is in addition to the action panel at the bottom of the workspace, which is
+  unchanged and still works — and remains the place a decision appears when the event that requested
+  it is older than the timeline page currently loaded.
+
+Out of scope, matching the limits of what Forge actually records: diff cards show per-file line
+counts, never the diff content itself; tool-call rows show that a command ran and how it ended, never
+the command text or its output; and all of this refreshes on the timeline's existing cadence rather
+than streaming live.
+
 ## v0.85.0
 
 ### Added

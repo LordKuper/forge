@@ -9,15 +9,21 @@ namespace Forge.Desktop.Presentation;
 /// <see cref="CopyText"/> are computed once here so the page never re-derives either from raw
 /// <see cref="SprintTimelineItem"/> fields itself.</summary>
 /// <remarks><c>Payload</c> is ADR 0059/0060/0061's already-redacted structured payload, carried
-/// through verbatim so the page has it available. Nothing renders it yet -- a diff-statistics card is
-/// deliberately separate follow-up work (finding D1 of the desktop design-parity review), and none of
-/// those slices adds any Desktop UI. <see cref="MessageText"/> already carries the localized one-line
-/// summary for an <c>AttemptDiffRecorded</c>, <c>AttemptToolUseRecorded</c>, or
-/// <c>AttemptUsageRecorded</c> item, identical to the CLI's, because it resolves that item's own
-/// <c>workflow.attempt_*_recorded</c> template from the event's flat arguments -- so each new payload
-/// family reaches Desktop with no code change here at all.</remarks>
+/// through verbatim. <see cref="TimelineCardProjector"/> now turns it into the stat chips and
+/// per-file/per-call detail rows the sprint workspace renders (finding D1 of the desktop
+/// design-parity review); the three slices that produced the data deliberately shipped without it.
+/// <see cref="MessageText"/> still carries the localized one-line summary for an
+/// <c>AttemptDiffRecorded</c>, <c>AttemptToolUseRecorded</c>, or <c>AttemptUsageRecorded</c> item,
+/// identical to the CLI's, because it resolves that item's own <c>workflow.attempt_*_recorded</c>
+/// template from the event's flat arguments -- the card adds the structure that sentence cannot
+/// carry, it never replaces it.
+/// <para><see cref="Sequence"/> is <see cref="SprintTimelineItem.Sequence"/> -- the same dense
+/// <see cref="WorkflowEvent.Sequence"/> ADR 0058's <c>AvailableActionTarget.TimelineSequence</c>
+/// points at, so <see cref="TimelineGateLinks"/> can place a gate decision beside the very event
+/// that requested it with no second lookup.</para></remarks>
 public sealed record TimelineItemView(
     Guid Id,
+    long Sequence,
     DateTimeOffset OccurredAt,
     string Type,
     string ActorText,
@@ -331,7 +337,7 @@ public sealed class SprintTimelineViewModel(ForgeApplication application, Projec
             $"{item.OccurredAt:O} [{item.Type}/{actorText}] {messageText} " +
                 $"({item.TargetKind}:{item.TargetId})");
         return new(
-            item.Id, item.OccurredAt, item.Type, actorText, messageText, item.Arguments, item.CorrelationId,
-            item.CausationId, unread, copyText, item.Payload);
+            item.Id, item.Sequence, item.OccurredAt, item.Type, actorText, messageText, item.Arguments,
+            item.CorrelationId, item.CausationId, unread, copyText, item.Payload);
     }
 }

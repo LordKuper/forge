@@ -145,7 +145,7 @@ public partial class WorkspaceShellPage
         // mutation must reuse the same Entry instance rather than replace it with a blank one).
         Entry messageEntry = Describe(new Entry(), text.Resolve(MessageKeys.TimelineMessageLabel));
         Label messageResult = new() { Style = resultLabelStyle };
-        // PR #99 review finding 7: hoisted out of RefreshActionsAsync (like rewindReasonEntry already
+        // PR #99 review finding 7: hoisted out of RenderActions (like rewindReasonEntry already
         // was) so a re-render triggered by a FAILED mutation -- every mutation handler calls
         // RefreshAllAsync unconditionally on completion -- reuses the same Entry instance instead of
         // replacing it with a blank one. Only a genuinely successful, completed action clears the
@@ -155,6 +155,12 @@ public partial class WorkspaceShellPage
         Entry evidenceEntry = Describe(new Entry(), text.Resolve(MessageKeys.ConfirmEvidenceLabel));
         Entry justificationEntry = Describe(new Entry(), text.Resolve(MessageKeys.TestWorkJustificationLabel));
         SprintDetails? currentDetails = null;
+        // Finding D1/D2: the Host's action rows are now needed by the timeline render (to place a
+        // pending gate's decision beside the event that requested it), not only by the bottom action
+        // panel -- so fetching and rendering them are separate steps (LoadActionsAsync/RenderActions
+        // below) with the timeline render sandwiched between them. Still exactly one action fetch per
+        // refresh; only the ordering changed.
+        IReadOnlyList<AvailableAction> loadedActions = [];
         // PR #99 review finding 3: RenderTimelineItems below re-assigns filterPicker.ItemsSource/
         // SelectedItem, either of which can raise the picker's own SelectedIndexChanged event
         // synchronously (a fresh ItemsSource resets SelectedIndex first) -- re-entering
@@ -185,7 +191,7 @@ public partial class WorkspaceShellPage
         {
             contentFocusRegistry.Register(key, control);
             // PR #110 review round 2 finding 1: the five hoisted Entry fields (rewindReasonEntry et
-            // al.) pass through here again on every RefreshActionsAsync call -- MarkWiredOnce guards
+            // al.) pass through here again on every RenderActions call -- MarkWiredOnce guards
             // the Focused subscription so a control already wired by an earlier call in this same
             // navigation's lifetime (its own field declaration onward) never gets a second, third, ...
             // Nth handler stacked on top of the first, while a freshly built control (every dynamic
@@ -393,25 +399,200 @@ public partial class WorkspaceShellPage
 
         // Nocturne visual pass: the mockup's timeline distinguishes a user-message bubble, an agent
         // summary with a sparkle avatar, and several per-kind tool-call/diff/test/permission cards --
-        // but TimelineItemView is one flat shape for every journal event (WorkflowEvent has exactly
-        // nine ...Type consts total: RouteDecisionRecorded, AttemptActivityRecorded,
-        // AttemptSuperseded, AttemptStopRequested/Converged, StageRevisionRecorded,
-        // StageTransitionConverged, UserMessagePosted, AgentSummaryRecorded -- no distinct
-        // "read"/"edit"/"test" tool-call shape or diff/test-output structure the Host actually
-        // describes). This reproduces exactly the distinction the data supports: bubble-align
-        // "operator" (human-authored: supersede/stop/rewind/UserMessagePosted), sparkle-card "agent"
-        // (AgentSummaryRecorded), and an icon-tagged card for every other "system" (workflow-driven)
-        // event, styled by its own Type -- never a fabricated per-kind layout.
+        // but TimelineItemView is one flat shape for every journal event, so this reproduces exactly
+        // the distinction the data supports: bubble-align "operator" (human-authored: supersede/stop/
+        // rewind/UserMessagePosted), sparkle-card "agent" (AgentSummaryRecorded), and an icon-tagged
+        // card for every other "system" (workflow-driven) event, styled by its own Type -- never a
+        // fabricated per-kind layout. The three ADR 0059/0060/0061 payload-bearing types get their
+        // own glyphs from the same already-declared set (no new codepoint): a diff summary reads as a
+        // diff, a tool-use summary as a terminal, a token-usage summary as a processor.
         string TimelineIconFor(TimelineItemView item) => item.Type switch
         {
             WorkflowEvent.AttemptActivityRecordedType => IconGlyphs.TerminalWindow,
             WorkflowEvent.AttemptSupersededType => IconGlyphs.GitMerge,
             WorkflowEvent.AttemptStopRequestedType or WorkflowEvent.AttemptStopConvergedType => IconGlyphs.StopCircle,
-            WorkflowEvent.StageRevisionRecordedType => IconGlyphs.GitDiff,
+            WorkflowEvent.StageRevisionRecordedType or WorkflowEvent.AttemptDiffRecordedType => IconGlyphs.GitDiff,
             WorkflowEvent.StageTransitionConvergedType => IconGlyphs.FlowArrow,
-            WorkflowEvent.RouteDecisionRecordedType => IconGlyphs.Cpu,
+            WorkflowEvent.AttemptToolUseRecordedType => IconGlyphs.TerminalWindow,
+            WorkflowEvent.RouteDecisionRecordedType or WorkflowEvent.AttemptUsageRecordedType => IconGlyphs.Cpu,
             _ => IconGlyphs.Circle,
         };
+
+        // Finding D1: TimelineCardProjector owns every label and every localization decision on a
+        // payload card; this view owns only the color a tone maps to and the layout it sits in.
+        Color ToneColor(TimelineStatTone tone) => tone switch
+        {
+            TimelineStatTone.Positive => ThemeColor("ColorStatusGreenText"),
+            TimelineStatTone.Negative => ThemeColor("ColorStatusRedText"),
+            TimelineStatTone.Caution => ThemeColor("ColorStatusAmberText"),
+            _ => ThemeColor("ColorNeutral300"),
+        };
+
+        // One counter chip. TagAccentStyle is this theme's only pill Border style, so a neutral chip
+        // reads as the same pill with neutral text rather than through a second Border style this
+        // slice would have to invent.
+        Border StatChip(TimelineStat stat)
+        {
+            Label label = new()
+            {
+                Text = stat.Label,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 9,
+                TextColor = ThemeColor("ColorNeutral500"),
+                VerticalOptions = LayoutOptions.Center,
+            };
+            Label value = new()
+            {
+                Text = stat.Value,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 11,
+                TextColor = ToneColor(stat.Tone),
+            };
+            Border chip = new()
+            {
+                Style = ThemeStyle("TagAccentStyle"),
+                VerticalOptions = LayoutOptions.Center,
+                Content = new HorizontalStackLayout { Spacing = 4, Children = { label, value } },
+            };
+            // The two Labels never speak individually either way: a Label's UIA name is its own text,
+            // so "files" and "3" as separate stops read as two disconnected fragments. Either the
+            // whole chip is excluded (its numbers are already in the item's described summary
+            // sentence) or the chip itself carries one coherent "<label>: <value>" description.
+            Decorative(label);
+            Decorative(value);
+            if (stat.RestatesSummary)
+            {
+                Decorative(chip);
+            }
+            else
+            {
+                SemanticProperties.SetDescription(
+                    chip, string.Create(CultureInfo.InvariantCulture, $"{stat.Label}: {stat.Value}"));
+            }
+
+            return chip;
+        }
+
+        View DetailRow(TimelineDetailRow detailRow)
+        {
+            HorizontalStackLayout line = new() { Spacing = 8 };
+            line.Children.Add(Describe(new Label
+            {
+                Text = detailRow.PrimaryText,
+                FontFamily = ThemeString("FontMono"),
+                FontSize = 10.5,
+                TextColor = ToneColor(detailRow.Tone),
+                LineBreakMode = LineBreakMode.MiddleTruncation,
+            }));
+            if (detailRow.SecondaryText is { } secondary)
+            {
+                line.Children.Add(Describe(new Label
+                {
+                    Text = secondary,
+                    FontFamily = ThemeString("FontMono"),
+                    FontSize = 10.5,
+                    TextColor = ThemeColor("ColorNeutral500"),
+                }));
+            }
+
+            return line;
+        }
+
+        // ADR 0058's decision, rendered at the exact point in the timeline that asked for it. Strictly
+        // ADDITIVE: ContextualActionHost's own gate card is untouched and remains the fallback surface
+        // for a gate whose requesting event is not on the loaded page (TimelineGateLinks.Resolve emits
+        // no link for one). Like that panel's card, this refreshes on mutation and navigation, not on
+        // the 15s timeline poll -- the poll re-fetches timeline items only, never actions, so a gate
+        // that opens between two mutations first appears inline at the next refresh. That is an
+        // accepted, documented limitation of the existing poll, not something this slice changes.
+        Border InlineGateCard(TimelineGateLink link)
+        {
+            Button approve = new()
+            {
+                Text = text.Resolve(MessageKeys.GateApproveAction),
+                IsEnabled = link.Approve.Enabled,
+                Style = ThemeStyle("PrimaryButtonStyle"),
+            };
+            Button reject = new()
+            {
+                Text = text.Resolve(MessageKeys.GateRejectAction),
+                IsEnabled = link.Reject.Enabled,
+                Style = ThemeStyle("DangerButtonStyle"),
+            };
+            // Two concurrently pending gates render two of these cards at once (the case ADR 0058
+            // node-scoped the action ids for), so "Approve"/"Reject" alone -- a Button's UIA name is
+            // its own Text -- would reach assistive technology as several indistinguishable buttons
+            // with no way to tell which decides which node. The node id is already on screen as a
+            // sibling Label, but that is a separate, disconnected stop; folding it into each button's
+            // own description is what makes the button itself uniquely identified. Same "<visible
+            // text> - <disambiguator>" shape RefreshHeaderAsync's own title description uses.
+            SemanticProperties.SetDescription(
+                approve, string.Create(CultureInfo.InvariantCulture, $"{approve.Text} - {link.NodeId}"));
+            SemanticProperties.SetDescription(
+                reject, string.Create(CultureInfo.InvariantCulture, $"{reject.Text} - {link.NodeId}"));
+            // Deliberately different from ContextualActionHost's own gate buttons, which pass `null`
+            // (resolving to the built-in graph's canonical gate node). The panel could name a node --
+            // currentDetails.Nodes is in scope there and NodeIsReady already indexes it, and only a
+            // human gate is ever `awaiting_human` -- but it renders exactly ONE approve/reject pair,
+            // so with two gates pending any id it picked would be an arbitrary choice between them
+            // presented as a definite target. Its single-target UI is what has to change, which is
+            // finding A2's job (see ADR 0064). This card is emitted per node-scoped approve_gate:/
+            // reject_gate: row, so naming the exact node is unambiguous here.
+            approve.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(true, link.NodeId));
+            reject.Clicked += (_, _) => _ = RunAsync(() => ResolveGateAsync(false, link.NodeId));
+            return new Border
+            {
+                Style = ThemeStyle("AmberCardStyle"),
+                Content = new VerticalStackLayout
+                {
+                    Spacing = 8,
+                    Children =
+                    {
+                        new HorizontalStackLayout
+                        {
+                            Spacing = 8,
+                            Children =
+                            {
+                                DecorativeGlyph(new Label
+                                {
+                                    Text = IconGlyphs.ShieldCheck,
+                                    Style = ThemeStyle("IconGlyphStyle"),
+                                    TextColor = ThemeColor("ColorStatusAmber"),
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                                Describe(new Label
+                                {
+                                    Text = text.Resolve(MessageKeys.TimelineGateDecisionRequiredLabel),
+                                    Style = ThemeStyle("HeadingLabelStyle"),
+                                    FontSize = 13,
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                                Describe(new Label
+                                {
+                                    Text = link.NodeId,
+                                    Style = ThemeStyle("MonoLabelStyle"),
+                                    VerticalOptions = LayoutOptions.Center,
+                                }),
+                            },
+                        },
+                        new HorizontalStackLayout
+                        {
+                            Spacing = 8,
+                            // NOT TrackContentFocus: that pair is restored only by RefreshAllAsync,
+                            // which never runs for the 15s poll that rebuilds this host -- so a key
+                            // captured here would sit unconsumed until an unrelated mutation yanked
+                            // focus back onto a button this card no longer renders. Every other
+                            // control inside timelineItemsHost uses this same lighter pattern.
+                            Children =
+                            {
+                                ClearContentFocusWhenFocused(approve),
+                                ClearContentFocusWhenFocused(reject),
+                            },
+                        },
+                    },
+                },
+            };
+        }
 
         void RenderTimelineItems(TimelineState state)
         {
@@ -425,6 +606,10 @@ public partial class WorkspaceShellPage
                 }));
             }
 
+            // Resolved once per render rather than per item: a gate whose requesting event is not on
+            // the loaded page yields no link at all, so the common case (no pending gate) is an empty
+            // list and the per-item check below is a scan over nothing.
+            IReadOnlyList<TimelineGateLink> gateLinks = TimelineGateLinks.Resolve(loadedActions, state.Items);
             foreach (TimelineItemView item in state.Items)
             {
                 bool isOperator = item.ActorText == "operator";
@@ -440,24 +625,82 @@ public partial class WorkspaceShellPage
                     TextColor = ThemeColor(isAgent ? "ColorNeutral200" : "ColorNeutral300"),
                 });
                 row.Children.Add(summary);
-                string argumentsText = string.Join(
-                    Environment.NewLine,
-                    item.Arguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
-                        .Select(pair => string.Create(CultureInfo.InvariantCulture, $"  {pair.Key}={pair.Value}")));
-                Label technicalDetail = Describe(new Label
+                // Only the chip strip is projected here. TimelineCardProjector.BuildStats is the
+                // cheap half by construction -- three to five chips -- while the up-to-50 formatted
+                // detail rows behind the "Details" toggle come from BuildDetails, called from the
+                // lazy builder below and never on an ordinary render (ADR 0064).
+                IReadOnlyList<TimelineStat> cardStats = TimelineCardProjector.BuildStats(item, text.Current);
+                if (cardStats.Count > 0)
                 {
-                    IsVisible = false,
-                    Text = string.Create(
-                        CultureInfo.InvariantCulture,
-                        $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
-                    Style = ThemeStyle("MonoLabelStyle"),
-                });
+                    HorizontalStackLayout chips = new() { Spacing = 6 };
+                    foreach (TimelineStat stat in cardStats)
+                    {
+                        chips.Children.Add(StatChip(stat));
+                    }
+
+                    row.Children.Add(chips);
+                }
+
+                // Built lazily on first expansion, and never rebuilt afterwards -- the projection of
+                // the underlying data included, not only the controls. This method runs on every 15s
+                // poll tick over up to SprintTimelineProjector.MaxItemsPerPage items, each of which
+                // may carry up to 50 per-file or per-call payload rows; formatting and constructing
+                // all of that would mean tens of thousands of strings and controls per tick for
+                // content that is collapsed and unread. The whole technical-detail section is inside
+                // the lazy builder, not just the new payload rows, so the correlation/causation/
+                // arguments text (previously an eager string.Join per item per render) shares the same
+                // discipline.
+                VerticalStackLayout technicalDetail = new() { IsVisible = false, Spacing = 3 };
+                bool technicalDetailBuilt = false;
+                void BuildTechnicalDetail()
+                {
+                    if (technicalDetailBuilt)
+                    {
+                        return;
+                    }
+
+                    technicalDetailBuilt = true;
+                    TimelineCardDetails details = TimelineCardProjector.BuildDetails(item, text.Current);
+                    foreach (TimelineDetailRow detailRow in details.Rows)
+                    {
+                        technicalDetail.Children.Add(DetailRow(detailRow));
+                    }
+
+                    // Every note, not only the last one written: a payload may cap a diff family and
+                    // a tool-use family independently, and each elision is its own fact (ADR
+                    // 0059/0060 via TimelineCardDetails.ElidedNotes).
+                    foreach (string elidedNote in details.ElidedNotes)
+                    {
+                        technicalDetail.Children.Add(Describe(new Label
+                        {
+                            Text = elidedNote,
+                            Style = ThemeStyle("MutedLabelStyle"),
+                        }));
+                    }
+
+                    string argumentsText = string.Join(
+                        Environment.NewLine,
+                        item.Arguments.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                            .Select(pair => string.Create(CultureInfo.InvariantCulture, $"  {pair.Key}={pair.Value}")));
+                    technicalDetail.Children.Add(Describe(new Label
+                    {
+                        Text = string.Create(
+                            CultureInfo.InvariantCulture,
+                            $"correlation={item.CorrelationId} causation={item.CausationId}\n{argumentsText}"),
+                        Style = ThemeStyle("MonoLabelStyle"),
+                    }));
+                }
+
                 Button detailsButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineDetailsAction),
                     Style = ThemeStyle("GhostButtonStyle"),
                 };
-                detailsButton.Clicked += (_, _) => technicalDetail.IsVisible = !technicalDetail.IsVisible;
+                detailsButton.Clicked += (_, _) =>
+                {
+                    BuildTechnicalDetail();
+                    technicalDetail.IsVisible = !technicalDetail.IsVisible;
+                };
                 Button copyButton = new()
                 {
                     Text = text.Resolve(MessageKeys.TimelineCopyAction),
@@ -512,14 +755,21 @@ public partial class WorkspaceShellPage
                     };
                 }
 
-                Border card = new()
+                Border itemCard = new()
                 {
                     Style = ThemeStyle(isOperator ? "MessageBubbleStyle" : "OutlinedPanelStyle"),
                     Content = cardContent,
                     HorizontalOptions = isOperator ? LayoutOptions.End : LayoutOptions.Fill,
                     MaximumWidthRequest = isOperator ? 620 : double.PositiveInfinity,
                 };
-                timelineItemsHost.Children.Add(card);
+                timelineItemsHost.Children.Add(itemCard);
+                foreach (TimelineGateLink link in gateLinks)
+                {
+                    if (link.Sequence == item.Sequence)
+                    {
+                        timelineItemsHost.Children.Add(InlineGateCard(link));
+                    }
+                }
             }
 
             loadMoreButton.IsVisible = state.HasMore;
@@ -550,12 +800,23 @@ public partial class WorkspaceShellPage
             RenderTimelineItems(state);
         }
 
-        async Task RefreshActionsAsync()
-        {
-            ContextualActionHost.Children.Clear();
-            IReadOnlyList<AvailableAction> actions = await sprintWorkspace.Actions
+        // Fetches the Host's action rows and stores them for BOTH consumers -- the timeline render
+        // (which needs them to place a pending gate's decision inline) and RenderActions below.
+        // Separated from rendering purely so the fetch can happen before the timeline renders; the
+        // number of Host round-trips per refresh is unchanged.
+        async Task LoadActionsAsync() =>
+            loadedActions = await sprintWorkspace.Actions
                 .LoadAsync(root, sprintId, CancellationToken.None)
                 .ConfigureAwait(true);
+
+        // Byte-for-byte the rendering half of the single fetch-and-render step this slice split in
+        // two (LoadActionsAsync above is the other half), reading loadedActions instead of awaiting
+        // its own fetch -- the bottom action panel is not changed by this slice in any way (finding
+        // A2, which dissolves it, is separate structural work).
+        void RenderActions()
+        {
+            ContextualActionHost.Children.Clear();
+            IReadOnlyList<AvailableAction> actions = loadedActions;
             ContextualActionHost.Children.Add(Describe(new Label
             {
                 Text = text.Resolve(MessageKeys.ActionsTitle),
@@ -678,7 +939,7 @@ public partial class WorkspaceShellPage
 
                 // PR #110 review finding 2: this Entry is hoisted (see its own field declaration's
                 // remarks) so the *instance* -- and whatever the user already typed into it -- survives
-                // RefreshActionsAsync, but it is still removed from ContextualActionHost and re-added on
+                // RenderActions, but it is still removed from ContextualActionHost and re-added on
                 // every rebuild, which disconnects the handler and drops focus exactly as it would for a
                 // freshly built button. Tracking it here is what lets RestoreContentFocus bring focus
                 // back mid-edit instead of only ever restoring buttons.
@@ -855,7 +1116,7 @@ public partial class WorkspaceShellPage
                 ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:definition-of-done", definitionOfDoneEntry));
                 ContextualActionHost.Children.Add(TrackContentFocus("action:confirm:evidence", evidenceEntry));
                 // PR #110 review finding 3: evidenceKind is rebuilt fresh (not hoisted) on every
-                // RefreshActionsAsync call, so unlike the two Entry fields above it is never a
+                // RenderActions call, so unlike the two Entry fields above it is never a
                 // meaningful restoration target and is deliberately left out of TrackContentFocus. But
                 // it is still a real, focusable control the user can tab into -- see
                 // ClearContentFocusWhenFocused's own remarks for why that still requires wiring.
@@ -1005,11 +1266,16 @@ public partial class WorkspaceShellPage
         bool NodeIsReady(string nodeId) =>
             currentDetails?.Nodes.Any(node => node.Id == nodeId && node.State == "ready") ?? false;
 
-        async Task ResolveGateAsync(bool approved)
+        // `nodeId` defaults to null so ContextualActionHost's existing call sites are unchanged -- see
+        // InlineGateCard's own remarks for why only the inline card can honestly name a node. The
+        // inline card routes its outcome here too, into the panel's own hoisted gateResult label:
+        // RefreshAllAsync below tears the resolved gate's inline card out of the timeline entirely,
+        // so a result label inside it would be destroyed before it could be read.
+        async Task ResolveGateAsync(bool approved, string? nodeId = null)
         {
             string action = text.Resolve(approved ? MessageKeys.GateApproveAction : MessageKeys.GateRejectAction);
             bool confirmed = await DisplayAlertAsync(
-                    action, sprintWorkspace.GatePrompt(sprintId, null), action, text.Resolve(MessageKeys.CancelAction))
+                    action, sprintWorkspace.GatePrompt(sprintId, nodeId), action, text.Resolve(MessageKeys.CancelAction))
                 .ConfigureAwait(true);
             if (!confirmed)
             {
@@ -1018,7 +1284,7 @@ public partial class WorkspaceShellPage
             }
 
             string message = await sprintWorkspace
-                .ResolveGateAsync(root, sprintId, null, approved, confirmed, CancellationToken.None)
+                .ResolveGateAsync(root, sprintId, nodeId, approved, confirmed, CancellationToken.None)
                 .ConfigureAwait(true);
             await RefreshAllAsync().ConfigureAwait(true);
             gateResult.Text = message;
@@ -1099,13 +1365,17 @@ public partial class WorkspaceShellPage
             // is re-registered under its own stable key, so clearing first means a control that no
             // longer renders (a resolved gate, a move target whose legal set changed) leaves no stale
             // entry behind for RestoreContentFocus to resolve to a now-detached instance. This spans
-            // both RefreshHeaderAsync and RefreshActionsAsync, so it belongs here rather than in either
+            // both RefreshHeaderAsync and RenderActions, so it belongs here rather than in either
             // individually -- matching where RestoreContentFocus itself already sits, below, once both
             // have finished. The initial three-call render at the end of RenderSprintWorkspaceAsync
             // does not need this: contentFocusRegistry is declared empty immediately above and nothing
             // has populated it yet by the time that render runs.
             contentFocusRegistry.Clear();
             await RefreshHeaderAsync().ConfigureAwait(true);
+            // Loaded before the timeline renders, rendered after it: the timeline needs the action
+            // rows to resolve a pending gate's inline decision card, and the panel needs the same
+            // rows. One fetch feeds both (see LoadActionsAsync's own remarks).
+            await LoadActionsAsync().ConfigureAwait(true);
             if (resetTimeline)
             {
                 // Full re-InitializeAsync clears SprintTimelineViewModel's loaded list and cursor,
@@ -1124,17 +1394,20 @@ public partial class WorkspaceShellPage
                     await sprintWorkspace.Timeline.LoadMoreAsync(root, CancellationToken.None).ConfigureAwait(true));
             }
 
-            await RefreshActionsAsync().ConfigureAwait(true);
+            RenderActions();
             // Plan 12.6: restored once here, after both hosts this method rebuilds have finished --
-            // restoring inside RefreshHeaderAsync/RefreshActionsAsync individually would consume the
+            // restoring inside RefreshHeaderAsync/RenderActions individually would consume the
             // captured key against a registry that has not fully rebuilt yet (see TrackContentFocus's
             // own remarks).
             RestoreContentFocus();
         }
 
         await RefreshHeaderAsync().ConfigureAwait(true);
+        // Same load-then-render-timeline-then-render-actions order RefreshAllAsync uses, for the same
+        // reason: the timeline's inline gate card is resolved from these rows.
+        await LoadActionsAsync().ConfigureAwait(true);
         await InitializeTimelineAsync().ConfigureAwait(true);
-        await RefreshActionsAsync().ConfigureAwait(true);
+        RenderActions();
 
         string? SelectedFilterOrNull()
         {

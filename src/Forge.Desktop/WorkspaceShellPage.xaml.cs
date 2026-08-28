@@ -1055,9 +1055,19 @@ public partial class WorkspaceShellPage : ContentPage
     /// Neither property is scanned by WorkspaceShellAccessibilityTests' IsTabStop/InputTransparent
     /// opt-out guard: a Label is not keyboard-focusable to begin with, so nothing is made
     /// unreachable.</summary>
-    private static Label DecorativeGlyph(Label glyph)
+    private static Label DecorativeGlyph(Label glyph) => Decorative(glyph);
+
+    /// <summary><see cref="DecorativeGlyph"/>'s rule for anything that is not a glyph
+    /// <see cref="Label"/>. Used by the timeline's payload stat chips (finding D1): a chip whose
+    /// numbers the item's own described summary sentence already speaks is visual reinforcement, and
+    /// repeating it as its own screen-reader stop is worse than silence -- so the chip's
+    /// <see cref="Border"/> and both of its text <see cref="Label"/>s are excluded together, since
+    /// excluding only the container still leaves each Label's own text as a stop. A chip that adds
+    /// something the sentence does not say keeps a real
+    /// <see cref="SemanticProperties.SetDescription"/> instead.</summary>
+    private static T Decorative<T>(T element) where T : VisualElement
     {
-        AutomationProperties.SetIsInAccessibleTree(glyph, false);
-        return glyph;
+        AutomationProperties.SetIsInAccessibleTree(element, false);
+        return element;
     }
 }
