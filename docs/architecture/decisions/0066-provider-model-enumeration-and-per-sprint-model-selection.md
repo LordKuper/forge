@@ -134,16 +134,24 @@ hygiene a probed value gets.
 
 The enumeration check is conditional on there *being* an enumeration — an empty `ListModelsAsync`
 means the vendor could not be asked, and refusing every explicit choice whenever a vendor probe is
-unavailable would trade a rare bad run for a common blocked one. When there *is* one, the provider's
-current `DefaultModel` is accepted alongside it even if the catalog omits it. Round 1 review of PR
-#123 found that omission is reachable and its consequence perverse: `DefaultModel` comes from
-`codex doctor --json` (whatever the user's own `config.toml` resolves) while the catalog is
+unavailable would trade a rare bad run for a common blocked one. When there *is* one, the model
+already resolved for that provider is accepted alongside it even if the catalog omits it. Round 1
+review of PR #123 found that omission is reachable and its consequence perverse: `DefaultModel` comes
+from `codex doctor --json` (whatever the user's own `config.toml` resolves) while the catalog is
 `codex debug models` filtered to `"visibility": "list"`, so a `model = "..."` naming a `hide` entry, or
 a custom `model_providers`/OSS slug that is in no served catalog at all, yields a non-empty catalog
 without the current default in it. Omitting the request froze that model happily; asking for the same
 value was refused — the "safe" explicit choice punished and the implicit one not, and a picker's
 pre-selected entry unreachable. The default is trivially a valid choice, because it is precisely what
 a sprint that requests nothing freezes and runs.
+
+The operand of that comparison is the already-resolved map entry, never a second reading of
+`DefaultModel`. Round 2 review of PR #123 found the first fix re-read the property, which reopens the
+same asymmetry through freshness rather than through the rule: the property is resolvable at runtime,
+so a refresh landing while `ListModelsAsync` is awaited moves it, and the request is then compared
+against a value this sprint never uses — refusing precisely the model an omitted request would have
+frozen. One resolution feeds the enumeration check, the allowlist gate, and the freeze alike, which is
+what `ResolveModelsAsync` exists to guarantee.
 
 The check that actually protects policy is unconditional and runs regardless.
 

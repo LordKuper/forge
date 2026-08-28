@@ -463,9 +463,12 @@ public sealed class SprintDefinitionTests
     // running on a genuinely different provider, for which a `codex` model id means nothing -- must
     // keep its OWN resolved default. A leak in either direction is durable sprint state and a `-m`
     // argument, so it would surface as a vendor rejection at review time rather than at the gate.
-    // The allowlist names both expected values and nothing else, so it also pins the second half of
-    // the interaction: ModelPolicyGate iterates the whole map, and the untouched provider's default
-    // must still be allowlisted.
+    // The allowlist names both expected values and nothing else, so nothing here succeeds by being
+    // unchecked. Its companion below --
+    // AnUntouchedReviewProviderSModelIsStillCheckedAgainstTheProjectPolicy -- is what pins the second
+    // half of the interaction, since a green result alone cannot distinguish a gate that iterated the
+    // whole map from one that checked the primary provider's entry and stopped (round 2 review of PR
+    // #123).
     [Fact]
     [Trait("Category", "Unit")]
     public async Task AnExplicitModelRequestAppliesToThePrimaryProviderOnlyWhenReviewRunsOnAnother()
@@ -504,6 +507,46 @@ public sealed class SprintDefinitionTests
         Assert.Equal(RequestedModel, reviewProfile.Lineage.ImplementationModel);
         // Only the primary provider is asked what it offers: the request is its id, not the reviewer's.
         Assert.Equal(0, review.ListModelsCalls);
+    }
+
+    // Round 2 review of PR #123. The mirror of the test above, and the one that actually proves
+    // ModelPolicyGate evaluates EVERY frozen provider's model rather than the requested one alone. The
+    // allowlist permits the primary provider's requested model and restricts `claude_code` to a model
+    // that is NOT its resolved default -- a provider with no entry at all would be unrestricted, so
+    // naming a non-matching one is what makes the review phase's untouched default the single failing
+    // entry. A gate that checked the request, or only the first map entry, would report success --
+    // which is the regression this guards, because a multi-provider sprint would then freeze a
+    // reviewer model the project excluded.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnUntouchedReviewProviderSModelIsStillCheckedAgainstTheProjectPolicy()
+    {
+        FakeLlmProvider review = new(
+            new ProviderId("claude_code"), ProviderState.Ready, "1.0.0", selectableModels: ["claude-other-model"]);
+        using TestEnvironment environment = new(
+            llmProviders: [CodexProviderOffering(RequestedModel), review],
+            providerEnablement: new FakeProviderEnablementSource(["codex", "claude_code"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(
+                new[] { $"codex:{RequestedModel}", "claude_code:claude-other-model" }),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: RequestedModel), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ModelPolicyViolation, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
     }
 
     // ADR 0066's zero-behaviour-change guarantee for the path every existing caller is on. No request

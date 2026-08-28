@@ -227,14 +227,23 @@ public static class ExecutionProfilePolicy
     /// The enumeration check is conditional on there BEING an enumeration — an empty
     /// <see cref="ILlmProvider.ListModelsAsync"/> means the vendor could not be asked, not that it
     /// offers nothing, and refusing every explicit choice whenever a vendor probe is unavailable would
-    /// trade a rare bad run for a common blocked one. When there IS one, the provider's current
-    /// <see cref="ILlmProvider.DefaultModel"/> is accepted alongside it even if the catalog omits it
-    /// (round 1 review of PR #123). An adapter's catalog and its resolved default answer two different
-    /// questions and can legitimately disagree — a Codex `config.toml` may name an entry Codex marks
+    /// trade a rare bad run for a common blocked one. When there IS one, this provider's entry in
+    /// <paramref name="models"/> is accepted alongside it even if the catalog omits it (round 1 review
+    /// of PR #123). An adapter's catalog and its resolved default answer two different questions and
+    /// can legitimately disagree — a Codex `config.toml` may name an entry Codex marks
     /// `"visibility": "hide"`, or a custom `model_providers` slug that is in no served catalog at all —
     /// and the default is trivially a valid choice, since it is precisely what a sprint that requests
     /// nothing freezes and runs. Refusing it would punish the explicit choice while allowing the
     /// identical implicit one, and would make a picker's own pre-selected entry unreachable.
+    ///
+    /// That comparison reads <paramref name="models"/>, never
+    /// <see cref="ILlmProvider.DefaultModel"/> again (round 2 review of PR #123). The property is
+    /// resolvable at runtime, so a concurrent refresh — the Host's capability pass, a sibling sprint
+    /// creation, `forge models --refresh` — can move it while the <c>await</c> above is in flight, and
+    /// a second reading would then compare the request against a value no part of this sprint uses:
+    /// the model an omitted request WOULD have frozen gets refused because the property has since
+    /// moved on. One resolution, used by this check, <see cref="ModelPolicyGate"/>, and
+    /// <see cref="Freeze"/> alike, is the same invariant <see cref="ResolveModelsAsync"/> exists for.
     ///
     /// The check that actually protects policy, <see cref="ModelPolicyGate"/>, is unconditional, runs
     /// regardless, and stays the caller's.
@@ -270,7 +279,8 @@ public static class ExecutionProfilePolicy
             await provider.ListModelsAsync(false, cancellationToken).ConfigureAwait(false);
         if (selectable.Count > 0 &&
             !selectable.Contains(requested, StringComparer.Ordinal) &&
-            !string.Equals(requested, provider.DefaultModel, StringComparison.Ordinal))
+            !(models.TryGetValue(providerId, out string? resolvedDefault) &&
+                string.Equals(requested, resolvedDefault, StringComparison.Ordinal)))
         {
             return new(null, DiagnosticCodes.SprintModelNotOffered);
         }
