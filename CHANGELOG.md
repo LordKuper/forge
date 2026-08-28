@@ -2,6 +2,41 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.88.0
+
+### Added
+
+- **A sprint can be created on a chosen model instead of the provider's default.** Sprint creation
+  accepts an explicit model, which is validated and then frozen into all three of that sprint's
+  execution profiles — planning, implementation, and review — in place of the model the provider
+  would have resolved for itself. The choice is made once, at creation, and never changes afterwards:
+  a sprint's profiles are frozen when it is created, which is what makes its attempts reproducible.
+  Validation accepts anything the provider offers plus the provider's own configured default, which
+  stays selectable even when the catalog the provider publishes omits it — a Codex `config.toml` may
+  name a hidden, preview, or custom model, and that model is exactly what a sprint with no choice
+  would run on. It refuses the placeholder values a provider reserves for its own internal use
+  (Codex's `vendor-default` and `gpt-5`, which it never sends to the vendor), so a sprint is never
+  frozen on a model its attempts would not actually use. Creating a sprint without a choice behaves
+  exactly as before.
+- **Forge can list the models a provider offers.** Codex is asked for its own catalog and Forge
+  offers the entries Codex itself marks as listed, in Codex's own order; Claude Code publishes no
+  catalog, so its three documented aliases (`fable`, `opus`, `sonnet`) are offered instead. Codex's
+  answer is cached per machine on the same 24-hour cadence as the update and default-model checks, so
+  asking repeatedly costs nothing and asking while Codex is unreachable costs nothing either.
+  `forge models --refresh` re-asks immediately, so a model the vendor has just released becomes
+  selectable right away instead of waiting for the cache to expire.
+- **A refused model choice says which kind of refusal it was.** Three outcomes, each with its own
+  diagnostic and exit code: `sprint_model_not_offered` (exit 7) when the provider does not offer the
+  requested model, `sprint_model_invalid` (exit 2) when the value is not a usable model id at all, and
+  `model_policy_violation` (exit 11) only when a project's `models.allowed_models` genuinely excludes
+  it. No sprint is registered in any of the three cases.
+
+Sprints created by earlier releases are unaffected: they keep the model they were frozen on and keep
+running exactly as before.
+
+> **Note:** there is no model picker in the app yet. This release is the backend half — the
+> enumeration, the per-sprint choice, and its validation — that the picker is built on.
+
 ## v0.87.0
 
 ### Added

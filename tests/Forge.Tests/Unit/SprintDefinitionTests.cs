@@ -14,6 +14,31 @@ public sealed class SprintDefinitionTests
     private static readonly string[] ViolatingModelPolicy = ["codex:some-other-model"];
     private static readonly string[] SatisfyingModelPolicy = ["codex:codex-fake-model"];
 
+    /// <summary>A selectable model that is deliberately NOT the fake provider's own
+    /// <c>DefaultModel</c>, so an explicit request is always distinguishable from the default (ADR
+    /// 0066).</summary>
+    private const string RequestedModel = "codex-chosen-model";
+
+    /// <summary>An allowlist naming only <see cref="RequestedModel"/> — the provider's own default is
+    /// excluded, so creation can only succeed if the gate evaluated the request.</summary>
+    private static readonly string[] RequestedModelPolicy = [$"codex:{RequestedModel}"];
+
+    /// <summary>A literal the fake provider reserves for its own internal use — the neutral stand-in
+    /// for a real adapter's suppressed sentinel (Codex's `vendor-default`/`gpt-5`), which
+    /// <c>RunAsync</c> declines to send and which must therefore never be freezable as an explicit
+    /// choice (round 1 review of PR #123).</summary>
+    private const string ReservedModel = "reserved-sentinel";
+
+    /// <summary>The `codex` fake every model-selection test here shares: ready, offering its own
+    /// default plus <paramref name="alsoOffers"/>, and reserving <see cref="ReservedModel"/>.</summary>
+    private static FakeLlmProvider CodexProviderOffering(string alsoOffers) =>
+        new(
+            new ProviderId("codex"),
+            ProviderState.Ready,
+            "1.0.0",
+            selectableModels: ["codex-fake-model", alsoOffers],
+            reservedModel: ReservedModel);
+
 
     // ADR 0008: "Routing candidates are the ordered intersection of the frozen project profile and
     // the user-enabled set... The resolved candidate list is frozen into the sprint profile." No
@@ -253,6 +278,313 @@ public sealed class SprintDefinitionTests
             approvedModel,
             definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
         Assert.Equal(1, provider.ModelReads);
+    }
+
+    // ADR 0066 / plan decision Q10: the picker exists at sprint creation only, and what it chooses
+    // must be what every phase actually runs on. One provider is enabled, so review falls back to it
+    // too -- which makes this the case that also pins the lineage, the fourth place one freeze records
+    // a model. The allowlist deliberately names ONLY the requested model, so creation succeeding also
+    // proves ModelPolicyGate evaluated the request rather than the provider's own default.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitModelRequestIsFrozenIntoEveryPhaseInsteadOfTheProviderDefault()
+    {
+        using TestEnvironment environment = new(
+            llmProviders:
+            [
+                new FakeLlmProvider(
+                    new ProviderId("codex"),
+                    ProviderState.Ready,
+                    "1.0.0",
+                    selectableModels: ["codex-fake-model", RequestedModel]),
+            ],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(RequestedModelPolicy),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: RequestedModel), cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.True(result.Succeeded);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.Equal(3, definition!.ExecutionProfiles.Count);
+        Assert.All(definition.ExecutionProfiles.Values, profile => Assert.Equal(RequestedModel, profile.Model));
+        Assert.Equal(
+            RequestedModel,
+            definition.ExecutionProfiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
+    }
+
+    // The requested model reaches ModelPolicyGate, so a project allowlist that permits the provider's
+    // own default but not the request must refuse creation -- otherwise the picker would be a way
+    // around models.allowed_models. The allowlist here is exactly the one
+    // CreationSucceedsWhenTheFrozenModelIsListedInTheConfiguredPolicy creates a sprint under, so the
+    // request is the only difference between success and refusal.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitModelRequestTheProjectPolicyDisallowsIsRefusedWithoutRegisteringASprint()
+    {
+        using TestEnvironment environment = new(
+            llmProviders:
+            [
+                new FakeLlmProvider(
+                    new ProviderId("codex"),
+                    ProviderState.Ready,
+                    "1.0.0",
+                    selectableModels: ["codex-fake-model", RequestedModel]),
+            ],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(SatisfyingModelPolicy),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: RequestedModel), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ModelPolicyViolation, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // Round 1 review of PR #123. Every way a request can be refused BEFORE the project allowlist is
+    // consulted, each on its own code -- the point being that none of them is
+    // `model_policy_violation` any more: all of these fire with no `models.allowed_models` configured
+    // at all, so naming a policy the project never set sent an operator to a key that is not there.
+    //   * `sprint_model_not_offered` -- a well-formed id this provider's catalog does not list, and a
+    //     literal it reserves for its own internal use (the neutral stand-in for a real adapter's
+    //     suppressed sentinel, which RunAsync would decline to send).
+    //   * `sprint_model_invalid` -- every shape ProviderInstallation.NormalizeModelName rejects
+    //     outright: embedded whitespace, a newline-bearing value, one past the length bound,
+    //     non-printable input.
+    // Genuine allowlist violations keep reporting `model_policy_violation`, pinned by
+    // AnExplicitModelRequestTheProjectPolicyDisallowsIsRefusedWithoutRegisteringASprint above.
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData("codex-model-nobody-offers", DiagnosticCodes.SprintModelNotOffered)]
+    [InlineData(ReservedModel, DiagnosticCodes.SprintModelNotOffered)]
+    [InlineData("codex chosen model", DiagnosticCodes.SprintModelInvalid)]
+    [InlineData("codex-chosen-model\nrm -rf /", DiagnosticCodes.SprintModelInvalid)]
+    [InlineData(
+        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        DiagnosticCodes.SprintModelInvalid)]
+    [InlineData("codex-chåsen-model", DiagnosticCodes.SprintModelInvalid)]
+    public async Task AnExplicitModelRequestThatIsNotSelectableIsRefusedWithItsOwnDiagnosticCode(
+        string requestedModel, string expectedDiagnostic)
+    {
+        using TestEnvironment environment = new(
+            llmProviders: [CodexProviderOffering(RequestedModel)],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: requestedModel), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(expectedDiagnostic, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // Round 1 review of PR #123, finding 1. An adapter's catalog and its resolved default answer two
+    // different questions and can legitimately disagree -- a Codex `config.toml` may name an entry
+    // Codex marks `"visibility": "hide"`, or a custom `model_providers` slug that is in no served
+    // catalog at all -- so a non-empty catalog that omits the CURRENT default must not make that
+    // default unrequestable. The fake here offers a catalog that deliberately excludes its own
+    // DefaultModel, which is exactly the shape that used to refuse: omitting the request froze that
+    // model happily, while asking for the very same value was rejected. Both must now agree.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ExplicitlyRequestingTheProviderDefaultSucceedsEvenWhenTheCatalogOmitsIt()
+    {
+        FakeLlmProvider provider = new(
+            new ProviderId("codex"),
+            ProviderState.Ready,
+            "1.0.0",
+            // A catalog that lists other models and NOT `codex-fake-model`, this fake's own default.
+            selectableModels: [RequestedModel, "codex-other-model"],
+            reservedModel: ReservedModel);
+        using TestEnvironment environment = new(
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: provider.DefaultModel),
+            cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.True(result.Succeeded);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.All(
+            definition!.ExecutionProfiles.Values,
+            profile => Assert.Equal(provider.DefaultModel, profile.Model));
+        // The enumeration really was consulted and really did omit the value -- otherwise this test
+        // would pass for the wrong reason (an empty catalog skipping the check entirely).
+        Assert.Equal(1, provider.ListModelsCalls);
+        Assert.DoesNotContain(
+            provider.DefaultModel,
+            await provider.ListModelsAsync(false, cancellationToken));
+    }
+
+    // Round 1 review of PR #123, finding 3: every other creation test here enables ONE provider, so
+    // review falls back to the implementation provider and Freeze's `reviewModel = implementationModel`
+    // shortcut hides the branch the override's own contract is stated in. With two providers the
+    // requested model must reach planning and implementation and the lineage, and the review phase --
+    // running on a genuinely different provider, for which a `codex` model id means nothing -- must
+    // keep its OWN resolved default. A leak in either direction is durable sprint state and a `-m`
+    // argument, so it would surface as a vendor rejection at review time rather than at the gate.
+    // The allowlist names both expected values and nothing else, so nothing here succeeds by being
+    // unchecked. Its companion below --
+    // AnUntouchedReviewProviderSModelIsStillCheckedAgainstTheProjectPolicy -- is what pins the second
+    // half of the interaction, since a green result alone cannot distinguish a gate that iterated the
+    // whole map from one that checked the primary provider's entry and stopped (round 2 review of PR
+    // #123).
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnExplicitModelRequestAppliesToThePrimaryProviderOnlyWhenReviewRunsOnAnother()
+    {
+        FakeLlmProvider review = new(
+            new ProviderId("claude_code"), ProviderState.Ready, "1.0.0", selectableModels: ["claude-other-model"]);
+        using TestEnvironment environment = new(
+            llmProviders: [CodexProviderOffering(RequestedModel), review],
+            providerEnablement: new FakeProviderEnablementSource(["codex", "claude_code"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(new[] { $"codex:{RequestedModel}", $"claude_code:{review.DefaultModel}" }),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: RequestedModel), cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, result.DiagnosticCode);
+        Assert.True(result.Succeeded);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.Equal(RequestedModel, definition!.ExecutionProfiles[ExecutionPhase.Planning].Model);
+        Assert.Equal(RequestedModel, definition.ExecutionProfiles[ExecutionPhase.Implementation].Model);
+        ExecutionProfile reviewProfile = definition.ExecutionProfiles[ExecutionPhase.Review];
+        Assert.Equal("claude_code", reviewProfile.Provider);
+        Assert.Equal(review.DefaultModel, reviewProfile.Model);
+        Assert.True(reviewProfile.Lineage!.AchievedIndependence);
+        Assert.Equal(RequestedModel, reviewProfile.Lineage.ImplementationModel);
+        // Only the primary provider is asked what it offers: the request is its id, not the reviewer's.
+        Assert.Equal(0, review.ListModelsCalls);
+    }
+
+    // Round 2 review of PR #123. The mirror of the test above, and the one that actually proves
+    // ModelPolicyGate evaluates EVERY frozen provider's model rather than the requested one alone. The
+    // allowlist permits the primary provider's requested model and restricts `claude_code` to a model
+    // that is NOT its resolved default -- a provider with no entry at all would be unrestricted, so
+    // naming a non-matching one is what makes the review phase's untouched default the single failing
+    // entry. A gate that checked the request, or only the first map entry, would report success --
+    // which is the regression this guards, because a multi-provider sprint would then freeze a
+    // reviewer model the project excluded.
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task AnUntouchedReviewProviderSModelIsStillCheckedAgainstTheProjectPolicy()
+    {
+        FakeLlmProvider review = new(
+            new ProviderId("claude_code"), ProviderState.Ready, "1.0.0", selectableModels: ["claude-other-model"]);
+        using TestEnvironment environment = new(
+            llmProviders: [CodexProviderOffering(RequestedModel), review],
+            providerEnablement: new FakeProviderEnablementSource(["codex", "claude_code"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        ConfigurationWriteResult configured = await environment.Application.SetConfigurationAsync(
+            ConfigurationScope.Project,
+            environment.ProjectRoot,
+            "models.allowed_models",
+            JsonSerializer.SerializeToElement(
+                new[] { $"codex:{RequestedModel}", "claude_code:claude-other-model" }),
+            cancellationToken);
+        Assert.True(configured.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+        ISprintStore store = environment.Resolve<ISprintStore>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: RequestedModel), cancellationToken);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(DiagnosticCodes.ModelPolicyViolation, result.DiagnosticCode);
+        Assert.Empty(await store.ListAsync(environment.ProjectRoot, cancellationToken));
+    }
+
+    // ADR 0066's zero-behaviour-change guarantee for the path every existing caller is on. No request
+    // (and a blank one, which a picker's own "auto" entry sends) must freeze the provider's resolved
+    // default in all three phases AND must not enumerate at all -- the enumeration is validation for a
+    // choice, so a sprint that makes no choice must not pay for one or be exposed to its failures.
+    [Theory]
+    [Trait("Category", "Unit")]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task OmittingTheModelRequestFreezesTheProviderDefaultWithoutEnumeratingAnything(
+        string? requestedModel)
+    {
+        FakeLlmProvider provider = new(
+            new ProviderId("codex"),
+            ProviderState.Ready,
+            "1.0.0",
+            selectableModels: ["codex-fake-model", RequestedModel]);
+        using TestEnvironment environment = new(
+            llmProviders: [provider],
+            providerEnablement: new FakeProviderEnablementSource(["codex"]));
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        InitializeProjectResult init = await environment.InitializeAsync(
+            environment.ProjectRoot, true, cancellationToken);
+        Assert.True(init.Succeeded);
+        SprintOrchestrator orchestrator = environment.Resolve<SprintOrchestrator>();
+
+        CreateSprintResult result = await orchestrator.CreateSprintAsync(
+            new(environment.ProjectRoot, 1, Guid.NewGuid(), RequestedModel: requestedModel), cancellationToken);
+
+        Assert.True(result.Succeeded);
+        SprintDefinition? definition = await orchestrator.GetDefinitionAsync(
+            environment.ProjectRoot, result.SprintId!, cancellationToken);
+        Assert.All(
+            definition!.ExecutionProfiles.Values,
+            profile => Assert.Equal(provider.DefaultModel, profile.Model));
+        Assert.Equal(0, provider.ListModelsCalls);
     }
 
     // A definition.json written before FrozenProviders existed has no such key at all -- proves
@@ -666,6 +998,14 @@ public sealed class SprintDefinitionTests
         /// <c>ExecutionProfilePolicy.ResolveModelsAsync</c> performs must not itself consume one.</summary>
         public Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        /// <summary>Empty on purpose: this fake enumerates nothing, so no test built on it can
+        /// accidentally depend on the enumeration path, and every <see cref="DefaultModel"/> read
+        /// stays counted.</summary>
+        public Task<IReadOnlyList<string>> ListModelsAsync(bool bypassCache, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
+        public bool IsReservedModelName(string model) => false;
 
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             Task.FromResult(ProviderStatus.Ready(id, "1.0.0"));

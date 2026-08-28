@@ -32,16 +32,19 @@ public static class ExitCodes
             DiagnosticCodes.ConfirmationEvidenceKindInvalid or DiagnosticCodes.ConfirmationTextRequired or
             DiagnosticCodes.TestWorkJustificationRequired or DiagnosticCodes.StageTransitionReasonRequired or
             DiagnosticCodes.UserMessageTooLong or DiagnosticCodes.UserMessageRequired or
-            DiagnosticCodes.SprintTitleTooLong => Usage,
+            DiagnosticCodes.SprintTitleTooLong or DiagnosticCodes.SprintModelInvalid => Usage,
         DiagnosticCodes.ConfigurationScopeViolation or DiagnosticCodes.ConfigurationInvalid =>
             Configuration,
         DiagnosticCodes.ProjectNotInitialized or DiagnosticCodes.ProjectDirectoryUnknown or
             DiagnosticCodes.ProjectRootMissing => Project,
         DiagnosticCodes.PlatformNotSupported => Platform,
         DiagnosticCodes.UpdateCheckDeferred => Update,
+        // ADR 0066: the answer comes from the provider's own catalog, not from project policy or from
+        // the argument's shape, so it belongs with the other provider-capability refusals rather than
+        // with `model_policy_violation`'s workflow family (round 1 review of PR #123).
         DiagnosticCodes.ProviderPreflightPending or DiagnosticCodes.ProviderUpdateFailed or
-            DiagnosticCodes.IntegrationLanguageUnsupported or DiagnosticCodes.IntegrationPartiallyRefused =>
-            Provider,
+            DiagnosticCodes.IntegrationLanguageUnsupported or DiagnosticCodes.IntegrationPartiallyRefused or
+            DiagnosticCodes.SprintModelNotOffered => Provider,
         DiagnosticCodes.PermissionDenied => Authorization,
         DiagnosticCodes.ConfirmationRequired => Confirmation,
         DiagnosticCodes.SuggestionStale or DiagnosticCodes.ControlCursorStale => Concurrency,

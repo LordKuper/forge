@@ -14,6 +14,7 @@ public static class CodexProviderServices
             new CodexReleaseSource(provider.GetRequiredService<INetworkClient>()),
             provider.GetRequiredService<IProviderReleaseCache>(),
             provider.GetRequiredService<IProviderDefaultModelCache>(),
+            provider.GetRequiredService<IProviderModelCatalogCache>(),
             provider.GetRequiredService<IProviderInstallLock>(),
             provider.GetRequiredService<IClock>()));
         services.AddSingleton<IProviderIntegrationGenerator, CodexIntegrationGenerator>();

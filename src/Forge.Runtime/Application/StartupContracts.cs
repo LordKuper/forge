@@ -233,13 +233,37 @@ public static class DiagnosticCodes
     /// unimplemented until this ADR.</summary>
     public const string PermissionDenied = "permission_denied";
 
-    /// <summary>ADR 0042: a frozen provider's <c>ILlmProvider.DefaultModel</c> is not listed in the
-    /// project's configured <c>models.allowed_models</c> policy for that provider. Checked in
+    /// <summary>ADR 0042: a frozen provider's model — its <c>ILlmProvider.DefaultModel</c>, or the
+    /// model the caller explicitly requested (ADR 0066) — is not listed in the project's configured
+    /// <c>models.allowed_models</c> policy for that provider. Checked in
     /// <see cref="SprintOrchestrator.CreateSprintAsync"/> immediately after <c>frozenProviders</c> is
     /// resolved, before any event is appended -- the same fail-closed placement
     /// <see cref="SprintProviderCandidatesEmpty"/> already uses for the adjacent "no routable
-    /// provider" case.</summary>
+    /// provider" case. Reported ONLY when an allowlist actually excludes the model: a request the
+    /// provider does not offer is <see cref="SprintModelNotOffered"/>, and one that is not a usable
+    /// model id at all is <see cref="SprintModelInvalid"/> (round 1 review of PR #123 — reusing this
+    /// code for either sent an operator to a `models.allowed_models` key that is usually not even
+    /// configured).</summary>
     public const string ModelPolicyViolation = "model_policy_violation";
+
+    /// <summary>ADR 0066: <c>CreateSprintCommand.RequestedModel</c> is not among the models the
+    /// primary provider currently offers (<c>ILlmProvider.ListModelsAsync</c>), or is a placeholder
+    /// that provider reserves for its own internal use (<c>ILlmProvider.IsReservedModelName</c>).
+    /// Distinct from <see cref="ModelPolicyViolation"/>, which means a configured project allowlist
+    /// excluded the model: this one fires with no allowlist configured at all, and its recovery is to
+    /// choose an offered model or re-run `forge models --refresh` when the provider has just published
+    /// a new one. Never reported when the provider could not be enumerated -- an unavailable vendor
+    /// probe leaves the request to the allowlist and model-name checks rather than refusing
+    /// it.</summary>
+    public const string SprintModelNotOffered = "sprint_model_not_offered";
+
+    /// <summary>ADR 0066: <c>CreateSprintCommand.RequestedModel</c> is not a usable model id at all --
+    /// blank, whitespace-bearing, non-printable, or past the length bound
+    /// <c>ProviderInstallation.NormalizeModelName</c> enforces. Caller input that never reaches a
+    /// provider, reported separately from <see cref="SprintModelNotOffered"/> so an operator is not
+    /// told to check a catalog when the value could not have been in one (round 1 review of PR
+    /// #123).</summary>
+    public const string SprintModelInvalid = "sprint_model_invalid";
 
     /// <summary>ADR 0042 (round 1 review of PR #87): a `models.allowed_models` entry names a
     /// provider id that matches none of the project's enabled providers -- a likely typo or a

@@ -43,6 +43,24 @@ internal sealed class FakeDefaultModelCache : IProviderDefaultModelCache
     }
 }
 
+/// <summary>The <see cref="IProviderModelCatalogCache"/> counterpart of
+/// <see cref="FakeDefaultModelCache"/> (ADR 0066): in-memory, per-<see cref="ProviderId"/>, empty
+/// until something is written.</summary>
+internal sealed class FakeModelCatalogCache : IProviderModelCatalogCache
+{
+    private readonly Dictionary<string, ProviderModelCatalogCacheEntry> entries = new(StringComparer.Ordinal);
+
+    public Task<ProviderModelCatalogCacheEntry?> ReadAsync(ProviderId id, CancellationToken cancellationToken) =>
+        Task.FromResult(entries.TryGetValue(id.Value, out ProviderModelCatalogCacheEntry? entry) ? entry : null);
+
+    public Task WriteAsync(
+        ProviderId id, ProviderModelCatalogCacheEntry entry, CancellationToken cancellationToken)
+    {
+        entries[id.Value] = entry;
+        return Task.CompletedTask;
+    }
+}
+
 /// <summary>Acquires immediately (or never, with <paramref name="acquires"/> false) without any
 /// real cross-process contention.</summary>
 internal sealed class FakeInstallLock(bool acquires = true) : IProviderInstallLock

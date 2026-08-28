@@ -119,6 +119,36 @@ public sealed class ExecutionProfilePolicyTests
             profiles[ExecutionPhase.Review].Lineage!.ImplementationModel);
     }
 
+    /// <summary>Round 2 review of PR #123. Once a provider's model is in the resolved map, every later
+    /// comparison against it must use THAT value: <see cref="ILlmProvider.DefaultModel"/> is resolvable
+    /// at runtime (ADR 0063), so a concurrent refresh can move it while
+    /// <see cref="ExecutionProfilePolicy.ApplyRequestedModelAsync"/> is awaiting the enumeration. The
+    /// provider here moves on every read and publishes a catalog that never lists it — the exact shape
+    /// where the enumeration check falls through to the default — so requesting the value the map
+    /// already holds is accepted only if the comparison operand is the map, not a fresher property
+    /// reading. A second reading refuses precisely the model an omitted request would have frozen.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task ARequestForTheResolvedModelSurvivesTheDefaultMovingUnderneathIt()
+    {
+        ShiftingModelProvider provider = new(new ProviderId("codex"), ["catalog-model"]);
+        ProviderCatalog catalog = new([provider]);
+        CancellationToken cancellationToken = TestContext.Current.CancellationToken;
+        IReadOnlyDictionary<string, string> models =
+            await ExecutionProfilePolicy.ResolveModelsAsync(["codex"], catalog, cancellationToken);
+        string resolved = models["codex"];
+
+        ExecutionProfilePolicy.RequestedModelOutcome outcome =
+            await ExecutionProfilePolicy.ApplyRequestedModelAsync(
+                models, "codex", resolved, catalog, cancellationToken);
+
+        Assert.Equal(DiagnosticCodes.None, outcome.DiagnosticCode);
+        Assert.Equal(resolved, outcome.Models!["codex"]);
+        // The drift is real rather than assumed: the property has genuinely moved off the resolved
+        // value, so the acceptance above can only have come from the map.
+        Assert.NotEqual(resolved, provider.DefaultModel);
+    }
+
     /// <summary>ADR 0063's unresolved-model sentinel is an ordinary non-empty model string as far as
     /// this policy is concerned, so a sprint created before any successful vendor probe still freezes a
     /// profile that satisfies `execution-profile.schema.json`'s `minLength: 1` on `model` (and on the
@@ -163,14 +193,21 @@ public sealed class ExecutionProfilePolicyTests
     }
 
     /// <summary>Reports a different model on every single read — the pathological end of what ADR 0063
-    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.ResolveModelsAsync"/>
-    /// plus <see cref="ExecutionProfilePolicy.Freeze"/> is caught rather than depending on a race
-    /// actually occurring.</summary>
-    private sealed class ShiftingModelProvider(ProviderId id) : StubProvider(id)
+    /// makes possible, so a single re-read anywhere in <see cref="ExecutionProfilePolicy.ResolveModelsAsync"/>,
+    /// <see cref="ExecutionProfilePolicy.Freeze"/>, or
+    /// <see cref="ExecutionProfilePolicy.ApplyRequestedModelAsync"/> is caught rather than depending on
+    /// a race actually occurring. <paramref name="catalog"/> is empty unless a caller supplies one,
+    /// meaning "this provider could not be enumerated".</summary>
+    private sealed class ShiftingModelProvider(ProviderId id, IReadOnlyList<string>? catalog = null)
+        : StubProvider(id)
     {
         private int reads;
 
         public override string DefaultModel => $"model-{Interlocked.Increment(ref reads)}";
+
+        public override Task<IReadOnlyList<string>> ListModelsAsync(
+            bool bypassCache, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>(catalog ?? []);
     }
 
     private sealed class FixedModelProvider(ProviderId id, string model) : StubProvider(id)
@@ -210,6 +247,16 @@ public sealed class ExecutionProfilePolicyTests
 
         public virtual Task RefreshDefaultModelAsync(bool bypassCache, CancellationToken cancellationToken) =>
             Task.CompletedTask;
+
+        /// <summary>Empty by default — "this provider could not be enumerated" — so a subclass that
+        /// cares about the enumeration path has to say so.</summary>
+        public virtual Task<IReadOnlyList<string>> ListModelsAsync(
+            bool bypassCache, CancellationToken cancellationToken) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+
+        /// <summary>Nothing reserved by default, so a subclass that cares about the reserved-sentinel
+        /// path has to say so.</summary>
+        public virtual bool IsReservedModelName(string model) => false;
 
         public Task<ProviderStatus> DiscoverAsync(bool bypassReleaseCache, CancellationToken cancellationToken) =>
             throw new NotSupportedException();
