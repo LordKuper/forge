@@ -2,6 +2,18 @@
 
 User-facing Forge changes are listed by release, newest first.
 
+## v0.88.0
+
+### Added
+
+- **Four new settings are now configurable**, ahead of the settings page that will present them.
+  `interaction.auto_approve_gate` records whether the human approval gate may be approved
+  automatically — the gate is still unconditional and nothing acts on this value yet. `shell.theme`
+  accepts `dark`, `light`, or `system` and defaults to `dark`; no light palette ships yet, so the
+  other two are stored but not yet rendered. `providers.priority` records a preferred provider
+  order, and `models.effort` records a per-model effort level. Existing configuration files keep
+  working untouched and pick up the defaults.
+
 ## v0.87.0
 
 ### Added

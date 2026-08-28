@@ -14,10 +14,29 @@ public static class ConfigurationKeys
 {
     public const string ProvidersEnabled = "providers.enabled";
 
+    /// <summary>ADR 0067: the user's preferred order for routing among the providers
+    /// <see cref="ProvidersEnabled"/> allows. Declared, validated, and resolved only -- no routing
+    /// code reads it yet.</summary>
+    public const string ProvidersPriority = "providers.priority";
+
+    /// <summary>ADR 0067: a map from model id to one of <c>ProviderEffortLevels.KnownLevels</c>.
+    /// Declared, validated, and resolved only -- <c>ExecutionProfilePolicy.Freeze</c> does not read
+    /// it.</summary>
+    public const string ModelsEffort = "models.effort";
+
+    /// <summary>ADR 0067: whether the mandatory human-approval gate may be approved automatically.
+    /// A schema placeholder with no enforcement path -- see that ADR before wiring a consumer.</summary>
+    public const string AutoApproveGate = "interaction.auto_approve_gate";
+
     /// <summary>Desktop-instance-level UI preference (ADR 0050 addendum): whether the workspace
     /// shell's sidebar is collapsed to its icon-only rail. User-scoped like
     /// <c>notifications.enabled</c> -- a per-installation preference, never tied to one project.</summary>
     public const string SidebarCollapsed = "shell.sidebar_collapsed";
+
+    /// <summary>ADR 0067: the desktop shell's colour theme. Grouped with
+    /// <see cref="SidebarCollapsed"/> because both are per-installation shell appearance
+    /// preferences. <c>light</c> is a valid value with no palette behind it until S24.</summary>
+    public const string ShellTheme = "shell.theme";
 }
 
 public enum ConfigurationProvenance

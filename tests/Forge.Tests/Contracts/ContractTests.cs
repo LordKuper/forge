@@ -3,6 +3,7 @@ using System.Text.Json.Nodes;
 using Forge.Application;
 using Forge.Configuration;
 using Forge.Domain;
+using Forge.Providers;
 using Forge.Tests.Support;
 using Json.Schema;
 
@@ -205,6 +206,34 @@ public sealed class ContractTests
         Assert.Equal(
             registryKeys.Keys.OrderBy(name => name, StringComparer.Ordinal),
             contractKeyNames.OrderBy(name => name, StringComparer.Ordinal));
+    }
+
+    /// <summary>ADR 0067's `models.effort` bounds its values with an enum in
+    /// `user-config.schema.json`, while the vocabulary itself is owned by
+    /// <see cref="ProviderEffortLevels.KnownLevels"/>. Hand-syncing the two has a silent failure
+    /// mode in both directions: a level added to the ladder but not the schema becomes
+    /// unconfigurable, and one added to the schema but not the ladder is accepted at write time and
+    /// then dropped by <see cref="ProviderEffortLevels.Resolve"/> with no diagnostic. Read from both
+    /// actual sources, never a literal restated here, so either edit alone trips this.</summary>
+    [Fact]
+    [Trait("Category", "Contracts")]
+    public void TheEffortEnumInUserConfigMatchesTheLadderTheProviderLayerUnderstands()
+    {
+        string schemaPath = Path.Combine(
+            Forge.UnitTests.RepositoryRoot.Find(), "docs", "contracts", "v1", "schemas", "user-config.schema.json");
+        using JsonDocument schema = JsonDocument.Parse(File.ReadAllText(schemaPath));
+
+        IEnumerable<string> schemaLevels = schema.RootElement
+            .GetProperty("properties")
+            .GetProperty("models")
+            .GetProperty("properties")
+            .GetProperty("effort")
+            .GetProperty("additionalProperties")
+            .GetProperty("enum")
+            .EnumerateArray()
+            .Select(value => value.GetString()!);
+
+        Assert.Equal(ProviderEffortLevels.KnownLevels, schemaLevels);
     }
 
     /// <summary>Stage 12's migration/versioned-contract audit found every embedded contract

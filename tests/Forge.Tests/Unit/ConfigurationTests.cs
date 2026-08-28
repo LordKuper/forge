@@ -161,7 +161,7 @@ public sealed class ConfigurationTests
 
             using JsonDocument json = JsonDocument.Parse(
                 await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-            Assert.Equal("1.3.0", json.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.4.0", json.RootElement.GetProperty("schema_version").GetString());
             Assert.Equal(
                 "ru",
                 json.RootElement.GetProperty("language").GetProperty("ui").GetString());
@@ -171,6 +171,57 @@ public sealed class ConfigurationTests
                     .GetProperty("confirm_destructive")
                     .GetBoolean());
             Assert.False(json.RootElement.TryGetProperty("values", out _));
+        }
+        finally
+        {
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, true);
+            }
+        }
+    }
+
+    /// <summary>Pins the on-disk nesting ADR 0067's four keys serialize to, since that shape — not
+    /// the dotted key name — is what a hand-edited `config.json` and the settings page both bind to.
+    /// The effort map's ids must survive verbatim: property names are snake_cased by
+    /// <c>PropertyNamingPolicy</c>, but dictionary keys are governed by <c>DictionaryKeyPolicy</c>,
+    /// which is deliberately left unset.</summary>
+    [Fact]
+    [Trait("Category", "Unit")]
+    public async Task TheSettingsKeysSerializeIntoTheirDeclaredNestedObjects()
+    {
+        string directory = Path.Combine(Path.GetTempPath(), $"forge-tests-{Guid.NewGuid():N}");
+        string path = Path.Combine(directory, "config.json");
+        try
+        {
+            JsonConfigurationStore store = new(path, ConfigurationScope.User, new ConfigurationRegistry());
+            await store.WriteAsync(
+                new(
+                    1,
+                    new Dictionary<string, JsonElement>
+                    {
+                        [ConfigurationKeys.AutoApproveGate] = JsonSerializer.SerializeToElement(true),
+                        [ConfigurationKeys.ProvidersPriority] =
+                            JsonSerializer.SerializeToElement<string[]>(["codex", "claude_code"]),
+                        [ConfigurationKeys.ModelsEffort] = JsonSerializer.SerializeToElement(
+                            new Dictionary<string, string> { ["gpt-5-Codex"] = "xhigh" }),
+                        [ConfigurationKeys.ShellTheme] = JsonSerializer.SerializeToElement("system"),
+                    }),
+                TestContext.Current.CancellationToken);
+
+            using JsonDocument json = JsonDocument.Parse(
+                await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
+            JsonElement root = json.RootElement;
+
+            Assert.True(root.GetProperty("interaction").GetProperty("auto_approve_gate").GetBoolean());
+            Assert.Equal(
+                ["codex", "claude_code"],
+                root.GetProperty("providers").GetProperty("priority")
+                    .EnumerateArray().Select(item => item.GetString()));
+            Assert.Equal(
+                "xhigh",
+                root.GetProperty("models").GetProperty("effort").GetProperty("gpt-5-Codex").GetString());
+            Assert.Equal("system", root.GetProperty("shell").GetProperty("theme").GetString());
         }
         finally
         {
@@ -271,7 +322,7 @@ public sealed class ConfigurationTests
             await store.WriteAsync(reloaded, TestContext.Current.CancellationToken);
             using JsonDocument upgraded = JsonDocument.Parse(
                 await File.ReadAllTextAsync(path, TestContext.Current.CancellationToken));
-            Assert.Equal("1.3.0", upgraded.RootElement.GetProperty("schema_version").GetString());
+            Assert.Equal("1.4.0", upgraded.RootElement.GetProperty("schema_version").GetString());
         }
         finally
         {

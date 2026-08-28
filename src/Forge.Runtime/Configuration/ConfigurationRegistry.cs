@@ -52,10 +52,42 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             "true",
             null,
             false);
+        // ADR 0067: user-scoped like interaction.confirm_destructive above, and deliberately
+        // separate from it -- confirm_destructive governs surface confirmations, this governs the
+        // workflow's own human-approval node. Defaults to false because that is the behavior every
+        // prior release shipped: the gate is unconditional today and nothing reads this key yet.
+        yield return Create(
+            ConfigurationKeys.AutoApproveGate,
+            ConfigurationScope.User,
+            "false",
+            null,
+            false);
         yield return Create(
             ConfigurationKeys.ProvidersEnabled,
             ConfigurationScope.User,
             "null",
+            null,
+            false);
+        // ADR 0067 (plan decision Q23: user scope only): the preferred routing order among enabled
+        // providers. Empty is "no preference" -- the registration order every release has used --
+        // so, unlike providers.enabled above, an omitted and an explicitly empty list mean the same
+        // thing and no omitted-vs-empty distinction needs preserving (matching
+        // models.allowed_models below).
+        yield return Create(
+            ConfigurationKeys.ProvidersPriority,
+            ConfigurationScope.User,
+            "[]",
+            null,
+            false);
+        // ADR 0067 (plan decision Q23: user scope only): model id -> effort level. User-scoped
+        // rather than project-scoped like models.allowed_models below, because how hard a given
+        // model should think is a per-operator preference, not a property of the project's policy.
+        // The first object-typed key in this registry; empty is "no per-model preference," which is
+        // what ExecutionProfilePolicy's frozen per-phase efforts already express.
+        yield return Create(
+            ConfigurationKeys.ModelsEffort,
+            ConfigurationScope.User,
+            "{}",
             null,
             false);
         yield return Create(
@@ -108,6 +140,16 @@ public sealed class ConfigurationRegistry : IConfigurationRegistry
             ConfigurationKeys.SidebarCollapsed,
             ConfigurationScope.User,
             "false",
+            null,
+            false);
+        // ADR 0067 (plan decision Q24, shape only): user-scoped shell appearance, grouped with
+        // shell.sidebar_collapsed above. Defaults to "dark" because App.xaml declares dark tokens
+        // only -- "light" and "system" are valid configuration today with no palette behind them
+        // until the light ramp lands (slice S24).
+        yield return Create(
+            ConfigurationKeys.ShellTheme,
+            ConfigurationScope.User,
+            "\"dark\"",
             null,
             false);
     }
